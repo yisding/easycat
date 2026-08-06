@@ -227,6 +227,8 @@ WebRTC has two layers:
   stateless/per-server route handling, admission, and per-offer transport
   construction. Each accepted offer also installs one named runtime cleanup
   task that waits for peer closure and releases its Session and capacity slot.
+  Shutdown cancels those waiters, runs forced finalizers in a separate named
+  cohort, and reports unexpected results with their task identities.
 
 Shared config/stats/health/CORS/root behavior lives once in
 [`server/_webrtc_handlers.py`](../../src/easycat/server/_webrtc_handlers.py).

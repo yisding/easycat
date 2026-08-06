@@ -737,6 +737,46 @@ async def test_webrtc_cleanup_and_drain_share_one_force_escalatable_stop() -> No
     assert routes._cleanup_task_scope.tasks() == ()
 
 
+@pytest.mark.parametrize("finalizer_fails", [False, True])
+async def test_webrtc_cleanup_reports_only_unexpected_results_with_task_name(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    finalizer_fails: bool,
+) -> None:
+    routes = WebRTCRoutes(
+        WebRTCTransportConfig(static_dir=None),
+        auth=None,
+        config_factory=lambda _transport: _GracefulSession(),  # type: ignore[arg-type]
+        gate=CapacityGate(max_sessions=1),
+        manager=SessionManager(),
+        runtime_feedback=False,
+    )
+
+    async def finalize(_key: int, *, force: bool) -> None:
+        if force and finalizer_fails:
+            raise RuntimeError("forced finalizer failed")
+
+    monkeypatch.setattr(routes, "_finalize_session_cleanup", finalize)
+    cleanup = routes._start_cleanup_task(
+        7,
+        _NeverClosedTransport(),  # type: ignore[arg-type]
+    )
+
+    with caplog.at_level("ERROR", logger="easycat.server.webrtc_routes"):
+        await routes.cancel_cleanup_tasks()
+
+    messages = [record.getMessage() for record in caplog.records]
+    expected = "WebRTC cleanup task easycat-webrtc-force-cleanup-7 failed"
+    if finalizer_fails:
+        assert expected in messages
+    else:
+        assert not any(message.startswith("WebRTC cleanup task ") for message in messages)
+    assert cleanup.cancelled()
+    assert routes._cleanup_task_scope.tasks() == ()
+    assert routes._force_cleanup_task_scope.tasks() == ()
+
+
 async def test_drain_with_no_active_sessions_is_a_noop() -> None:
     gate: CapacityGate[int] = CapacityGate(max_sessions=4)
     await gate.drain(list, drain_timeout_s=1.0, force_after=True)
