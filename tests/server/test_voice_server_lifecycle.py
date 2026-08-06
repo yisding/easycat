@@ -648,6 +648,55 @@ async def test_listener_cleanup_timeout_keeps_drain_fence_and_drains_sessions() 
     assert server._listener_cleanup_task_scope.tasks() == ()
 
 
+async def test_raw_websocket_listener_timeout_retries_same_owned_waiter() -> None:
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+    cancel_seen = asyncio.Event()
+    release_wait = asyncio.Event()
+
+    class _CancellationResistantListener:
+        def __init__(self) -> None:
+            self.wait_calls = 0
+
+        def close(self, close_connections: bool = True) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            self.wait_calls += 1
+            while not release_wait.is_set():
+                try:
+                    await release_wait.wait()
+                except asyncio.CancelledError:
+                    cancel_seen.set()
+
+    listener = _CancellationResistantListener()
+    server._ws_server = listener
+    server._started = True
+
+    with pytest.raises(RuntimeError, match="raw-WebSocket listener did not close"):
+        await server.stop(force=True)
+
+    await asyncio.wait_for(cancel_seen.wait(), timeout=1)
+    waiter = server._listener_cleanup_tasks["raw-WebSocket listener"]
+    assert waiter.get_name() == ("easycat-voice-server-listener-cleanup-raw-websocket-listener")
+    assert server._listener_cleanup_task_scope.tasks() == (waiter,)
+
+    with pytest.raises(RuntimeError, match="raw-WebSocket listener did not close"):
+        await server.stop(force=True)
+    assert listener.wait_calls == 1
+
+    release_wait.set()
+    await server.stop(force=True)
+
+    assert listener.wait_calls == 1
+    assert server._ws_server is None
+    assert "raw-WebSocket listener" not in server._listener_cleanup_tasks
+    assert server._listener_cleanup_task_scope.tasks() == ()
+
+
 async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_ownership(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,

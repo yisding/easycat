@@ -569,24 +569,15 @@ class VoiceServer:
         # backstop: even a pathological handler that resists cancellation cannot
         # make ``stop()`` block forever.
         if ws_server is not None:
-            wait_succeeded, closed = await self._attempt_cleanup(
-                "raw-WebSocket listener wait",
-                _await_with_hard_timeout(
-                    ws_server.wait_closed(),
-                    timeout_s=self.config.force_shutdown_timeout_s,
-                ),
+            closed = await self._attempt_bounded_listener_cleanup(
+                "raw-WebSocket listener",
+                ws_server.wait_closed,
                 cleanup_errors,
+                cancel_on_timeout=True,
+                timeout_action="close",
             )
-            if wait_succeeded:
-                if not closed:
-                    timeout_error = RuntimeError(
-                        "raw-WebSocket listener did not close within "
-                        f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s"
-                    )
-                    logger.warning("VoiceServer: %s", timeout_error)
-                    cleanup_errors.append(timeout_error)
-                elif self._ws_server is ws_server:
-                    self._ws_server = None
+            if closed and self._ws_server is ws_server:
+                self._ws_server = None
 
         # Cancel the per-offer WebRTC ``wait_closed`` cleanup tasks. The drain
         # step already force-stopped the sessions via the shared active set;
@@ -725,6 +716,9 @@ class VoiceServer:
         stage: str,
         cleanup: Callable[[], Awaitable[Any]],
         cleanup_errors: list[Exception],
+        *,
+        cancel_on_timeout: bool = False,
+        timeout_action: str = "finish",
     ) -> bool:
         """Run one listener cleanup stage under the force-shutdown deadline.
 
@@ -733,6 +727,8 @@ class VoiceServer:
         that same task instead of concurrently invoking the listener cleanup a
         second time. The surrounding drain can therefore still force-stop
         sessions promptly while the gate remains fenced as ``draining``.
+        ``cancel_on_timeout`` preserves stages whose legacy hard bound first
+        requested cooperative cancellation before retaining a survivor.
         """
         task, previously_completed = self._prepare_listener_cleanup_task(
             stage,
@@ -743,9 +739,12 @@ class VoiceServer:
             return True
         if task is None:
             return False
-        if not await self._wait_for_listener_cleanup_task(task):
+        if not await self._wait_for_listener_cleanup_task(
+            task,
+            cancel_on_timeout=cancel_on_timeout,
+        ):
             timeout_error = RuntimeError(
-                f"{stage} did not finish within "
+                f"{stage} did not {timeout_action} within "
                 f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s"
             )
             logger.warning("VoiceServer: %s", timeout_error)
@@ -792,7 +791,12 @@ class VoiceServer:
         """Invoke one listener cleanup operation inside its named owner task."""
         return await cleanup()
 
-    async def _wait_for_listener_cleanup_task(self, task: asyncio.Task[Any]) -> bool:
+    async def _wait_for_listener_cleanup_task(
+        self,
+        task: asyncio.Task[Any],
+        *,
+        cancel_on_timeout: bool,
+    ) -> bool:
         """Wait one bounded slice while preserving a listener cleanup task's ownership."""
         try:
             done, _ = await asyncio.wait(
@@ -807,7 +811,15 @@ class VoiceServer:
             if not task.done():
                 task.cancel()
             raise
-        return task in done
+        if task in done:
+            return True
+        if cancel_on_timeout and not task.done():
+            task.cancel()
+            # Preserve the old hard-timeout behavior: request cooperative
+            # cancellation and give it one event-loop turn without waiting for
+            # a cancellation-resistant listener.
+            await asyncio.sleep(0)
+        return False
 
     async def _finish_listener_cleanup_task(
         self,
