@@ -154,6 +154,45 @@ async def test_cancel_websocket_handlers_reports_only_cleanup_failures(
     assert server._ws_handler_task_scope.tasks() == ()
 
 
+async def test_cancel_websocket_handlers_reports_failure_after_hard_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler() -> None:
+        started.set()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+        raise RuntimeError("late handler cleanup failed")
+
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    task = asyncio.create_task(handler(), name="easycat-raw-ws-handler-41")
+    server._ws_handler_task_scope.adopt_task(task)
+    await started.wait()
+
+    with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
+        await server._cancel_ws_handler_tasks(timeout_s=0.01)
+        await cancellation_seen.wait()
+        release.set()
+        with pytest.raises(RuntimeError, match="late handler cleanup failed"):
+            await task
+        await asyncio.sleep(0)
+        await asyncio.gather(
+            *tuple(server._ws_handler_task_scope._release_tasks),
+            return_exceptions=True,
+        )
+
+    assert "VoiceServer raw-WebSocket handler task easycat-raw-ws-handler-41 failed" in caplog.text
+    assert "late handler cleanup failed" in caplog.text
+    assert server._ws_handler_task_scope.tasks() == ()
+    assert server._ws_handler_task_scope.scope is None
+
+
 # ── start/serve/stop ─────────────────────────────────────────────────
 
 

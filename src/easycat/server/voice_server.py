@@ -25,6 +25,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import is_dataclass, replace
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from easycat._extras import require_module
@@ -130,6 +131,7 @@ class VoiceServer:
             logger=logger,
             failure_message="VoiceServer raw-WebSocket handler task failed",
             drop_if_closed=False,
+            release_standalone_when_idle=True,
         )
         self._ws_connections: dict[int, Any] = {}
         self._ws_close_task_scope = RuntimeTaskScope(
@@ -923,6 +925,20 @@ class VoiceServer:
                 exc_info=result,
             )
 
+    @staticmethod
+    def _report_late_shutdown_task_result(stage: str, task: asyncio.Task[Any]) -> None:
+        """Report a shutdown worker that fails after its hard deadline."""
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "VoiceServer %s task %s failed",
+                stage,
+                task.get_name(),
+                exc_info=error,
+            )
+
     def _reset_gate_bookkeeping(self) -> None:
         """Reset the gate's active set, reservations, AND draining flag after a drain.
 
@@ -974,6 +990,13 @@ class VoiceServer:
                     results,
                     explicitly_cancelled=set(tasks),
                 )
+            else:
+                report_late = partial(
+                    self._report_late_shutdown_task_result,
+                    "raw-WebSocket handler",
+                )
+                for task in tasks:
+                    task.add_done_callback(report_late)
         await self._ws_handler_task_scope.release_standalone_if_empty()
 
     def _active_session_pairs(self) -> list[tuple[int, Any]]:
