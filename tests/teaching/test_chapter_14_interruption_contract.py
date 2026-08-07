@@ -145,7 +145,7 @@ async def test_shallow_bridge_stops_forwarding_after_cancellation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_shallow_text_session_records_failed_state_notification() -> None:
+async def test_shallow_text_session_records_failed_state_notification(tmp_path: Path) -> None:
     class BlockingShallowWorkflow:
         def __init__(self) -> None:
             self.started = asyncio.Event()
@@ -160,7 +160,14 @@ async def test_shallow_text_session_records_failed_state_notification() -> None:
 
     workflow = BlockingShallowWorkflow()
     bridge = GenericWorkflowBridge(workflow)
-    session = create_text_session(agent=bridge, debug="full", wrap_agent=False)
+    # Full debug mode writes a durable SQLite journal; keep xdist workers out
+    # of the repository-wide default data directory.
+    session = create_text_session(
+        agent=bridge,
+        debug="full",
+        wrap_agent=False,
+        data_dir=tmp_path,
+    )
 
     first_turn = asyncio.create_task(session.send_text("first"))
     await workflow.started.wait()
