@@ -15,7 +15,7 @@ from websockets.http11 import Request, Response
 from easycat._concurrency import RuntimeSupervisor
 from easycat._net import normalize_auth_token
 from easycat._signals import create_shutdown_event
-from easycat.server.auth import BearerTokenAuth, enforce_bind_guard, from_websocket
+from easycat.server.auth import BearerTokenAuth, authorized_bind, from_websocket
 from easycat.server.transports import WebSocketSessionRuntime
 from easycat.session import Session
 from easycat.session_manager import SessionManager
@@ -61,11 +61,6 @@ async def serve_websocket_sessions(
         if auth_token is not None
         else None
     )
-    enforce_bind_guard(
-        settings.host,
-        auth=auth_policy,
-        unsafe_allow_no_auth=unsafe_allow_no_auth,
-    )
     manager: SessionManager[int] = SessionManager()
     runtime = WebSocketSessionRuntime(
         manager=manager,
@@ -85,13 +80,18 @@ async def serve_websocket_sessions(
                 )
         return None
 
-    server = await websockets.serve(
-        runtime.handle,
+    server = await authorized_bind(
         settings.host,
-        settings.port,
-        process_request=process_request,
-        compression=None,
-        max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+        auth=auth_policy,
+        unsafe_allow_no_auth=unsafe_allow_no_auth,
+        binder=lambda bind_host: websockets.serve(
+            runtime.handle,
+            bind_host,
+            settings.port,
+            process_request=process_request,
+            compression=None,
+            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+        ),
     )
     if announce:
         print(f"\nServer ready. Connect WebSocket clients to ws://{settings.host}:{settings.port}")

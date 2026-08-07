@@ -8,11 +8,14 @@ import sys
 import pytest
 
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._provider_helpers import ProviderErrorEmitter
 from easycat._turn_context import TurnContext
 from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentFinal,
+    Error,
+    ErrorStage,
     EventBus,
     Interruption,
     TTSAudio,
@@ -21,8 +24,10 @@ from easycat.events import (
 )
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
+from easycat.runtime.scope import RuntimeScope
 from easycat.session._session import Session
 from easycat.session._types import TurnState
+from easycat.stt.base import STTBase
 from easycat.turn_manager import TurnManagerState
 from tests.session._session_core_helpers import (
     FakeSTT,
@@ -73,6 +78,100 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
     records = [record for record in journal.read() if record.name == "warmup_completed"]
     warmed = [c["component"] for record in records for c in record.data["components"]]
     assert warmed == ["stt", "tts", "audio_resampling", "agent", "transport"]
+
+
+@pytest.mark.asyncio
+async def test_session_attaches_runtime_bindables_and_provider_emitters() -> None:
+    class ScopedFakeSTT(ProviderErrorEmitter, STTBase):
+        _error_stage = ErrorStage.STT
+        _provider_error_name = "fake-stt"
+
+        def __init__(self) -> None:
+            STTBase.__init__(self)
+            self._init_emit_tasks()
+
+    class ScopedFakeTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.runtime_scope: RuntimeScope | None = None
+
+        def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+            self.runtime_scope = parent.create_child(name)
+
+    class ScopedFakeTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.runtime_scope: RuntimeScope | None = None
+
+        def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+            self.runtime_scope = parent.create_child(name)
+
+    stt = ScopedFakeSTT()
+    tts = ScopedFakeTTS()
+    transport = ScopedFakeTransport()
+    session = Session(_full_config(stt=stt, tts=tts, transport=transport))
+
+    assert stt._emit_scope is not None
+    assert stt._emit_scope.parent is session._runtime_scope
+    assert stt._emit_scope.name == "stt-provider-events"
+    assert stt._runtime_scope is not None
+    assert stt._runtime_scope.parent is session._runtime_scope
+    assert stt._runtime_scope.name == "stt-provider-runtime"
+    assert tts.runtime_scope is not None
+    assert tts.runtime_scope.parent is session._runtime_scope
+    assert tts.runtime_scope.name == "tts-provider-runtime"
+    assert transport.runtime_scope is not None
+    assert transport.runtime_scope.parent is session._runtime_scope
+    assert transport.runtime_scope.name == "transport-runtime"
+
+    await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+async def test_force_stop_finishes_provider_error_emission_before_close() -> None:
+    class ScopedFakeSTT(ProviderErrorEmitter, FakeSTT):
+        _error_stage = ErrorStage.STT
+        _provider_error_name = "fake-stt"
+
+        def __init__(self) -> None:
+            FakeSTT.__init__(self)
+            self._init_emit_tasks()
+            self._event_bus: EventBus | None = None
+
+        def _resolve_event_bus(self) -> EventBus | None:
+            return self._event_bus
+
+        async def close(self) -> None:
+            await self._drain_emit_tasks()
+
+    stt = ScopedFakeSTT()
+    bus = EventBus()
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+    received: list[Error] = []
+
+    async def handle_error(event: Error) -> None:
+        received.append(event)
+        handler_started.set()
+        await release_handler.wait()
+
+    bus.subscribe(Error, handle_error)
+    session = Session(_full_config(stt=stt, event_bus=bus))
+    stt._emit_provider_error(RuntimeError("provider failed"))
+    await handler_started.wait()
+
+    stopping = asyncio.create_task(session.stop(force=True))
+    await asyncio.sleep(0)
+
+    assert stt._emit_tasks
+    assert all(not task.cancelled() for task in stt._emit_tasks)
+
+    release_handler.set()
+    await stopping
+
+    assert len(received) == 1
+    assert str(received[0].exception) == "provider failed"
+    assert not stt._emit_tasks
 
 
 @pytest.mark.asyncio

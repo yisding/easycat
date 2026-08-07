@@ -10,6 +10,7 @@ import inspect
 from typing import Any, Protocol, cast, runtime_checkable
 
 from easycat.audio_format import AudioChunk
+from easycat.runtime.scope import RuntimeScope
 
 
 @runtime_checkable
@@ -36,6 +37,15 @@ class Warmupable(Protocol):
 
     def warmup(self) -> Any:
         """Prime provider resources before first user traffic."""
+        ...
+
+
+@runtime_checkable
+class RuntimeScopeBindable(Protocol):
+    """Provider capability for attaching background work to a lifecycle tree."""
+
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach provider-owned runtime work beneath *parent*."""
         ...
 
 

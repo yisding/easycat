@@ -228,8 +228,41 @@ terminal journal records. It owns runtime work such as:
 - ingress and outbound loops;
 - pipeline heartbeat;
 - STT pause/commit tasks;
+- provider receive loops after their matching STT or TTS finalizer;
 - greeting work; and
 - post-cutoff barge-in cleanup.
+
+Session constructs an explicit lifecycle root backed by one
+`RuntimeSupervisor`/`SurvivorRegistry`. Named child scopes register beneath
+that root and share both quotas; a parent drain recursively includes child
+work. The audio router's cancellable first-frame transport write is the first
+adopted child cohort, so a cancellation-resistant inline send remains anchored
+without broadening ownership to unrelated runtime tasks.
+
+Scope teardown policy keeps cooperative token signalling separate from Python
+task cancellation. Each member declares graceful and force policies with a
+named cohort, optional token signal, `finish` or `cancel` task action, and
+optional grace/hard budgets. Teardown synchronously signals every member in a
+cohort before awaiting any sibling, then drains cohorts in an explicit phase
+order. A hard deadline parks owned work in the shared survivor registry; the
+scope reports `closed_with_survivors` until that work settles. Closing a scope
+also closes task admission, including callbacks submitted from other threads,
+and a force close can supersede an unbounded graceful close without starting a
+second concurrent teardown controller.
+
+Non-task teardown steps register as named async finalizers. Their names appear
+in the same explicit close sequence as cohorts, so an ordering such as
+`outbound` → `transport-disconnect` → `provider-close` is represented without
+inventing task-shaped wrappers. An in-flight finalizer is reused when force
+supersedes graceful close. Finalizers always retain a typed terminal result;
+tasks opt into the same result mode when their caller must preserve raised
+cleanup errors. Callers can inspect or pop those results and use `unwrap()` to
+apply their existing exception-precedence policy.
+
+`RuntimeScope.run_finalizer()` can invoke a registered finalizer before the
+root close begins without closing ordinary task admission. Concurrent callers
+share one attempt, a successful attempt is not repeated by the later root
+close, and a failed attempt remains visible and retryable.
 
 ```mermaid
 stateDiagram-v2

@@ -157,6 +157,34 @@ async def test_connect_until_stopped_cancellation_closes_and_reaps_connector() -
     assert not client.connected
 
 
+async def test_connect_until_stopped_preserves_connect_failure_without_exception_group() -> None:
+    class FailingClient(_ConnectUntilStoppedClient):
+        async def connect(self) -> None:
+            raise RuntimeError("connect failed")
+
+    client = FailingClient()
+
+    with pytest.raises(RuntimeError, match="connect failed"):
+        await connect_until_stopped(client, asyncio.Event())  # type: ignore[arg-type]
+
+
+async def test_connect_until_stopped_preserves_stop_close_failure() -> None:
+    class FailingCloseClient(_ConnectUntilStoppedClient):
+        async def close(self) -> None:
+            raise RuntimeError("stop close failed")
+
+    client = FailingCloseClient()
+    stop = asyncio.Event()
+    joining = asyncio.create_task(
+        connect_until_stopped(client, stop)  # type: ignore[arg-type]
+    )
+    await client.started.wait()
+    stop.set()
+
+    with pytest.raises(RuntimeError, match="stop close failed"):
+        await joining
+
+
 class TestReconnectingWebSocket:
     def _make_ws(self, url: str = "wss://test.com", **kwargs) -> ReconnectingWebSocket:
         config = ReconnectConfig(**kwargs)
@@ -459,12 +487,48 @@ class TestReconnectingWebSocket:
         with pytest.raises(ConnectionError, match="closed during reconnect"):
             await asyncio.wait_for(connect_task, timeout=0.1)
 
+        assert not ws._background_tasks.empty
         release.set()
         for _ in range(10):
             if late_connection.close.await_count:
                 break
             await asyncio.sleep(0)
         late_connection.close.assert_awaited_once()
+        for _ in range(10):
+            if ws._background_tasks.empty:
+                break
+            await asyncio.sleep(0)
+        assert ws._background_tasks.empty
+
+    async def test_overlapping_connection_races_keep_distinct_ownership(self):
+        first_release = asyncio.Event()
+        second_release = asyncio.Event()
+        first_connection = FakeWSConnection()
+        second_connection = FakeWSConnection()
+
+        async def connect(
+            release: asyncio.Event,
+            connection: FakeWSConnection,
+        ) -> FakeWSConnection:
+            await release.wait()
+            return connection
+
+        ws = ReconnectingWebSocket(url="wss://test.com")
+        first = asyncio.create_task(
+            ws._connect_attempt_or_close(connect(first_release, first_connection))
+        )
+        await asyncio.sleep(0)
+        second = asyncio.create_task(
+            ws._connect_attempt_or_close(connect(second_release, second_connection))
+        )
+        await asyncio.sleep(0)
+
+        first_release.set()
+        second_release.set()
+
+        assert await first is first_connection
+        assert await second is second_connection
+        assert ws._background_tasks.empty
 
     async def test_late_connection_close_failure_is_retained_for_close_retry(self):
         started = asyncio.Event()

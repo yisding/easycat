@@ -480,17 +480,56 @@ class TestOutboundPipelineWiring:
         await session.hold_started.wait()
         hold_task = wiring._hold_audio_task
         assert hold_task is not None
+        assert wiring._hold_audio_tasks.tasks() == (hold_task,)
 
         wiring.stop()
 
         with pytest.raises(asyncio.CancelledError):
             await hold_task
         assert session.hold_cancelled.is_set()
+        assert wiring._hold_audio_tasks.empty
         assert wiring._on_screening_response not in bus.subscribers(ScreeningResponse)
         assert wiring._hold_audio_task is None
         wiring.play_hold_audio("late hold")
         await asyncio.sleep(0)
         assert wiring._hold_audio_task is None
+
+    @pytest.mark.asyncio
+    async def test_new_hold_audio_replaces_owned_synthesis(self) -> None:
+        from easycat.config._telephony_wiring import _OutboundPipelineWiring
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.started = {text: asyncio.Event() for text in ("first", "second")}
+                self.cancelled = {text: asyncio.Event() for text in ("first", "second")}
+
+            async def synthesize_bypass(self, text: str) -> None:
+                self.started[text].set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    self.cancelled[text].set()
+
+        session = FakeSession()
+        wiring = _OutboundPipelineWiring(session, EventBus())  # type: ignore[arg-type]
+        wiring.start()
+        try:
+            wiring.play_hold_audio("first")
+            await session.started["first"].wait()
+            first = wiring._hold_audio_task
+            assert first is not None
+
+            wiring.play_hold_audio("second")
+            await session.started["second"].wait()
+            second = wiring._hold_audio_task
+            assert second is not None
+
+            await asyncio.sleep(0)
+            assert first.cancelled()
+            assert session.cancelled["first"].is_set()
+            assert wiring._hold_audio_tasks.tasks() == (second,)
+        finally:
+            wiring.stop()
 
     @pytest.mark.asyncio
     async def test_flush_gated_audio_propagates_caller_cancellation(self) -> None:

@@ -339,6 +339,20 @@ async def test_session_manager_stop_all_empty_report_is_successful() -> None:
     assert report.failures == ()
 
 
+def test_session_manager_releases_stop_scope_before_cross_loop_reuse() -> None:
+    manager: SessionManager[str] = SessionManager()
+
+    async def run_once(key: str) -> None:
+        session = _DummySession()
+        await manager.add(key, session)  # type: ignore[arg-type]
+        await manager.remove(key)
+
+    asyncio.run(run_once("first"))
+    asyncio.run(run_once("second"))
+
+    assert manager.active_keys() == ()
+
+
 @pytest.mark.asyncio
 async def test_cancelled_remove_retains_session_for_force_sweep() -> None:
     manager: SessionManager[str] = SessionManager()
@@ -363,16 +377,21 @@ async def test_cancelled_remove_retains_session_for_force_sweep() -> None:
     await manager.add("call", session)  # type: ignore[arg-type]
     remove_task = asyncio.create_task(manager.remove("call"))
     await session.graceful_started.wait()
+    stop_task = manager._stop_tasks["call"][1]
+
+    assert manager._stop_task_scope.tasks() == (stop_task,)
 
     remove_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await remove_task
 
     assert manager.get("call") is session
-    assert manager._stop_tasks["call"][1].done() is False
+    assert stop_task.done() is False
+    assert manager._stop_task_scope.tasks() == (stop_task,)
     await manager.stop_all(force=True)
     assert session.forced is True
     assert manager.get("call") is None
+    assert manager._stop_task_scope.tasks() == ()
 
 
 @pytest.mark.asyncio

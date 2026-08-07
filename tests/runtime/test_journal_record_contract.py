@@ -35,7 +35,7 @@ _TYPED_RECORD_NAMES = {
     "JournalDegraded": "journal_degraded",
     "RecoveredSessionMarker": "recovered_session",
 }
-_CATALOG_SHA256 = "7b3495cd93c8b0a64037f98f9a8cdaf4a265e3c6184fc26ef805c8c4e1695562"
+_CATALOG_SHA256 = "37aaa836e8e46b1c64021741f2872c74679bb9e0cfaf0400e741d4d55c19ca3c"
 
 
 @dataclass(frozen=True)

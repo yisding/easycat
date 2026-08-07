@@ -13,6 +13,7 @@ import pytest
 
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportDegraded
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
 from easycat.server.webrtc_routes import serve_webrtc_config_sessions
 from easycat.transports.webrtc import (
     _DEGRADED_INBOUND_CONSUME_ERROR,
@@ -355,7 +356,7 @@ class TestWebRTCIngressQueueOwnership:
         assert response.status == 503
         assert candidate.closed is True
         assert transport._pc is None
-        assert transport._retiring_peer_generation is None
+        assert transport._peer_epoch.capture().value is None
 
     @pytest.mark.asyncio
     async def test_disconnect_from_active_offer_fails_instead_of_self_deadlocking(
@@ -507,9 +508,86 @@ class TestWebRTCIngressQueueOwnership:
         assert transport._disconnect_cleanup_error is None
 
     @pytest.mark.asyncio
+    async def test_connect_authorizes_the_backend_capability(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.server.auth as auth_module
+        import easycat.transports.webrtc as webrtc_module
+
+        web, runner, _site = _fake_serve_web()
+        monkeypatch.setattr(webrtc_module, "require_module", lambda *_a, **_kw: web)
+        error = RuntimeError("rejected at backend capability")
+        guard_calls = 0
+
+        def guard(*_args: object, **_kwargs: object) -> None:
+            nonlocal guard_calls
+            guard_calls += 1
+            if guard_calls == 2:
+                raise error
+
+        monkeypatch.setattr(auth_module, "enforce_bind_guard", guard)
+        transport = WebRTCTransport(WebRTCTransportConfig(static_dir=None))
+
+        with pytest.raises(RuntimeError, match="rejected at backend capability") as exc_info:
+            await transport.connect()
+
+        assert exc_info.value is error
+        assert guard_calls == 2
+        runner.setup.assert_awaited_once()
+        web.TCPSite.assert_not_called()
+        runner.cleanup.assert_awaited_once()
+        assert transport._site is None
+        assert transport._runner is None
+        assert transport._connected is False
+
+    @pytest.mark.asyncio
+    async def test_connect_public_without_token_uses_shared_guard(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.transports.webrtc as webrtc_module
+
+        require_backend = Mock()
+        monkeypatch.setattr(webrtc_module, "require_module", require_backend)
+        transport = WebRTCTransport(WebRTCTransportConfig(host="0.0.0.0", static_dir=None))
+
+        with pytest.raises(ValueError) as exc_info:
+            await transport.connect()
+
+        assert "auth_token" in str(exc_info.value)
+        assert "non-loopback" in str(exc_info.value)
+        require_backend.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_connect_preserves_exact_backend_exception_and_partial_site(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.transports.webrtc as webrtc_module
+
+        error = RuntimeError("site bind failed")
+        web, runner, site = _fake_serve_web(start_error=error)
+        monkeypatch.setattr(webrtc_module, "require_module", lambda *_a, **_kw: web)
+        transport = WebRTCTransport(WebRTCTransportConfig(static_dir=None))
+
+        with pytest.raises(RuntimeError, match="site bind failed") as exc_info:
+            await transport.connect()
+
+        assert exc_info.value is error
+        site.start.assert_awaited_once()
+        site.stop.assert_awaited_once()
+        runner.cleanup.assert_awaited_once()
+        assert transport._site is None
+        assert transport._runner is None
+        assert transport._connected is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cancel_count", [1, 2])
     async def test_connect_rollback_preserves_new_caller_cancellation(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        cancel_count: int,
     ) -> None:
         import easycat.transports.webrtc as webrtc_module
 
@@ -542,7 +620,9 @@ class TestWebRTCIngressQueueOwnership:
 
         connecting = asyncio.create_task(transport.connect())
         await cleanup_entered.wait()
-        connecting.cancel()
+        for _ in range(cancel_count):
+            connecting.cancel()
+            await asyncio.sleep(0)
         release_cleanup.set()
 
         with pytest.raises(asyncio.CancelledError) as exc_info:
@@ -683,7 +763,7 @@ class TestWebRTCIngressQueueOwnership:
         first_response = await transport._handle_offer(_FakeOfferRequest())
         assert first_response.status == 200
         first_pc = _FakeRTCPeerConnection.instances[0]
-        first_generation = transport._peer_generation
+        first_peer = transport._peer_epoch.capture()
 
         audio_iter = transport.receive_audio()
         pending = asyncio.create_task(anext(audio_iter))
@@ -698,7 +778,8 @@ class TestWebRTCIngressQueueOwnership:
         failed_response = await transport._handle_offer(_FakeOfferRequest())
 
         assert failed_response.status == 400
-        assert transport._peer_generation == first_generation
+        assert first_peer.guard()
+        assert first_peer.value is first_pc
         assert transport._pc is first_pc
         assert not first_pc.closed
         assert _FakeRTCPeerConnection.instances[1].closed
@@ -744,7 +825,32 @@ class TestWebRTCIngressQueueOwnership:
         assert len(_FakeRTCPeerConnection.instances) == 1
         assert _FakeRTCPeerConnection.instances[0].closed is True
         assert transport._pc is None
-        assert transport._peer_generation == 0
+        assert transport._peer_epoch.generation == 0
+        assert transport._peer_epoch.capture().value is None
+
+    @pytest.mark.asyncio
+    async def test_unpublished_peer_close_settles_before_repeated_cancellation(self) -> None:
+        transport = WebRTCTransport()
+        close_entered = asyncio.Event()
+        release_close = asyncio.Event()
+
+        async def block_close() -> None:
+            close_entered.set()
+            await release_close.wait()
+
+        pc = SimpleNamespace(close=AsyncMock(side_effect=block_close))
+        closing = asyncio.create_task(transport._close_unpublished_peer(pc))
+        await close_entered.wait()
+        for _ in range(2):
+            closing.cancel()
+            await asyncio.sleep(0)
+        release_close.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+
+        pc.close.assert_awaited_once()
+        assert transport._pending_peer_cleanup is None
 
     @pytest.mark.asyncio
     async def test_cancelled_replacement_retirement_closes_candidate_and_is_retryable(
@@ -757,7 +863,7 @@ class TestWebRTCIngressQueueOwnership:
         transport._connected = True
 
         assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
-        first_generation = transport._peer_generation
+        first_peer = transport._peer_epoch.capture()
         old_outbound = transport._outbound
         original_aclose = old_outbound.aclose
         retirement_started = asyncio.Event()
@@ -776,7 +882,8 @@ class TestWebRTCIngressQueueOwnership:
             await handling
 
         assert candidate.closed is True
-        assert transport._peer_generation == first_generation
+        assert not first_peer.guard()
+        assert transport._peer_epoch.capture().value is None
         assert transport._pc is None
         assert transport._connected is False
         assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
@@ -796,7 +903,7 @@ class TestWebRTCIngressQueueOwnership:
         transport._connected = True
 
         assert (await transport._handle_offer(_FakeOfferRequest())).status == 200
-        first_generation = transport._peer_generation
+        first_peer = transport._peer_epoch.capture()
         old_outbound = transport._outbound
         original_aclose = old_outbound.aclose
         close_calls = 0
@@ -815,7 +922,8 @@ class TestWebRTCIngressQueueOwnership:
 
         candidate = _FakeRTCPeerConnection.instances[-1]
         assert candidate.closed is True
-        assert transport._peer_generation == first_generation
+        assert not first_peer.guard()
+        assert transport._peer_epoch.capture().value is None
         assert transport._connected is False
         assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
         assert (await transport._handle_offer(_FakeOfferRequest())).status == 503
@@ -828,7 +936,7 @@ class TestWebRTCIngressQueueOwnership:
     async def test_track_event_during_set_remote_description_starts_consumer(self, monkeypatch):
         # aiortc fires the synchronous ``track`` event during
         # setRemoteDescription, before the offer handler commits the new peer
-        # generation. A successful offer must still start ``_consume_task`` and
+        # peer. A successful offer must still start ``_consume_task`` and
         # forward the captured track's frames to receive_audio().
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()
@@ -853,6 +961,16 @@ class TestWebRTCIngressQueueOwnership:
         # The deferred consumer must be created and running post-commit.
         assert transport._consume_task is not None
         assert not transport._consume_task.done()
+        assert transport._receive_tasks.owns_root
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="test-root:webrtc-receive",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        transport.set_runtime_scope(root, name="transport-runtime")
+        assert root.tasks("webrtc_receive") == (transport._consume_task,)
+        assert "transport-receive" in root.cohorts(force=False)
         # The ``ended`` handler must be registered on the captured track.
         assert "ended" in inbound._handlers
 
@@ -863,6 +981,7 @@ class TestWebRTCIngressQueueOwnership:
 
         await audio_iter.aclose()
         await transport.disconnect()
+        assert not root.tasks("webrtc_receive")
 
     @pytest.mark.asyncio
     async def test_inbound_consume_ignores_pyav_plane_padding(self):
@@ -1670,19 +1789,55 @@ async def test_serve_webrtc_config_sessions_cleans_runner_on_start_failure(
 ) -> None:
     import easycat._extras as extras_module
 
-    web, runner, site = _fake_serve_web(start_error=RuntimeError("port busy"))
+    error = RuntimeError("port busy")
+    web, runner, site = _fake_serve_web(start_error=error)
     monkeypatch.setattr(extras_module, "require_module", lambda *_args, **_kwargs: web)
 
-    with pytest.raises(RuntimeError, match="port busy"):
+    with pytest.raises(RuntimeError, match="port busy") as exc_info:
         await serve_webrtc_config_sessions(
             lambda _transport: {},
             WebRTCTransportConfig(static_dir=None),
             announce=False,
         )
 
+    assert exc_info.value is error
     runner.setup.assert_awaited_once()
     site.start.assert_awaited_once()
     site.stop.assert_not_awaited()
+    runner.cleanup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_serve_webrtc_config_sessions_authorizes_the_backend_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat._extras as extras_module
+    import easycat.server.auth as auth_module
+
+    web, runner, _site = _fake_serve_web()
+    monkeypatch.setattr(extras_module, "require_module", lambda *_args, **_kwargs: web)
+    error = RuntimeError("rejected at backend capability")
+    guard_calls = 0
+
+    def guard(*_args: object, **_kwargs: object) -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls == 2:
+            raise error
+
+    monkeypatch.setattr(auth_module, "enforce_bind_guard", guard)
+
+    with pytest.raises(RuntimeError, match="rejected at backend capability") as exc_info:
+        await serve_webrtc_config_sessions(
+            lambda _transport: {},
+            WebRTCTransportConfig(static_dir=None),
+            announce=False,
+        )
+
+    assert exc_info.value is error
+    assert guard_calls == 2
+    runner.setup.assert_awaited_once()
+    web.TCPSite.assert_not_called()
     runner.cleanup.assert_awaited_once()
 
 
@@ -1737,6 +1892,64 @@ async def test_serve_webrtc_config_sessions_bounds_shutdown(
     site.stop.assert_awaited_once()
     runner.cleanup.assert_awaited_once()
     assert "abandoning final sweep" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_standalone_sweep_scope_survives_timeout_until_task_settles() -> None:
+    import gc
+
+    from easycat.server import webrtc_routes as routes_module
+
+    class _Gate:
+        def start_draining(self) -> None:
+            pass
+
+        async def drain(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    async def stop_all(*, force: bool) -> None:
+        assert force is True
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+
+    manager = SimpleNamespace(stop_all=stop_all)
+    before = set(routes_module._STANDALONE_SWEEP_SCOPES)
+
+    await routes_module._shutdown_standalone_webrtc(
+        site=SimpleNamespace(stop=AsyncMock()),
+        runner=SimpleNamespace(cleanup=AsyncMock()),
+        gate=_Gate(),  # type: ignore[arg-type]
+        active_sessions={},
+        routes=SimpleNamespace(
+            _stop_managed_session=AsyncMock(),
+            cancel_cleanup_tasks=AsyncMock(),
+        ),
+        manager=manager,  # type: ignore[arg-type]
+        drain_timeout_s=0.0,
+        force_shutdown_timeout_s=0.01,
+    )
+    await cancellation_seen.wait()
+
+    retained = routes_module._STANDALONE_SWEEP_SCOPES - before
+    assert len(retained) == 1
+    scope = retained.pop()
+    tasks = scope.tasks()
+    assert len(tasks) == 1
+    sweep_task = tasks[0]
+    gc.collect()
+    assert not sweep_task.done()
+
+    release.set()
+    await sweep_task
+    await asyncio.sleep(0)
+
+    assert scope not in routes_module._STANDALONE_SWEEP_SCOPES
 
 
 @pytest.mark.asyncio
@@ -1796,7 +2009,16 @@ async def test_standalone_shutdown_surfaces_failed_session_report_and_retains_le
         stopped_keys=(),
         failures=(SessionStopFailure(key=41, exception=failure),),
     )
-    manager = SimpleNamespace(stop_all=AsyncMock(return_value=report))
+    sweep_task_names: list[str] = []
+
+    async def stop_all(*, force: bool) -> SessionStopReport[int]:
+        assert force is True
+        current = asyncio.current_task()
+        assert current is not None
+        sweep_task_names.append(current.get_name())
+        return report
+
+    manager = SimpleNamespace(stop_all=AsyncMock(side_effect=stop_all))
     retained_session = object()
     active_sessions = {41: retained_session}
 
@@ -1825,6 +2047,7 @@ async def test_standalone_shutdown_surfaces_failed_session_report_and_retains_le
     assert "webrtc session teardown failed" in caplog.text
     assert active_sessions == {41: retained_session}
     manager.stop_all.assert_awaited_once_with(force=True)
+    assert sweep_task_names == ["easycat-standalone-webrtc-session-sweep"]
 
 
 @pytest.mark.asyncio
@@ -2236,7 +2459,7 @@ class TestWebRTCDegradedEvents:
             async def recv(self):
                 raise RuntimeError("decode boom")
 
-        await transport._consume_audio(_BadTrack(), peer_generation=transport._peer_generation)
+        await transport._consume_audio(_BadTrack())
 
         for _ in range(5):
             await asyncio.sleep(0)

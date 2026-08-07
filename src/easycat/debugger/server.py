@@ -41,6 +41,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from easycat._audio_utils import to_mono_chunk
+from easycat._concurrency import shielded_cleanup
 from easycat._net import is_loopback_host
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.debug._pcm import full_scale as _full_scale
@@ -213,39 +214,18 @@ def _collect_concat_pcm(
 
 async def _close_vad_provider_owned(provider: Any) -> None:
     """Close one debugger-only VAD provider despite repeated caller cancellation."""
-    cancellation: asyncio.CancelledError | None = None
-    close_task = asyncio.create_task(
-        close_if_supported(provider),
-        name="debugger_vad_provider_cleanup",
-    )
-    while not close_task.done():
-        caller = asyncio.current_task()
-        cancellation_requests = caller.cancelling() if caller is not None else 0
-        try:
-            await asyncio.shield(close_task)
-        except asyncio.CancelledError as exc:
-            new_cancellation = caller is not None and caller.cancelling() > cancellation_requests
-            if not new_cancellation:
-                break
-            # The HTTP request may be cancelled again while provider cleanup is
-            # already running. Keep the independently owned close task alive and
-            # preserve cancellation only after the provider has settled.
-            if cancellation is None:
-                cancellation = exc
-            continue
-    close_error: BaseException | None = None
-    try:
-        close_task.result()
-    except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-        close_error = exc
-    if cancellation is not None:
-        if close_error is not None:
-            raise cancellation from close_error
+    settlement = await shielded_cleanup(lambda: close_if_supported(provider))
+    if settlement.cancellation_requests:
+        cancellation = asyncio.CancelledError()
+        if settlement.error is not None:
+            raise cancellation from settlement.error
         raise cancellation
-    if isinstance(close_error, asyncio.CancelledError):
-        raise RuntimeError("Debugger VAD provider cleanup was interrupted") from close_error  # noqa: TRY004 domain-specific validation error
-    if close_error is not None:
-        raise close_error
+    if isinstance(settlement.error, asyncio.CancelledError):
+        raise RuntimeError(  # noqa: TRY004 domain-specific validation error
+            "Debugger VAD provider cleanup was interrupted"
+        ) from settlement.error
+    if settlement.error is not None:
+        raise settlement.error
 
 
 async def _vad_whatif_for_turn(

@@ -36,7 +36,7 @@
       "id": "tier_a_session_lifecycle_staleness",
       "name": "Tier-A Session lifecycle and staleness",
       "tier": "A",
-      "gate": "A60",
+      "observation": "tier_a_outcome",
       "status": "preregistered",
       "treatment_slices": [
         "WS0.1a",
@@ -179,7 +179,7 @@
       "id": "tier_b_agent_bridge_lifecycle",
       "name": "Tier-B retained agent bridges",
       "tier": "B",
-      "gate": "bridge_B60",
+      "observation": "agent_bridge_outcome",
       "status": "preregistered",
       "treatment_slices": [
         "WS2.6"
@@ -288,7 +288,7 @@
       "id": "tier_b_transport_lifecycle",
       "name": "Tier-B retained transports",
       "tier": "B",
-      "gate": "transport_B60",
+      "observation": "transport_outcome",
       "status": "preregistered",
       "treatment_slices": [
         "WS1.4",

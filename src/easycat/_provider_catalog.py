@@ -11,8 +11,8 @@ from dataclasses import dataclass, field, fields, is_dataclass, replace
 from difflib import get_close_matches
 from typing import Any
 
+from easycat._credentials import has_usable_credential
 from easycat._provider_domains import register_sensitive_api_domains
-from easycat._provider_helpers import has_usable_credential
 from easycat.errors import EasyCatError, EasyConfigError
 
 logger = logging.getLogger("easycat")

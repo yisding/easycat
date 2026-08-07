@@ -15,6 +15,8 @@ from easycat.events import (
     SupervisorListenerAttached,
     SupervisorListenerDetached,
 )
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
+from easycat.session._session import Session
 from easycat.supervisor import (
     SessionAudioBroadcaster,
     serve_supervisor_websocket,
@@ -22,6 +24,7 @@ from easycat.supervisor import (
     supervisor_auth_token_from_env,
     supervisor_message_authorized,
 )
+from tests.session._session_core_helpers import _full_config
 
 
 class _DummySession:
@@ -34,6 +37,17 @@ class _DummySession:
 
     def unsubscribe_event(self, event_type, handler) -> None:
         self.event_bus.unsubscribe(event_type, handler)
+
+
+class _ScopedDummySession(_DummySession):
+    def __init__(self, session_id: str = "session-test") -> None:
+        super().__init__(session_id)
+        self._runtime_scope = RuntimeScope.create_root(
+            name="session",
+            root_id=f"test-root:{session_id}",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
 
 
 def _chunk(byte: int) -> AudioChunk:
@@ -126,6 +140,58 @@ async def test_session_audio_broadcaster_fans_out_caller_and_assistant_audio() -
     broadcaster.unsubscribe(listener_a)
     broadcaster.unsubscribe(listener_b)
     await broadcaster.drain_audit_events()
+
+
+@pytest.mark.asyncio
+async def test_session_broadcasters_share_attached_audit_event_scope() -> None:
+    session = _ScopedDummySession()
+    first = SessionAudioBroadcaster(session)
+    second = SessionAudioBroadcaster(session)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _handler(_event: SupervisorListenerAttached) -> None:
+        entered.set()
+        await release.wait()
+
+    session.event_bus.subscribe(SupervisorListenerAttached, _handler)
+    first.subscribe()
+    await entered.wait()
+
+    assert first._event_tasks is second._event_tasks
+    scope = first._event_tasks.scope
+    assert scope is not None
+    assert scope.parent is session._runtime_scope
+    assert scope.name == "supervisor-events"
+
+    closing = asyncio.create_task(session._runtime_scope.close(phases=("supervisor-events",)))
+    await asyncio.sleep(0)
+    assert not closing.done()
+    release.set()
+    await closing
+
+    assert not first._event_tasks.tasks()
+    first.close()
+    second.close()
+
+
+@pytest.mark.asyncio
+async def test_audit_subscriber_can_drain_its_own_event_task() -> None:
+    session = _DummySession()
+    broadcaster = SessionAudioBroadcaster(session)
+    drained = asyncio.Event()
+
+    async def _handler(_event: SupervisorListenerAttached) -> None:
+        await broadcaster.drain_audit_events()
+        drained.set()
+
+    session.event_bus.subscribe(SupervisorListenerAttached, _handler)
+    broadcaster.subscribe()
+
+    await asyncio.wait_for(drained.wait(), timeout=0.2)
+    await asyncio.sleep(0)
+    assert not broadcaster._event_tasks.tasks()
+    broadcaster.close()
 
 
 @pytest.mark.asyncio
@@ -377,6 +443,123 @@ async def test_serve_supervisor_websocket_subscribes_and_streams_audio() -> None
     ws.feed(None)
     await asyncio.wait_for(task, timeout=1.0)
     assert broadcaster.listener_count == 0
+
+
+@pytest.mark.asyncio
+async def test_supervisor_stream_workers_are_cancelled_with_session_scope() -> None:
+    session = _ScopedDummySession("session-a")
+    broadcaster = SessionAudioBroadcaster(session)
+    ws = _FakeSupervisorWebSocket(
+        [json.dumps({"type": "subscribe", "session_id": "session-a", "token": "secret"})]
+    )
+    serving = asyncio.create_task(
+        serve_supervisor_websocket(
+            ws,
+            {"session-a": broadcaster},
+            expected_token="secret",
+        )
+    )
+    await _wait_for_sent_type(ws, "subscribed")
+    await asyncio.sleep(0)
+
+    assert {task.get_name() for task in session._runtime_scope.tasks()} == {
+        serving.get_name(),
+        "supervisor-queue-0",
+        "supervisor-recv-0",
+    }
+
+    await session._runtime_scope.close()
+    with pytest.raises(asyncio.CancelledError):
+        await serving
+
+    assert broadcaster.listener_count == 0
+    assert session._runtime_scope.tasks("supervisor_stream_0") == ()
+    await broadcaster.drain_audit_events()
+    assert session._runtime_scope.empty
+
+
+@pytest.mark.asyncio
+async def test_graceful_session_stop_joins_supervisor_handler_and_workers() -> None:
+    session = Session(_full_config())
+    broadcaster = SessionAudioBroadcaster(session)
+    ws = _FakeSupervisorWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "subscribe",
+                    "session_id": session.session_id,
+                    "token": "secret",
+                }
+            )
+        ]
+    )
+    serving = asyncio.create_task(
+        serve_supervisor_websocket(
+            ws,
+            {session.session_id: broadcaster},
+            expected_token="secret",
+        )
+    )
+    await _wait_for_sent_type(ws, "subscribed")
+
+    await session.stop()
+
+    with pytest.raises(asyncio.CancelledError):
+        await serving
+    assert broadcaster.listener_count == 0
+    assert not session._runtime_scope.tasks("supervisor_stream_0")
+
+
+@pytest.mark.asyncio
+async def test_cancelling_supervisor_handler_joins_both_stream_workers() -> None:
+    session = _ScopedDummySession("session-a")
+    broadcaster = SessionAudioBroadcaster(session)
+    ws = _FakeSupervisorWebSocket(
+        [json.dumps({"type": "subscribe", "session_id": "session-a", "token": "secret"})]
+    )
+    serving = asyncio.create_task(
+        serve_supervisor_websocket(
+            ws,
+            {"session-a": broadcaster},
+            expected_token="secret",
+        )
+    )
+    await _wait_for_sent_type(ws, "subscribed")
+    await asyncio.sleep(0)
+
+    serving.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await serving
+
+    assert broadcaster.listener_count == 0
+    assert session._runtime_scope.tasks("supervisor_stream_0") == ()
+    await broadcaster.drain_audit_events()
+    assert session._runtime_scope.empty
+
+
+@pytest.mark.asyncio
+async def test_supervisor_inbound_worker_failure_propagates_after_sibling_cleanup() -> None:
+    class _FailingSupervisorWebSocket(_FakeSupervisorWebSocket):
+        async def __anext__(self) -> object:
+            raise RuntimeError("inbound failed")
+
+    session = _ScopedDummySession("session-a")
+    broadcaster = SessionAudioBroadcaster(session)
+    ws = _FailingSupervisorWebSocket(
+        [json.dumps({"type": "subscribe", "session_id": "session-a", "token": "secret"})]
+    )
+
+    with pytest.raises(RuntimeError, match="inbound failed"):
+        await serve_supervisor_websocket(
+            ws,
+            {"session-a": broadcaster},
+            expected_token="secret",
+        )
+
+    assert broadcaster.listener_count == 0
+    assert session._runtime_scope.tasks("supervisor_stream_0") == ()
+    await broadcaster.drain_audit_events()
+    assert session._runtime_scope.empty
 
 
 @pytest.mark.asyncio

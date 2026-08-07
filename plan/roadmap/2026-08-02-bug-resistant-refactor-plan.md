@@ -16,22 +16,20 @@ proposal first; sections referenced as §N below are its sections.
   revertible, behavior-preserving unless explicitly marked **[behavior fix]**
   (a bug being fixed) or **[behavior change]** (an intentional semantic
   change that needs its own test asserting the new semantics).
-- **Tiers gate spend** (§10 of the proposal): Tier A ships unconditionally.
-  A deterministic Tier-A exit gate permits only WS2.1's first vertical slice;
-  bulk Tier B adoption waits for the 60-day Tier-A outcome gate. Tier C also
-  requires the peer-set decision (below) and the Tier-B outcome gate.
+- **Tiers sequence dependencies** (§10 of the proposal): Tier A ships first.
+  A deterministic Tier-A structural exit permits Tier B; Tier C requires the
+  peer-set decision and its named implementation prerequisites. No calendar
+  window blocks engineering work.
 - Each workstream names focused verification targets. The global regression
   net is `just check`; each PR records the exact focused command it ran.
-- Progress inventory: the ratchet baselines (WS0.3). Outcome metric: the
-  family-scoped recurrence gate in "Re-measurement".
+- Progress inventory: the ratchet baselines (WS0.3). Outcome telemetry: the
+  family-scoped recurrence report in "Re-measurement".
 - Source symbols and behaviors are normative; line anchors are wayfinding from
   the pinned audit and must be refreshed with `rg` in each implementation PR.
 - Sizes: S ≈ under half a day, M ≈ a day, L ≈ multi-day. Honest engineering
-  effort if everything ships: ~45-60 PR-days. The mandatory 60-day observation
-  gates are serial: Tier C cannot be eligible earlier than roughly five to six
-  months after Tier-A work begins, before adding maintainer scheduling delays.
-  Review bandwidth is the binding constraint; any PR touching more than ~10
-  source files is too big for this codebase's history and must be split.
+  effort if everything ships: ~45-60 PR-days. Review bandwidth is the binding
+  constraint; any PR touching more than ~10 source files is too big for this
+  codebase's history and must be split.
 
 ## Blocking decision: the peer set
 
@@ -42,16 +40,13 @@ WS4.1 supplied the compatibility signal whose absence was T1's mechanism. The
 *retained set* is therefore the full shipped set, and every gated item below
 migrates all twelve peers rather than a subset.
 
-**This discharges the peer-set prerequisite only — it does not start any
-migration.** The tier gates in the dependency graph above are unchanged and
-still bind:
+**This discharges the peer-set prerequisite.** The remaining prerequisites are
+structural and can be satisfied without waiting for a calendar window:
 
-- WS1.4, WS1.5, WS2.2-2.6, WS2.7b-c, WS5.1, and WS5.3 remain behind **A60**,
-  which cannot even begin until the Tier-A completion SHA is stamped — and
-  WS0.4 and WS6.1b are still open.
-- WS3.2+ additionally requires **bridge B60** plus the retained-peer adapter
-  sketches; WS4.2+ additionally requires **transport B60** plus WS1.4, WS2.3,
-  and WS5.1.
+- WS1.4, WS1.5, WS2.2-2.6, WS2.7b-c, WS5.1, and WS5.3 require the
+  deterministic Tier-A structural exit.
+- WS3.2+ additionally requires the retained-peer adapter sketches; WS4.2+
+  additionally requires WS1.4, WS2.3, and WS5.1.
 
 The cohort member lock this decision required is **done** (2026-08-04): both
 Tier-B cohorts in `plan/metrics/refactor-families.json` are pre-registered with
@@ -80,20 +75,15 @@ WS0 (all slices) ──→ WS1.1 ──→ WS1.2a-e + WS1.3         [Tier A]
 WS2.7a, WS3.1, WS4.1, WS5.2, WS6.1b                     [Tier A]
                   │
                   ▼
-        deterministic Tier-A exit ──→ named WS2.1 vertical slice
-                                              │
-                                              ▼
-                                        14-day slice soak
-                                              │
-                                              ├──→ WS2.1 foundation complete
-                                              └──→ WS1.2f-g
+        deterministic Tier-A exit ──→ WS2.1a ──→ WS2.1b ──→ WS2.1c
+                                      │                         │
+                                      └─────────────────────────┴──→ WS1.2f-g
 
-Tier-A completion SHA/date ──→ A60 ──→ WS1.4, WS1.5, WS2.2-2.6,
-                                      WS2.7b-c, WS5.1, WS5.3       [Tier B]
+Tier-A structural exit ──→ WS1.4, WS1.5, WS2.2-2.6,
+                           WS2.7b-c, WS5.1, WS5.3       [Tier B]
 
-Peer ADR + bridge B60 + WS3.1 + retained-peer sketches ──→ WS3.2+ [Tier C]
-Peer ADR + transport B60 + WS4.1 + WS1.4 + WS2.3 + WS5.1
-                                                        ──→ WS4.2+ [Tier C]
+Peer ADR + WS3.1 + retained-peer sketches ──→ WS3.2+   [Tier C]
+Peer ADR + WS4.1 + WS1.4 + WS2.3 + WS5.1 ──→ WS4.2+   [Tier C]
 ```
 
 Note: **WS2.1 must land before WS2.2-2.6** so every adopted scope has an
@@ -405,6 +395,9 @@ preceding explicit teardown cancellation as expected, and journal unexpected
 exceptions. Tests: expected cancellation emits no failure, while a genuine
 finalizer exception is observable with its task name.
 
+Completed — see
+[completion log](2026-08-02-bug-resistant-completion-log.md#ws04).
+
 ### WS0.5 — Websocket resampler-tail fence [S] [behavior fix]
 
 Moved forward from the epoch workstream on review: this is a live race
@@ -502,7 +495,7 @@ bookkeeping intentionally remain live.
   `preemptive_take_closed` phase latch; it is not an identity Epoch. Freeze the
   late-STT-final-during-`end_stream` race.
 - **f. Turn child scope + compound-predicate deletion (Tier B).** Only after
-  the 14-day slice soak, completed WS2.1 foundation, and a membership inventory
+  the completed WS2.1 foundation and a membership inventory
   of every per-turn task, bind identity invalidation to prompt scope unwinding.
   Then replace `_cancel_cleanup_owns_turn` and remaining generation checks with
   identity/activity/token guards, still re-guarding at commits. Tests freeze
@@ -563,7 +556,7 @@ Completed — see [completion log](2026-08-02-bug-resistant-completion-log.md#ws
 
 ### WS1.4 — Transport connection epochs [M per transport] (Tier B; peer-gated)
 
-After the peer-set decision and Tier-A outcome gate, one PR per retained
+After the peer-set decision and Tier-A structural exit, one PR per retained
 transport: `websocket.py` `_connection_generation`,
 `twilio_media.py` (`:1465,:1559,:1595`), `webrtc.py`
 `_peer_generation`/`_retiring_peer_generation` (`:167-168,:239-242` — the
@@ -588,15 +581,16 @@ are arithmetic over stream positions, not liveness fences.
 
 ### WS2.1 — Extend `RuntimeScope` [L, three PRs]
 
-Keep this foundation reviewable and make the soak SHA unambiguous:
+Keep this foundation reviewable and advance on verified dependencies:
 
 - **2.1a — named vertical slice:** after the Tier-A structural gate, add child
   hierarchy, explicit parent/root attachment, the WS0.1 supervisor/registry,
   and one Session-owned `_audio_router` inline-send cohort in
-  `runtime/scope.py` + `session/_audio_router.py`. Its merge SHA starts the
-  14-day soak; no other package adoption is part of it.
-- **2.1b — policy/cohort engine:** after that soak, add mode-dependent policy,
-  named phase barriers, escalation, and graceful-to-force supersession.
+  `runtime/scope.py` + `session/_audio_router.py`. No other package adoption is
+  part of it.
+- **2.1b — policy/cohort engine:** after 2.1a's focused and global checks pass,
+  add mode-dependent policy, named phase barriers, escalation, and
+  graceful-to-force supersession.
 - **2.1c — finalization/result model:** add ordered finalizer nodes and retained
   terminal results, then run the full current-stop mapping before WS1.2f.
 
@@ -895,7 +889,7 @@ Completed — see [completion log](2026-08-02-bug-resistant-completion-log.md#ws
 
 ### WS4.2 — compositional lifecycle controller [L, split a-d] (peer-gated)
 
-After the peer ADR, transport B60, WS4.1, WS1.4, the relevant WS2.3 slices,
+After the peer ADR, WS4.1, WS1.4, the relevant WS2.3 slices,
 and WS5.1, introduce a transport-neutral component consumed by retained peers.
 Do **not** grow `ServerTransportBase`: it is specifically a
 `websockets.serve` host, while WebRTC uses aiohttp, WebTransport has distinct
@@ -978,6 +972,9 @@ runs without skip; duplicated lifecycle code is deleted.
   family/control assignment, insufficient exposure/zero denominators, control
   invalidation, candidate clustering, and stable output. This is measurement
   infrastructure only; no outcome can be claimed before a window closes.
+
+Completed — see [completion log](2026-08-02-bug-resistant-completion-log.md#ws61b).
+
 - Remaining work is explicitly out of this implementation plan and lives in
   [critique T5](../critique/2026-07-26-full-critique.md#t5-—-the-meta-layer-became-a-second-product-competing-for-the-same-maintenance-budget).
   Standing rules here: new guards assert values, never prose; a new generated
@@ -1005,7 +1002,7 @@ real bridge suite is not silently treated as part of local `just check`.
 
 ---
 
-## Re-measurement and release gates
+## Re-measurement and release evidence
 
 Before Tier-A implementation, each cohort manifest freezes: treated members,
 recurring bug classes, controls, minimum exposure (touching commits and churn),
@@ -1030,47 +1027,40 @@ post-hoc replacement.
 - computes `delta = post_density - pre_density` for treated and pooled controls.
 
 A cohort result is decidable: a zero denominator, invalid control, or exposure
-below its pre-registered minimum is `insufficient_data` and does not pass. It
-passes only with zero adjudicated multi-member recurrences, adequate exposure,
+below its pre-registered minimum is `insufficient_data`. It reports `pass` only
+with zero adjudicated multi-member recurrences, adequate exposure,
 and `treated_delta <= control_delta + epsilon`; when `pre_density > 0`, it also
 requires `post_density < pre_density`. A healthy zero-fix pre-window instead
 requires zero post fixes and non-inferiority, not impossible strict decrease.
 
-The soak incident source is `plan/metrics/incidents.json`, populated from
-linked issues, regression PRs, reverts, and release-blocking CI failures. The
-rubric is frozen in WS6.1a: P1 is security/cross-session corruption, data loss,
-or service-wide unavailability; P2 is a supported lifecycle path that hangs,
-leaks owned work, misroutes state, or requires a hotfix/rollback. The manifest's
-named reviewer records attribution evidence; an unresolved attribution dispute
-does not pass the soak.
+The sequencing checks are structural, not calendar-driven:
 
-The gates are deliberately separate:
+1. **Tier-A structural exit:** all Tier-A contracts, behavior-parity tests,
+   source ratchets, inventories, and the normal PR checks are green. This
+   permits Tier-B work.
+2. **Per-slice readiness:** a dependent slice begins when its named predecessor
+   is merged and its focused plus global verification is green. There is no
+   elapsed-time waiting period between WS2.1a and WS2.1b-c.
+3. **Tier-C readiness:** the peer ADR and each workstream's named code and test
+   prerequisites are complete. Cohort observation results do not delay it.
 
-1. **Tier-A structural exit (immediate):** all Tier-A contracts, behavior-
-   parity tests, source ratchets, and inventories are green. This permits one
-   peer-neutral WS2.1 vertical slice, and nothing else from Tier B.
-2. **Vertical-slice soak (14 days from WS2.1a's merge SHA/date):** no attributable
-   P1/P2 incident under the rubric above. This permits WS2.1b-c; WS1.2f-g also
-   require that foundation and the per-turn membership inventory.
-3. **Tier-A 60-day outcome (A60):** apply the formula above to the pre-registered
-   Session lifecycle/staleness cohort. Any fail or `insufficient_data` stops
-   bulk Tier B and triggers reassessment.
-4. **Tier-B 60-day outcomes (B60):** apply the same rule independently to each
-   migrated family using its own `D`. Bridge B60 gates WS3; transport B60 gates
-   WS4. There is no single anchor reused across families.
+The 60-day pre/post windows remain useful longitudinal telemetry. They are
+generated when data becomes available, but `pass`, `fail`, and
+`insufficient_data` never authorize or block a refactor slice. A regression
+found at any time is handled through the normal issue, test, and rollback
+process rather than waiting for a scheduled review date.
 
-After each eligible window, regenerate the persisted report and run:
+When refreshing the optional observation report, run:
 
 ```bash
-uv run python scripts/refactor_metrics.py --manifest plan/metrics/refactor-families.json
+uv run python scripts/refactor_metrics.py --as-of <UTC-RFC-3339-review-time>
+uv run python scripts/refactor_metrics.py --as-of <UTC-RFC-3339-review-time> --check
 uv run pytest tests/ratchets -q
 uv run ruff check .
 ```
 
-Raw rolling-90-day fix-commit share may remain dashboard context, but it is
-not a gate and cannot substitute for the pinned-window report. The 60-day
-observation periods are part of the calendar, not parallel work assumed away
-by the engineering-day estimate.
+Raw rolling-90-day fix-commit share may remain dashboard context. Neither it
+nor the pinned-window report is a sequencing gate.
 
 ## Session-refactor invariants
 

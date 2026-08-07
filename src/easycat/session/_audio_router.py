@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._concurrency import SurvivorCapacityError
 from easycat._env import is_truthy
 from easycat._log_context import bind_turn
 from easycat.audio_format import AudioChunk
@@ -189,6 +190,7 @@ class AudioRouter:
         self._event_bus = event_bus
         self._journal_sink = journal_sink
         self._runtime_scope = runtime_scope
+        self._inline_send_scope = runtime_scope.create_child("audio-router-inline-send")
         self._run_ctx = run_ctx
         self._no_turn = no_turn
         self._echo_canceller = echo_canceller
@@ -351,7 +353,7 @@ class AudioRouter:
         # A cancelled first-frame caller can leave its transport write running
         # briefly while the transport is being terminated. Keep shutdown
         # joined to that lifecycle-owned write before reporting outbound idle.
-        await self._runtime_scope.cancel_and_drain(self._INLINE_SEND_TASK_NAME)
+        await self._inline_send_scope.cancel_and_drain()
         self._outbound_task = None
 
     async def await_drain(self, timeout: float = _AUDIO_DRAIN_TIMEOUT_S) -> None:
@@ -448,13 +450,26 @@ class AudioRouter:
 
         self._claim_outbound_send()
         turn = self._current_turn()
+        ownership_started = asyncio.Event()
         try:
-            send_task = self._runtime_scope.create_task(
+            send_task = await self._inline_send_scope.start_owned_task(
                 self._INLINE_SEND_TASK_NAME,
-                self._send_first_audio_inline_owned(chunk, outbound_task, turn),
+                lambda: self._send_first_audio_inline_owned(
+                    chunk,
+                    outbound_task,
+                    turn,
+                    ownership_started=ownership_started,
+                ),
             )
-        except BaseException:
+        except SurvivorCapacityError:
             await self._finish_outbound_send(replayed_chunk=False)
+            return False
+        except BaseException:
+            # Reservation is asynchronous. If cancellation or quota rejection
+            # wins before the child starts, the caller still owns the in-flight
+            # claim; once the child starts, its ``finally`` owns that release.
+            if not ownership_started.is_set():
+                await self._finish_outbound_send(replayed_chunk=False)
             raise
         return await self._await_non_cancellable_send(
             send_task,
@@ -475,8 +490,11 @@ class AudioRouter:
         chunk: AudioChunk,
         outbound_task: asyncio.Task[None],
         turn: TurnContext | None,
+        *,
+        ownership_started: asyncio.Event,
     ) -> bool:
         """Own the send lock and in-flight count for a cancellable inline write."""
+        ownership_started.set()
         try:
             async with self._outbound_send_lock:
                 if not self._can_send_first_audio_inline(outbound_task):
