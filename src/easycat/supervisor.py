@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
-import websockets
+from websockets.exceptions import ConnectionClosed
 
 from easycat._net import constant_time_strings_equal
 from easycat.audio_format import AudioChunk
@@ -29,8 +29,8 @@ from easycat.events import (
     SupervisorListenerAttached,
     SupervisorListenerDetached,
 )
-from easycat.runtime._event_tasks import RuntimeEventTaskScope
-from easycat.runtime.scope import RuntimeScope
+from easycat.runtime._event_tasks import RuntimeEventTaskScope, RuntimeTaskScope
+from easycat.runtime.scope import RuntimeScope, RuntimeTaskAction
 
 if TYPE_CHECKING:
     from easycat.session._session import Session
@@ -42,6 +42,8 @@ SupervisorTrack = Literal["caller", "assistant"]
 _SUPERVISOR_EVENT_TASK_NAME = "supervisor_audit_emit"
 _SUPERVISOR_EVENT_COHORT = "supervisor-events"
 _SUPERVISOR_EVENT_OWNER_ATTR = "_supervisor_event_tasks"
+_SUPERVISOR_STREAM_COHORT = "supervisor-streams"
+_SUPERVISOR_STREAM_COUNTER_ATTR = "_supervisor_stream_counter"
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,7 +229,17 @@ async def _stream_supervisor_audio(
     listener_id, queue = broadcaster.subscribe()
     logger.info("Supervisor attached to %s", session_id)
 
-    recv_task = asyncio.create_task(_drain_supervisor_inbound(ws))
+    stream_tasks = _supervisor_stream_tasks(broadcaster._session)
+    handler_task = asyncio.current_task()
+    if handler_task is not None:
+        stream_tasks.adopt_task(handler_task)
+    recv_task = stream_tasks.create_task(
+        _drain_supervisor_inbound(ws),
+        task_name=f"supervisor-recv-{listener_id}",
+    )
+    if recv_task is None:
+        broadcaster.unsubscribe(listener_id)
+        return
     try:
         await _send_supervisor_json(
             ws,
@@ -238,26 +250,27 @@ async def _stream_supervisor_audio(
             },
         )
         while True:
-            get_task = asyncio.create_task(queue.get())
+            get_task = stream_tasks.create_task(
+                queue.get(),
+                task_name=f"supervisor-queue-{listener_id}",
+            )
+            if get_task is None:
+                break
             done, _pending = await asyncio.wait(
                 {get_task, recv_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if recv_task in done:
-                get_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await get_task
+                await recv_task
                 break
             frame = get_task.result()
             if frame is None:
                 break
             await _send_supervisor_text(ws, supervisor_audio_frame_to_json(frame))
-    except websockets.exceptions.ConnectionClosed:
+    except ConnectionClosed:
         logger.info("Supervisor disconnected from %s", session_id)
     finally:
-        recv_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await recv_task
+        await stream_tasks.cancel_and_drain()
         dropped_frames = broadcaster.dropped_frames_for(listener_id)
         broadcaster.unsubscribe(listener_id)
         logger.info(
@@ -271,12 +284,31 @@ async def _drain_supervisor_inbound(ws: SupervisorWebSocket) -> None:
     try:
         async for _ in ws:
             pass
-    except websockets.exceptions.ConnectionClosed:
+    except ConnectionClosed:
         return
 
 
 async def _recv_supervisor_message(ws: SupervisorWebSocket) -> object:
     return await ws.recv()
+
+
+def _supervisor_stream_tasks(session: Session) -> RuntimeTaskScope:
+    """Create one session-owned task cohort for a supervisor connection."""
+    counter = getattr(session, _SUPERVISOR_STREAM_COUNTER_ATTR, 0)
+    setattr(session, _SUPERVISOR_STREAM_COUNTER_ATTR, counter + 1)
+    tasks = RuntimeTaskScope(
+        owner_label="supervisor-stream",
+        member_name=f"supervisor_stream_{counter}",
+        cohort=_SUPERVISOR_STREAM_COHORT,
+        logger=logger,
+        failure_message="Supervisor stream worker failed",
+        graceful_action=RuntimeTaskAction.CANCEL,
+        force_action=RuntimeTaskAction.CANCEL,
+    )
+    runtime_scope = getattr(session, "_runtime_scope", None)
+    if isinstance(runtime_scope, RuntimeScope):
+        tasks.bind(runtime_scope)
+    return tasks
 
 
 async def _send_supervisor_json(ws: SupervisorWebSocket, payload: Mapping[str, object]) -> None:
@@ -296,7 +328,7 @@ async def _close_supervisor_with_error(
 ) -> None:
     try:
         await _send_supervisor_json(ws, {"type": "error", "message": message})
-    except websockets.exceptions.ConnectionClosed:
+    except ConnectionClosed:
         return
     await ws.close(code, reason)
 

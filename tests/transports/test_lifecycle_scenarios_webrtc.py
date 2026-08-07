@@ -306,22 +306,23 @@ class _WebRTCLifecycleDriver:
     async def observe_late_frames(self) -> LateFrameObservation:
         self._replace_transport()
         self.transport._connected = True
-        self.transport._peer_generation = 2
-        stale_generation = 1
-        active_generation = 2
+        self.transport._peer_epoch.bump(object())
+        stale_peer = self.transport._peer_epoch.capture()
+        self.transport._peer_epoch.bump(object())
+        active_peer = self.transport._peer_epoch.capture()
         before_stale = self.transport._in_queue.qsize()
-        if self.transport._is_current_peer_generation(stale_generation):
+        if self.transport._is_current_peer(stale_peer):
             self.transport._enqueue_chunk(_webrtc_chunk(b"stale"), context="WebRTC")
         stale_accepted = self.transport._in_queue.qsize() > before_stale
         before_active = self.transport._in_queue.qsize()
-        if self.transport._is_current_peer_generation(active_generation):
+        if self.transport._is_current_peer(active_peer):
             self.transport._enqueue_chunk(_webrtc_chunk(b"fresh"), context="WebRTC")
         active_accepted = self.transport._in_queue.qsize() > before_active
         delivered = self.transport._in_queue.get_nowait()
         self.transport._connected = False
         return LateFrameObservation(
-            stale_generation=str(stale_generation),
-            active_generation=str(active_generation),
+            stale_generation=str(stale_peer.generation),
+            active_generation=str(active_peer.generation),
             stale_accepted=stale_accepted,
             active_accepted=active_accepted,
             delivered_frames=(() if delivered is None else (delivered.data.decode(),)),
@@ -428,7 +429,7 @@ class _WebRTCLifecycleDriver:
         return NormalizedTransportLifecycleState(
             connected=connected,
             active_generation=(
-                str(transport._peer_generation)
+                str(transport._peer_epoch.generation)
                 if connected and transport._pc is not None
                 else None
             ),
@@ -445,7 +446,7 @@ class _WebRTCLifecycleDriver:
             "owned_work": state.owned_work,
             "queued_frames": state.queued_frames,
             "retained_cleanup": state.retained_cleanup,
-            "peer_generation": self.transport._peer_generation,
+            "peer_generation": self.transport._peer_epoch.generation,
             "has_peer": self.transport._pc is not None,
             "has_pending_peer": self.transport._pending_peer_cleanup is not None,
             "has_site": self.transport._site is not None,

@@ -4,16 +4,41 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Coroutine
 from typing import Any
 
 from easycat.runtime.scope import (
+    BackgroundTaskScope,
     RuntimeMemberPolicy,
     RuntimeScope,
     RuntimeScopeState,
     RuntimeTaskAction,
     RuntimeTaskPolicy,
 )
+
+
+async def wait_for_owned_future(
+    future: asyncio.Future[Any],
+    *,
+    timeout_s: float,
+) -> bool:
+    """Apply a hard duration bound without creating or retaining hidden work.
+
+    The caller must establish and retain ownership before calling this helper.
+    A timeout requests cancellation, gives cooperative cleanup one event-loop
+    turn, and returns ``False`` without waiting for cancellation-resistant work.
+    Cancelling the caller leaves the owned future running and propagates the
+    caller's cancellation.
+    """
+    if not isinstance(future, asyncio.Future):
+        raise TypeError("wait_for_owned_future requires an already-owned Future or Task")
+    done, _pending = await asyncio.wait({future}, timeout=max(timeout_s, 0.0))
+    if future not in done:
+        future.cancel()
+        await asyncio.sleep(0)
+        return False
+    await future
+    return True
 
 
 class RuntimeTaskScope:
@@ -28,6 +53,9 @@ class RuntimeTaskScope:
         logger: logging.Logger,
         failure_message: str,
         drop_if_closed: bool = True,
+        release_standalone_when_idle: bool = False,
+        graceful_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
+        force_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
     ) -> None:
         if not owner_label:
             raise ValueError("Event task owner label must be non-empty")
@@ -38,21 +66,25 @@ class RuntimeTaskScope:
         self._logger = logger
         self._failure_message = failure_message
         self._drop_if_closed = drop_if_closed
+        self._release_standalone_when_idle = release_standalone_when_idle
         self._policy = RuntimeTaskPolicy(
             graceful=RuntimeMemberPolicy(
                 cohort=cohort,
                 signal_token=False,
-                task_action=RuntimeTaskAction.FINISH,
+                task_action=graceful_action,
             ),
             force=RuntimeMemberPolicy(
                 cohort=cohort,
                 signal_token=False,
-                task_action=RuntimeTaskAction.FINISH,
+                task_action=force_action,
             ),
         )
         self._scope: RuntimeScope | None = None
         self._owns_root = False
         self._retired_roots: list[RuntimeScope] = []
+        self._release_task_scope = BackgroundTaskScope(name=f"{owner_label}-idle-scope-releases")
+        self._release_tasks: set[asyncio.Task[None]] = set()
+        self._release_serial = 0
 
     @property
     def scope(self) -> RuntimeScope | None:
@@ -134,6 +166,32 @@ class RuntimeTaskScope:
         task.add_done_callback(self._on_done)
         return task
 
+    def create_awaitable_task(
+        self,
+        awaitable: Awaitable[Any],
+        *,
+        task_name: str,
+    ) -> asyncio.Task[Any] | None:
+        """Create one owned task from an SDK-specific non-coroutine awaitable."""
+        scope = self.ensure_scope()
+        try:
+            task = scope.create_awaitable_task(
+                self._member_name,
+                awaitable,
+                task_name=task_name,
+                policy=self._policy,
+            )
+        except RuntimeError:
+            if scope.state is RuntimeScopeState.OPEN or not self._drop_if_closed:
+                raise
+            close = getattr(awaitable, "close", None)
+            if callable(close):
+                close()
+            self._logger.debug("Could not start task - runtime scope is closed")
+            return None
+        task.add_done_callback(self._on_done)
+        return task
+
     def adopt_task(self, task: asyncio.Task[Any]) -> asyncio.Task[Any]:
         """Adopt an existing task into the same ownership and result policy."""
         scope = self.ensure_scope()
@@ -147,19 +205,29 @@ class RuntimeTaskScope:
         if scope is not None:
             scope.discard(task)
 
+    async def cancel_and_drain(self) -> None:
+        """Cancel and join this owner's tasks, closing an empty standalone root."""
+        scope = self._scope
+        if scope is None:
+            return
+        await scope.cancel_and_drain(self._member_name)
+        await self.release_standalone_if_empty()
+
     async def release_standalone_if_empty(self) -> None:
         """Close and release an empty lazily created root."""
         for retired in tuple(self._retired_roots):
             if retired.empty:
-                await retired.close()
                 self._retired_roots.remove(retired)
+                await retired.close()
         scope = self._scope
         if not self._owns_root or scope is None or not scope.empty:
             return
+        # Detach before the first await. A new operation can then create a
+        # fresh root while this empty one closes, and a loop-shutdown
+        # cancellation cannot leave the owner pointing at the old loop.
+        self._scope = None
+        self._owns_root = False
         await scope.close()
-        if self._scope is scope:
-            self._scope = None
-            self._owns_root = False
 
     def _replace_scope(self, scope: RuntimeScope) -> None:
         """Install *scope*, promoting work from a standalone root if needed."""
@@ -197,12 +265,38 @@ class RuntimeTaskScope:
         scope = self._scope
         if scope is not None:
             scope.discard(task)
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                self._logger.debug(
+                    self._failure_message,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+        if self._release_standalone_when_idle:
+            self._schedule_standalone_release()
+
+    def _schedule_standalone_release(self) -> None:
+        """Release an idle standalone root on the loop that created it."""
+        scope = self._scope
+        if not self._owns_root or scope is None or not scope.empty:
+            return
+        self._release_serial += 1
+        release = self._release_task_scope.create_task(
+            f"{self._owner_label}-release-idle-scope-{self._release_serial}",
+            self.release_standalone_if_empty(),
+            log_errors=False,
+        )
+        self._release_tasks.add(release)
+        release.add_done_callback(self._on_release_done)
+
+    def _on_release_done(self, task: asyncio.Task[None]) -> None:
+        self._release_tasks.discard(task)
         if task.cancelled():
             return
         error = task.exception()
         if error is not None:
             self._logger.debug(
-                self._failure_message,
+                "Could not release idle standalone runtime scope",
                 exc_info=(type(error), error, error.__traceback__),
             )
 

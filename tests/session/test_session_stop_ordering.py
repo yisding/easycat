@@ -199,8 +199,17 @@ async def test_stop_preserves_reviewed_partial_order(  # noqa: C901, PLR0915
             _exclude_tasks=_exclude_tasks,
         )
 
-    async def scope_drain_cohort(_signal: object) -> None:
-        record("scope.drain.all")
+    async def scope_drain_cohort(
+        signal: object,
+        *,
+        force: bool | None = None,
+    ) -> None:
+        if isinstance(signal, str):
+            assert force is False
+            record(f"scope.drain.{signal}")
+        else:
+            assert force is None
+            record("scope.drain.all")
 
     monkeypatch.setattr(session._runtime_scope, "drain", scope_drain)
     monkeypatch.setattr(
@@ -277,6 +286,7 @@ async def test_stop_preserves_reviewed_partial_order(  # noqa: C901, PLR0915
             ("stt.cancel", "scope.drain.all"),
             ("scope.drain.all", "ingress.stop"),
         )
+        health_edges = (("health.stop", "helpers.stop"),)
     else:
         branch_edges = (
             ("scope.drain.barge_in_cleanup", "greeting.cancel"),
@@ -284,10 +294,13 @@ async def test_stop_preserves_reviewed_partial_order(  # noqa: C901, PLR0915
             ("stt.cancel", "tts.cancel"),
             ("tts.cancel", "ingress.stop"),
         )
+        health_edges = (
+            ("health.stop", "scope.drain.supervisor-streams"),
+            ("scope.drain.supervisor-streams", "helpers.stop"),
+        )
 
     common_edges = (
         ("ingress.stop", "health.stop"),
-        ("health.stop", "helpers.stop"),
         ("helpers.stop", "queue.close"),
         ("queue.close", "outbound.stop"),
         ("outbound.stop", "scope.drain.pipeline_heartbeat"),
@@ -298,7 +311,7 @@ async def test_stop_preserves_reviewed_partial_order(  # noqa: C901, PLR0915
         ("journal.finalize", "journal.close"),
         ("journal.close", "session.closed"),
     )
-    for first, second in (*branch_edges, *common_edges):
+    for first, second in (*branch_edges, *health_edges, *common_edges):
         _assert_before(events, first, second)
 
     # Audio-provider siblings share one finalizer node. Their internal order

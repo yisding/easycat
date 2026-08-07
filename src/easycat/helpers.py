@@ -12,6 +12,7 @@ from easycat._signals import create_shutdown_event as _create_shutdown_event
 from easycat._signals import scoped_shutdown_signal_handlers as _shutdown_signal_handler_scope
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.events import AgentFinal, BotStoppedSpeaking, Interruption, STTFinal, TurnStarted
+from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.session._session import Session
 
 if TYPE_CHECKING:
@@ -127,21 +128,34 @@ async def _await_session_until_shutdown(session: Session) -> None:
         loop = asyncio.get_running_loop()
         with _shutdown_signal_handler_scope(loop, stop_event) as installed:
             if installed:
-                waiters = {
-                    asyncio.create_task(stop_event.wait()),
-                    asyncio.create_task(session.wait_closed()),
-                }
+                waiters = RuntimeTaskScope(
+                    owner_label="run-session",
+                    member_name="shutdown_waiter",
+                    cohort="shutdown",
+                    logger=logger,
+                    failure_message="Run-session shutdown waiter failed",
+                    drop_if_closed=False,
+                )
+                signal_waiter = waiters.create_task(
+                    stop_event.wait(),
+                    task_name="run-session-signal-waiter",
+                )
+                session_waiter = waiters.create_task(
+                    session.wait_closed(),
+                    task_name="run-session-close-waiter",
+                )
+                assert signal_waiter is not None
+                assert session_waiter is not None
+                pending = {signal_waiter, session_waiter}
                 try:
                     done, _pending = await asyncio.wait(
-                        waiters,
+                        pending,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     for task in done:
                         task.result()
                 finally:
-                    for task in waiters:
-                        task.cancel()
-                    await asyncio.gather(*waiters, return_exceptions=True)
+                    await waiters.cancel_and_drain()
             else:
                 # No signal-handler support (e.g. Windows ProactorEventLoop).
                 # Session-driven shutdown still completes normally; Ctrl+C is

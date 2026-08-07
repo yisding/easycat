@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "rationale": "Shared shielded cleanup reduced WebRTC unpublished-peer close below the C901 threshold.",
+  "rationale": "Llama stream-race cleanup extracted into a typed lifecycle helper, removing its reviewed C901 exception",
   "counts": {
-    "C901": 55,
+    "C901": 54,
     "PLR0912": 31,
     "PLR0915": 26
   },
@@ -53,7 +53,6 @@
     "src/easycat/integrations/agents/langgraph.py\tPLR0912\tLangGraphBridge._flush_pending_state_mutations",
     "src/easycat/integrations/agents/llama_agents.py\tC901\tLlamaAgentsBridge._invoke_local",
     "src/easycat/integrations/agents/llama_agents.py\tC901\tLlamaAgentsBridge._invoke_remote",
-    "src/easycat/integrations/agents/llama_agents.py\tC901\t_aiter_with_cancellation",
     "src/easycat/integrations/agents/llama_agents.py\tPLR0912\tLlamaAgentsBridge._invoke_local",
     "src/easycat/integrations/agents/llama_agents.py\tPLR0912\tLlamaAgentsBridge._invoke_remote",
     "src/easycat/integrations/agents/llama_agents.py\tPLR0915\tLlamaAgentsBridge._invoke_local",
