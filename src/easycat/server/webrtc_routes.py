@@ -189,6 +189,7 @@ class WebRTCRoutes:
             logger=logger,
             failure_message="WebRTC offer cleanup task failed",
             drop_if_closed=False,
+            release_standalone_when_idle=True,
         )
         self._force_cleanup_task_scope = RuntimeTaskScope(
             owner_label="webrtc-routes-force-cleanup",
@@ -197,6 +198,7 @@ class WebRTCRoutes:
             logger=logger,
             failure_message="WebRTC forced cleanup task failed",
             drop_if_closed=False,
+            release_standalone_when_idle=True,
         )
         self._cleanup_task_keys: dict[asyncio.Task[Any], int] = {}
         self._released_cleanup_keys: set[int] = set()
@@ -598,6 +600,9 @@ class WebRTCRoutes:
                     results,
                     explicitly_cancelled={task for task, _key in pending},
                 )
+            else:
+                for finalizer in finalizers:
+                    finalizer.add_done_callback(self._report_late_cleanup_result)
         await self._cleanup_task_scope.release_standalone_if_empty()
         await self._force_cleanup_task_scope.release_standalone_if_empty()
 
@@ -618,6 +623,18 @@ class WebRTCRoutes:
                 "WebRTC cleanup task %s failed",
                 task.get_name(),
                 exc_info=result,
+            )
+
+    def _report_late_cleanup_result(self, task: asyncio.Task[Any]) -> None:
+        """Report a forced finalizer that settles after the hard deadline."""
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "WebRTC cleanup task %s failed",
+                task.get_name(),
+                exc_info=error,
             )
 
     async def _stop_managed_session(self, key: int, force: bool) -> None:

@@ -777,6 +777,50 @@ async def test_webrtc_cleanup_reports_only_unexpected_results_with_task_name(
     assert routes._force_cleanup_task_scope.tasks() == ()
 
 
+async def test_webrtc_cleanup_reports_forced_finalizer_failure_after_timeout(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    routes = WebRTCRoutes(
+        WebRTCTransportConfig(static_dir=None),
+        auth=None,
+        config_factory=lambda _transport: _GracefulSession(),  # type: ignore[arg-type]
+        gate=CapacityGate(max_sessions=1),
+        manager=SessionManager(),
+        runtime_feedback=False,
+    )
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    async def finalize(_key: int, *, force: bool) -> None:
+        assert force is True
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            await release.wait()
+        raise RuntimeError("late forced finalizer failed")
+
+    monkeypatch.setattr(routes, "_finalize_session_cleanup", finalize)
+    routes._start_cleanup_task(
+        7,
+        _NeverClosedTransport(),  # type: ignore[arg-type]
+    )
+
+    with caplog.at_level("ERROR", logger="easycat.server.webrtc_routes"):
+        await routes.cancel_cleanup_tasks(timeout_s=0.0)
+        await cancellation_seen.wait()
+        release.set()
+        for _ in range(20):
+            if routes._force_cleanup_task_scope.tasks() == ():
+                break
+            await asyncio.sleep(0)
+
+    assert "WebRTC cleanup task easycat-webrtc-force-cleanup-7 failed" in caplog.text
+    assert "late forced finalizer failed" in caplog.text
+    assert routes._force_cleanup_task_scope.tasks() == ()
+
+
 async def test_drain_with_no_active_sessions_is_a_noop() -> None:
     gate: CapacityGate[int] = CapacityGate(max_sessions=4)
     await gate.drain(list, drain_timeout_s=1.0, force_after=True)
