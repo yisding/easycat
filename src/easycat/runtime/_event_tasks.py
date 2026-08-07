@@ -8,6 +8,7 @@ from collections.abc import Coroutine
 from typing import Any
 
 from easycat.runtime.scope import (
+    BackgroundTaskScope,
     RuntimeMemberPolicy,
     RuntimeScope,
     RuntimeScopeState,
@@ -57,7 +58,9 @@ class RuntimeTaskScope:
         self._scope: RuntimeScope | None = None
         self._owns_root = False
         self._retired_roots: list[RuntimeScope] = []
+        self._release_task_scope = BackgroundTaskScope(name=f"{owner_label}-idle-scope-releases")
         self._release_tasks: set[asyncio.Task[None]] = set()
+        self._release_serial = 0
 
     @property
     def scope(self) -> RuntimeScope | None:
@@ -227,9 +230,11 @@ class RuntimeTaskScope:
         scope = self._scope
         if not self._owns_root or scope is None or not scope.empty:
             return
-        release = asyncio.create_task(
+        self._release_serial += 1
+        release = self._release_task_scope.create_task(
+            f"{self._owner_label}-release-idle-scope-{self._release_serial}",
             self.release_standalone_if_empty(),
-            name=f"{self._owner_label}-release-idle-scope",
+            log_errors=False,
         )
         self._release_tasks.add(release)
         release.add_done_callback(self._on_release_done)
