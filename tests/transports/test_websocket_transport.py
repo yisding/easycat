@@ -690,6 +690,22 @@ async def test_server_disconnect_treats_internal_client_cancel_as_retryable_fail
 
 
 @pytest.mark.asyncio
+async def test_server_disconnect_invalidates_socket_lease_before_base_clears_pointer() -> None:
+    transport = WebSocketTransport(WebSocketTransportConfig())
+    client = _TrackingCloseWebSocket()
+    transport._connected = True
+    transport._ws = client  # type: ignore[assignment]
+    transport._connection_epoch.bump(client)  # type: ignore[arg-type]
+    lease = transport._connection_epoch.capture()
+
+    await transport.disconnect()
+
+    assert transport._ws is None
+    assert not lease.guard()
+    assert transport._connection_epoch.capture().value is None
+
+
+@pytest.mark.asyncio
 async def test_server_disconnect_preserves_client_close_caller_cancel_for_retry() -> None:
     transport = WebSocketTransport(WebSocketTransportConfig())
     client = _BlockingFirstCloseWebSocket()

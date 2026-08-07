@@ -355,6 +355,11 @@ class WebSocketTransport(_WebSocketProtocolMixin, ServerTransportBase):
             # attached to a disconnected transport.
             self._close_browser_event_forwarder()
 
+    def _begin_disconnect_cleanup(self) -> None:
+        """Invalidate the accepted-socket lease before base cleanup clears it."""
+        self._connection_epoch.bump(None)
+        super()._begin_disconnect_cleanup()
+
     # ── Server helpers ────────────────────────────────────────────
 
     async def _handle_connection(self, ws: ServerConnection) -> None:
