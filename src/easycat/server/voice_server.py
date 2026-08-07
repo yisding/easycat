@@ -130,6 +130,7 @@ class VoiceServer:
             logger=logger,
             failure_message="VoiceServer raw-WebSocket close task failed",
             drop_if_closed=False,
+            release_standalone_when_idle=True,
         )
         self._await_natural_end_drain = False
 

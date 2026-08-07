@@ -80,6 +80,44 @@ async def test_active_websocket_close_reports_only_failures_with_task_name(
     assert server._ws_close_task_scope.tasks() == ()
 
 
+def test_late_websocket_close_releases_scope_before_cross_loop_reuse() -> None:
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+
+    async def first_close() -> None:
+        release = asyncio.Event()
+
+        class _LateConnection:
+            async def close(self, *, code: int, reason: str) -> None:
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+
+        server._ws_connections[1] = _LateConnection()
+        await server._close_active_ws_connections()
+        late_tasks = server._ws_close_task_scope.tasks()
+        assert len(late_tasks) == 1
+        release.set()
+        await asyncio.gather(*late_tasks)
+        for _ in range(20):
+            if server._ws_close_task_scope.scope is None:
+                break
+            await asyncio.sleep(0)
+        assert server._ws_close_task_scope.scope is None
+
+    async def second_close() -> None:
+        server._ws_connections.clear()
+        server._ws_connections[2] = AsyncMock()
+        await server._close_active_ws_connections()
+
+    asyncio.run(first_close())
+    asyncio.run(second_close())
+
+
 # ── start/serve/stop ─────────────────────────────────────────────────
 
 
