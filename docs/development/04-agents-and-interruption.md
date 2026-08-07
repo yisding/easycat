@@ -26,7 +26,8 @@ small:
 
 | Kind | Important fields | Runtime use |
 | --- | --- | --- |
-| `text_delta` | `text` | emit `AgentDelta`, feed streaming TTS buffer |
+| `text_delta` | `text`, optional `part_index` | append text, emit `AgentDelta`, feed streaming TTS buffer |
+| `text_replace` | `text`, `part_index` | replace one indexed text part and repair or cut off TTS safely |
 | `tool_started` | `tool_name`, `call_id` | emit and journal tool start |
 | `tool_delta` | `call_id`, `text` | stream tool progress |
 | `tool_result` | `call_id`, `result` | complete tool evidence |
@@ -35,6 +36,12 @@ small:
 Framework-specific execution cursors, handoffs, snapshots, and commit
 boundaries are carried in the recorder/evidence model without expanding the
 public speech grammar for every SDK.
+
+Text has two mutually exclusive stream shapes. Most bridges emit flat,
+unindexed `text_delta` events. Frameworks with replaceable response parts emit
+indexed `text_replace` snapshots plus indexed `text_delta` continuations. A
+repeated replacement at the same index changes the canonical transcript
+instead of appending duplicate text.
 
 ```mermaid
 flowchart LR
@@ -220,6 +227,13 @@ are tested in:
 - [`tests/session/test_session_streaming_segmentation.py`](../../tests/session/test_session_streaming_segmentation.py)
 - [`tests/session/test_session_streaming_markdown.py`](../../tests/session/test_session_streaming_markdown.py)
 - [`tests/session/test_session_streaming_consumer.py`](../../tests/session/test_session_streaming_consumer.py)
+
+Indexed replacements remain repairable until a TTS payload crosses the
+sentence buffer. If a later replacement changes text after that boundary,
+EasyCat cancels and clears current playback and suppresses further speech for
+the turn. The agent continues so `AgentFinal` and framework history receive
+the corrected transcript; EasyCat does not replay a correction over words the
+caller may already have heard.
 
 ## 4.6 TTS Preparation and Scheduling
 

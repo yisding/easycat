@@ -2105,6 +2105,21 @@ class Session:
         if self._turn is turn and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             self._reset_turn_state()
 
+    async def _cut_off_tts_for_text_replacement(self) -> None:
+        """Clear stale speech without cancelling the agent or ending its turn.
+
+        An indexed bridge replacement can still repair buffered text. Once a
+        TTS payload has been admitted, however, replaying the replacement
+        would duplicate any prefix the caller already heard. The streaming
+        consumer invokes this cutoff and suppresses further TTS while the
+        agent continues to produce the corrected final transcript.
+        """
+        self._tts_scheduler.set_playback_suppressed(True)
+        self._outbound_queue.flush_for_new_turn()
+        self._audio_router.reset_replay_chunks()
+        await self._tts_scheduler.synthesizer.cancel()
+        await clear_audio_if_supported(self.transport)
+
     async def reset_state(self) -> None:
         """Cancel everything and return to idle/listening state.
 

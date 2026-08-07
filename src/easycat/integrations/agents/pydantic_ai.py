@@ -14,6 +14,7 @@ import shlex
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import ExitStack
+from dataclasses import replace
 from typing import Any, ClassVar
 from urllib.parse import unquote
 from uuid import uuid4
@@ -28,6 +29,7 @@ from easycat.integrations.agents._helpers import (
     split_replacement_by_original_parts,
 )
 from easycat.integrations.agents._pydantic_ai_events import translate_event
+from easycat.integrations.agents._text_stream import AgentTextStream, is_text_event
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -582,7 +584,7 @@ class PydanticAIBridge:
             entered_at=time.monotonic_ns(),
             committable=False,
         )
-        accumulated = ""
+        accumulated = AgentTextStream()
         raw_output: Any = None
         done_emitted = False
 
@@ -599,10 +601,10 @@ class PydanticAIBridge:
                 if hasattr(agent, "iter"):
                     inner = self._stream_via_iter(turn_input, recorder, cancel_token, history_key)
                     async for ev in inner:
-                        if ev.kind == "text_delta":
-                            accumulated += ev.text
-                        elif ev.kind == "done":
+                        if ev.kind == "done":
                             done_emitted = True
+                        else:
+                            accumulated.apply(ev)
                         yield ev
                     raw_output = self._last_output
                 else:
@@ -613,8 +615,7 @@ class PydanticAIBridge:
                         history_key,
                     )
                     async for ev in inner:
-                        if ev.kind == "text_delta":
-                            accumulated += ev.text
+                        accumulated.apply(ev)
                         yield ev
                     raw_output = self._last_output
             finally:
@@ -630,7 +631,7 @@ class PydanticAIBridge:
         if not done_emitted:
             yield AgentBridgeEvent(
                 kind="done",
-                text=_completion_text(accumulated, raw_output),
+                text=_completion_text(accumulated.text, raw_output),
                 structured_output=raw_output,
             )
 
@@ -674,7 +675,7 @@ class PydanticAIBridge:
                                 tool_call_ids=tool_call_ids,
                             )
                             if mapped is not None:
-                                if interrupted and mapped.kind == "text_delta":
+                                if interrupted and is_text_event(mapped):
                                     continue
                                 yield mapped
 
@@ -1027,14 +1028,15 @@ class _GraphEventHandler:
 
     def __init__(self, recorder: AgentRecorder) -> None:
         self._recorder = recorder
-        self._accumulated_text = ""
+        self._text_stream = AgentTextStream()
         self._was_called = False
         self._pending: list[AgentBridgeEvent] = []
         self._tool_call_ids: dict[int, str] = {}
+        self._next_part_index = 0
 
     @property
     def accumulated_text(self) -> str:
-        return self._accumulated_text
+        return self._text_stream.text
 
     @property
     def was_called(self) -> bool:
@@ -1045,16 +1047,26 @@ class _GraphEventHandler:
         self._pending = []
         return events
 
-    async def _handle_event(self, event: Any) -> None:
+    async def _handle_event(
+        self,
+        event: Any,
+        *,
+        part_index_offset: int = 0,
+        tool_call_ids: dict[int, str] | None = None,
+    ) -> int | None:
         mapped = translate_event(
             event,
             self._recorder,
-            tool_call_ids=self._tool_call_ids,
+            tool_call_ids=self._tool_call_ids if tool_call_ids is None else tool_call_ids,
         )
         if mapped is not None:
-            if mapped.kind == "text_delta":
-                self._accumulated_text += mapped.text
+            local_part_index = mapped.part_index
+            if local_part_index is not None and part_index_offset:
+                mapped = replace(mapped, part_index=local_part_index + part_index_offset)
+            self._text_stream.apply(mapped)
             self._pending.append(mapped)
+            return local_part_index
+        return None
 
     async def __call__(self, *args: Any) -> None:
         """Handle PydanticAI v1 single events and v2 ``(ctx, events)`` streams."""
@@ -1064,10 +1076,24 @@ class _GraphEventHandler:
             return
         if len(args) == 2:
             ctx, events = args
+            part_index_offset = self._next_part_index
+            max_local_part_index = -1
+            tool_call_ids: dict[int, str] = {}
             try:
                 async for event in events:
-                    await self._handle_event(event)
+                    local_part_index = await self._handle_event(
+                        event,
+                        part_index_offset=part_index_offset,
+                        tool_call_ids=tool_call_ids,
+                    )
+                    if local_part_index is not None:
+                        max_local_part_index = max(max_local_part_index, local_part_index)
             finally:
+                if max_local_part_index >= 0:
+                    self._next_part_index = max(
+                        self._next_part_index,
+                        part_index_offset + max_local_part_index + 1,
+                    )
                 await record_usage_from_result(
                     self._recorder,
                     ctx,

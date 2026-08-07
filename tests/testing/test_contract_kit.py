@@ -492,6 +492,7 @@ async def test_agent_bridge_suite_accepts_minimal_conformant_bridge() -> None:
 def test_agent_bridge_event_kinds_match_the_bridge_grammar() -> None:
     assert AGENT_BRIDGE_EVENT_KINDS == {
         "text_delta",
+        "text_replace",
         "tool_started",
         "tool_delta",
         "tool_result",

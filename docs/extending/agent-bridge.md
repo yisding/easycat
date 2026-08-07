@@ -61,7 +61,7 @@ the authoritative docstrings):
 | Member | Purpose |
 | --- | --- |
 | `COMMITTABLE_BOUNDARIES` | Map of unit kinds to commit rules for interruption handling. |
-| `async invoke(turn_input, recorder, cancel_token)` | Run one turn, yielding `AgentBridgeEvent`s (`text_delta`, `tool_started`, ...). |
+| `async invoke(turn_input, recorder, cancel_token)` | Run one turn, yielding `AgentBridgeEvent`s (`text_delta`, `text_replace`, `tool_started`, ...). |
 | `snapshot_state()` | JSON-safe `FrameworkStateSnapshot` of framework state. |
 | `apply_interruption(delivered_text, mode, ...)` | Truncate history to what the user actually heard. |
 | `replace_last_assistant_text(text)` | Adopt the post-processed (Markdown-stripped) reply. |
@@ -95,9 +95,19 @@ implementation must produce — lives in
 
 ## Notes
 
-- Bridges yield `text_delta` events as text arrives; Session splits them
-  into sentences for TTS. Buffering a whole reply before yielding adds
-  first-audio latency.
+- Append-only bridges yield unindexed `text_delta` events as text arrives;
+  Session splits them into sentences for TTS. Buffering a whole reply before
+  yielding adds first-audio latency.
+- A bridge with indexed, replaceable framework parts yields
+  `text_replace(text=..., part_index=N)` for the complete current part, then
+  indexed `text_delta` events for continuations. Repeating `text_replace` at
+  `N` replaces that part. Do not mix indexed and unindexed text events in one
+  turn.
+- Session repairs replacements while text is still buffered. If replacement
+  changes text after TTS admission, playback is cancelled and cleared and the
+  rest of that turn is not synthesized; the corrected final transcript still
+  completes normally. This avoids replaying duplicate speech over a stale
+  audible prefix.
 - Honor `cancel_token` cooperatively — check it between model/tool steps
   rather than relying on task cancellation.
 - `apply_interruption` receives the text the user actually heard

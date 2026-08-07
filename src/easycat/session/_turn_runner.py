@@ -53,6 +53,7 @@ from easycat.events import (
     _mark_turn_started_observation,
 )
 from easycat.integrations.agents._agent_runner import PreparedAgentResponse
+from easycat.integrations.agents._text_stream import AgentTextStream
 from easycat.integrations.agents.base import AgentBridgeEvent
 from easycat.runtime.context import RunContext
 from easycat.runtime.records import JournalRecordKind
@@ -157,6 +158,7 @@ class _PreemptiveAgentResult:
 @dataclass
 class _TextTurnStreamState:
     accumulated: str = ""
+    text_stream: AgentTextStream = field(default_factory=AgentTextStream)
     structured_output: object | None = None
     pending_tool_calls: Counter[str | None] = field(default_factory=Counter)
 
@@ -210,6 +212,7 @@ class TurnRunner:
         self._drain_session_actions = wiring.drain_session_actions
         self._caller_id_system_message = wiring.caller_id_system_message
         self._cancel_turn = wiring.cancel_turn
+        self._cut_off_tts_for_text_replacement = wiring.cut_off_tts_for_text_replacement
         self._stop = wiring.stop
         self._reset_turn_state = wiring.reset_turn_state
         self._emit = wiring.emit
@@ -903,6 +906,7 @@ class TurnRunner:
                 first_tts_payload_ready=st.first_tts_payload_ready,
                 abort_event=st.agent_stream_aborted,
                 is_active=lambda: self._streaming_turn_is_current(st),
+                on_tts_replacement_conflict=self._cut_off_tts_for_text_replacement,
             )
 
         agent_task = asyncio.create_task(_run_agent_consumer())
@@ -1754,15 +1758,23 @@ class TurnRunner:
         if kind == "done":
             if getattr(event, "text", ""):
                 state.accumulated = event.text
+                state.text_stream.replace_final(event.text)
             if getattr(event, "structured_output", None) is not None:
                 state.structured_output = event.structured_output
             return True
-        if kind == "text_delta" and getattr(event, "text", ""):
-            state.accumulated += event.text
+        if kind in {"text_delta", "text_replace"}:
+            update = state.text_stream.apply(event)
+            if update is None:  # pragma: no cover - guarded by kind
+                return False
+            state.accumulated = update.text
             self._text_turn_accumulated = state.accumulated
+            if update.text == update.previous_text:
+                return False
             await self._emit(
                 AgentDelta(
                     text=event.text,
+                    part_index=update.part_index,
+                    replacement=update.operation == "replace",
                     session_id=self._session_id,
                     turn_id=turn_id,
                 )

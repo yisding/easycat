@@ -173,6 +173,13 @@ that need timeout/cancellation/history. `auto_adapt_agent()` in
 `integrations/agents/_factory.py` detects known framework objects and returns
 the right bridge.
 
+Bridge text is either a flat sequence of unindexed `text_delta` events or an
+indexed sequence whose `text_replace` snapshots replace complete response
+parts and whose deltas append within those parts. Session repairs replacements
+before TTS admission; a replacement that crosses admitted speech clears and
+suppresses the rest of that turn's playback while preserving the corrected
+final transcript.
+
 ## Dual-Backend Fallback
 
 - VAD: `create_vad` auto-resolves Silero → FunASR → TEN → Krisp and raises if

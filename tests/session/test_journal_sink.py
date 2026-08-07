@@ -7,6 +7,7 @@ import pytest
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.events import (
+    AgentDelta,
     CallAnswered,
     CallEnded,
     CallFailed,
@@ -94,6 +95,25 @@ async def test_journal_sink_subscribes_session_events() -> None:
     assert records[0].session_id == "event-session"
     assert records[0].turn_id == "t1"
     assert records[0].data == {"text": "hello", "track": "caller"}
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_preserves_agent_text_replacement_metadata() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(AgentDelta(text="correct", part_index=2, replacement=True))
+
+    [record] = journal.read()
+    assert record.data == {"text": "correct", "part_index": 2, "replacement": True}
 
 
 @pytest.mark.asyncio

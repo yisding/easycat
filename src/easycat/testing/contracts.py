@@ -527,6 +527,18 @@ class AgentBridgeContractSuite(ContractSuite):
                 f"invoke() yielded unknown event kind {event.kind!r}; the stream grammar "
                 f"allows only {sorted(AGENT_BRIDGE_EVENT_KINDS)}"
             )
+            if event.kind == "text_replace":
+                assert event.part_index is not None, (
+                    "text_replace must identify the complete text part it replaces"
+                )
+        text_modes = {
+            "indexed" if event.part_index is not None else "flat"
+            for event in events
+            if event.kind in {"text_delta", "text_replace"}
+        }
+        assert len(text_modes) <= 1, (
+            "one invoke() stream cannot mix indexed and unindexed text events"
+        )
         kinds = [event.kind for event in events]
         assert kinds.count("done") == 1, "invoke() must yield exactly one done event"
         assert kinds[-1] == "done", "the done event must terminate the stream"
