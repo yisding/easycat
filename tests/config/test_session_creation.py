@@ -18,13 +18,15 @@ from easycat import (
     TurnMode,
     create_session,
 )
-from easycat.config import EasyConfigError
+from easycat.config import EasyConfigError, OutboundCallConfig, TelephonyConfig
 from easycat.config import _factory as config_factory
 from easycat.runtime.artifacts import ArtifactWriteReceipt
 from easycat.session._types import CallIdentity
 from easycat.stages.base import put_artifact_async
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.openai_provider import OpenAISTT
+from easycat.telephony.retry import RetryStrategyConfig
+from easycat.timeouts import TimeoutConfig
 from easycat.transports.twilio_media import TwilioConnectionTransport
 from easycat.tts.input import TTSInputPolicy
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
@@ -596,6 +598,246 @@ def test_create_session_revalidates_mutated_privacy_policy_before_resources(
     )
 
     with pytest.raises(EasyConfigError, match="caller_id_exposure"):
+        create_session(config)
+
+
+def test_create_session_revalidates_mutated_timeout_policy_before_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+    )
+    config.timeouts.agent_timeout = 0.0
+    monkeypatch.setattr(
+        config_factory,
+        "_create_debug_resources",
+        lambda *_args, **_kwargs: pytest.fail("resources allocated before timeout validation"),
+    )
+
+    with pytest.raises(ValueError, match="agent_timeout must be a finite positive number"):
+        create_session(config)
+
+
+def test_create_session_revalidates_mutated_outbound_policy_before_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outbound = OutboundCallConfig(from_number="+15551234567")
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        telephony=TelephonyConfig(outbound=outbound),
+    )
+    outbound.max_call_duration_s = 0
+    monkeypatch.setattr(
+        config_factory,
+        "_create_debug_resources",
+        lambda *_args, **_kwargs: pytest.fail("resources allocated before outbound validation"),
+    )
+
+    with pytest.raises(ValueError, match="max_call_duration_s must be positive"):
+        create_session(config)
+
+
+def test_create_session_revalidates_mutated_nested_voicemail_policy_before_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outbound = OutboundCallConfig(from_number="+15551234567")
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        telephony=TelephonyConfig(outbound=outbound),
+    )
+    outbound.voicemail_detection.mode = "detect_end"  # type: ignore[assignment]
+    monkeypatch.setattr(
+        config_factory,
+        "_create_debug_resources",
+        lambda *_args, **_kwargs: pytest.fail("resources allocated before voicemail validation"),
+    )
+
+    with pytest.raises(EasyConfigError, match="voicemail_detection.mode"):
+        create_session(config)
+
+
+def test_create_session_rejects_replaced_outbound_before_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RaisingCopyOutbound:
+        copy_called = False
+
+        def __copy__(self) -> object:
+            type(self).copy_called = True
+            raise AssertionError("invalid outbound was copied before validation")
+
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        telephony=TelephonyConfig(outbound=OutboundCallConfig()),
+    )
+    config.telephony.outbound = _RaisingCopyOutbound()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        config_factory,
+        "_create_debug_resources",
+        lambda *_args, **_kwargs: pytest.fail("resources allocated before outbound type check"),
+    )
+
+    with pytest.raises(EasyConfigError, match="telephony.outbound must be an OutboundCallConfig"):
+        create_session(config)
+    assert _RaisingCopyOutbound.copy_called is False
+
+
+def test_create_session_revalidates_mutated_outbound_boolean_before_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outbound = OutboundCallConfig()
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        telephony=TelephonyConfig(outbound=outbound),
+    )
+    outbound.classification_gate = "false"  # type: ignore[assignment]
+    monkeypatch.setattr(
+        config_factory,
+        "_create_debug_resources",
+        lambda *_args, **_kwargs: pytest.fail("resources allocated before boolean validation"),
+    )
+
+    with pytest.raises(EasyConfigError, match="classification_gate must be a boolean"):
+        create_session(config)
+
+
+def test_create_session_revalidates_mutated_telephony_boolean_before_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    telephony = TelephonyConfig()
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        telephony=telephony,
+    )
+    telephony.enable_outbound_call_manager = "false"  # type: ignore[assignment]
+    monkeypatch.setattr(
+        config_factory,
+        "_create_debug_resources",
+        lambda *_args, **_kwargs: pytest.fail(
+            "resources allocated before telephony boolean validation"
+        ),
+    )
+
+    with pytest.raises(EasyConfigError, match="enable_outbound_call_manager must be a boolean"):
+        create_session(config)
+
+
+def test_create_session_rejects_replaced_telephony_before_copying_nested_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RaisingCopyTelephony:
+        copy_called = False
+
+        def __copy__(self) -> object:
+            type(self).copy_called = True
+            raise AssertionError("invalid telephony config was copied before validation")
+
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        telephony=TelephonyConfig(),
+    )
+    config.telephony = _RaisingCopyTelephony()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        config_factory,
+        "_create_debug_resources",
+        lambda *_args, **_kwargs: pytest.fail("resources allocated before telephony type check"),
+    )
+
+    with pytest.raises(EasyConfigError, match="telephony must be a TelephonyConfig"):
+        create_session(config)
+    assert _RaisingCopyTelephony.copy_called is False
+
+
+def test_create_session_copies_timeout_policy_for_runtime() -> None:
+    timeouts = TimeoutConfig(agent_timeout=12.0)
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        debug="off",
+        timeouts=timeouts,
+    )
+
+    session = create_session(config)
+    timeouts.agent_timeout = 1.0
+
+    assert session._timeout_config is not timeouts
+    assert session._timeout_config.agent_timeout == 12.0
+
+
+def test_audio_runtime_config_copies_nested_retry_policy() -> None:
+    retry = RetryStrategyConfig(max_retries=4)
+    outbound = OutboundCallConfig(from_number="+15551234567", retry_strategy=retry)
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        telephony=TelephonyConfig(outbound=outbound),
+    )
+
+    runtime = config_factory._audio_runtime_config(config)
+    runtime_retry = runtime.telephony.outbound.retry_strategy  # type: ignore[union-attr]
+    retry.max_retries = 1
+
+    assert runtime_retry is not retry
+    assert runtime_retry is not None
+    assert runtime_retry.max_retries == 4
+
+
+def test_create_session_revalidates_mutated_retry_policy_before_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    retry = RetryStrategyConfig()
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        telephony=TelephonyConfig(
+            outbound=OutboundCallConfig(from_number="+15551234567", retry_strategy=retry)
+        ),
+    )
+    retry.base_delay_s = float("nan")
+    monkeypatch.setattr(
+        config_factory,
+        "_create_debug_resources",
+        lambda *_args, **_kwargs: pytest.fail("resources allocated before retry validation"),
+    )
+
+    with pytest.raises(EasyConfigError, match="retry_strategy.*base_delay_s"):
         create_session(config)
 
 

@@ -303,6 +303,42 @@ def test_runtime_scope_child_requires_attached_root_and_unique_name() -> None:
 
 
 @pytest.mark.asyncio
+async def test_prune_empty_child_forgets_settled_owner_metadata() -> None:
+    root = _attached_root("session", survivor_capacity=1)
+    child = root.create_child("provider-attempt")
+    owner_id = child.owner_id
+    release = asyncio.Event()
+    task = await child.start_owned_task("close", release.wait)
+
+    assert root.prune_empty_child(child) is False
+    assert root.children() == (child,)
+
+    release.set()
+    await task
+    await child.drain()
+
+    assert root.prune_empty_child(child) is True
+    assert root.children() == ()
+    assert child.state is RuntimeScopeState.CLOSED
+    registry = root.survivor_registry
+    assert registry is not None
+    assert owner_id not in registry._owner_states
+
+
+@pytest.mark.asyncio
+async def test_prune_empty_child_preserves_retained_terminal_evidence() -> None:
+    root = _attached_root("session")
+    child = root.create_child("provider-attempt")
+    task = child.create_task("close", asyncio.sleep(0), retain_result=True)
+    await task
+    await child.drain()
+
+    assert root.prune_empty_child(child) is False
+    assert root.children() == (child,)
+    assert child.terminal_results("close")
+
+
+@pytest.mark.asyncio
 async def test_runtime_scope_owned_child_charges_and_releases_both_quotas() -> None:
     supervisor = RuntimeSupervisor(capacity=2)
     root = _attached_root("session", supervisor=supervisor, survivor_capacity=2)

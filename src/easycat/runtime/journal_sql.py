@@ -75,6 +75,11 @@ logger = logging.getLogger(__name__)
 # sequence-writer exclusivity invariant for a shared path.
 _LIVE_JOURNALS_LOCK = threading.Lock()
 _LIVE_JOURNALS: weakref.WeakValueDictionary[tuple[int, Path], Any] = weakref.WeakValueDictionary()
+# A libSQL SDK close can fail or outlive the bounded public close call. Keep
+# those connections strongly owned at process scope until the SDK confirms
+# physical closure; the ordinary live-writer registry intentionally remains
+# weak so abandoned synchronous SQLite journals retain their recovery behavior.
+_PENDING_LIBSQL_CLOSES: dict[tuple[int, Path], Any] = {}
 _CRASH_SWEEP_INTERVAL_SECONDS = 60.0
 _CRASH_SWEEP_RETRY_SECONDS = 1.0
 _CRASH_SWEEP_MAX_ROOTS = 128
@@ -474,6 +479,7 @@ class SqliteJournal(_SqlJournalBase):
         self._seq = 0
         self._degraded = False
         self._closed = False
+        self._closing = False
         self._recovered = False
         self._original_session_id = session_id
         self._clean_close_marked = False
@@ -506,8 +512,8 @@ class SqliteJournal(_SqlJournalBase):
             self._conn.executescript(_SQLITE_SCHEMA)
             _ensure_journal_schema(self._conn)
 
-            self._claim_live_journal()
             try:
+                self._claim_live_journal()
                 self._initialize_live_journal(session_id, existed=existed)
                 _begin_filesystem_artifact_epoch(root, session_id, self._conn)
             except BaseException:
@@ -521,8 +527,18 @@ class SqliteJournal(_SqlJournalBase):
         """Reject a second live writer for this process/path identity."""
         key = (os.getpid(), self._db_path.absolute())
         with _LIVE_JOURNALS_LOCK:
+            pending_libsql = _PENDING_LIBSQL_CLOSES.get(key)
             current = _LIVE_JOURNALS.get(key)
-            if current is not None and not current._closed:
+            # ``close()`` closes admission before it acquires the connection
+            # lock. Keep the path claim exclusive until teardown releases the
+            # registry entry; otherwise a replacement can open beside the
+            # still-live connection and inherit a stale transaction snapshot.
+            # ``_closed`` without ``_closing`` represents an abandoned/crashed
+            # connection and remains eligible for the existing recovery path.
+            if pending_libsql is not None or (
+                current is not None
+                and (not current._closed or bool(getattr(current, "_closing", False)))
+            ):
                 raise RuntimeError(f"Journal is already active: {self._db_path}")
 
             row = self._conn.execute(
@@ -736,40 +752,54 @@ class SqliteJournal(_SqlJournalBase):
     def close(self) -> None:
         if self._closed:
             return
+        self._closing = True
         self._closed = True
-        with self._lock:
-            try:
-                self._commit_transaction_locked(reopen=False)
-                harden_sqlite_files(self._db_path)
-            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
-                pass  # no active transaction or already closed
-            try:
-                self._conn.execute(
-                    "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
-                )
-                # Drop the liveness marker: the process is shutting down, so
-                # the journal is no longer "live" for the crash sweep.
-                self._conn.execute(
-                    "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
-                )
-                self._clean_close_marked = True
-            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
-                pass
-            try:
-                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                harden_sqlite_files(self._db_path)
-            except (sqlite3.OperationalError, sqlite3.ProgrammingError):
-                logger.debug("WAL checkpoint skipped on close", exc_info=True)
-            try:
-                self._conn.close()
-            except sqlite3.ProgrammingError:
-                pass  # already closed
-        self._release_live_journal()
+        try:
+            with self._lock:
+                try:
+                    try:
+                        self._commit_transaction_locked(reopen=False)
+                    except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                        pass  # no active transaction or already closed
+                    self._harden_files_on_close()
+                    try:
+                        self._conn.execute(
+                            "INSERT OR REPLACE INTO session_state "
+                            "(key, value) VALUES ('clean_close', '1')"
+                        )
+                        # Drop the liveness marker: the process is shutting down, so
+                        # the journal is no longer "live" for the crash sweep.
+                        self._conn.execute(
+                            "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
+                        )
+                        self._clean_close_marked = True
+                    except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                        pass
+                    try:
+                        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+                        logger.debug("WAL checkpoint skipped on close", exc_info=True)
+                    self._harden_files_on_close()
+                finally:
+                    try:
+                        self._conn.close()
+                    except sqlite3.Error:
+                        logger.debug("SQLite connection close failed", exc_info=True)
+        finally:
+            # A permission-hardening failure is diagnostic, not permission to
+            # leave an open connection and an unretryable process-local claim.
+            self._release_live_journal()
         # Run retention opportunistically — never block a turn.
         try:
             run_retention(self._root, mode=self._retention_mode, skip=self._db_path)
         except Exception:
             logger.debug("Retention sweep failed", exc_info=True)
+
+    def _harden_files_on_close(self) -> None:
+        try:
+            harden_sqlite_files(self._db_path)
+        except OSError:
+            logger.warning("Failed to harden SQLite journal files during close", exc_info=True)
 
     def flush(self) -> None:
         """Commit the current transaction and start a new one."""
@@ -1313,8 +1343,13 @@ class LibsqlJournal(_SqlJournalBase):
         mkdir_private(journals_dir)
         self._db_path = journals_dir / f"{session_id}.sqlite"
         self._lock = threading.Lock()
+        self._lifecycle_lock = threading.Lock()
         self._degraded = False
         self._closed = False
+        self._connection_closed = False
+        self._finalize_requested = False
+        self._finalize_thread: threading.Thread | None = None
+        self._close_thread: threading.Thread | None = None
 
         url = sync_url or os.environ.get("EASYCAT_LIBSQL_URL", "")
         token = auth_token or os.environ.get("EASYCAT_LIBSQL_AUTH_TOKEN", "")
@@ -1324,6 +1359,15 @@ class LibsqlJournal(_SqlJournalBase):
             connect_kwargs["sync_url"] = url
         if token:
             connect_kwargs["auth_token"] = token
+
+        # A prior Session may already have been collected after swapping its
+        # live journal for a read-only postmortem view. Service that retained
+        # writer's bounded close retry before opening another SDK connection,
+        # but reject this admission attempt because the path was still owned
+        # when it began. A later attempt can proceed once physical close has
+        # removed the process-global pending claim.
+        if self._retry_pending_close_for_path():
+            raise RuntimeError(f"Journal is already active: {self._db_path}")
 
         # Serialize startup until the durable live-owner marker is committed.
         # The local replica has the same sequence primary key as SqliteJournal,
@@ -1406,7 +1450,7 @@ class LibsqlJournal(_SqlJournalBase):
         """Reject a second live writer for this local replica path."""
         key = (os.getpid(), self._db_path.absolute())
         with _LIVE_JOURNALS_LOCK:
-            current = _LIVE_JOURNALS.get(key)
+            current = _PENDING_LIBSQL_CLOSES.get(key) or _LIVE_JOURNALS.get(key)
             # ``close()`` marks the instance closed before it removes the
             # persisted owner marker. Keep the in-process claim exclusive
             # until teardown reaches ``_release_live_journal()``.
@@ -1425,11 +1469,35 @@ class LibsqlJournal(_SqlJournalBase):
                     raise RuntimeError(f"Journal is active in process {live_pid}: {self._db_path}")
             _LIVE_JOURNALS[key] = self
 
+    def _retry_pending_close_for_path(self) -> bool:
+        """Retry a retained predecessor without opening a replacement connection."""
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_JOURNALS_LOCK:
+            pending = _PENDING_LIBSQL_CLOSES.get(key)
+        if pending is None:
+            return False
+        try:
+            pending.close()
+        except Exception:
+            logger.warning("Pending libSQL close retry failed", exc_info=True)
+        return True
+
+    def _retain_pending_close(self) -> None:
+        """Keep this journal alive until its SDK connection physically closes."""
+        key = (os.getpid(), self._db_path.absolute())
+        with _LIVE_JOURNALS_LOCK:
+            pending = _PENDING_LIBSQL_CLOSES.get(key)
+            if pending is not None and pending is not self:
+                raise RuntimeError(f"Journal is already active: {self._db_path}")
+            _PENDING_LIBSQL_CLOSES[key] = self
+
     def _release_live_journal(self) -> None:
         key = (os.getpid(), self._db_path.absolute())
         with _LIVE_JOURNALS_LOCK:
             if _LIVE_JOURNALS.get(key) is self:
                 _LIVE_JOURNALS.pop(key, None)
+            if _PENDING_LIBSQL_CLOSES.get(key) is self:
+                _PENDING_LIBSQL_CLOSES.pop(key, None)
 
     def _restore_live_owner_marker(self) -> None:
         self._conn.execute(
@@ -1464,39 +1532,95 @@ class LibsqlJournal(_SqlJournalBase):
             logger.debug("libsql sync failed during flush", exc_info=True)
 
     def finalize(self) -> None:
-        if self._closed:
-            return
-        try:
-            with self._lock:
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._finalize_requested = True
+            worker = self._finalize_thread
+            if worker is None or not worker.is_alive():
+                worker = threading.Thread(
+                    target=self._finalize_in_background,
+                    daemon=True,
+                    name="libsql-finalize",
+                )
+                self._finalize_thread = worker
+                worker.start()
+        worker.join(timeout=JOURNAL_LIBSQL_SYNC_THREAD_JOIN_TIMEOUT_S)
+        if worker.is_alive():
+            logger.warning(
+                "libSQL finalize exceeded %.1fs; cleanup remains runtime-owned",
+                JOURNAL_LIBSQL_SYNC_THREAD_JOIN_TIMEOUT_S,
+            )
+
+    def _finalize_in_background(self) -> None:
+        with self._lock:
+            if self._connection_closed:
+                return
+            try:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
                 )
                 self._conn.commit()
                 harden_sqlite_files(self._db_path)
-        except Exception:
-            logger.debug("libsql clean_close marker write failed", exc_info=True)
-        try:
-            with self._lock:
+            except Exception:
+                logger.debug("libsql clean_close marker write failed", exc_info=True)
+            try:
                 self._conn.sync()
-        except Exception:
-            logger.debug("libsql sync failed during finalize", exc_info=True)
+            except Exception:
+                logger.debug("libsql sync failed during finalize", exc_info=True)
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
+        with self._lifecycle_lock:
+            if not self._connection_closed:
+                self._retain_pending_close()
+            worker = self._close_thread
+            if worker is None or (not worker.is_alive() and not self._connection_closed):
+                self._closed = True
+                self._sync_stop.set()
+                worker = threading.Thread(
+                    target=self._close_in_background,
+                    daemon=True,
+                    name="libsql-close",
+                )
+                self._close_thread = worker
+                worker.start()
+        worker.join(timeout=JOURNAL_LIBSQL_SYNC_THREAD_JOIN_TIMEOUT_S)
+        if worker.is_alive():
+            logger.warning(
+                "libSQL close exceeded %.1fs; cleanup remains runtime-owned",
+                JOURNAL_LIBSQL_SYNC_THREAD_JOIN_TIMEOUT_S,
+            )
 
-        # Stop the sync thread.
-        self._sync_stop.set()
-        if self._sync_thread is not None:
-            self._sync_thread.join(timeout=JOURNAL_LIBSQL_SYNC_THREAD_JOIN_TIMEOUT_S)
+    @property
+    def close_complete(self) -> bool:
+        """Whether the SDK connection has confirmed physical closure."""
+        return self._connection_closed
 
-        # Serialize the final sync and connection close with an append that
-        # started just before ``_closed`` was set.  Unlike the periodic sync
-        # path, this used to touch the connection without the writer lock,
-        # allowing teardown to close it underneath an in-flight commit.
+    def _close_in_background(self) -> None:
+        """Finish close after every connection user has released the writer lock."""
         try:
+            current = threading.current_thread()
+            with self._lifecycle_lock:
+                workers = (self._sync_thread, self._finalize_thread)
+            for worker in workers:
+                if worker is not None and worker is not current:
+                    worker.join()
+
+            # Serialize final mutation/sync/close with an append that started
+            # just before admission closed. If an SDK call is stuck, only this
+            # daemon owner waits; the public close boundary stays bounded.
             with self._lock:
+                if self._connection_closed:
+                    return
+                if self._finalize_requested:
+                    try:
+                        self._conn.execute(
+                            "INSERT OR REPLACE INTO session_state "
+                            "(key, value) VALUES ('clean_close', '1')"
+                        )
+                        self._conn.commit()
+                    except Exception:
+                        logger.debug("libsql clean_close marker write failed", exc_info=True)
                 try:
                     self._conn.execute(
                         "DELETE FROM session_state WHERE key IN ('live_pid', 'live_pid_start')"
@@ -1514,12 +1638,46 @@ class LibsqlJournal(_SqlJournalBase):
                 except Exception:
                     logger.debug("libsql final sync failed on close", exc_info=True)
 
-                try:
-                    self._conn.close()
-                except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
-                    pass
+                if not self._close_connection_locked():
+                    return
+                self._connection_closed = True
         finally:
-            self._release_live_journal()
+            if self._connection_closed:
+                self._release_live_journal()
+
+    def _close_connection_locked(self) -> bool:
+        """Close the SDK connection, restoring ownership when close fails."""
+        try:
+            self._conn.close()
+        except Exception:
+            logger.warning(
+                "libSQL connection close failed; cleanup remains retryable",
+                exc_info=True,
+            )
+            self._restore_owner_after_close_failure_locked()
+            return False
+        return True
+
+    def _restore_owner_after_close_failure_locked(self) -> None:
+        # Closing can fail before the SDK releases the local replica. Restore
+        # the marker removed above so another process cannot mistake that
+        # still-owned connection for a cleanly released writer.
+        try:
+            self._restore_live_owner_marker()
+            self._conn.commit()
+        except Exception:
+            logger.warning(
+                "libSQL live-owner marker restoration failed after close error",
+                exc_info=True,
+            )
+            return
+        try:
+            self._conn.sync()
+        except Exception:
+            logger.warning(
+                "libSQL restored owner marker could not sync after close error",
+                exc_info=True,
+            )
 
     # ── Internals ────────────────────────────────────────────────
 

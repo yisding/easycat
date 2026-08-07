@@ -1404,6 +1404,27 @@ class TestReplayDecision:
         await stage.execute([b"\x00\x00"], ctx, turn)
         assert stage.replay_decision(stage.snapshot_state()) == 1
 
+    async def test_turn_stage_materializes_generator_input_once_for_detection(self):
+        chunk = AudioChunk(data=b"\x01\x02", format=PCM16_MONO_16K)
+        seen: list[AudioChunk] = []
+
+        class _CapturingSmartTurn:
+            async def detect(self, audio_chunks):
+                seen.extend(audio_chunks)
+                return {"prediction": 1, "probability": 0.95}
+
+        def audio_window():
+            yield chunk
+
+        result = await TurnStage(_CapturingSmartTurn()).execute(
+            audio_window(),
+            _make_ctx(),
+            _make_turn(),
+        )
+
+        assert result["prediction"] == 1
+        assert seen == [chunk]
+
     async def test_turn_stage_journals_current_prediction_in_state_after(self):
         journal = InMemoryRingBuffer(capacity=100)
         ctx = _make_ctx(journal=journal)

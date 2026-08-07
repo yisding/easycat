@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "update_rationale": "WS1.2c routes internal turn starts through private publications before marked public observations",
+  "update_rationale": "Reviewed bug-audit lifecycle ownership, cancellation, and bounded teardown changes",
   "counts": {
     "categories": {
       "activity_epoch_bump": 1,
       "activity_owner_assignment": 1,
-      "activity_reset_call": 3,
+      "activity_reset_call": 5,
       "activity_transition_call": 9,
       "identity_carrier_assignment": 4,
       "identity_clear_call": 15,
@@ -19,7 +19,7 @@
     },
     "roles": {
       "activity_initialize": 1,
-      "activity_reset": 4,
+      "activity_reset": 6,
       "activity_transition": 9,
       "identity_carrier": 4,
       "identity_clear": 15,
@@ -35,6 +35,8 @@
     "activity_owner_assignment\tturn_manager.py\tTurnManager.__init__\tassign self._activity\t45c30128467ea343\t0\tactivity_initialize\tInitializes the TurnManager-owned activity Epoch in IDLE.",
     "activity_reset_call\tsession/_session.py\tSession._reset_turn_state\tcall self._turn_manager.reset\tc784e162b528b927\t0\tactivity_reset\tResets manager activity whenever Session clears voice-turn identity.",
     "activity_reset_call\tsession/_turn_runner.py\tTurnRunner._reset_turn_manager_preserving_token\tcall self._turn_manager.reset\t3c0a3930c95e301f\t0\tactivity_reset\tEnds manager activity while gated replay deliberately retains turn identity and token.",
+    "activity_reset_call\tsession/_turn_runner.py\tTurnRunner._rollback_rejected_start_activity\tcall self._turn_manager.reset\tc784e162b528b927\t0\tactivity_reset\tRolls back the exact manager activity still owned by a cancelled STT startup publication.",
+    "activity_reset_call\tturn_manager.py\tTurnManager._begin_turn\tcall self.reset\tcf0d1ee17187962a\t0\tactivity_reset\tRolls back manager activity when private Session admission rejects the new voice turn.",
     "activity_reset_call\tturn_manager.py\tTurnManager.shutdown\tcall self.reset\tcf0d1ee17187962a\t0\tactivity_reset\tRoutes shutdown through the manager activity reset path.",
     "activity_transition_call\tturn_manager.py\tTurnManager._begin_turn\ttransition TurnManagerState.USER_SPEAKING reason=reason\tbfeeacc99d9fdfa4\t0\tactivity_transition\tStarts USER_SPEAKING for VAD, push-to-talk, and barge-in entry paths.",
     "activity_transition_call\tturn_manager.py\tTurnManager._complete_user_turn\ttransition TurnManagerState.PROCESSING reason=reason\t3a3779ab91d50a6c\t0\tactivity_transition\tEnds user input for endpointed and manual turn-completion paths.",
@@ -57,10 +59,10 @@
     "identity_clear_call\tsession/_session.py\tSession.reset_state\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears identity through the public state-reset operation.",
     "identity_clear_call\tsession/_session.py\tSession.stop\tcall self._turn_lifecycle.clear_identity\t84c87971555b95fc\t0\tidentity_clear\tInvalidates retained identity during final Session teardown.",
     "identity_clear_call\tsession/_tts_scheduler.py\tTTSScheduler.finalize_speaking_turn\tcall self._clear_turn\t6751acb4b1e5f391\t0\tidentity_clear\tClears the retained speaking turn after final playback bookkeeping.",
+    "identity_clear_call\tsession/_turn_runner.py\tTurnRunner._cleanup_rejected_stt_start\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears the partially published turn identity only after rejected STT startup cleanup settles.",
     "identity_clear_call\tsession/_turn_runner.py\tTurnRunner._execute_application_prompt\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears an application prompt identity when its execution settles.",
     "identity_clear_call\tsession/_turn_runner.py\tTurnRunner._settle_turn_after_tts\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears voice identity after TTS settlement when replay retention is unnecessary.",
     "identity_clear_call\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears identity when end-of-speech processing settles without retained playback.",
-    "identity_clear_call\tsession/_turn_runner.py\tTurnRunner.on_turn_publication\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears a privately published voice identity when STT startup fails.",
     "identity_clear_call\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tcall self._reset_turn_state\te17604b19c7611fe\t0\tidentity_clear\tClears identity when agent streaming settles before bot playback owns it.",
     "identity_clear_call\tsession/_wiring.py\t_SessionTurnHandle.set\tcall self._session._turn_lifecycle.clear_identity\tf07dfd8a99b6a463\t0\tidentity_clear\tRoutes collaborator handle clears through the canonical owner.",
     "identity_clear_call\tsession/_wiring.py\tbuild_wiring._clear_turn\tcall session._turn_lifecycle.clear_identity\t6d39b00a96463a77\t0\tidentity_clear\tRoutes TTS completion clears through the canonical owner.",

@@ -149,6 +149,11 @@ def _require_non_negative_integer(name: str, value: object) -> None:
         raise EasyConfigError(f"{name} must be non-negative and a finite integer")
 
 
+def _require_boolean(name: str, value: object) -> None:
+    if not isinstance(value, bool):
+        raise EasyConfigError(f"{name} must be a boolean")
+
+
 def _validate_on_agent_failure(
     policy: str | Callable[[Exception], str] | None,
 ) -> None:
@@ -486,6 +491,7 @@ class VoicemailDetectionConfig:
                 f"Invalid voicemail_detection.mode={self.mode!r}. "
                 f"Must be one of {sorted(_VALID_VOICEMAIL_MODES)}."
             )
+        _require_boolean("async_mode", self.async_mode)
         # ``detection_timeout_s`` flows into ``asyncio.sleep`` in the outbound
         # state machine with no runtime guard, so a non-positive value either
         # raises an uncaught ``ValueError`` (negative) or instantly
@@ -555,6 +561,36 @@ class OutboundCallConfig:
     retry_strategy: RetryStrategyConfig | None = None
 
     def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Revalidate mutable outbound policy before runtime wiring."""
+        if not isinstance(self.voicemail_detection, VoicemailDetectionConfig):
+            raise EasyConfigError(
+                "voicemail_detection must be a VoicemailDetectionConfig instance."
+            )
+        self.voicemail_detection.validate()
+        if self.retry_strategy is not None:
+            from easycat.telephony.retry import RetryStrategyConfig
+
+            if not isinstance(self.retry_strategy, RetryStrategyConfig):
+                raise EasyConfigError(
+                    "retry_strategy must be a RetryStrategyConfig instance or None."
+                )
+            try:
+                self.retry_strategy.validate()
+            except ValueError as exc:
+                raise EasyConfigError(f"Invalid retry_strategy: {exc}") from exc
+        for name in (
+            "enable_screening_detection",
+            "screening_use_agent",
+            "enable_realtime_transcription",
+            "classification_gate",
+            "enable_number_health",
+            "enable_disposition_tracker",
+            "enable_retry_strategy",
+        ):
+            _require_boolean(name, getattr(self, name))
         _require_positive("classification_gate_timeout_s", self.classification_gate_timeout_s)
         _require_positive("max_call_duration_s", self.max_call_duration_s)
         _require_positive_integer("max_screening_turns", self.max_screening_turns)
@@ -576,6 +612,23 @@ class TelephonyConfig:
     voicemail_detector: VoicemailDetectorConfig = field(default_factory=VoicemailDetectorConfig)
     outbound: OutboundCallConfig | None = None
     twilio_actions: TwilioSessionActionConfig | None = None
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Revalidate mutable telephony switches and nested outbound policy."""
+        for name in (
+            "enable_dtmf_aggregator",
+            "enable_voicemail_detector",
+            "enable_outbound_call_manager",
+        ):
+            _require_boolean(name, getattr(self, name))
+        if self.outbound is None:
+            return
+        if not isinstance(self.outbound, OutboundCallConfig):
+            raise EasyConfigError("telephony.outbound must be an OutboundCallConfig instance.")
+        self.outbound.validate()
 
 
 TransportConfig = (
@@ -867,6 +920,9 @@ class EasyConfig(_AgentSessionConfig):
         """Validate mutable config immediately before allocating session resources."""
         self._validate_common_fields()
         _validate_on_agent_failure(self.on_agent_failure)
+        if not isinstance(self.timeouts, TimeoutConfig):
+            raise EasyConfigError("timeouts must be a TimeoutConfig instance.")
+        self.timeouts.validate()
         if self.agent is None:
             raise EasyConfigError(
                 "agent is required for an audio session. Pass agent=... to EasyConfig."
@@ -878,8 +934,10 @@ class EasyConfig(_AgentSessionConfig):
         )
         self._resolve_provider_shortcuts(api_key_overrides)
         self.turn_taking.validate()
-        if self.telephony is not None and self.telephony.outbound is not None:
-            self.telephony.outbound.voicemail_detection.validate()
+        if self.telephony is not None:
+            if not isinstance(self.telephony, TelephonyConfig):
+                raise EasyConfigError("telephony must be a TelephonyConfig instance or None.")
+            self.telephony.validate()
         self._validate()
 
     def _warn_if_vad_pre_roll_is_too_short(self) -> None:

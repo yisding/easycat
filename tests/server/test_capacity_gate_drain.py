@@ -10,6 +10,7 @@ replicates the real ``Session._stopping`` idempotency guard (where a
 from __future__ import annotations
 
 import asyncio
+import gc
 
 import pytest
 
@@ -241,6 +242,30 @@ async def test_timed_safe_await_rejects_and_closes_unowned_coroutine() -> None:
         await server_transports._safe_await(awaitable, timeout_s=0.01)
 
     assert awaitable.cr_frame is None
+
+
+async def test_timed_safe_await_observes_cancelled_gather_result() -> None:
+    loop = asyncio.get_running_loop()
+    contexts: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: contexts.append(context))
+    try:
+        owned = asyncio.create_task(asyncio.Event().wait())
+        gathered = asyncio.gather(owned, return_exceptions=True)
+
+        await server_transports._safe_await(gathered, timeout_s=0.0)
+        await asyncio.sleep(0)
+        assert gathered.done()
+
+        del gathered
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert not any(
+        "exception was never retrieved" in str(context.get("message", "")) for context in contexts
+    )
 
 
 @pytest.mark.parametrize("max_sessions", [True, 1.5, float("nan"), float("inf"), 0, -1])

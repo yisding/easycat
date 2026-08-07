@@ -36,6 +36,7 @@ class SessionDebugBackends:
         self._journal_sink = journal_sink
         self._flushed = False
         self._destroyed = False
+        self._pending_journal_close: ExecutionJournal | None = None
 
     @property
     def state(self) -> DebugBackendState:
@@ -55,6 +56,7 @@ class SessionDebugBackends:
 
     def destroy(self) -> DebugBackendState:
         """Close live debug backends while preserving read-only inspection."""
+        self._retry_pending_journal_close()
         if self._destroyed:
             return self.state
         self.close()
@@ -63,6 +65,13 @@ class SessionDebugBackends:
             live_journal = self._journal
             replacement = _preserve_journal_after_destroy(live_journal)
             live_journal.close()
+            if not _journal_close_complete(live_journal):
+                # LibsqlJournal bounds public close by delegating a stuck SDK
+                # operation to a daemon worker. The journal's process-global
+                # pending-close registry owns the live object after this
+                # Session disappears; this local handle lets a later
+                # destroy()/Session.stop() service the retry directly.
+                self._pending_journal_close = live_journal
             self._journal = replacement
             if self._journal_view is not None:
                 # Keep previously-cached ``session.journal`` views useful
@@ -81,6 +90,19 @@ class SessionDebugBackends:
         )
         self._destroyed = True
         return self.state
+
+    def _retry_pending_journal_close(self) -> None:
+        pending = self._pending_journal_close
+        if pending is None:
+            return
+        pending.close()
+        if _journal_close_complete(pending):
+            self._pending_journal_close = None
+
+
+def _journal_close_complete(journal: ExecutionJournal) -> bool:
+    """Treat synchronous journals as complete unless they expose a pending close."""
+    return bool(getattr(journal, "close_complete", True))
 
 
 def _preserve_journal_after_destroy(journal: ExecutionJournal) -> ExecutionJournal:

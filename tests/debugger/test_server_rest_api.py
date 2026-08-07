@@ -7,6 +7,7 @@ pytest.importorskip("aiohttp")
 from easycat import create_text_session
 from easycat.debug.bundle import RunBundle
 from easycat.debugger import _audio
+from easycat.debugger import server as debugger_server
 from easycat.debugger._audio import _coerce_frames_to_format
 from easycat.debugger._sources import DebuggerSource, _bundle_source
 from easycat.debugger.server import (
@@ -496,6 +497,54 @@ async def test_api_audio_waveform_mic_track(tmp_path):
         assert resp.status == 200
         body = await resp.read()
         assert body[:8] == _PNG_SIGNATURE
+
+
+async def test_api_audio_waveform_accepts_pcm_at_memory_limit(monkeypatch):
+    monkeypatch.setattr(debugger_server, "_WAVEFORM_MAX_PCM_BYTES", 4)
+    records = [
+        {
+            "sequence": sequence,
+            "name": "tts_frame",
+            "turn_id": "t1",
+            "output_ref": ref,
+            "data": {"sample_rate": 16000, "channels": 1, "sample_width": 2},
+        }
+        for sequence, ref in enumerate(("a", "b"), start=1)
+    ]
+    app = _make_app(_audio_source(records, {"a": b"\x00\x00", "b": b"\x01\x00"}))
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/waveform/t1?w=2&h=2")
+
+    assert resp.status == 200
+
+
+async def test_api_audio_waveform_rejects_pcm_over_memory_limit(monkeypatch):
+    monkeypatch.setattr(debugger_server, "_WAVEFORM_MAX_PCM_BYTES", 4)
+    records = [
+        {
+            "sequence": sequence,
+            "name": "tts_frame",
+            "turn_id": "t1",
+            "output_ref": ref,
+            "data": {"sample_rate": 16000, "channels": 1, "sample_width": 2},
+        }
+        for sequence, ref in enumerate(("a", "b"), start=1)
+    ]
+    app = _make_app(_audio_source(records, {"a": b"\x00\x00", "b": b"\x01\x00\x02\x00"}))
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/waveform/t1")
+        payload = await resp.json()
+
+    assert resp.status == 413
+    assert payload == {
+        "error_code": "WAVEFORM_AUDIO_TOO_LARGE",
+        "message": "Waveform audio exceeds the in-memory rendering limit",
+        "max_pcm_bytes": 4,
+    }
 
 
 async def test_api_audio_waveform_mic_unsupported_width_returns_415(tmp_path):

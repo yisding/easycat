@@ -191,6 +191,7 @@ async def test_export_rejected_for_bundle_source(tmp_path):
         resp = await client.post(
             "/api/export",
             headers={
+                "Host": "localhost:8765",
                 "Origin": "http://localhost:8765",
                 "Content-Type": "application/json",
             },
@@ -208,6 +209,7 @@ async def test_replay_destructive_combos_require_confirm(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
     safe_headers = {
+        "Host": "localhost:8765",
         "Origin": "http://localhost:8765",
         "Content-Type": "application/json",
     }
@@ -242,6 +244,7 @@ async def test_replay_destructive_confirm_must_be_literal_true(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
     headers = {
+        "Host": "localhost:8765",
         "Origin": "http://localhost:8765",
         "Content-Type": "application/json",
     }
@@ -263,6 +266,7 @@ async def test_replay_force_must_be_literal_boolean(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
     headers = {
+        "Host": "localhost:8765",
         "Origin": "http://localhost:8765",
         "Content-Type": "application/json",
     }
@@ -295,6 +299,7 @@ async def test_replay_rejects_unknown_keys(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
     headers = {
+        "Host": "localhost:8765",
         "Origin": "http://localhost:8765",
         "Content-Type": "application/json",
     }
@@ -314,6 +319,7 @@ async def test_replay_rejects_malformed_json(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
     headers = {
+        "Host": "localhost:8765",
         "Origin": "http://localhost:8765",
         "Content-Type": "application/json",
     }
@@ -344,6 +350,7 @@ async def test_replay_rejects_non_object_json(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
     headers = {
+        "Host": "localhost:8765",
         "Origin": "http://localhost:8765",
         "Content-Type": "application/json",
     }
@@ -377,6 +384,7 @@ async def test_export_without_journal_returns_409(tmp_path):
         resp = await client.post(
             "/api/export",
             headers={
+                "Host": "localhost:8765",
                 "Origin": "http://localhost:8765",
                 "Content-Type": "application/json",
             },
@@ -393,7 +401,11 @@ async def test_replay_force_artifact_with_confirm_succeeds(tmp_path):
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    headers = {"Origin": "http://localhost:8765", "Content-Type": "application/json"}
+    headers = {
+        "Host": "localhost:8765",
+        "Origin": "http://localhost:8765",
+        "Content-Type": "application/json",
+    }
     async with TestClient(TestServer(app)) as client:
         resp = await client.post(
             "/api/replay",

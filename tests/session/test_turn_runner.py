@@ -8,8 +8,10 @@ decomposition.
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import time
+import weakref
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
 
@@ -153,6 +155,169 @@ class FakeSTT:
             if event is None:
                 break
             yield event
+
+
+class _CancellationResistantCommitSTT(FakeSTT):
+    def __init__(
+        self,
+        *,
+        cleanup_started: asyncio.Event,
+        release_cleanup: asyncio.Event,
+    ) -> None:
+        super().__init__(transcript="")
+        self.cleanup_started = cleanup_started
+        self.release_cleanup = release_cleanup
+        self.start_calls = 0
+        self.commit_in_progress = False
+        self.concurrent_provider_call = False
+
+    async def start_stream(self) -> None:
+        self.concurrent_provider_call |= self.commit_in_progress
+        self.start_calls += 1
+        if self.stream_open:
+            raise RuntimeError("previous STT stream is still open")
+        self.stream_open = True
+
+    async def commit_segment(self) -> bool:
+        self.commit_in_progress = True
+        try:
+            while not self.release_cleanup.is_set():
+                try:
+                    await self.release_cleanup.wait()
+                except asyncio.CancelledError:
+                    self.cleanup_started.set()
+            return False
+        finally:
+            self.commit_in_progress = False
+
+    async def end_stream(self) -> None:
+        self.concurrent_provider_call |= self.commit_in_progress
+        await super().end_stream()
+
+
+class _CancellationResistantLifecycleSTT(STTBase):
+    """STTBase double that keeps its lifecycle lock across commit cancellation."""
+
+    def __init__(
+        self,
+        *,
+        cleanup_started: asyncio.Event,
+        release_cleanup: asyncio.Event,
+    ) -> None:
+        super().__init__()
+        self.cleanup_started = cleanup_started
+        self.release_cleanup = release_cleanup
+        self.commit_in_progress = False
+        self.close_calls = 0
+        self.close_during_commit = False
+
+    async def _on_commit_segment(self) -> bool:
+        self.commit_in_progress = True
+        try:
+            while not self.release_cleanup.is_set():
+                try:
+                    await self.release_cleanup.wait()
+                except asyncio.CancelledError:
+                    self.cleanup_started.set()
+            return False
+        finally:
+            self.commit_in_progress = False
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        self.close_during_commit |= self.commit_in_progress
+        await super().close()
+
+
+class _RetryingTransferredCloseSTT(_CancellationResistantLifecycleSTT):
+    def __init__(
+        self,
+        *,
+        cleanup_started: asyncio.Event,
+        release_cleanup: asyncio.Event,
+        allow_close: asyncio.Event,
+    ) -> None:
+        super().__init__(
+            cleanup_started=cleanup_started,
+            release_cleanup=release_cleanup,
+        )
+        self.allow_close = allow_close
+        self.close_failed = asyncio.Event()
+        self.close_succeeded = asyncio.Event()
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        self.close_during_commit |= self.commit_in_progress
+        if not self.allow_close.is_set():
+            self.close_failed.set()
+            raise RuntimeError("transient provider close failure")
+        await STTBase.close(self)
+        self.close_succeeded.set()
+
+
+class _GatedTransferredCloseSTT(_CancellationResistantLifecycleSTT):
+    def __init__(
+        self,
+        *,
+        cleanup_started: asyncio.Event,
+        release_cleanup: asyncio.Event,
+    ) -> None:
+        super().__init__(
+            cleanup_started=cleanup_started,
+            release_cleanup=release_cleanup,
+        )
+        self.close_started = asyncio.Event()
+        self.release_close = asyncio.Event()
+        self.close_completed = asyncio.Event()
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        self.close_during_commit |= self.commit_in_progress
+        self.close_started.set()
+        await self.release_close.wait()
+        await STTBase.close(self)
+        self.close_completed.set()
+
+
+async def _wait_for_stt_timeout(errors: list[Error]) -> Error:
+    while True:
+        for event in errors:
+            if isinstance(event.exception, STTTimeoutError):
+                return event
+        await asyncio.sleep(0)
+
+
+def _assert_segment_commit_timeout_handoff(
+    session: Session,
+    stt: _CancellationResistantCommitSTT,
+    scoped_commit: asyncio.Task[None],
+    timeout_error: Error,
+    resets: list[None],
+) -> None:
+    assert not scoped_commit.done()
+    assert session._runtime_scope.tasks("stt_segment_commit") == (scoped_commit,)
+    assert timeout_error.stage is ErrorStage.STT
+    assert timeout_error.provider == "stt"
+    assert isinstance(timeout_error.exception, STTTimeoutError)
+    assert timeout_error.exception.timeout == pytest.approx(0.01)
+    assert resets
+    assert not stt.concurrent_provider_call
+    assert stt.end_stream_calls == 0
+    assert stt.start_calls == 1
+    assert session._turn is not None
+    assert session._turn.id == "old-turn"
+
+
+def _assert_segment_commit_retry_handoff(
+    session: Session,
+    stt: _CancellationResistantCommitSTT,
+) -> None:
+    assert session._runtime_scope.tasks("stt_segment_commit") == ()
+    assert not stt.concurrent_provider_call
+    assert stt.end_stream_calls == 1
+    assert stt.start_calls == 2
+    assert session._turn is not None
+    assert session._turn.id == "successor-turn-retry"
 
 
 class FakeTTS:
@@ -483,27 +648,10 @@ async def test_successor_turn_drains_scoped_segment_commit_before_starting() -> 
 async def test_successor_turn_bounds_cancellation_resistant_segment_commit() -> None:
     cleanup_started = asyncio.Event()
     release_cleanup = asyncio.Event()
-
-    class StreamOwningSTT(FakeSTT):
-        def __init__(self) -> None:
-            super().__init__(transcript="")
-            self.start_calls = 0
-
-        async def start_stream(self) -> None:
-            self.start_calls += 1
-            if self.stream_open:
-                raise RuntimeError("previous STT stream is still open")
-            self.stream_open = True
-
-        async def commit_segment(self) -> bool:
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                cleanup_started.set()
-                await release_cleanup.wait()
-                return False
-
-    stt = StreamOwningSTT()
+    stt = _CancellationResistantCommitSTT(
+        cleanup_started=cleanup_started,
+        release_cleanup=release_cleanup,
+    )
     session = Session(
         _config(
             stt=stt,
@@ -518,6 +666,7 @@ async def test_successor_turn_bounds_cancellation_resistant_segment_commit() -> 
     session.event_bus.subscribe(Error, errors.append)
 
     scoped_commit: asyncio.Task[None] | None = None
+    successor: asyncio.Task[None] | None = None
     try:
         await runner.on_turn_started(TurnStarted(turn_id="old-turn"))
         old_turn = session._turn
@@ -536,29 +685,943 @@ async def test_successor_turn_bounds_cancellation_resistant_segment_commit() -> 
         session._stt_committer.mark_inactive()
         session._stt_committer._segment_commit_task = None
 
+        successor = asyncio.create_task(
+            runner.on_turn_started(TurnStarted(turn_id="successor-turn"))
+        )
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+
+        timeout_error = await asyncio.wait_for(_wait_for_stt_timeout(errors), timeout=1)
+        await asyncio.wait_for(successor, timeout=1)
+
+        assert cleanup_started.is_set()
+        _assert_segment_commit_timeout_handoff(
+            session,
+            stt,
+            scoped_commit,
+            timeout_error,
+            resets,
+        )
+
+        release_cleanup.set()
+        await asyncio.wait_for(scoped_commit, timeout=1)
+
         await asyncio.wait_for(
-            runner.on_turn_started(TurnStarted(turn_id="successor-turn")),
+            runner.on_turn_started(TurnStarted(turn_id="successor-turn-retry")),
             timeout=1,
         )
 
-        assert cleanup_started.is_set()
-        assert not scoped_commit.done()
-        assert session._runtime_scope.tasks("stt_segment_commit") == ()
-        timeout_error = next(
-            event for event in errors if isinstance(event.exception, STTTimeoutError)
+        _assert_segment_commit_retry_handoff(session, stt)
+    finally:
+        release_cleanup.set()
+        if successor is not None:
+            await asyncio.gather(successor, return_exceptions=True)
+        if scoped_commit is not None:
+            await asyncio.gather(scoped_commit, return_exceptions=True)
+        await session._stt_committer.cancel(session._turn)
+
+
+@pytest.mark.asyncio
+async def test_rejected_manager_publication_rolls_back_and_retries_after_stt_cleanup() -> None:
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    stt = _CancellationResistantCommitSTT(
+        cleanup_started=cleanup_started,
+        release_cleanup=release_cleanup,
+    )
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
         )
-        assert timeout_error.stage is ErrorStage.STT
-        assert timeout_error.provider == "stt"
-        assert timeout_error.exception.timeout == pytest.approx(0.01)
-        assert resets
-        assert stt.end_stream_calls == 1
+    )
+    session._is_running = True
+    observed: list[TurnStarted] = []
+    session.event_bus.subscribe(TurnStarted, observed.append)
+    scoped_commit: asyncio.Task[None] | None = None
+
+    try:
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="old-turn"))
+        old_turn = session._turn
+        assert old_turn is not None
+        old_turn.stt_has_uncommitted_audio = True
+        await session._stt_committer._start_segment_commit(turn=old_turn)
+        scoped_commit = session._stt_committer._segment_commit_task
+        assert scoped_commit is not None
+        await asyncio.sleep(0)
+
+        await asyncio.wait_for(session._turn_manager._begin_turn("test-rejected"), timeout=1)
+
+        assert cleanup_started.is_set()
+        assert observed == []
+        assert session._turn_manager.state is TurnManagerState.IDLE
+        assert session._turn_manager._current_turn_id is None
+        assert session._turn is old_turn
+        assert stt.start_calls == 1
+        assert not stt.concurrent_provider_call
+
+        release_cleanup.set()
+        await asyncio.wait_for(scoped_commit, timeout=1)
+        await session._turn_manager._begin_turn("test-retry")
+
+        assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
+        assert session._turn is not None and session._turn is not old_turn
+        assert len(observed) == 1
+        assert observed[0].turn_id == session._turn.id
         assert stt.start_calls == 2
-        assert session._turn is not None
-        assert session._turn.id == "successor-turn"
+        assert not stt.concurrent_provider_call
     finally:
         release_cleanup.set()
         if scoped_commit is not None:
             await asyncio.gather(scoped_commit, return_exceptions=True)
+        await session._stt_committer.cancel(session._turn)
+
+
+@pytest.mark.asyncio
+async def test_resistant_segment_timeout_notification_allows_rollback_and_force_stop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    error_handler_started = asyncio.Event()
+    release_error_handler = asyncio.Event()
+    stt = _CancellationResistantCommitSTT(
+        cleanup_started=cleanup_started,
+        release_cleanup=release_cleanup,
+    )
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+
+    async def _resist_error_cancellation(_event: Error) -> None:
+        error_handler_started.set()
+        while not release_error_handler.is_set():
+            try:
+                await release_error_handler.wait()
+            except asyncio.CancelledError:
+                pass
+
+    session.event_bus.subscribe(Error, _resist_error_cancellation)
+    scoped_commit: asyncio.Task[None] | None = None
+
+    try:
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="old-turn"))
+        old_turn = session._turn
+        assert old_turn is not None
+        old_turn.stt_has_uncommitted_audio = True
+        await session._stt_committer._start_segment_commit(turn=old_turn)
+        scoped_commit = session._stt_committer._segment_commit_task
+        assert scoped_commit is not None
+        await asyncio.sleep(0)
+
+        await asyncio.wait_for(session._turn_manager._begin_turn("rejected-turn"), timeout=0.5)
+
+        assert cleanup_started.is_set()
+        assert session._turn_manager.state is TurnManagerState.IDLE
+        assert session._turn_manager._current_turn_id is None
+        assert session._turn is old_turn
+        assert not scoped_commit.done()
+        await asyncio.wait_for(error_handler_started.wait(), timeout=0.5)
+        await asyncio.sleep(0.02)
+        assert session._stt_committer._provider_error_supervisor.survivor_count == 1
+
+        # Force stop hits the same segment timeout again. The occupied
+        # notification owner rejects that second best-effort Error without
+        # delaying survivor parking or provider-close transfer.
+        await asyncio.wait_for(session.stop(force=True), timeout=1)
+
+        assert session._closed is True
+        assert session._runtime_scope.tasks("stt_segment_commit") == (scoped_commit,)
+        assert session._runtime_supervisor.survivor_count == 1
+        assert session._stt_committer._provider_error_supervisor.survivor_count == 1
+        assert "STT provider Error notification skipped: survivor capacity full" in caplog.text
+    finally:
+        release_cleanup.set()
+        release_error_handler.set()
+        if scoped_commit is not None:
+            await asyncio.gather(scoped_commit, return_exceptions=True)
+        await session._stt_committer._provider_error_runtime_scope.drain(suppress_errors=True)
+        if not session._closed:
+            await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["cancel_turn", "reset_state"])
+async def test_explicit_cancel_preserves_turn_until_stt_handoff_finishes(
+    method_name: str,
+) -> None:
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    stt = _CancellationResistantCommitSTT(
+        cleanup_started=cleanup_started,
+        release_cleanup=release_cleanup,
+    )
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+    scoped_commit: asyncio.Task[None] | None = None
+
+    try:
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="old-turn"))
+        old_turn = session._turn
+        assert old_turn is not None
+        old_turn.stt_has_uncommitted_audio = True
+        await session._stt_committer._start_segment_commit(turn=old_turn)
+        scoped_commit = session._stt_committer._segment_commit_task
+        assert scoped_commit is not None
+        await asyncio.sleep(0)
+
+        with pytest.raises(RuntimeError, match="lifecycle-owned"):
+            await asyncio.wait_for(getattr(session, method_name)(), timeout=1)
+
+        assert cleanup_started.is_set()
+        assert session._turn is old_turn
+        assert session._stt_committer.requires_successor_handoff
+
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="rejected-successor"))
+        assert session._turn is old_turn
+        assert stt.start_calls == 1
+        assert not stt.concurrent_provider_call
+
+        release_cleanup.set()
+        await asyncio.wait_for(scoped_commit, timeout=1)
+        await getattr(session, method_name)()
+        assert session._turn is None
+
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="accepted-successor"))
+        assert session._turn is not None
+        assert session._turn.id == "accepted-successor"
+        assert stt.start_calls == 2
+        assert not stt.concurrent_provider_call
+    finally:
+        release_cleanup.set()
+        if scoped_commit is not None:
+            await asyncio.gather(scoped_commit, return_exceptions=True)
+        await session._stt_committer.cancel(session._turn)
+
+
+@pytest.mark.asyncio
+async def test_force_stop_parks_cancellation_resistant_segment_commit() -> None:
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    stt = _CancellationResistantCommitSTT(
+        cleanup_started=cleanup_started,
+        release_cleanup=release_cleanup,
+    )
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+
+    scoped_commit: asyncio.Task[None] | None = None
+    try:
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="force-stop-turn"))
+        turn = session._turn
+        assert turn is not None
+        turn.stt_has_uncommitted_audio = True
+        await session._stt_committer._start_segment_commit(turn=turn)
+        scoped_commit = session._stt_committer._segment_commit_task
+        assert scoped_commit is not None
+        await asyncio.sleep(0)
+
+        await asyncio.wait_for(session.stop(force=True), timeout=1)
+
+        assert cleanup_started.is_set()
+        assert not scoped_commit.done()
+        assert session._runtime_scope.tasks("stt_segment_commit") == (scoped_commit,)
+        assert session._runtime_supervisor.survivor_count == 1
+        assert not stt.concurrent_provider_call
+        assert stt.end_stream_calls == 0
+
+        release_cleanup.set()
+        await asyncio.wait_for(scoped_commit, timeout=1)
+        await asyncio.sleep(0)
+
+        assert session._runtime_scope.tasks("stt_segment_commit") == ()
+        assert session._runtime_supervisor.survivor_count == 0
+    finally:
+        release_cleanup.set()
+        if scoped_commit is not None:
+            await asyncio.gather(scoped_commit, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_force_stop_transfers_sttbase_close_behind_parked_commit() -> None:
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    stt = _CancellationResistantLifecycleSTT(
+        cleanup_started=cleanup_started,
+        release_cleanup=release_cleanup,
+    )
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+    scoped_commit: asyncio.Task[None] | None = None
+
+    try:
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="force-close-turn"))
+        turn = session._turn
+        assert turn is not None
+        turn.stt_has_uncommitted_audio = True
+        await session._stt_committer._start_segment_commit(turn=turn)
+        scoped_commit = session._stt_committer._segment_commit_task
+        assert scoped_commit is not None
+        await asyncio.sleep(0)
+
+        await asyncio.wait_for(session.stop(force=True), timeout=1)
+
+        assert cleanup_started.is_set()
+        assert not scoped_commit.done()
+        assert stt.close_calls == 0
+        assert session._runtime_supervisor.survivor_count == 1
+
+        release_cleanup.set()
+        await asyncio.wait_for(scoped_commit, timeout=1)
+        await asyncio.sleep(0)
+
+        assert stt.close_calls == 1
+        assert not stt.close_during_commit
+        assert session._runtime_scope.tasks("stt_segment_commit") == ()
+        assert session._runtime_supervisor.survivor_count == 0
+
+        await session.stop(force=True)
+        assert stt.close_calls == 1
+    finally:
+        release_cleanup.set()
+        if scoped_commit is not None:
+            await asyncio.gather(scoped_commit, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_force_hard_deadline_cannot_cancel_transferred_provider_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    stt = _GatedTransferredCloseSTT(
+        cleanup_started=cleanup_started,
+        release_cleanup=release_cleanup,
+    )
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+    scoped_commit: asyncio.Task[None] | None = None
+    stopping: asyncio.Task[None] | None = None
+
+    try:
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="force-close-window"))
+        turn = session._turn
+        assert turn is not None
+        turn.stt_has_uncommitted_audio = True
+        await session._stt_committer._start_segment_commit(turn=turn)
+        scoped_commit = session._stt_committer._segment_commit_task
+        assert scoped_commit is not None
+        await asyncio.sleep(0)
+
+        original_transfer = session._stt_committer.transfer_provider_close_to_owned_work
+
+        def _release_after_transfer() -> bool:
+            transferred = original_transfer()
+            if transferred:
+                release_cleanup.set()
+            return transferred
+
+        monkeypatch.setattr(
+            session._stt_committer,
+            "transfer_provider_close_to_owned_work",
+            _release_after_transfer,
+        )
+        stopping = asyncio.create_task(session.stop(force=True))
+        await asyncio.wait_for(stt.close_started.wait(), timeout=1)
+
+        # Keep close suspended beyond the already-started force deadline. A
+        # pre-transfer drain must not leave any force cancellation capable of
+        # landing inside this provider-owned await.
+        await asyncio.sleep(0.03)
+        stt.release_close.set()
+        await asyncio.wait_for(stopping, timeout=1)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert stt.close_completed.is_set()
+        assert stt.close_calls == 1
+        assert not stt.close_during_commit
+        assert session._stt_committer.provider_close_transferred is True
+        assert session._stt_committer._provider_close_pending is False
+        assert scoped_commit.done() and not scoped_commit.cancelled()
+        assert session._runtime_scope.tasks("stt_segment_commit") == ()
+        assert session._runtime_supervisor.survivor_count == 0
+    finally:
+        release_cleanup.set()
+        stt.release_close.set()
+        if stopping is not None:
+            await asyncio.gather(stopping, return_exceptions=True)
+        if scoped_commit is not None:
+            await asyncio.gather(scoped_commit, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_transferred_provider_close_retry_survives_session_gc(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        "easycat.session._stt_committer._PROVIDER_CLOSE_RETRY_INITIAL_S",
+        0.01,
+    )
+    monkeypatch.setattr(
+        "easycat.session._stt_committer._PROVIDER_CLOSE_RETRY_MAX_S",
+        0.01,
+    )
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    allow_close = asyncio.Event()
+    stt = _RetryingTransferredCloseSTT(
+        cleanup_started=cleanup_started,
+        release_cleanup=release_cleanup,
+        allow_close=allow_close,
+    )
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+    scoped_commit: asyncio.Task[None] | None = None
+
+    try:
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="gc-close-turn"))
+        turn = session._turn
+        assert turn is not None
+        turn.stt_has_uncommitted_audio = True
+        await session._stt_committer._start_segment_commit(turn=turn)
+        scoped_commit = session._stt_committer._segment_commit_task
+        assert scoped_commit is not None
+        await asyncio.sleep(0)
+
+        await asyncio.wait_for(session.stop(force=True), timeout=1)
+        release_cleanup.set()
+        await asyncio.wait_for(stt.close_failed.wait(), timeout=1)
+        caplog.clear()
+
+        supervisor = session._runtime_supervisor
+        session_ref = weakref.ref(session)
+        provider_ref = weakref.ref(stt)
+        del turn
+        del session
+        del stt
+        gc.collect()
+
+        assert session_ref() is not None
+        assert provider_ref() is not None
+        assert not scoped_commit.done()
+        assert supervisor.survivor_count == 1
+
+        allow_close.set()
+        provider = provider_ref()
+        assert provider is not None
+        await asyncio.wait_for(provider.close_succeeded.wait(), timeout=1)
+        del provider
+        await asyncio.wait_for(scoped_commit, timeout=1)
+        await asyncio.sleep(0)
+
+        for _ in range(3):
+            gc.collect()
+            await asyncio.sleep(0)
+
+        assert supervisor.survivor_count == 0
+    finally:
+        release_cleanup.set()
+        allow_close.set()
+        if scoped_commit is not None:
+            await asyncio.gather(scoped_commit, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_graceful_stop_is_retryable_while_stt_commit_remains_owned() -> None:
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    stt = _CancellationResistantLifecycleSTT(
+        cleanup_started=cleanup_started,
+        release_cleanup=release_cleanup,
+    )
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+    scoped_commit: asyncio.Task[None] | None = None
+
+    try:
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="graceful-stop-turn"))
+        turn = session._turn
+        assert turn is not None
+        turn.stt_has_uncommitted_audio = True
+        await session._stt_committer._start_segment_commit(turn=turn)
+        scoped_commit = session._stt_committer._segment_commit_task
+        assert scoped_commit is not None
+        await asyncio.sleep(0)
+
+        with pytest.raises(RuntimeError, match="lifecycle-owned"):
+            await asyncio.wait_for(session.stop(), timeout=1)
+
+        assert cleanup_started.is_set()
+        assert session._closed is False
+        assert session._stopping is True
+        assert session._runtime_scope.tasks("stt_segment_commit") == (scoped_commit,)
+        assert stt.close_calls == 0
+
+        release_cleanup.set()
+        await asyncio.wait_for(scoped_commit, timeout=1)
+        await session.stop()
+
+        assert session._closed is True
+        assert session._stopping is False
+        assert stt.close_calls == 1
+        assert not stt.close_during_commit
+        assert session._runtime_scope.tasks("stt_segment_commit") == ()
+    finally:
+        release_cleanup.set()
+        if scoped_commit is not None:
+            await asyncio.gather(scoped_commit, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_manual_turn_before_session_start_is_rejected() -> None:
+    session = Session(_config())
+    observed: list[TurnStarted] = []
+    session.event_bus.subscribe(TurnStarted, observed.append)
+
+    publication = await session._turn_runner.on_turn_publication(
+        TurnPublication(
+            source="voice",
+            session_id=session.session_id,
+            turn_id="not-running",
+            cancel_token=CancelToken(),
+            activity=session._turn_manager.capture_activity(),
+        )
+    )
+
+    assert publication.admission_rejected is True
+    with pytest.raises(RuntimeError, match="not running"):
+        await session.start_turn()
+    assert observed == []
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    assert session._turn is None
+    assert not session._stt_committer.is_active
+
+
+@pytest.mark.asyncio
+async def test_stale_activity_during_blocked_stt_start_rejects_and_closes_stream() -> None:
+    class _BlockingPartialStartSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def start_stream(self) -> None:
+            self.stream_open = True
+            self.started.set()
+            await self.release.wait()
+
+    stt = _BlockingPartialStartSTT()
+    session = Session(_config(stt=stt))
+    session._is_running = True
+    observed: list[TurnStarted] = []
+    session.event_bus.subscribe(TurnStarted, observed.append)
+    starting = asyncio.create_task(session._turn_manager._begin_turn("stale-start"))
+
+    await stt.started.wait()
+    turn = session._turn
+    assert turn is not None
+    session._turn_manager.reset()
+    stt.release.set()
+    await starting
+
+    assert observed == []
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    assert session._turn is turn
+    assert stt.stream_open is False
+    assert stt.end_stream_calls == 1
+    assert not session._stt_committer.is_active
+    session._reset_turn_state()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_blocked_stt_start_cleans_up_before_reraising() -> None:
+    class _CancellationPartialStartSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.started = asyncio.Event()
+
+        async def start_stream(self) -> None:
+            self.stream_open = True
+            self.started.set()
+            await asyncio.Event().wait()
+
+    stt = _CancellationPartialStartSTT()
+    session = Session(_config(stt=stt))
+    session._is_running = True
+    observed: list[TurnStarted] = []
+    session.event_bus.subscribe(TurnStarted, observed.append)
+    starting = asyncio.create_task(session._turn_manager._begin_turn("cancelled-start"))
+
+    await stt.started.wait()
+    starting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await starting
+
+    assert observed == []
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    assert session._turn is None
+    assert stt.stream_open is False
+    assert stt.end_stream_calls == 1
+    assert not session._stt_committer.is_active
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_start_error_notification_follows_cleanup() -> None:
+    class _PartialStartFailureSTT(FakeSTT):
+        async def start_stream(self) -> None:
+            self.stream_open = True
+            raise RuntimeError("start failed after opening stream")
+
+    stt = _PartialStartFailureSTT(transcript="")
+    session = Session(_config(stt=stt))
+    session._is_running = True
+    error_handler_started = asyncio.Event()
+
+    async def _block_error(_event: Error) -> None:
+        error_handler_started.set()
+        await asyncio.Event().wait()
+
+    session.event_bus.subscribe(Error, _block_error)
+    starting = asyncio.create_task(session._turn_manager._begin_turn("cancel-error-emit"))
+    await error_handler_started.wait()
+    starting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await starting
+
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    assert session._turn_manager._current_turn_id is None
+    assert session._turn is None
+    assert stt.stream_open is False
+    assert stt.end_stream_calls == 1
+    assert not session._stt_committer.is_active
+
+
+@pytest.mark.asyncio
+async def test_strict_start_error_subscriber_raises_only_after_cleanup() -> None:
+    class _PartialStartFailureSTT(FakeSTT):
+        async def start_stream(self) -> None:
+            self.stream_open = True
+            raise RuntimeError("start failed after opening stream")
+
+    bus = EventBus(handler_error_policy="raise")
+    stt = _PartialStartFailureSTT(transcript="")
+    session = Session(_config(stt=stt, event_bus=bus))
+    session._is_running = True
+
+    def _raise_from_error(_event: Error) -> None:
+        raise RuntimeError("strict error subscriber failed")
+
+    bus.subscribe(Error, _raise_from_error)
+    with pytest.raises(RuntimeError, match="strict error subscriber failed"):
+        await session._turn_manager._begin_turn("strict-error-emit")
+
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    assert session._turn_manager._current_turn_id is None
+    assert session._turn is None
+    assert stt.stream_open is False
+    assert stt.end_stream_calls == 1
+    assert not session._stt_committer.is_active
+
+
+@pytest.mark.asyncio
+async def test_start_exception_cancelled_during_timed_out_cleanup_rolls_back_manager() -> None:
+    class _FailedStartWithStubbornEndSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.end_started = asyncio.Event()
+            self.release_end = asyncio.Event()
+
+        async def start_stream(self) -> None:
+            self.stream_open = True
+            raise RuntimeError("start failed after opening stream")
+
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            self.end_started.set()
+            while not self.release_end.is_set():
+                try:
+                    await self.release_end.wait()
+                except asyncio.CancelledError:
+                    pass
+            self.stream_open = False
+
+    stt = _FailedStartWithStubbornEndSTT()
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+    starting = asyncio.create_task(session._turn_manager._begin_turn("error-cancel-timeout"))
+    owned_end: asyncio.Task[None] | None = None
+
+    try:
+        await stt.end_started.wait()
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(starting, timeout=0.5)
+
+        assert session._turn_manager.state is TurnManagerState.IDLE
+        assert session._turn_manager._current_turn_id is None
+        assert session._turn is not None
+        [owned_end] = session._runtime_scope.tasks(session._stt_committer.PROVIDER_END_TASK_NAME)
+        assert not owned_end.done()
+        assert session._runtime_supervisor.survivor_count == 1
+    finally:
+        stt.release_end.set()
+        if owned_end is not None:
+            await asyncio.gather(owned_end, return_exceptions=True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        session._reset_turn_state()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_start_cleanup_timeout_rolls_back_manager_and_keeps_survivor(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _PartialStartWithStubbornEndSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.start_started = asyncio.Event()
+            self.end_started = asyncio.Event()
+            self.release_end = asyncio.Event()
+
+        async def start_stream(self) -> None:
+            self.stream_open = True
+            self.start_started.set()
+            await asyncio.Event().wait()
+
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            self.end_started.set()
+            while not self.release_end.is_set():
+                try:
+                    await self.release_end.wait()
+                except asyncio.CancelledError:
+                    pass
+            self.stream_open = False
+
+    stt = _PartialStartWithStubbornEndSTT()
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+    error_handler_started = asyncio.Event()
+    release_error_handler = asyncio.Event()
+
+    async def _resist_error_cancellation(_event: Error) -> None:
+        error_handler_started.set()
+        while not release_error_handler.is_set():
+            try:
+                await release_error_handler.wait()
+            except asyncio.CancelledError:
+                pass
+
+    session.event_bus.subscribe(Error, _resist_error_cancellation)
+    starting = asyncio.create_task(session._turn_manager._begin_turn("cancel-timeout"))
+    owned_end: asyncio.Task[None] | None = None
+
+    try:
+        await stt.start_started.wait()
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        assert stt.end_started.is_set()
+        assert session._turn_manager.state is TurnManagerState.IDLE
+        assert session._turn_manager._current_turn_id is None
+        assert session._turn is not None
+        assert not session._stt_committer.is_active
+        [owned_end] = session._runtime_scope.tasks(session._stt_committer.PROVIDER_END_TASK_NAME)
+        assert not owned_end.done()
+        assert session._runtime_supervisor.survivor_count == 1
+
+        await asyncio.wait_for(error_handler_started.wait(), timeout=0.5)
+        await asyncio.sleep(0.02)
+        assert session._stt_committer._provider_error_supervisor.survivor_count == 1
+
+        # The resistant public notification is independently parked and can
+        # neither hold manager rollback open nor make force teardown join it.
+        await asyncio.wait_for(session.stop(force=True), timeout=1)
+        assert session._closed is True
+        assert session._stt_committer._provider_error_supervisor.survivor_count == 1
+        assert "STT provider Error notification skipped: survivor capacity full" in caplog.text
+    finally:
+        stt.release_end.set()
+        release_error_handler.set()
+        if owned_end is not None:
+            await asyncio.gather(owned_end, return_exceptions=True)
+        await session._stt_committer._provider_error_runtime_scope.drain(suppress_errors=True)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        session._reset_turn_state()
+
+
+@pytest.mark.asyncio
+async def test_partial_second_start_failure_closes_new_provider_stream() -> None:
+    class _PartialSecondStartFailureSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.start_calls = 0
+
+        async def start_stream(self) -> None:
+            self.start_calls += 1
+            self.stream_open = True
+            if self.start_calls == 2:
+                raise RuntimeError("second start failed after opening stream")
+
+    stt = _PartialSecondStartFailureSTT()
+    session = Session(_config(stt=stt))
+    session._is_running = True
+
+    await session._turn_runner.on_turn_started(TurnStarted(turn_id="first"))
+    first = session._turn
+    assert first is not None
+    assert await session._stt_committer.cancel(first) is True
+    session._reset_turn_state()
+    assert stt.end_stream_calls == 1
+
+    await session._turn_runner.on_turn_started(TurnStarted(turn_id="second"))
+
+    assert stt.start_calls == 2
+    assert stt.end_stream_calls == 2
+    assert stt.stream_open is False
+    assert session._turn is None
+    assert not session._stt_committer.is_active
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["start", "preroll"])
+async def test_startup_failure_rejects_public_turn_admission(failure_stage: str) -> None:
+    stt = FakeSTT(
+        transcript="",
+        fail_on_start=failure_stage == "start",
+        fail_on_send=failure_stage == "preroll",
+    )
+    session = Session(_config(stt=stt))
+    session._is_running = True
+    observed: list[TurnStarted] = []
+    session.event_bus.subscribe(TurnStarted, observed.append)
+    if failure_stage == "preroll":
+        session._turn_manager.on_audio_frame(_chunk())
+
+    await session._turn_manager._begin_turn(f"{failure_stage}-failure")
+
+    assert observed == []
+    assert session._turn_manager.state is TurnManagerState.IDLE
+    assert session._turn_manager._current_turn_id is None
+    assert session._turn is None
+    assert not session._stt_committer.is_active
+    assert stt.end_stream_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_startup_cleanup_timeout_rejects_publication_until_provider_settles() -> None:
+    class _StartupFailureWithStubbornEndSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.start_calls = 0
+            self.cleanup_started = asyncio.Event()
+            self.release_cleanup = asyncio.Event()
+
+        async def start_stream(self) -> None:
+            self.start_calls += 1
+            self.stream_open = True
+            if self.start_calls == 1:
+                raise RuntimeError("start failed after opening stream")
+
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            if self.end_stream_calls == 1:
+                self.cleanup_started.set()
+                while not self.release_cleanup.is_set():
+                    try:
+                        await self.release_cleanup.wait()
+                    except asyncio.CancelledError:
+                        pass
+                self.stream_open = False
+                return
+            await super().end_stream()
+
+    stt = _StartupFailureWithStubbornEndSTT()
+    session = Session(
+        _config(
+            stt=stt,
+            timeout_config=TimeoutConfig(stt_timeout=0.01),
+        )
+    )
+    session._is_running = True
+    observed: list[TurnStarted] = []
+    session.event_bus.subscribe(TurnStarted, observed.append)
+    owned_end: asyncio.Task[None] | None = None
+
+    try:
+        await session._turn_manager._begin_turn("failed-start")
+
+        assert stt.cleanup_started.is_set()
+        assert observed == []
+        assert session._turn_manager.state is TurnManagerState.IDLE
+        assert session._turn_manager._current_turn_id is None
+        assert session._turn is not None
+        assert not session._stt_committer.is_active
+        [owned_end] = session._runtime_scope.tasks(session._stt_committer.PROVIDER_END_TASK_NAME)
+        assert not owned_end.done()
+
+        stt.release_cleanup.set()
+        await asyncio.wait_for(owned_end, timeout=1)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await session._turn_manager._begin_turn("retry-start")
+
+        assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
+        assert session._turn is not None
+        assert len(observed) == 1
+        assert observed[0].turn_id == session._turn.id
+        assert stt.start_calls == 2
+    finally:
+        stt.release_cleanup.set()
+        if owned_end is not None:
+            await asyncio.gather(owned_end, return_exceptions=True)
         await session._stt_committer.cancel(session._turn)
 
 
@@ -629,11 +1692,11 @@ async def test_on_turn_started_preroll_failure_tears_down_and_closes_stream() ->
     stt = FakeSTT(transcript="hello", fail_on_send=True)
     session = Session(_config(stt=stt))
 
-    # Populate pre-roll while not running so the bus-driven on_turn_started
-    # short-circuits; start_turn() flushes pre-roll into turn_audio.
-    session._is_running = False
+    # Populate and flush the manager's pre-roll directly. Public manual turns
+    # now correctly reject admission until Session.start() marks the lifecycle
+    # running; this test drives the private publication path below.
     session._turn_manager.on_audio_frame(_chunk())
-    await session._turn_manager.start_turn()
+    session._turn_manager._flush_pre_roll_into_turn_audio()
     assert session._turn_manager.turn_audio  # pre-roll captured
 
     session._is_running = True

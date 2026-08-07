@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import math
 import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 
+from easycat._numeric import is_finite_number
 from easycat.telephony.outbound import BLOCK_REASONS
 
 
@@ -47,12 +49,29 @@ class RetryStrategyConfig:
     # [delay * (1 - jitter_fraction), delay].
     jitter_fraction: float = 0.5
 
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Revalidate mutable retry policy before it becomes runtime state."""
+        _require_positive_integer("max_retries", self.max_retries)
+        _require_positive_integer("sms_fallback_after", self.sms_fallback_after)
+        _require_non_negative_number("base_delay_s", self.base_delay_s)
+        _require_non_negative_number("max_delay_s", self.max_delay_s)
+        _require_positive_number("backoff_factor", self.backoff_factor)
+        _require_non_negative_number("shorter_delay_s", self.shorter_delay_s)
+        if not is_finite_number(self.jitter_fraction) or not 0 <= self.jitter_fraction <= 1:
+            raise ValueError("jitter_fraction must be a finite number between 0 and 1")
+        _require_reason_set("no_retry_reasons", self.no_retry_reasons)
+        _require_reason_set("shorter_delay_reasons", self.shorter_delay_reasons)
+
 
 class RetryStrategy:
     """Determines whether and when to retry a failed outbound call."""
 
     def __init__(self, config: RetryStrategyConfig | None = None) -> None:
         self._config = config or RetryStrategyConfig()
+        self._config.validate()
         self._states: dict[str, RetryState] = {}
 
     def get_state(self, number: str) -> RetryState:
@@ -106,7 +125,14 @@ class RetryStrategy:
         if reason in self._config.shorter_delay_reasons:
             return self._apply_jitter(self._config.shorter_delay_s)
 
-        delay = self._config.base_delay_s * (self._config.backoff_factor ** (state.attempts - 1))
+        try:
+            delay = self._config.base_delay_s * (
+                self._config.backoff_factor ** (state.attempts - 1)
+            )
+        except OverflowError:
+            delay = self._config.max_delay_s
+        if not math.isfinite(delay):
+            delay = self._config.max_delay_s
         delay = min(delay, self._config.max_delay_s)
         return self._apply_jitter(delay)
 
@@ -128,3 +154,25 @@ class RetryStrategy:
         """Reset retry state for a number (e.g., after successful call)."""
         if number in self._states:
             del self._states[number]
+
+
+def _require_positive_integer(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+
+
+def _require_non_negative_number(name: str, value: object) -> None:
+    if not is_finite_number(value) or value < 0:
+        raise ValueError(f"{name} must be a finite number >= 0")
+
+
+def _require_positive_number(name: str, value: object) -> None:
+    if not is_finite_number(value) or value <= 0:
+        raise ValueError(f"{name} must be a finite positive number")
+
+
+def _require_reason_set(name: str, value: object) -> None:
+    if not isinstance(value, frozenset) or not all(
+        isinstance(item, str) and bool(item) for item in value
+    ):
+        raise ValueError(f"{name} must be a frozenset of non-empty strings")

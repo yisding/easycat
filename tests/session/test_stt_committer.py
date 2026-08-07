@@ -9,6 +9,7 @@ from typing import TypeVar
 
 import pytest
 
+from easycat._concurrency import RuntimeSupervisor
 from easycat._epoch import Epoch, Lease
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
@@ -138,7 +139,12 @@ def _make_committer(
         ),
         event_bus=bus,
         journal_sink=sink,
-        runtime_scope=RuntimeScope(),
+        runtime_scope=RuntimeScope.create_root(
+            name="stt-committer-test",
+            root_id="stt-committer-test",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        ),
         timeout_config=timeout_config,
         segment_silence_ms=segment_silence_ms,
         no_turn=no_turn,
@@ -394,6 +400,37 @@ async def test_await_pending_returns_false_on_timeout_and_emits_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_await_pending_timeout_does_not_wait_for_resistant_error_subscriber() -> None:
+    committer, _stt, _emitted, _no_turn, _tm = _make_committer(
+        timeout_config=TimeoutConfig(stt_timeout=0.01),
+    )
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+
+    async def _resist_cancellation(_event: Error) -> None:
+        handler_started.set()
+        while not release_handler.is_set():
+            try:
+                await release_handler.wait()
+            except asyncio.CancelledError:
+                pass
+
+    committer._event_bus.subscribe(Error, _resist_cancellation)
+    turn = _new_turn("resistant-await-pending")
+    turn.pending_stt_segment_futures.append(asyncio.get_running_loop().create_future())
+
+    try:
+        assert await asyncio.wait_for(committer.await_pending(turn), timeout=0.5) is False
+        assert turn.pending_stt_segment_futures == []
+        await asyncio.wait_for(handler_started.wait(), timeout=0.5)
+        await asyncio.sleep(0.02)
+        assert committer._provider_error_supervisor.survivor_count == 1
+    finally:
+        release_handler.set()
+        await committer._provider_error_runtime_scope.drain(suppress_errors=True)
+
+
+@pytest.mark.asyncio
 async def test_await_pending_timeout_error_names_real_provider() -> None:
     class _NamedSTT(_RecordingSTT):
         def version_info(self) -> dict[str, str]:
@@ -516,7 +553,7 @@ async def test_cancel_logs_when_end_stream_raises(
 
     assert stt.end_stream_calls == 1
     assert committer.is_active is False
-    assert "STT end_stream during cancel raised" in caplog.text
+    assert "STT provider lifecycle operation failed" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -549,6 +586,95 @@ async def test_cancel_applies_stt_timeout_and_emits_typed_error() -> None:
     assert error.exception.timeout == pytest.approx(0.02)
     assert stt.cancelled.is_set()
     assert committer.is_active is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_parks_cancellation_resistant_end_stream_until_it_finishes() -> None:
+    class _CancellationResistantEndStreamSTT(_RecordingSTT):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.cancel_requests = 0
+
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            self.started.set()
+            while not self.release.is_set():
+                try:
+                    await self.release.wait()
+                except asyncio.CancelledError:
+                    self.cancel_requests += 1
+
+    stt = _CancellationResistantEndStreamSTT()
+    committer, _stt, emitted, _no_turn, _tm = _make_committer(
+        stt=stt,
+        timeout_config=TimeoutConfig(stt_timeout=0.01),
+    )
+    committer.mark_active()
+    turn = _new_turn()
+    cancelling = asyncio.create_task(committer.cancel(turn))
+
+    try:
+        await asyncio.wait_for(stt.started.wait(), timeout=1)
+        assert await asyncio.wait_for(cancelling, timeout=1) is False
+
+        [owned_end] = committer._runtime_scope.tasks(committer.PROVIDER_END_TASK_NAME)
+        assert not owned_end.done()
+        assert stt.cancel_requests >= 1
+        assert any(
+            isinstance(event, Error) and isinstance(event.exception, STTTimeoutError)
+            for event in emitted
+        )
+
+        stt.release.set()
+        await asyncio.wait_for(owned_end, timeout=1)
+        await asyncio.sleep(0)
+
+        assert committer._runtime_scope.tasks(committer.PROVIDER_END_TASK_NAME) == ()
+        assert await committer.cancel(turn) is True
+        assert stt.end_stream_calls == 1
+    finally:
+        stt.release.set()
+        await asyncio.gather(cancelling, return_exceptions=True)
+        await committer._runtime_scope.drain(suppress_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_repeated_parked_provider_end_attempts_prune_retired_owner_scopes() -> None:
+    class _EventuallySettlingEndStreamSTT(_RecordingSTT):
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 0.03
+            while loop.time() < deadline:
+                try:
+                    await asyncio.sleep(deadline - loop.time())
+                except asyncio.CancelledError:
+                    pass
+
+    stt = _EventuallySettlingEndStreamSTT()
+    committer, _stt, _emitted, _no_turn, _tm = _make_committer(
+        stt=stt,
+        timeout_config=TimeoutConfig(stt_timeout=0.005),
+    )
+    registry = committer._runtime_scope.survivor_registry
+    assert registry is not None
+
+    for index in range(3):
+        committer.mark_active()
+        assert await committer.cancel(_new_turn(f"turn-{index}")) is False
+        [owned_end] = committer._runtime_scope.tasks(committer.PROVIDER_END_TASK_NAME)
+
+        await asyncio.wait_for(owned_end, timeout=1)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert committer._runtime_scope.children() == ()
+        assert registry.active_count == 0
+        assert registry._owner_states == {}
+
+    assert stt.end_stream_calls == 3
 
 
 @pytest.mark.asyncio
@@ -608,33 +734,10 @@ async def test_end_stream_times_out_and_resolves_pending_future() -> None:
         def version_info(self) -> dict[str, str]:
             return {"provider": "openai"}
 
-    bus = EventBus()
-    errors: list[Error] = []
-    bus.subscribe(Error, lambda e: errors.append(e))
-    journal = InMemoryRingBuffer(capacity=64)
-    sink = SessionJournalSink(
-        event_bus=bus,
-        journal=journal,
-        artifact_store=None,
-        session_id="sess",
-        current_turn_id=lambda turn_id=None: turn_id,
-    )
-
-    async def _emit(event):
-        await bus.emit(event)
-
     stt = _HangingSTT()
-    no_turn = TurnContext("no-turn", CancelToken())
-    tm = TurnManager(bus, config=TurnManagerConfig())
-    committer = STTCommitter(
-        wiring=make_wiring(stt=lambda: stt, emit=_emit),
-        event_bus=bus,
-        journal_sink=sink,
-        runtime_scope=RuntimeScope(),
+    committer, _stt, emitted, _no_turn, _tm = _make_committer(
+        stt=stt,
         timeout_config=TimeoutConfig(stt_timeout=0.01),
-        segment_silence_ms=0,
-        no_turn=no_turn,
-        turn_manager=tm,
     )
     turn = _new_turn()
 
@@ -642,7 +745,7 @@ async def test_end_stream_times_out_and_resolves_pending_future() -> None:
 
     assert stt.end_stream_calls == 1
     assert turn.pending_stt_segment_futures == []
-    stt_errors = [e for e in errors if e.stage == ErrorStage.STT]
+    stt_errors = [e for e in emitted if isinstance(e, Error) and e.stage == ErrorStage.STT]
     assert stt_errors
     assert stt_errors[0].provider == "openai"
 

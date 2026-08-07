@@ -73,3 +73,31 @@ async def test_route_controller_closes_tracked_websockets_on_shutdown() -> None:
 
     assert closed == [(1001, b"server shutdown"), (1001, b"server shutdown")]
     assert routes.websockets == set()
+
+
+@pytest.mark.asyncio
+async def test_route_controller_reports_and_retains_websocket_close_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from aiohttp import WSMsgType, web
+
+    class _FailingSocket:
+        async def close(self, *, code: int, message: bytes) -> None:
+            raise RuntimeError("close failed")
+
+    routes = _DebuggerRoutes(
+        _empty_dev_source(),
+        web=web,
+        ws_msg_type=WSMsgType,
+        allow_remote=False,
+        registry=None,
+    )
+    socket = _FailingSocket()
+    routes.websockets.add(socket)
+
+    with caplog.at_level("ERROR", logger="easycat.debugger.server"):
+        await routes.shutdown(None)
+
+    assert routes.websockets == {socket}
+    assert "Debugger WebSocket close failed" in caplog.text
+    assert "close failed" in caplog.text

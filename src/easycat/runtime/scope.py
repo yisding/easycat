@@ -577,6 +577,28 @@ class RuntimeScope:
             self._children[name] = child
         return child
 
+    def prune_empty_child(self, child: RuntimeScope) -> bool:
+        """Retire and unlink one settled direct child without reopening its owner."""
+        if child.parent is not self:
+            raise ValueError("RuntimeScope child does not belong to this parent")
+        child._close_admission_recursive()
+        if (
+            child.tasks()
+            or child.children()
+            or child._pending_finalizer_names()
+            or child.terminal_results()
+        ):
+            return False
+        with self._state_lock:
+            if self._children.get(child.name) is not child:
+                return False
+            self._children.pop(child.name)
+        child._mark_terminal_recursive()
+        registry = child.survivor_registry
+        if registry is not None:
+            registry.forget_closed_owner(child.owner_id)
+        return True
+
     async def start_owned_task(
         self,
         name: str,

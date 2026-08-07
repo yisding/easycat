@@ -312,6 +312,64 @@ class TestClassificationGate:
         finally:
             gate.stop()
 
+    @pytest.mark.parametrize("failure_type", [RuntimeError, asyncio.CancelledError])
+    @pytest.mark.asyncio
+    async def test_gate_opens_when_async_flush_fails(
+        self,
+        failure_type: type[BaseException],
+    ) -> None:
+        from easycat.audio_format import AudioChunk, AudioFormat
+
+        bus = EventBus()
+        gate = ClassificationGate(bus, enabled=True, timeout_s=60)
+
+        async def _fail_flush(_events: list[TTSAudio]) -> None:
+            raise failure_type("flush failed")
+
+        gate.set_flush_async_callback(_fail_flush)
+        gate.start()
+        try:
+            gate.close()
+            fmt = AudioFormat(sample_rate=16000, channels=1, sample_width=2)
+            await bus.emit(TTSAudio(chunk=AudioChunk(data=b"buffered", format=fmt)))
+
+            with pytest.raises(failure_type, match="flush failed"):
+                await gate.flush_and_release()
+
+            assert not gate.is_buffering
+            assert not gate._started
+            assert gate.buffer == []
+            await bus.emit(TTSAudio(chunk=AudioChunk(data=b"future", format=fmt)))
+            assert gate.buffer == []
+        finally:
+            gate.stop()
+
+    @pytest.mark.asyncio
+    async def test_timeout_failure_still_opens_gate_and_releases_ownership(self) -> None:
+        bus = EventBus()
+        gate = ClassificationGate(bus, enabled=True, timeout_s=0)
+
+        async def _fail_flush(_events: list[TTSAudio]) -> None:
+            raise RuntimeError("timeout flush failed")
+
+        gate.set_flush_async_callback(_fail_flush)
+        gate.start()
+        try:
+            gate.close()
+            timeout_task = gate._timeout_task
+            assert timeout_task is not None
+
+            result = await asyncio.gather(timeout_task, return_exceptions=True)
+
+            assert len(result) == 1
+            assert isinstance(result[0], RuntimeError)
+            assert str(result[0]) == "timeout flush failed"
+            assert not gate.is_buffering
+            assert not gate._started
+            assert not gate._tasks.active("classification_gate_timeout")
+        finally:
+            gate.stop()
+
     @pytest.mark.asyncio
     async def test_gate_disabled_no_buffering(self) -> None:
         from easycat.audio_format import AudioChunk, AudioFormat

@@ -1573,6 +1573,7 @@ class Session:
             # Close admission before cancellation so a not-yet-started caller
             # that acquires the lock next fails its startup pre-check.
             self._stopping = True
+            self._turn_manager.close_admission()
             start_task = self._start_task
             if start_task is not None and not start_task.done():
                 start_task.cancel()
@@ -1592,6 +1593,7 @@ class Session:
         else:
             async with self._start_lock:
                 self._stopping = True
+                self._turn_manager.close_admission()
 
         # Idempotent callers join the active teardown. A force request may take
         # ownership from a graceful stop: cancel the old caller task, wait a
@@ -1645,6 +1647,12 @@ class Session:
                     )
 
             if self._closed:
+                # A bounded libSQL close may have left a strongly-owned retry
+                # pending after this Session first became logically closed.
+                # Give later stop() calls a deterministic opportunity to
+                # finish physical cleanup.
+                await self._stt_committer.retry_transferred_provider_close()
+                self._finalize_debug_backends()
                 return
 
             prompt_task = self._turn_runner.active_application_prompt
@@ -1686,6 +1694,7 @@ class Session:
             # close the wrapped agent.
             await self._turn_runner.cancel_preemptive_generation()
 
+            stt_provider_close_transferred = False
             if force:
                 # Force path: aggressively cancel every pipeline task and
                 # signal scoped work before awaiting any handle so the
@@ -1736,13 +1745,24 @@ class Session:
                         await task
                     except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                         pass
-                await self._stt_committer.cancel(turn)
+                stt_cleanup_complete = await self._stt_committer.cancel(turn)
                 # RuntimeScope-owned work currently covers heartbeat,
                 # greeting, audio-router loops, and STT segment commit/pause
                 # tasks. These can outlive the pipeline/STT consumer handles
                 # above, so the force path drains the scope before provider
                 # teardown.
                 await self._drain_force_runtime_signals(runtime_signals, deferred=False)
+                if stt_cleanup_complete is False:
+                    # Establish survivor ownership before transferring close.
+                    # The force cohort's hard-timeout escalation issues one
+                    # final task.cancel() before it parks unfinished work; if
+                    # close were transferred first, that cancellation could
+                    # land inside provider.close() and drop the obligation.
+                    # A task that settled during the drain needs no transfer:
+                    # direct provider close below safely owns cleanup instead.
+                    stt_provider_close_transferred = (
+                        self._stt_committer.transfer_provider_close_to_owned_work()
+                    )
                 self._stt_committer.clear_task_handles()
                 self._greeting.clear_task()
                 self._heartbeat_task = None
@@ -1774,7 +1794,11 @@ class Session:
                 # from underneath the detached cleanup.
                 await self._runtime_scope.drain(_BARGE_IN_CLEANUP_TASK)
                 await self._greeting.cancel()
-                await self._stt_committer.cancel(turn)
+                if (await self._stt_committer.cancel(turn)) is False:
+                    raise RuntimeError(
+                        "STT provider cleanup remains lifecycle-owned; "
+                        "retry stop() after it settles or use stop(force=True)"
+                    )
                 await self._tts_scheduler.cancel()
 
             await self._audio_router.stop_ingress()
@@ -1793,16 +1817,25 @@ class Session:
             # transport — otherwise the task may hang on send_audio()
             # with a disconnected transport.  (The force path already
             # cancelled it above; stop_outbound is idempotent.)
-            await self._audio_router.stop_outbound()
+            await self._audio_router.stop_outbound(force=force)
             await self._runtime_scope.cancel_and_drain("pipeline_heartbeat")
             self._heartbeat_task = None
             await self.transport.disconnect()
             await self._turn_manager.shutdown()
+            agent_close_error: Exception | None = None
             try:
                 await aclose_if_supported(self.agent)
-            except Exception:
-                logger.debug("Error closing agent during stop", exc_info=True)
-            await self._close_audio_providers()
+            except Exception as exc:
+                agent_close_error = exc
+                logger.warning("Error closing agent during stop", exc_info=True)
+            try:
+                await self._close_audio_providers(skip_stt=stt_provider_close_transferred)
+            except Exception as provider_close_error:
+                if agent_close_error is not None:
+                    raise agent_close_error from provider_close_error
+                raise
+            if agent_close_error is not None:
+                raise agent_close_error
             if force:
                 await self._drain_force_runtime_signals(runtime_signals, deferred=True)
             self._turn_lifecycle.clear_identity()
@@ -1995,19 +2028,24 @@ class Session:
             self._tts_scheduler.finish_turn_cancel(tts_task),
             name="tts_turn_cancel_cleanup",
         )
+        stt_cleanup_complete = True
         try:
             if barge_in:
                 await self._notify_barge_in(turn)
             if not successor_expected and self._cancel_cleanup_owns_turn(turn, manager_token):
                 await self._turn_runner.cancel_preemptive_generation()
                 if self._cancel_cleanup_owns_turn(turn, manager_token):
-                    await self._stt_committer.cancel(turn)
+                    stt_cleanup_complete = await self._stt_committer.cancel(turn)
         finally:
             try:
                 await tts_cleanup
             finally:
                 await prompt_cleanup
 
+        if stt_cleanup_complete is False:
+            raise RuntimeError(
+                "STT provider cleanup remains lifecycle-owned; retry cancellation after it settles"
+            )
         if not barge_in and self._cancel_cleanup_owns_turn(turn, manager_token):
             self._reset_turn_state()
 
@@ -2103,8 +2141,13 @@ class Session:
         self._audio_router.reset_replay_chunks()
         await clear_audio_if_supported(self.transport)
         await self._turn_runner.cancel_preemptive_generation()
-        await self._stt_committer.cancel(turn)
+        stt_cleanup_complete = await self._stt_committer.cancel(turn)
         await self._tts_scheduler.finish_turn_cancel(tts_task)
+        if stt_cleanup_complete is False:
+            raise RuntimeError(
+                "STT provider cleanup remains lifecycle-owned; "
+                "retry reset_state() after it settles"
+            )
 
         self.agent.reset()
         self._agent_stage.reset_history()
@@ -2176,10 +2219,16 @@ class Session:
 
     async def start_turn(self) -> None:
         """Manually start a user turn (push-to-talk mode)."""
+        if self._closed or self._stopping:
+            raise RuntimeError("Session is stopping or has been stopped")
+        if not self._is_running:
+            raise RuntimeError("Session is not running")
         await self._turn_manager.start_turn()
 
     async def end_turn(self) -> None:
         """Manually end the current user turn (push-to-talk mode)."""
+        if self._closed or self._stopping:
+            raise RuntimeError("Session is stopping or has been stopped")
         await self._turn_manager.end_turn()
 
     def _stop_helpers(self) -> None:
@@ -2190,7 +2239,7 @@ class Session:
             except Exception:
                 logger.debug("Error stopping session helper", exc_info=True)
 
-    async def _close_audio_providers(self) -> None:
+    async def _close_audio_providers(self, *, skip_stt: bool = False) -> None:
         """Release optional resources owned by audio providers."""
         providers = (
             ("stt", self.stt),
@@ -2200,15 +2249,23 @@ class Session:
             ("echo_canceller", self.echo_canceller),
         )
         closed: set[int] = set()
+        deferred = {id(self.stt)} if skip_stt else set()
+        close_errors: list[Exception] = []
         for name, provider in providers:
             provider_id = id(provider)
-            if provider_id in closed:
+            if provider_id in closed or provider_id in deferred:
                 continue
             closed.add(provider_id)
             try:
                 await close_if_supported(provider)
-            except Exception:
-                logger.debug("Error closing %s provider", name, exc_info=True)
+            except Exception as exc:
+                close_errors.append(exc)
+                logger.warning("Error closing %s provider", name, exc_info=True)
+        if close_errors:
+            primary = close_errors[0]
+            if len(close_errors) > 1:
+                raise primary from close_errors[1]
+            raise primary
 
     async def _drain_force_runtime_signals(
         self,

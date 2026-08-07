@@ -335,8 +335,8 @@ async def test_force_stop_escalates_immediately() -> None:
 async def test_session_hung_even_in_force_does_not_block_stop() -> None:
     # F4: a session whose force-stop ALSO hangs must not block ``stop()`` past
     # ~force_shutdown_timeout_s. ``force_shutdown_timeout_s`` bounds the forced
-    # phase inside the drain, so the hung force-stop is abandoned and ``stop()``
-    # returns promptly.
+    # phase inside the drain. The timed-out session remains fenced for retry
+    # because cancellation does not prove teardown completed.
     server, sessions = await _running_hang_even_in_force_server(
         VoiceServerConfig(
             host="127.0.0.1",
@@ -351,15 +351,26 @@ async def test_session_hung_even_in_force_does_not_block_stop() -> None:
         await _wait_until(lambda: server._active_sessions == 1)
         loop = asyncio.get_running_loop()
         start = loop.time()
-        # Must return well under the 4s bound despite the force-stop hanging.
-        await asyncio.wait_for(server.stop(), timeout=4)
+        # Must fail well under the 4s bound despite the force-stop hanging.
+        with pytest.raises(RuntimeError, match="retained 1 session"):
+            await asyncio.wait_for(server.stop(), timeout=4)
         elapsed = loop.time() - start
-    # The forced phase ran but was bounded; teardown did not block forever.
-    assert sessions[0].graceful_started.is_set()
-    assert sessions[0].force_started.is_set()
-    assert elapsed < 3.0
+        # The forced phase ran but was bounded; teardown did not block forever
+        # and the incomplete session remains behind the drain fence.
+        assert sessions[0].graceful_started.is_set()
+        assert sessions[0].force_started.is_set()
+        assert elapsed < 3.0
+        assert server._manager.active_keys()
+        assert server._lifecycle_cleanup_error is not None
+        assert server._gate.is_draining is True
+
+        sessions[0]._never.set()
+        await asyncio.wait_for(server.stop(force=True), timeout=2)
+
+    assert server._manager.active_keys() == ()
     assert server._active_sessions == 0
     assert server._ws_handler_task_scope.tasks() == ()
+    assert server._lifecycle_cleanup_error is None
 
 
 class _HangingWsServer:
@@ -399,6 +410,9 @@ async def test_wait_closed_is_bounded_by_force_shutdown_timeout() -> None:
     server._ws_server = hanging
     await asyncio.wait_for(server.stop(), timeout=2)
     assert hanging.closed is True
+    assert server._ws_server is None
+    assert "raw-WebSocket listener" not in server._listener_cleanup_tasks
+    assert server._listener_cleanup_task_scope.tasks() == ()
 
 
 # ── draining + capacity ──────────────────────────────────────────────

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS1.3b replaces integer pause identity and generation-carrying futures with exact Pause Epoch leases",
+  "update_rationale": "Reviewed bug-audit lifecycle ownership, cancellation, and bounded teardown changes",
   "counts": {
     "categories": {
       "api_capture": 1,
@@ -39,7 +39,7 @@
     "lease_guard\tturn_manager.py\tTurnManager._silence_timeout\tguard exact pause lease\t4354303a3a7ffe23\t1\tborrower\tRejects an effect unless its exact originating pause still owns the epoch.",
     "lease_guard\tturn_manager.py\tTurnManager.on_stt_final\tguard exact pause lease\t4354303a3a7ffe23\t0\tborrower\tRejects an effect unless its exact originating pause still owns the epoch.",
     "lease_handoff\tsession/_stt_committer.py\tSTTCommitter._commit_segment_after\tkeyword pause lease\tea94e48a1082b098\t0\tcarrier\tCarries an exact pause lease across one call boundary.",
-    "lease_handoff\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit\tkeyword pause lease\tea94e48a1082b098\t0\tcarrier\tCarries an exact pause lease across one call boundary.",
+    "lease_handoff\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit._commit\tkeyword pause lease\tea94e48a1082b098\t0\tcarrier\tCarries an exact pause lease across one call boundary.",
     "lease_handoff\tsession/_stt_committer.py\tSTTCommitter.schedule\tkeyword pause lease\tea94e48a1082b098\t0\tcarrier\tCarries an exact pause lease across one call boundary.",
     "lease_handoff\tsession/_stt_committer.py\tSTTCommitter.start_event_loop._consume\tkeyword pause lease\tea94e48a1082b098\t0\tcarrier\tCarries an exact pause lease across one call boundary.",
     "lease_receiver\tsession/_stt_committer.py\tSTTCommitter._commit_segment_after\tparameter pause lease\ta4df33cffd7447aa\t0\tcarrier\tReceives an exact pause lease for a timer, provider commit, or final.",

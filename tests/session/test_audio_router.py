@@ -517,15 +517,78 @@ async def test_inline_send_keeps_stubborn_transport_owned_until_it_finishes(
     assert state["runtime_scope"].tasks("audio_inline_send")
     assert state["runtime_supervisor"].active_count == 1
 
+    state["running"] = False
+    stopping = asyncio.create_task(router.stop_outbound())
+    await asyncio.sleep(0)
+
+    assert not stopping.done()
+
     release.set()
-    await state["runtime_scope"].drain("audio_inline_send")
+    await asyncio.wait_for(stopping, timeout=1)
     assert router._outbound_in_flight == 0
     assert not router._outbound_send_lock.locked()
     assert router._outbound_idle.is_set()
     assert state["runtime_supervisor"].active_count == 0
 
-    state["running"] = False
-    await router.stop_outbound()
+
+@pytest.mark.asyncio
+async def test_force_drain_parks_stubborn_inline_send_at_hard_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _CancellationResistantTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            _ = chunk
+            started.set()
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    pass
+            return True
+
+    monkeypatch.setattr(AudioRouter, "_INLINE_SEND_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(AudioRouter, "_INLINE_SEND_CANCEL_GRACE_S", 0.01)
+    router, state = _make_router(transport=_CancellationResistantTransport())
+    router.start_outbound()
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk()))
+
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        scope = state["runtime_scope"]
+        signal = scope.signal_cohort("audio-inline-send", force=True)
+        await asyncio.wait_for(scope.drain_cohort(signal), timeout=1)
+
+        [owned_send] = scope.tasks("audio_inline_send")
+        assert not owned_send.done()
+        assert state["runtime_supervisor"].survivor_count == 1
+        assert router._outbound_in_flight == 1
+
+        await asyncio.wait_for(router.stop_outbound(force=True), timeout=0.1)
+        assert not owned_send.done()
+        assert state["runtime_supervisor"].survivor_count == 1
+
+        inline.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(inline, timeout=1)
+
+        release.set()
+        await asyncio.wait_for(owned_send, timeout=1)
+        await asyncio.sleep(0)
+
+        assert scope.tasks("audio_inline_send") == ()
+        assert state["runtime_supervisor"].survivor_count == 0
+        assert router._outbound_in_flight == 0
+        assert router._outbound_idle.is_set()
+    finally:
+        release.set()
+        if not inline.done():
+            inline.cancel()
+        await asyncio.gather(inline, return_exceptions=True)
+        state["running"] = False
+        await router.stop_outbound()
 
 
 @pytest.mark.asyncio

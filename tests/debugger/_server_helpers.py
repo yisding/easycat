@@ -125,6 +125,7 @@ async def _build_voice_bundle(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 _SAFE_HEADERS = {
+    "Host": "localhost:8765",
     "Origin": "http://localhost:8765",
     "Content-Type": "application/json",
 }

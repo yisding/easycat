@@ -557,6 +557,53 @@ class TestSqliteJournalLifecycle:
         j.close()
         j.close()  # should not raise
 
+    def test_rejects_replacement_writer_until_close_releases_claim(self, tmp_path):
+        first = SqliteJournal("closing-writer", data_dir=tmp_path)
+        first._lock.acquire()
+        close_thread = threading.Thread(target=first.close)
+        close_thread.start()
+        try:
+            deadline = time.monotonic() + 1
+            while not first._closed and time.monotonic() < deadline:
+                time.sleep(0.001)
+            assert first._closed
+
+            with pytest.raises(RuntimeError, match="Journal is already active"):
+                SqliteJournal("closing-writer", data_dir=tmp_path)
+        finally:
+            first._lock.release()
+            close_thread.join(timeout=1)
+
+        assert not close_thread.is_alive()
+        reopened = SqliteJournal("closing-writer", data_dir=tmp_path)
+        try:
+            assert (
+                reopened.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="fresh",
+                    session_id="closing-writer",
+                )
+                == 1
+            )
+        finally:
+            reopened.close()
+
+    def test_close_releases_connection_and_claim_when_hardening_fails(self, tmp_path):
+        journal = SqliteJournal("close-hardening", data_dir=tmp_path)
+
+        with mock.patch.object(
+            journal_sql_module,
+            "harden_sqlite_files",
+            side_effect=OSError("chmod failed"),
+        ):
+            journal.close()
+
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            journal._conn.execute("SELECT 1")
+
+        reopened = SqliteJournal("close-hardening", data_dir=tmp_path)
+        reopened.close()
+
     def test_append_started_before_close_is_dropped_without_degrading(self, tmp_path):
         """A writer that loses the close race is not a storage failure.
 
@@ -2018,6 +2065,30 @@ class _BlockingOwnerDeleteConn(_LockProbeConn):
         return super().execute(sql, params)
 
 
+class _BlockingSyncConn(_LockProbeConn):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sync_started = threading.Event()
+        self.release_sync = threading.Event()
+
+    def sync(self):
+        self.sync_started.set()
+        assert self.release_sync.wait(timeout=2)
+        return super().sync()
+
+
+class _FailOnceCloseConn(_LockProbeConn):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.close_calls == 1:
+            raise RuntimeError("close failed before connection release")
+        super().close()
+
+
 class TestLibsqlJournal:
     def test_invalid_session_id_is_rejected_before_optional_sdk_import(self, tmp_path) -> None:
         from easycat.runtime import LibsqlJournal
@@ -2092,6 +2163,162 @@ class TestLibsqlJournal:
             journal.close()
 
         assert probe.synced_live_owner_states[-1] is False
+
+    def test_hung_periodic_sync_does_not_block_finalize_or_close(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A stuck SDK sync stays owned without trapping teardown callers."""
+        from easycat.runtime import LibsqlJournal
+
+        probe = _BlockingSyncConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+        monkeypatch.setattr(
+            journal_sql_module,
+            "JOURNAL_LIBSQL_SYNC_THREAD_JOIN_TIMEOUT_S",
+            0.05,
+        )
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            journal = LibsqlJournal(
+                "hung-sync",
+                data_dir=tmp_path,
+                sync_url="libsql://example.invalid",
+                sync_interval_s=0.01,
+            )
+            probe.journal = journal
+            assert probe.sync_started.wait(timeout=1)
+
+            started = time.monotonic()
+            journal.finalize()
+            finalize_elapsed = time.monotonic() - started
+
+            started = time.monotonic()
+            journal.close()
+            close_elapsed = time.monotonic() - started
+
+            assert finalize_elapsed < 0.5
+            assert close_elapsed < 0.5
+            assert journal._close_thread is not None
+            assert journal._close_thread.is_alive()
+
+            probe.release_sync.set()
+            journal._close_thread.join(timeout=1)
+
+        assert not journal._close_thread.is_alive()
+        assert probe.synced_live_owner_states[-1] is False
+
+    def test_failed_connection_close_retains_owner_and_retries(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A failed SDK close must not publish or cache a false clean release."""
+        from easycat.runtime import LibsqlJournal
+
+        first_connection = _FailOnceCloseConn()
+        rejected_connection = _LockProbeConn()
+        replacement_connection = _LockProbeConn()
+        connections = iter((first_connection, rejected_connection, replacement_connection))
+
+        class _SequencedLibsqlModule:
+            @staticmethod
+            def connect(**_kwargs: object) -> _LockProbeConn:
+                return next(connections)
+
+        with mock.patch.dict(
+            "sys.modules",
+            {"libsql_experimental": _SequencedLibsqlModule()},
+        ):
+            journal = LibsqlJournal("retry-close", data_dir=tmp_path)
+            first_connection.journal = journal
+
+            journal.close()
+
+            assert first_connection.close_calls == 1
+            assert journal._connection_closed is False
+            assert first_connection.live_owner_present is True
+            assert first_connection.synced_live_owner_states[-1] is True
+            with pytest.raises(RuntimeError, match="Journal is already active"):
+                LibsqlJournal("retry-close", data_dir=tmp_path)
+
+            # Admission services the retained predecessor before rejecting the
+            # attempt that began while the path was still owned.
+            assert first_connection.close_calls == 2
+            journal.close()
+
+            assert first_connection.close_calls == 2
+            assert journal._connection_closed is True
+            assert first_connection.live_owner_present is False
+
+            reopened = LibsqlJournal("retry-close", data_dir=tmp_path)
+            reopened.close()
+
+    def test_process_retains_failed_libsql_close_after_debug_backends_are_collected(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A collected Session owner must not discard an unclosed SDK writer."""
+        import gc
+        import weakref
+
+        from easycat.events import EventBus
+        from easycat.runtime import LibsqlJournal
+        from easycat.session._debug_backends import SessionDebugBackends
+        from easycat.session._journal_sink import SessionJournalSink
+
+        first_connection = _FailOnceCloseConn()
+        replacement_connection = _LockProbeConn()
+        connections = iter((first_connection, replacement_connection))
+
+        class _SequencedLibsqlModule:
+            @staticmethod
+            def connect(**_kwargs: object) -> _LockProbeConn:
+                return next(connections)
+
+        with mock.patch.dict(
+            "sys.modules",
+            {"libsql_experimental": _SequencedLibsqlModule()},
+        ):
+            journal = LibsqlJournal("session-retry-close", data_dir=tmp_path)
+            sink = SessionJournalSink(
+                event_bus=EventBus(),
+                journal=journal,
+                artifact_store=None,
+                session_id="session-retry-close",
+                current_turn_id=lambda turn_id=None: turn_id,
+            )
+            backends = SessionDebugBackends(
+                journal=journal,
+                journal_view=JournalView(journal),
+                artifact_store=None,
+                journal_sink=sink,
+            )
+            journal_ref = weakref.ref(journal)
+            backends_ref = weakref.ref(backends)
+
+            backends.destroy()
+
+            assert first_connection.close_calls == 1
+            assert journal.close_complete is False
+            del journal, sink, backends
+            gc.collect()
+
+            assert backends_ref() is None
+            assert journal_ref() is not None
+            with pytest.raises(RuntimeError, match="Journal is already active"):
+                SqliteJournal("session-retry-close", data_dir=tmp_path)
+            assert first_connection.close_calls == 1
+            with pytest.raises(RuntimeError, match="Journal is already active"):
+                LibsqlJournal("session-retry-close", data_dir=tmp_path)
+
+            # The rejected admission retried the still-owned connection without
+            # opening its replacement beside it.
+            assert first_connection.close_calls == 2
+            assert first_connection.live_owner_present is False
+
+            reopened = LibsqlJournal("session-retry-close", data_dir=tmp_path)
+            reopened.close()
 
     def test_rejects_second_live_writer_for_same_local_replica(self, tmp_path: Path) -> None:
         """A second local libSQL writer would reuse the same sequence counter."""

@@ -442,6 +442,8 @@ class VoicemailPolicyHandler:
         """
         from easycat.telephony.call_state import OutboundCallState
 
+        if event.call_sid and self._call_sid and event.call_sid != self._call_sid:
+            return
         if event.old == OutboundCallState.VOICEMAIL and event.new != OutboundCallState.VOICEMAIL:
             self._action_taken = False
 

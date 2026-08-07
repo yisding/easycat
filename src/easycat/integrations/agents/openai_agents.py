@@ -7,7 +7,6 @@ and records execution state to the journal via :class:`AgentRecorder`.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import AsyncIterator, Mapping
@@ -27,6 +26,7 @@ from easycat.integrations.agents._openai_agents_events import (
     extract_tool_delta,
     map_run_item,
 )
+from easycat.integrations.agents._state_serialization import serialize_framework_state
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -475,10 +475,7 @@ class OpenAIAgentsBridge:
 
     def _serialize_framework_state(self) -> bytes:
         """Serialize message history for artifact storage."""
-        try:
-            return json.dumps(self._message_history, default=str).encode()
-        except (TypeError, ValueError):
-            return b"[]"
+        return serialize_framework_state(self._message_history, fallback=b"[]")
 
     def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
         replacement = delivered_text + "..." if delivered_text else ""

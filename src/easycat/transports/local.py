@@ -12,8 +12,9 @@ import logging
 import queue as thread_queue
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NoReturn
 
+from easycat._audio_utils import validate_pcm16_format
 from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
@@ -62,6 +63,7 @@ class LocalTransportConfig:
     max_pending_in_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
 
     def __post_init__(self) -> None:
+        validate_pcm16_format("audio_format", self.audio_format)
         if (
             not isinstance(self.frame_duration_ms, int)
             or isinstance(self.frame_duration_ms, bool)
@@ -79,6 +81,12 @@ class LocalTransportConfig:
             or self.output_preroll_frames < 0
         ):
             raise ValueError("output_preroll_frames must be a non-negative integer")
+        if (
+            not isinstance(self.max_pending_out_chunks, int)
+            or isinstance(self.max_pending_out_chunks, bool)
+            or self.max_pending_out_chunks < 0
+        ):
+            raise ValueError("max_pending_out_chunks must be a non-negative integer")
         if (
             self.max_pending_out_chunks > 0
             and self.output_preroll_frames > self.max_pending_out_chunks
@@ -173,6 +181,10 @@ class LocalTransport(AudioQueueMixin):
         """Open audio devices and start capture / playback streams."""
         if self._connected:
             return
+        if self._input_stream is not None or self._output_stream is not None:
+            raise RuntimeError(
+                "Local transport cleanup is incomplete; call disconnect() before reconnecting"
+            )
 
         self._stream_generation += 1
         stream_generation = self._stream_generation
@@ -259,14 +271,28 @@ class LocalTransport(AudioQueueMixin):
                 ),
             )
             self._output_stream.start()
-        except BaseException:
+        except BaseException as startup_error:  # noqa: BLE001 - partial acquisition boundary
             # ``_connected`` becomes true only after both devices start, so a
             # failure here must unwind the handles directly rather than rely on
             # the steady-state flag. This also makes callers that do not wrap
             # ``connect()`` in an exit stack safe from partial acquisition.
-            await self.disconnect()
-            raise
+            await self._raise_failed_connect_after_cleanup(startup_error)
         self._connected = True
+
+    async def _raise_failed_connect_after_cleanup(
+        self,
+        startup_error: BaseException,
+    ) -> NoReturn:
+        """Roll back partial device acquisition without losing the primary failure."""
+        try:
+            await self.disconnect()
+        except asyncio.CancelledError as cancellation:
+            if isinstance(startup_error, asyncio.CancelledError):
+                raise startup_error from cancellation
+            raise cancellation from startup_error
+        except BaseException as cleanup_error:
+            raise startup_error from cleanup_error
+        raise startup_error
 
     def _enqueue_input_chunk(self, chunk: AudioChunk, *, stream_generation: int) -> None:
         """Enqueue mic audio only while its originating stream is still current."""
@@ -423,7 +449,12 @@ class LocalTransport(AudioQueueMixin):
         # generation check in that work then drops it instead of affecting a
         # subsequent connection.
         self._stream_generation += 1
-        for stream in (self._input_stream, self._output_stream):
+        cleanup_errors: list[Exception] = []
+        streams = (
+            ("input", self._input_stream),
+            ("output", self._output_stream),
+        )
+        for stream_name, stream in streams:
             if stream is not None:
                 try:
                     stream.stop()
@@ -431,16 +462,21 @@ class LocalTransport(AudioQueueMixin):
                     logger.debug("Error stopping audio stream", exc_info=True)
                 try:
                     stream.close()
-                except Exception:
+                except Exception as exc:
                     logger.debug("Error closing audio stream", exc_info=True)
-
-        self._input_stream = None
-        self._output_stream = None
+                    cleanup_errors.append(exc)
+                else:
+                    if stream_name == "input" and self._input_stream is stream:
+                        self._input_stream = None
+                    elif stream_name == "output" and self._output_stream is stream:
+                        self._output_stream = None
         self._flush_queues()
         self._enqueue_sentinel()
         self._connected = False
         self._loop = None
         await self._drain_emit_tasks()
+        if cleanup_errors:
+            raise cleanup_errors[0]
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Queue an audio chunk for speaker playback.

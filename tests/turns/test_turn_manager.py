@@ -200,6 +200,105 @@ async def test_stale_smart_turn_timer_cannot_end_a_later_pause() -> None:
         await manager.shutdown()
 
 
+@pytest.mark.asyncio
+async def test_shutdown_reaps_replaced_cancellation_resistant_timer() -> None:
+    class CancellationResistantDetector:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancel_seen = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def detect(self, _audio: list[AudioChunk]) -> SmartTurnResult:
+            self.started.set()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancel_seen.set()
+                await self.release.wait()
+            return SmartTurnResult(prediction=0, probability=0.0)
+
+    detector = CancellationResistantDetector()
+    manager = TurnManager(
+        EventBus(),
+        config=TurnManagerConfig(end_of_turn_silence_ms=0, endpoint_detector=detector),
+    )
+    await manager.on_vad_event(VADStartSpeaking())
+    manager.on_audio_frame(_chunk())
+    await manager.on_vad_event(VADStopSpeaking())
+    await detector.started.wait()
+    replaced = manager._silence_timer_task
+    assert replaced is not None
+
+    await manager.on_vad_event(VADStartSpeaking())
+    await detector.cancel_seen.wait()
+    assert manager._silence_timer_task is None
+    assert not replaced.done()
+
+    try:
+        await manager.shutdown()
+        assert replaced.done()
+        assert manager._silence_timer_tasks == set()
+    finally:
+        detector.release.set()
+        await asyncio.gather(replaced, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_silence_timer_admission_while_reaping() -> None:
+    class CancellationResistantDetector:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancel_seen = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def detect(self, _audio: list[AudioChunk]) -> SmartTurnResult:
+            self.started.set()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancel_seen.set()
+                await self.release.wait()
+            return SmartTurnResult(prediction=0, probability=0.0)
+
+    detector = CancellationResistantDetector()
+    manager = TurnManager(
+        EventBus(),
+        config=TurnManagerConfig(end_of_turn_silence_ms=0, endpoint_detector=detector),
+    )
+    await manager.on_vad_event(VADStartSpeaking())
+    manager.on_audio_frame(_chunk())
+    await manager.on_vad_event(VADStopSpeaking())
+    await detector.started.wait()
+
+    shutdown = asyncio.create_task(manager.shutdown())
+    await detector.cancel_seen.wait()
+    await manager.on_vad_event(VADStartSpeaking())
+    await manager.on_vad_event(VADStopSpeaking())
+    detector.release.set()
+    await shutdown
+
+    assert manager._silence_timer_tasks == set()
+    assert manager._silence_timer_task is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_manual_and_application_turn_admission() -> None:
+    bus = EventBus()
+    events = EventCollector(bus)
+    manager = TurnManager(bus)
+
+    await manager.shutdown()
+    await manager.start_turn()
+    await manager.end_turn()
+
+    with pytest.raises(RuntimeError, match="shutting down"):
+        manager.begin_application_turn("late-application", CancelToken())
+
+    assert manager.state is TurnManagerState.IDLE
+    assert manager.cancel_token is None
+    assert events.events == []
+
+
 def test_default_endpointing_outlasts_vad_restart_confirmation() -> None:
     """The default turn grace must stay above the VAD restart-confirmation gate.
 

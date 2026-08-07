@@ -63,10 +63,12 @@ def _comparison_samples_by_condition(
     grouped: dict[str, list[LatencySample]] = defaultdict(list)
     raw_samples = artifact.get("samples")
     if not isinstance(raw_samples, list):
-        return grouped
-    for item in raw_samples:
+        raise ValueError("latency comparison samples payload must be a list")  # noqa: TRY004 domain-specific validation error
+    for index, item in enumerate(raw_samples):
         if not isinstance(item, dict):
-            continue
+            raise ValueError(  # noqa: TRY004 domain-specific validation error
+                f"latency comparison sample at index {index} must be an object"
+            )
         sample = LatencySample.from_dict(item)
         if sample.warmup or sample.failure_class or sample.stages.total_ms is None:
             continue

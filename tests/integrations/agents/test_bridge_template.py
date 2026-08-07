@@ -16,6 +16,7 @@ from easycat.integrations.agents import (
 )
 from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents._recorder import JournalAgentRecorder
+from easycat.integrations.agents._state_serialization import serialize_framework_state
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -212,9 +213,46 @@ class TestTemplateDefaults:
                 return FrameworkStateSnapshot(
                     fields={
                         "history_len": 2,
+                        "author": "Ada",
+                        "authoredAt": "2026-08-06",
+                        "monkey": "banana",
+                        "keyboard_layout": "qwerty",
+                        "keyboardLayout": "dvorak",
+                        "authConfig": {"mode": "oauth"},
+                        "api_version": "v2",
+                        "apiVersion": "v1",
                         "api_key": "TOP_LEVEL_DROPPED",
                         "config": {"api_key": "NESTED_KEY_LEAK", "safe": "ok"},
+                        "auth_config": {"auth": "NESTED_AUTH_FIELD_LEAK"},
+                        "camel_credentials": {
+                            "authToken": "AUTH_TOKEN_CAMEL_LEAK",
+                            "apiToken": "API_TOKEN_CAMEL_LEAK",
+                            "apiSecret": "API_SECRET_CAMEL_LEAK",
+                            "tokenValue": "TOKEN_VALUE_CAMEL_LEAK",
+                            "authHeader": "AUTH_HEADER_CAMEL_LEAK",
+                            "apiHeader": "API_HEADER_CAMEL_LEAK",
+                            "authValue": "AUTH_VALUE_CAMEL_LEAK",
+                            "apiValue": "API_VALUE_CAMEL_LEAK",
+                        },
                         "headers": {"authorization": "Bearer NESTED_AUTH_LEAK"},
+                        "metadata": {"label": "sk-abcdefghijklmnop"},
+                        "lookup": {"sk-abcdefghijklmnop": "safe value"},
+                        "opaque": {("api_key", "OPAQUE_SECRET_LEAK")},
+                        "association_list": [("api_key", "LIST_SECRET_LEAK")],
+                        "association_tuple": ("token", "TUPLE_SECRET_LEAK"),
+                        "auth_association": ("auth", "AUTH_ASSOCIATION_LEAK"),
+                        "camel_associations": [
+                            ("authToken", "AUTH_TOKEN_ASSOCIATION_LEAK"),
+                            ("apiToken", "API_TOKEN_ASSOCIATION_LEAK"),
+                            ("apiSecret", "API_SECRET_ASSOCIATION_LEAK"),
+                            ("tokenValue", "TOKEN_VALUE_ASSOCIATION_LEAK"),
+                            ("authHeader", "AUTH_HEADER_ASSOCIATION_LEAK"),
+                            ("apiHeader", "API_HEADER_ASSOCIATION_LEAK"),
+                            ("authValue", "AUTH_VALUE_ASSOCIATION_LEAK"),
+                            ("apiValue", "API_VALUE_ASSOCIATION_LEAK"),
+                        ],
+                        "ordinary_pair": ("role", "assistant"),
+                        "ordinary_pairs": [("monkey", "banana")],
                         "messages": [{"role": "system", "token": "NESTED_TOKEN_LEAK"}],
                     },
                     kind="minimal",
@@ -224,13 +262,160 @@ class TestTemplateDefaults:
         state = json.loads(payload)
 
         assert "api_key" not in state
+        assert state["author"] == "Ada"
+        assert state["authoredAt"] == "2026-08-06"
+        assert state["monkey"] == "banana"
+        assert state["keyboard_layout"] == "qwerty"
+        assert state["keyboardLayout"] == "dvorak"
+        assert state["authConfig"] == {"mode": "oauth"}
+        assert state["api_version"] == "v2"
+        assert state["apiVersion"] == "v1"
         assert state["config"] == {"api_key": "[REDACTED_SECRET]", "safe": "ok"}
+        assert state["auth_config"] == {"auth": "[REDACTED_SECRET]"}
+        assert state["camel_credentials"] == {
+            "authToken": "[REDACTED_SECRET]",
+            "apiToken": "[REDACTED_SECRET]",
+            "apiSecret": "[REDACTED_SECRET]",
+            "tokenValue": "[REDACTED_SECRET]",
+            "authHeader": "[REDACTED_SECRET]",
+            "apiHeader": "[REDACTED_SECRET]",
+            "authValue": "[REDACTED_SECRET]",
+            "apiValue": "[REDACTED_SECRET]",
+        }
         assert state["headers"] == {"authorization": "[REDACTED_SECRET]"}
+        assert state["metadata"] == {"label": "[REDACTED_SECRET]"}
+        assert state["lookup"] == {}
+        assert state["opaque"] == [{"api_key": "[REDACTED_SECRET]"}]
+        assert state["association_list"] == [{"api_key": "[REDACTED_SECRET]"}]
+        assert state["association_tuple"] == {"token": "[REDACTED_SECRET]"}
+        assert state["auth_association"] == {"auth": "[REDACTED_SECRET]"}
+        assert state["camel_associations"] == [
+            {"authToken": "[REDACTED_SECRET]"},
+            {"apiToken": "[REDACTED_SECRET]"},
+            {"apiSecret": "[REDACTED_SECRET]"},
+            {"tokenValue": "[REDACTED_SECRET]"},
+            {"authHeader": "[REDACTED_SECRET]"},
+            {"apiHeader": "[REDACTED_SECRET]"},
+            {"authValue": "[REDACTED_SECRET]"},
+            {"apiValue": "[REDACTED_SECRET]"},
+        ]
+        assert state["ordinary_pair"] == ["role", "assistant"]
+        assert state["ordinary_pairs"] == [["monkey", "banana"]]
         assert state["messages"] == [{"role": "system", "token": "[REDACTED_SECRET]"}]
-        assert "TOP_LEVEL_DROPPED" not in payload
-        assert "NESTED_KEY_LEAK" not in payload
-        assert "NESTED_AUTH_LEAK" not in payload
-        assert "NESTED_TOKEN_LEAK" not in payload
+        for secret in (
+            "TOP_LEVEL_DROPPED",
+            "NESTED_KEY_LEAK",
+            "NESTED_AUTH_LEAK",
+            "sk-abcdefghijklmnop",
+            "NESTED_TOKEN_LEAK",
+            "OPAQUE_SECRET_LEAK",
+            "LIST_SECRET_LEAK",
+            "TUPLE_SECRET_LEAK",
+            "NESTED_AUTH_FIELD_LEAK",
+            "AUTH_ASSOCIATION_LEAK",
+            "AUTH_TOKEN_CAMEL_LEAK",
+            "API_TOKEN_CAMEL_LEAK",
+            "API_SECRET_CAMEL_LEAK",
+            "TOKEN_VALUE_CAMEL_LEAK",
+            "AUTH_HEADER_CAMEL_LEAK",
+            "API_HEADER_CAMEL_LEAK",
+            "AUTH_VALUE_CAMEL_LEAK",
+            "API_VALUE_CAMEL_LEAK",
+            "AUTH_TOKEN_ASSOCIATION_LEAK",
+            "API_TOKEN_ASSOCIATION_LEAK",
+            "API_SECRET_ASSOCIATION_LEAK",
+            "TOKEN_VALUE_ASSOCIATION_LEAK",
+            "AUTH_HEADER_ASSOCIATION_LEAK",
+            "API_HEADER_ASSOCIATION_LEAK",
+            "AUTH_VALUE_ASSOCIATION_LEAK",
+            "API_VALUE_ASSOCIATION_LEAK",
+        ):
+            assert secret not in payload
+
+    def test_serialized_state_drops_opaque_mapping_keys_without_stringifying_them(self):
+        class _OpaqueKey:
+            str_called = False
+
+            def __hash__(self) -> int:
+                return 1
+
+            def __str__(self) -> str:
+                type(self).str_called = True
+                return "OPAQUE_MAPPING_KEY_SECRET_LEAK"
+
+        payload = serialize_framework_state({"state": {_OpaqueKey(): "safe"}}).decode()
+
+        assert json.loads(payload) == {"state": {}}
+        assert _OpaqueKey.str_called is False
+        assert "OPAQUE_MAPPING_KEY_SECRET_LEAK" not in payload
+
+    def test_serialized_state_drops_primitive_subclass_keys_without_stringifying_them(self):
+        class _LeakyStringKey(str):
+            str_called = False
+
+            def __str__(self) -> str:
+                type(self).str_called = True
+                return "STRING_KEY_SECRET_LEAK"
+
+        class _LeakyIntegerKey(int):
+            str_called = False
+
+            def __str__(self) -> str:
+                type(self).str_called = True
+                return "INTEGER_KEY_SECRET_LEAK"
+
+        payload = serialize_framework_state(
+            {"state": {_LeakyStringKey("safe"): 1, _LeakyIntegerKey(1): 2}}
+        ).decode()
+
+        assert json.loads(payload) == {"state": {}}
+        assert _LeakyStringKey.str_called is False
+        assert _LeakyIntegerKey.str_called is False
+        assert "STRING_KEY_SECRET_LEAK" not in payload
+        assert "INTEGER_KEY_SECRET_LEAK" not in payload
+
+    def test_serialized_state_fails_closed_for_primitive_subclass_association_key(self):
+        class _DisguisedSecretKey(str):
+            str_called = False
+
+            def __str__(self) -> str:
+                type(self).str_called = True
+                return "role"
+
+        payload = serialize_framework_state(
+            {"pairs": [(_DisguisedSecretKey("api_key"), "ASSOCIATION_SECRET_LEAK")]}
+        ).decode()
+
+        assert json.loads(payload) == {"pairs": ["[UNSERIALIZABLE]"]}
+        assert _DisguisedSecretKey.str_called is False
+        assert "ASSOCIATION_SECRET_LEAK" not in payload
+
+    def test_serialized_state_does_not_use_opaque_object_repr(self):
+        class _LeakyOpaque:
+            def __str__(self) -> str:
+                return "api_key=UNPATTERNED_SECRET_LEAK"
+
+        class _OpaqueBridge(_MinimalBridge):
+            def snapshot_state(self):
+                return FrameworkStateSnapshot(
+                    fields={"opaque": _LeakyOpaque()},
+                    kind="minimal",
+                )
+
+        payload = _OpaqueBridge()._serialize_framework_state().decode()
+
+        assert json.loads(payload) == {"opaque": "[UNSERIALIZABLE]"}
+        assert "UNPATTERNED_SECRET_LEAK" not in payload
+
+    def test_serialized_state_never_emits_nonstandard_json_numbers(self):
+        class _NonFiniteBridge(_MinimalBridge):
+            def snapshot_state(self):
+                return FrameworkStateSnapshot(
+                    fields={"latency": float("nan"), "limit": float("inf")},
+                    kind="minimal",
+                )
+
+        assert _NonFiniteBridge()._serialize_framework_state() == b"{}"
 
     def test_serialized_state_degrades_to_empty_on_snapshot_failure(self):
         class _Broken(_MinimalBridge):

@@ -38,9 +38,47 @@ async def test_origin_guard_allows_loopback_origin(tmp_path):
     async with TestClient(TestServer(app)) as client:
         resp = await client.get(
             "/api/manifest",
-            headers={"Origin": "http://localhost:8765"},
+            headers={
+                "Host": "localhost:8765",
+                "Origin": "http://localhost:8765",
+            },
         )
         assert resp.status == 200
+
+
+async def test_origin_guard_refuses_different_loopback_port(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(
+            "/api/manifest",
+            headers={
+                "Host": "localhost:8765",
+                "Origin": "http://localhost:3000",
+            },
+        )
+        assert resp.status == 403
+
+
+async def test_origin_guard_refuses_different_loopback_hostname_on_post(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact"},
+            headers={
+                "Host": "127.0.0.1:8765",
+                "Origin": "http://localhost:8765",
+            },
+        )
+        assert resp.status == 403
 
 
 async def test_origin_guard_refuses_dns_rebinding_origin_prefix(tmp_path):
@@ -147,6 +185,7 @@ async def test_origin_guard_refuses_form_encoded_post(tmp_path):
             "/api/replay",
             data="fidelity=artifact",
             headers={
+                "Host": "localhost:8765",
                 "Origin": "http://localhost:8765",
                 "Content-Type": "application/x-www-form-urlencoded",
             },

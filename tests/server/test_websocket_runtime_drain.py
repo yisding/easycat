@@ -18,7 +18,7 @@ from easycat._concurrency import (
     reap,
     start_owned,
 )
-from easycat.server.transports import WebSocketSessionRuntime
+from easycat.server.transports import WebSocketSessionRuntime, cancel_handler_tasks
 from easycat.session_manager import SessionManager
 
 
@@ -251,6 +251,74 @@ async def test_runtime_surfaces_failed_manager_sweep_and_retains_ledgers_for_ret
     assert manager.get(key) is None
     assert runtime._sessions == {}
     assert runtime._connections == {}
+
+
+async def test_runtime_surfaces_failed_connection_close_and_retains_ledger_for_retry(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class RetryableConnection(_Connection):
+        def __init__(self, events: list[str]) -> None:
+            super().__init__(events)
+            self.fail_close = True
+
+        async def close(self, *, code: int, reason: str) -> None:
+            if self.fail_close:
+                raise RuntimeError("retryable connection failure")
+            await super().close(code=code, reason=reason)
+
+    events: list[str] = []
+    manager = SessionManager[int]()
+    server = _Server(events)
+    connection = RetryableConnection(events)
+    key = id(connection)
+    runtime = WebSocketSessionRuntime(
+        manager=manager,
+        max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="test-websocket-runtime",
+        session_factory=lambda _connection: None,
+    )
+    runtime._connections[key] = connection
+
+    with (
+        caplog.at_level(logging.ERROR, logger="easycat.server.transports"),
+        pytest.raises(
+            RuntimeError,
+            match="WebSocket connection shutdown retained 1 connection",
+        ),
+    ):
+        await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0)
+
+    assert "WebSocket connection close task" in caplog.text
+    assert "retryable connection failure" in caplog.text
+    assert runtime._connections == {key: connection}
+
+    connection.fail_close = False
+    await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0)
+
+    assert runtime._connections == {}
+
+
+async def test_cancel_handler_tasks_reports_cleanup_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = asyncio.Event()
+
+    async def handler() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as exc:
+            raise RuntimeError("handler cleanup failed") from exc
+
+    task = asyncio.create_task(handler(), name="easycat-test-websocket-handler")
+    await started.wait()
+
+    with caplog.at_level(logging.ERROR, logger="easycat.server.transports"):
+        await cancel_handler_tasks([task], timeout_s=1.0)
+
+    assert "WebSocket handler task easycat-test-websocket-handler failed" in caplog.text
+    assert "handler cleanup failed" in caplog.text
 
 
 async def test_cancelled_drain_preserves_connection_bookkeeping_for_retry() -> None:
@@ -486,15 +554,17 @@ async def test_force_timeout_is_shared_across_all_runtime_cleanup_steps() -> Non
         runtime_id="test-websocket-runtime",
         session_factory=lambda _connection: None,
     )
-    runtime._connections[1] = _StuckConnection()
+    connection = _StuckConnection()
+    runtime._connections[1] = connection
     handler = asyncio.create_task(resist_cancellation())
     runtime._handler_tasks.add(handler)
     await asyncio.sleep(0)
 
     loop = asyncio.get_running_loop()
     started = loop.time()
+    server = _StuckServer()
     await runtime.drain(
-        _StuckServer(),
+        server,
         drain_timeout_s=0.0,
         force_timeout_s=0.05,
     )
@@ -504,6 +574,7 @@ async def test_force_timeout_is_shared_across_all_runtime_cleanup_steps() -> Non
     close_tasks = runtime._connection_close_task_scope.tasks()
     assert len(close_tasks) == 1
     assert close_tasks[0].get_name().startswith("easycat-websocket-close-")
+    assert runtime._connection_cleanup_retry == {1: connection}
 
     release.set()
     await asyncio.gather(
@@ -515,6 +586,8 @@ async def test_force_timeout_is_shared_across_all_runtime_cleanup_steps() -> Non
     )
     await asyncio.sleep(0)
     assert runtime._connection_close_task_scope.tasks() == ()
+    await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0)
+    assert runtime._connection_cleanup_retry == {}
 
 
 class _CancellationResistantServer:

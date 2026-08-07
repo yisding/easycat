@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import easycat.transports.webrtc as webrtc_mod
+from easycat.transports._webrtc_stats import append_webrtc_stats_record
 from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 
 from ._webrtc_fakes import _FakeJsonRequest, _FakeWeb
@@ -163,6 +164,38 @@ class TestWebRTCStatsArtifact:
         )
 
         assert response.status == 400
+        assert not stats_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_stats_endpoint_drops_nonfinite_numbers(self, tmp_path):
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+        transport = WebRTCTransport(WebRTCTransportConfig(stats_path=str(stats_path)))
+        transport._web = _FakeWeb
+
+        response = await transport._handle_stats(
+            _FakeSameOriginJsonRequest(
+                {
+                    "sequence": float("nan"),
+                    "inbound_audio": {
+                        "jitter_ms": float("inf"),
+                        "packets_received": 42,
+                    },
+                }
+            )
+        )
+
+        assert response.status == 200
+        line = stats_path.read_text(encoding="utf-8").strip()
+        assert "NaN" not in line
+        assert "Infinity" not in line
+        assert json.loads(line)["inbound_audio"] == {"packets_received": 42}
+
+    def test_stats_writer_rejects_unsanitized_nonfinite_numbers(self, tmp_path):
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+
+        with pytest.raises(ValueError, match="Out of range float values"):
+            append_webrtc_stats_record(stats_path, {"sequence": float("-inf")})
+
         assert not stats_path.exists()
 
     def test_bundled_client_posts_webrtc_stats_milestones(self):

@@ -274,6 +274,7 @@ def test_aec_diagnostics_unsupported_for_mulaw_width():
 
 
 _SAFE_HEADERS = {
+    "Host": "localhost:8765",
     "Origin": "http://localhost:8765",
     "Content-Type": "application/json",
 }

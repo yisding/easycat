@@ -120,6 +120,10 @@ class TimeoutConfig:
     tts_first_byte_timeout: float = 5.0  # seconds
 
     def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Revalidate mutable timeout policy at a runtime build boundary."""
         self.stt_timeout = _finite_positive_timeout(self.stt_timeout, name="stt_timeout")
         self.agent_timeout = _finite_positive_timeout(self.agent_timeout, name="agent_timeout")
         self.tts_first_byte_timeout = _finite_positive_timeout(

@@ -67,11 +67,14 @@ _SAFE_SECRET_NAME_FIELDS = frozenset(
     }
 )
 
+_BARE_SECRET_VALUE_KEYS = frozenset({"api", "auth"})
+
 _SECRET_KEY_RE = re.compile(
     r"(?i)(^|[_\-.])("
     r"api[-_]?key|"
     r"x[-_]?api[-_]?key|"
     r"xi[-_]?api[-_]?key|"
+    r"(?:api|auth)[-_.]?(?:header|value)|"
     r"access[-_]?token|"
     r"refresh[-_]?token|"
     r"client[-_]?secret|"
@@ -86,6 +89,8 @@ _SECRET_KEY_RE = re.compile(
     r"key"
     r")($|[_\-.])"
 )
+_CAMEL_ACRONYM_BOUNDARY_RE = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
+_CAMEL_WORD_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 _URL_RE = re.compile(r"https?://[^\s\"')\]}]+")
 _URL_USERINFO_SECRET_RE = re.compile(r"(?i)(https?://[^/\s:@]+:)[^/\s@]+(@)")
@@ -411,7 +416,7 @@ def redact_value(
     policy: RedactionPolicy = "pii",
 ) -> Any:
     """Redact a JSON-compatible value using both field-name and value policy."""
-    normalized_key = str(key).lower() if key is not None else None
+    normalized_key = _normalize_key_name(key)
     if normalized_key == "command":
         return redact_command(value, policy=policy)
     if (
@@ -494,8 +499,23 @@ def redact_command(value: Any, *, policy: RedactionPolicy = "pii") -> Any:
 
 
 def should_redact_key(key: str | None) -> bool:
-    normalized_key = str(key).lower() if key is not None else None
-    return normalized_key in UNSAFE_TEXT_FIELDS or _is_secret_value_key(normalized_key)
+    normalized_key = _normalize_key_name(key)
+    return normalized_key in UNSAFE_TEXT_FIELDS or should_redact_secret_key(normalized_key)
+
+
+def should_redact_secret_key(key: str | None) -> bool:
+    """Return whether *key* names credential material rather than PII content."""
+    normalized_key = _normalize_key_name(key)
+    return normalized_key in _BARE_SECRET_VALUE_KEYS or _is_secret_value_key(normalized_key)
+
+
+def _normalize_key_name(key: str | None) -> str | None:
+    """Normalize case boundaries before credential-key classification."""
+    if key is None:
+        return None
+    value = str(key)
+    value = _CAMEL_ACRONYM_BOUNDARY_RE.sub("_", value)
+    return _CAMEL_WORD_BOUNDARY_RE.sub("_", value).lower()
 
 
 @functools.lru_cache(maxsize=256)

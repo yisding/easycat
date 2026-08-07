@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from easycat.telephony.retry import (
     RetryDecision,
     RetryStrategy,
@@ -111,3 +113,53 @@ class TestRetryStrategy:
             assert 50.0 <= delay <= 100.0
         # Jitter must actually randomize (not always the same value).
         assert len(delays) > 1
+
+    def test_backoff_overflow_caps_at_max_delay(self) -> None:
+        config = RetryStrategyConfig(
+            max_retries=5,
+            sms_fallback_after=5,
+            base_delay_s=1.0,
+            backoff_factor=1e308,
+            max_delay_s=10.0,
+            jitter_fraction=0.0,
+        )
+        strategy = RetryStrategy(config)
+        for _ in range(3):
+            strategy.record_attempt("+1555", "other")
+
+        assert strategy.get_delay("+1555") == 10.0
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "message"),
+    [
+        ("max_retries", 0, "max_retries"),
+        ("max_retries", True, "max_retries"),
+        ("sms_fallback_after", 0, "sms_fallback_after"),
+        ("base_delay_s", float("nan"), "base_delay_s"),
+        ("max_delay_s", float("inf"), "max_delay_s"),
+        ("backoff_factor", 0.0, "backoff_factor"),
+        ("shorter_delay_s", -1.0, "shorter_delay_s"),
+        ("jitter_fraction", -0.1, "jitter_fraction"),
+        ("jitter_fraction", 1.1, "jitter_fraction"),
+        ("jitter_fraction", True, "jitter_fraction"),
+        ("no_retry_reasons", {"declined"}, "no_retry_reasons"),
+        ("no_retry_reasons", frozenset({1}), "no_retry_reasons"),
+        ("shorter_delay_reasons", frozenset({""}), "shorter_delay_reasons"),
+    ],
+)
+def test_retry_config_rejects_invalid_policy(
+    field_name: str,
+    value: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        RetryStrategyConfig(**{field_name: value})  # type: ignore[arg-type]
+
+
+def test_retry_strategy_revalidates_mutated_config() -> None:
+    config = RetryStrategyConfig()
+    config.base_delay_s = float("nan")
+
+    with pytest.raises(ValueError, match="base_delay_s"):
+        RetryStrategy(config)

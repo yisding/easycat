@@ -1111,7 +1111,7 @@ class WebRTCTransport(AudioQueueMixin):
             await _wait_for_ice_gathering(pc, ice_gathering_complete)
         except asyncio.CancelledError as cancellation:
             await self._raise_cancelled_offer_after_peer_close(pc, cancellation)
-        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
+        except Exception as exc:
             logger.warning("WebRTC offer handling failed: %s", exc)
             self._emit_degraded(
                 _DEGRADED_NEGOTIATION_FAILED,
@@ -1119,7 +1119,19 @@ class WebRTCTransport(AudioQueueMixin):
                 fatal=False,
             )
             if pc is not None:
-                await pc.close()
+                try:
+                    cleanup_error = await self._close_unpublished_peer(pc)
+                except asyncio.CancelledError:
+                    if self._pending_peer_cleanup is pc:
+                        self._publish_failed_peer_replacement(
+                            RuntimeError("WebRTC failed-offer peer cleanup was interrupted")
+                        )
+                    raise
+                if cleanup_error is not None:
+                    self._publish_failed_peer_replacement(
+                        RuntimeError("WebRTC failed-offer peer cleanup failed")
+                    )
+                    raise exc from cleanup_error
             return web.Response(
                 status=400,
                 text=json.dumps({"error": f"SDP negotiation failed: {exc}"}),

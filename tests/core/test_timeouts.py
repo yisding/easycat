@@ -81,6 +81,17 @@ class TestTimeoutConfig:
         with pytest.raises(ValueError, match=rf"{field} must be a finite positive number"):
             TimeoutConfig(**{field: value})
 
+    @pytest.mark.parametrize(
+        "field",
+        ["stt_timeout", "agent_timeout", "tts_first_byte_timeout"],
+    )
+    def test_validate_rejects_post_construction_mutation(self, field: str) -> None:
+        cfg = TimeoutConfig()
+        setattr(cfg, field, 0.0)
+
+        with pytest.raises(ValueError, match=rf"{field} must be a finite positive number"):
+            cfg.validate()
+
 
 # ── Agent timeout (Task 8.4) ──────────────────────────────────────
 

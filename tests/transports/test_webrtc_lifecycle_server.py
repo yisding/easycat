@@ -793,6 +793,50 @@ class TestWebRTCIngressQueueOwnership:
         await audio_iter.aclose()
 
     @pytest.mark.asyncio
+    async def test_failed_offer_retains_peer_when_close_fails_and_disconnect_retries(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install_fake_webrtc_modules(monkeypatch)
+        transport = WebRTCTransport()
+        transport._web = _FakeWeb
+        transport._connected = True
+
+        async def fail_negotiation(self: _FakeRTCPeerConnection) -> _FakeSessionDescription:
+            raise RuntimeError("sdp boom")
+
+        close_calls = 0
+        original_close = _FakeRTCPeerConnection.close
+
+        async def fail_first_close(self: _FakeRTCPeerConnection) -> None:
+            nonlocal close_calls
+            close_calls += 1
+            if close_calls == 1:
+                raise RuntimeError("candidate close failed")
+            await original_close(self)
+
+        monkeypatch.setattr(_FakeRTCPeerConnection, "createAnswer", fail_negotiation)
+        monkeypatch.setattr(_FakeRTCPeerConnection, "close", fail_first_close)
+
+        with pytest.raises(RuntimeError, match="sdp boom") as exc_info:
+            await transport._handle_offer(_FakeOfferRequest())
+
+        candidate = _FakeRTCPeerConnection.instances[0]
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert "candidate close failed" in str(exc_info.value.__cause__)
+        assert transport._pending_peer_cleanup is candidate
+        assert isinstance(transport._disconnect_cleanup_error, RuntimeError)
+        assert transport._connected is False
+        assert (await transport._handle_offer(_FakeOfferRequest())).status == 503
+
+        await transport.disconnect()
+
+        assert close_calls == 2
+        assert candidate.closed is True
+        assert transport._pending_peer_cleanup is None
+        assert transport._disconnect_cleanup_error is None
+
+    @pytest.mark.asyncio
     async def test_cancelled_offer_closes_unpublished_candidate_peer(
         self,
         monkeypatch: pytest.MonkeyPatch,

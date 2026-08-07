@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass, field
 from typing import Any, Self
 
 import pytest
@@ -9,6 +11,43 @@ from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import AgentTurnInput, BridgeInputError, RecorderContext
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge, _GraphEventHandler
 from easycat.runtime import InMemoryRingBuffer
+
+
+def test_graph_snapshot_state_is_secret_safe_without_opaque_repr() -> None:
+    class _Opaque:
+        def __str__(self) -> str:
+            return "OPAQUE_STATE_SECRET_LEAK"
+
+    @dataclass
+    class _State:
+        api_key: str = "PYDANTIC_STATE_SECRET_LEAK"
+        auth: str = "PYDANTIC_AUTH_SECRET_LEAK"
+        author: str = "Ada"
+        apiVersion: str = "v1"
+        keyboardLayout: str = "dvorak"
+        safe: str = "ok"
+        opaque: Any = field(default_factory=_Opaque)
+
+    bridge = object.__new__(PydanticAIBridge)
+    bridge._mode = "graph"
+    bridge._graph = None
+    bridge._active_node = None
+    bridge._graph_states = {}
+    bridge._state = _State()
+
+    fields = bridge.snapshot_state().fields
+    serialized = json.dumps(fields)
+
+    assert fields["state"] == {
+        "author": "Ada",
+        "apiVersion": "v1",
+        "keyboardLayout": "dvorak",
+        "safe": "ok",
+        "opaque": "[UNSERIALIZABLE]",
+    }
+    assert "PYDANTIC_STATE_SECRET_LEAK" not in serialized
+    assert "PYDANTIC_AUTH_SECRET_LEAK" not in serialized
+    assert "OPAQUE_STATE_SECRET_LEAK" not in serialized
 
 
 class TextPartDelta:
