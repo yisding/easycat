@@ -147,6 +147,8 @@ class PydanticAIBridge:
         self._last_history_key = _DEFAULT_HISTORY_KEY
         self._last_output: Any = None
         self._entered_warmup_agents: list[Any] = []
+        self._warmup_lifecycle_lock = asyncio.Lock()
+        self._warmup_closed = False
 
     async def warmup(self) -> None:
         """Enter static agents and prime their persistent model clients.
@@ -157,14 +159,21 @@ class PydanticAIBridge:
         model-metadata request. Unsupported models and provider failures stay
         best-effort so warmup never becomes an availability gate.
         """
-        agents = (self._agent,) if self._mode == "agent" else tuple(self._agents or ())
-        for agent in agents:
-            if agent is None or any(entered is agent for entered in self._entered_warmup_agents):
-                continue
-            await self._warmup_agent(agent)
+        async with self._warmup_lifecycle_lock:
+            if self._warmup_closed:
+                return
+            agents = (self._agent,) if self._mode == "agent" else tuple(self._agents or ())
+            for agent in agents:
+                if agent is None or any(
+                    entered is agent for entered in self._entered_warmup_agents
+                ):
+                    continue
+                await self._warmup_agent(agent)
 
     async def _warmup_agent(self, agent: Any) -> None:
         model = getattr(agent, "model", None)
+        entry_started = False
+        exit_: Any = None
         try:
             if isinstance(model, str):
                 from pydantic_ai.models import infer_model
@@ -175,8 +184,19 @@ class PydanticAIBridge:
             exit_ = getattr(agent, "__aexit__", None)
             if enter is None or exit_ is None:
                 return
-            await enter()
+            entry_started = True
+            async with asyncio.timeout(_PYDANTIC_AI_WARMUP_TIMEOUT_SECONDS):
+                await enter()
             self._entered_warmup_agents.append(agent)
+        except asyncio.CancelledError as exc:
+            if entry_started and exit_ is not None:
+                await self._rollback_failed_warmup_entry(exit_, exc)
+            raise
+        except TimeoutError as exc:
+            if entry_started and exit_ is not None:
+                await self._rollback_failed_warmup_entry(exit_, exc)
+            logger.debug("PydanticAI agent context warmup timed out")
+            return
         except Exception as exc:  # noqa: BLE001 intentional best-effort warmup boundary
             logger.debug("PydanticAI agent warmup skipped: %s", exc)
             return
@@ -195,8 +215,30 @@ class PydanticAIBridge:
         except Exception as exc:  # noqa: BLE001 intentional best-effort warmup boundary
             logger.debug("PydanticAI model warmup skipped: %s", exc)
 
+    async def _rollback_failed_warmup_entry(self, exit_: Any, exc: BaseException) -> None:
+        """Best-effort unwind a context whose bounded entry did not complete."""
+        try:
+            async with asyncio.timeout(_PYDANTIC_AI_WARMUP_TIMEOUT_SECONDS):
+                await exit_(type(exc), exc, exc.__traceback__)
+        except BaseException:
+            logger.debug(
+                "PydanticAI partial agent context rollback failed",
+                exc_info=True,
+            )
+
+    async def rollback_warmup(self) -> None:
+        """Release entered contexts after failed startup while allowing retry."""
+        async with self._warmup_lifecycle_lock:
+            await self._close_warmup_agents()
+
     async def aclose(self) -> None:
         """Exit agent contexts entered by :meth:`warmup`."""
+        async with self._warmup_lifecycle_lock:
+            self._warmup_closed = True
+            await self._close_warmup_agents()
+
+    async def _close_warmup_agents(self) -> None:
+        """Exit and forget contexts entered by warmup while lifecycle is serialized."""
         entered, self._entered_warmup_agents = (
             self._entered_warmup_agents,
             [],

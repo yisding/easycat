@@ -76,6 +76,7 @@ from easycat.runtime.capabilities import (
     health_checkable,
     is_active_provider,
     is_passthrough_provider,
+    rollback_warmup_if_supported,
 )
 from easycat.runtime.journal import JournalView
 from easycat.runtime.record_contracts import BUILTIN_JOURNAL_RECORD_CONTRACTS
@@ -1541,8 +1542,25 @@ class Session:
         self._stop_helpers()
         self._reset_turn_state()
 
+        transport_error: Exception | None = None
         if transport_connected:
-            await self.transport.disconnect()
+            try:
+                await self.transport.disconnect()
+            except Exception as exc:  # noqa: BLE001 aggregate independent rollback failures
+                transport_error = exc
+
+        try:
+            await rollback_warmup_if_supported(self.agent)
+        except Exception as agent_error:
+            if transport_error is not None:
+                raise ExceptionGroup(
+                    "Session startup rollback failed",
+                    [transport_error, agent_error],
+                ) from None
+            raise
+
+        if transport_error is not None:
+            raise transport_error
 
     async def stop(self, *, force: bool = False) -> None:
         """Stop the session and release live backend resources.
