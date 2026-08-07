@@ -171,36 +171,47 @@ class PydanticAIBridge:
                 await self._warmup_agent(agent)
 
     async def _warmup_agent(self, agent: Any) -> None:
-        model = getattr(agent, "model", None)
-        entry_started = False
-        exit_: Any = None
         try:
-            if isinstance(model, str):
-                from pydantic_ai.models import infer_model
-
-                model = infer_model(model)
-                agent.model = model
-            enter = getattr(agent, "__aenter__", None)
-            exit_ = getattr(agent, "__aexit__", None)
-            if enter is None or exit_ is None:
-                return
-            entry_started = True
-            async with asyncio.timeout(_PYDANTIC_AI_WARMUP_TIMEOUT_SECONDS):
-                await enter()
-            self._entered_warmup_agents.append(agent)
-        except asyncio.CancelledError as exc:
-            if entry_started and exit_ is not None:
-                await self._rollback_failed_warmup_entry(exit_, exc)
-            raise
-        except TimeoutError as exc:
-            if entry_started and exit_ is not None:
-                await self._rollback_failed_warmup_entry(exit_, exc)
-            logger.debug("PydanticAI agent context warmup timed out")
-            return
+            model = self._resolve_warmup_model(agent)
         except Exception as exc:  # noqa: BLE001 intentional best-effort warmup boundary
             logger.debug("PydanticAI agent warmup skipped: %s", exc)
             return
+        if not await self._enter_warmup_agent_context(agent):
+            return
+        await self._prime_warmup_model(model)
 
+    @staticmethod
+    def _resolve_warmup_model(agent: Any) -> Any:
+        model = getattr(agent, "model", None)
+        if isinstance(model, str):
+            from pydantic_ai.models import infer_model
+
+            model = infer_model(model)
+            agent.model = model
+        return model
+
+    async def _enter_warmup_agent_context(self, agent: Any) -> bool:
+        enter = getattr(agent, "__aenter__", None)
+        exit_ = getattr(agent, "__aexit__", None)
+        if enter is None or exit_ is None:
+            return False
+        try:
+            async with asyncio.timeout(_PYDANTIC_AI_WARMUP_TIMEOUT_SECONDS):
+                await enter()
+        except asyncio.CancelledError as exc:
+            await self._rollback_failed_warmup_entry(exit_, exc)
+            raise
+        except TimeoutError as exc:
+            await self._rollback_failed_warmup_entry(exit_, exc)
+            logger.debug("PydanticAI agent context warmup timed out")
+            return False
+        except Exception as exc:  # noqa: BLE001 intentional best-effort warmup boundary
+            logger.debug("PydanticAI agent warmup skipped: %s", exc)
+            return False
+        self._entered_warmup_agents.append(agent)
+        return True
+
+    async def _prime_warmup_model(self, model: Any) -> None:
         client = getattr(model, "client", None)
         models = getattr(client, "models", None)
         retrieve = getattr(models, "retrieve", None)
