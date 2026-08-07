@@ -11,6 +11,10 @@ import shlex
 import tomllib
 from pathlib import Path
 
+import pytest
+
+from tests.conftest import _MAX_AUTO_XDIST_WORKERS, _xdist_auto_worker_count
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -35,12 +39,12 @@ def test_xdist_allows_one_replacement_without_a_restart_cycle() -> None:
     )
 
 
-def test_bare_pytest_excludes_live_and_external_integrations() -> None:
-    """Credentials in a developer shell must not make a normal run billable."""
+def test_bare_pytest_excludes_live_external_and_serial_tests() -> None:
+    """Bare runs stay non-billable and never fork a threaded pytest process."""
     addopts = shlex.split(_ini_options()["addopts"])
     marker_expression = addopts[addopts.index("-m") + 1]
 
-    assert marker_expression == "not integration_live and not integration_external"
+    assert marker_expression == "not integration_live and not integration_external and not serial"
 
 
 def test_timeout_settings_stay_ordered() -> None:
@@ -56,3 +60,27 @@ def test_timeout_settings_stay_ordered() -> None:
         "faulthandler_timeout must fire before timeout, or hung tests are "
         "reported with no stack to diagnose them from"
     )
+
+
+def test_xdist_auto_workers_are_capped_on_large_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
+    monkeypatch.setattr("tests.conftest.os.cpu_count", lambda: 128)
+
+    assert _xdist_auto_worker_count() == _MAX_AUTO_XDIST_WORKERS
+
+
+def test_xdist_auto_workers_respect_explicit_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "3")
+
+    assert _xdist_auto_worker_count() == 3
+
+
+def test_sync_tests_do_not_start_an_asyncio_runner(request: pytest.FixtureRequest) -> None:
+    assert "_function_scoped_runner" not in request.fixturenames
+    assert "fail_on_leaked_asyncio_tasks" not in request.fixturenames
+
+
+@pytest.mark.asyncio
+async def test_async_tests_enable_task_leak_check(request: pytest.FixtureRequest) -> None:
+    assert "_function_scoped_runner" in request.fixturenames
+    assert "fail_on_leaked_asyncio_tasks" in request.fixturenames

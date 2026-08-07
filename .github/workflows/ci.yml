@@ -65,6 +65,11 @@ jobs:
       # keeps local runs and CI grading the exact same surface.
       - name: mypy (gate, whole package)
         run: just typecheck
+      # Consumer snippets exercise overloads and public typing from a clean
+      # downstream graph. Keep their one cold mypy process serial instead of
+      # repeating it inside every Python/coverage/minimum-dependency xdist job.
+      - name: Downstream type contracts
+        run: uv run --python 3.12 pytest -q tests/typecheck/test_consumer_contracts.py
 
   test:
     name: Validate Quick
@@ -91,6 +96,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --group dev --python ${{ matrix.python-version }}
       - run: uv run --python ${{ matrix.python-version }} easycat validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "quick-py${{ matrix.python-version }}" --show-output
+      - name: Validate direct-fork tests serially
+        run: >-
+          uv run --python ${{ matrix.python-version }} pytest -q
+          -o faulthandler_timeout=0
+          --junitxml="$VALIDATION_ARTIFACTS_DIR/serial-junit.xml"
+          --junit-prefix "serial-py${{ matrix.python-version }}"
+          tests/runtime/test_artifacts.py
+          tests/runtime/test_crash_sweep.py
+          tests/vad/test_silero.py
+          -m serial
       - name: Upload quick validation artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -100,6 +115,7 @@ jobs:
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/latest.json
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/report.json
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/junit.xml
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/serial-junit.xml
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stdout.log
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stderr.log
 
@@ -179,8 +195,8 @@ jobs:
       # this per-PR Python 3.12 job is the PR signal for the guard suite too.
       - name: Run safe slice with coverage
         run: >-
-          uv run --python 3.12 pytest -q -n auto --dist loadscope
-          -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
+          uv run --python 3.12 pytest -q -n auto --dist load
+          -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not serial and not flaky"
           --cov --cov-report=term-missing --cov-report=xml:coverage.xml
       # Report-only: PRs see how much of the changed lines they cover.
       # Does NOT fail the build yet (see opt-in --fail-under below).

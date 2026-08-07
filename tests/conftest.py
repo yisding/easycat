@@ -29,6 +29,7 @@ if "typer.rich_utils" in sys.modules:
 register_hypothesis_profiles()
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+_MAX_AUTO_XDIST_WORKERS = 8
 
 # Near-pure prose/route-scanning trees whose whole directory is guard coverage.
 GUARD_DIRS = {"tests/docs", "tests/install", "tests/examples"}
@@ -92,6 +93,29 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+def _xdist_auto_worker_count() -> int:
+    """Keep ``-n auto`` useful on large developer and hosted machines."""
+    configured = os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS")
+    if configured is not None:
+        try:
+            workers = int(configured)
+        except ValueError as exc:
+            raise pytest.UsageError(
+                "PYTEST_XDIST_AUTO_NUM_WORKERS must be a positive integer"
+            ) from exc
+        if workers < 1:
+            raise pytest.UsageError("PYTEST_XDIST_AUTO_NUM_WORKERS must be a positive integer")
+        return workers
+    return min(os.cpu_count() or 1, _MAX_AUTO_XDIST_WORKERS)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
+    """Cap xdist auto-scaling while preserving its documented environment override."""
+    del config
+    return _xdist_auto_worker_count()
+
+
 def _format_task(task: asyncio.Task[object]) -> str:
     coroutine = task.get_coro()
     name = getattr(coroutine, "__qualname__", None) or getattr(coroutine, "__name__", None)
@@ -119,7 +143,7 @@ def _restore_easycat_logger_state():
     logger.propagate = propagate
 
 
-@pytest_asyncio.fixture(autouse=True)
+@pytest_asyncio.fixture
 async def fail_on_leaked_asyncio_tasks(request: pytest.FixtureRequest):
     """Fail async tests that leave new pending tasks on the pytest event loop."""
     if request.node.get_closest_marker("allow_task_leak") is not None:
@@ -148,6 +172,16 @@ async def fail_on_leaked_asyncio_tasks(request: pytest.FixtureRequest):
     await asyncio.gather(*leaked, return_exceptions=True)
     leaked_summary = ", ".join(sorted(_format_task(task) for task in leaked))
     pytest.fail(f"asyncio task leak detected: {leaked_summary}")
+
+
+@pytest.fixture(autouse=True)
+def _enable_async_task_leak_check(request: pytest.FixtureRequest) -> None:
+    """Install the async leak check only for tests that actually use an event loop."""
+    uses_asyncio = pytest_asyncio.is_async_test(request.node) or any(
+        name.endswith("_scoped_runner") for name in request.fixturenames
+    )
+    if uses_asyncio:
+        request.getfixturevalue("fail_on_leaked_asyncio_tasks")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

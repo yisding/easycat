@@ -60,12 +60,13 @@ def test_validation_runner_quick_writes_report_junit_logs_and_latest(tmp_path: P
     command = commands[0]
     assert command[:4] == ["uv", "run", "pytest", "-q"]
     # The quick slice is the only parallel lane (xdist-safe by design).
-    assert command[4:8] == ["-n", "auto", "--dist", "loadscope"]
+    assert command[4:8] == ["-n", "auto", "--dist", "load"]
     assert command[-2:] == [
         "-m",
         (
             "not integration_socket and not integration_live and not integration_external "
-            "and not contract and not slow and not stress and not flaky and not guard"
+            "and not contract and not slow and not stress and not serial and not flaky "
+            "and not guard"
         ),
     ]
     assert any(arg.startswith("--junitxml=") for arg in command)
@@ -461,7 +462,8 @@ def test_release_validation_fails_when_child_slice_fails(
             )
         quick_selector = (
             "not integration_socket and not integration_live and not integration_external "
-            "and not contract and not slow and not stress and not flaky and not guard"
+            "and not contract and not slow and not stress and not serial and not flaky "
+            "and not guard"
         )
         if quick_selector in command:
             return CommandResult(exit_code=1, stdout="", stderr="quick failed")
@@ -674,7 +676,7 @@ def test_validation_runner_can_use_installed_wheel_pytest_command(
         "-n",
         "auto",
         "--dist",
-        "loadscope",
+        "load",
         "/repo/tests",
         "/repo/smoke",
     ]

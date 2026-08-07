@@ -7,7 +7,7 @@ from pathlib import Path
 
 def pytest_target_tokens(command: str) -> list[str]:
     targets: list[str] = []
-    options_with_values = {"-k", "-m", "-n", "--dist", "--cov-report"}
+    options_with_values = {"-k", "-m", "-n", "-o", "--dist", "--cov-report"}
 
     for segment in re.split(r"\s+&&\s+", command):
         tokens = shlex.split(segment)

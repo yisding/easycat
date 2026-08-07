@@ -1799,6 +1799,8 @@ print(store.put(sys.argv[2].encode("ascii")), flush=True)
         with pytest.raises(OSError):
             os.fstat(cached_fd)
 
+    @pytest.mark.serial
+    @pytest.mark.timeout(0)
     def test_fork_child_does_not_close_reused_foreign_descriptor(self, tmp_path):
         if not hasattr(os, "fork") or not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
             pytest.skip("fork and descriptor-relative artifact I/O are required")
@@ -1833,6 +1835,9 @@ print(store.put(sys.argv[2].encode("ascii")), flush=True)
 
         assert os.waitstatus_to_exitcode(status) == 0
 
+    @pytest.mark.serial
+    @pytest.mark.timeout(0)
+    @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded.*:DeprecationWarning")
     def test_fork_child_close_resets_inherited_locked_mutex(self, tmp_path):
         if not hasattr(os, "fork") or not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
             pytest.skip("fork and descriptor-relative artifact I/O are required")
@@ -2000,6 +2005,9 @@ if child_mode:
             f"stdout: {completed.stdout!r}\nstderr: {completed.stderr!r}"
         )
 
+    @pytest.mark.serial
+    @pytest.mark.timeout(0)
+    @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded.*:DeprecationWarning")
     def test_fork_child_closes_session_fd_owned_by_another_thread(
         self,
         tmp_path,

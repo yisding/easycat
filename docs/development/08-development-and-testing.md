@@ -142,6 +142,7 @@ Markers are strict and defined in
 | `integration_socket` | localhost bind/connect behavior |
 | `integration_live` | real provider endpoint and credentials |
 | `integration_external` | local external SDK/binary/service without live provider credentials |
+| `serial` | process-global behavior that cannot run inside xdist |
 | `contract` | provider/protocol/bridge contract |
 | `latency` | latency measurement/SLO |
 | `stress` | load, soak, saturation |
@@ -155,10 +156,11 @@ Provider-scoped contract/live/latency tests must carry both a provider marker
 and a surface marker. [`tests/_marker_lint.py`](../../tests/_marker_lint.py)
 enforces the matrix at collection time.
 
-`integration_live` and `integration_external` are excluded from ordinary
-local test gates and must be selected explicitly. Never make a normal unit
-test depend on credentials merely because the developer who wrote it has
-them.
+`integration_live`, `integration_external`, and `serial` are excluded from
+bare pytest. The full `just test` recipe adds the serial slice back without
+xdist or pytest's watchdog threads; provider and external lanes remain
+explicit. Never make a normal unit test depend on credentials merely because
+the developer who wrote it has them.
 
 ## 8.6 Async Test Hygiene
 
@@ -184,6 +186,10 @@ Rules:
 - Retain and close async generators, client sessions, WebSockets, and servers.
 - Use port `0` where possible. Fixed-port socket tests stay grouped and marked
   so xdist does not collide.
+- Mark direct `os.fork()` coverage `serial`; forking an xdist worker inherits
+  its management threads and can deadlock the child before the test timeout.
+  Such tests disable pytest-timeout's own helper thread and must bound the
+  child with `signal.alarm`, `select`, or an equivalent primitive.
 - Do not use untracked `asyncio.create_task()` in production or test helpers.
 - Await cancellation and inspect terminal exceptions.
 - Use `allow_task_leak` only when the unfinished task is the behavior under
@@ -219,9 +225,12 @@ For typed boundaries:
 just typecheck
 ```
 
-The fast and full recipes use xdist with `--dist loadscope`, keeping one
-module on one worker. Follow the canonical recipe in the `justfile`; ad hoc
-parallel settings can split event-loop or socket assumptions.
+The full recipe uses `--dist loadscope` because it includes socket tests. The
+fast and quick recipes exclude those tests and use `--dist load` so large
+modules can be balanced across workers. `-n auto` is capped at eight workers
+unless `PYTEST_XDIST_AUTO_NUM_WORKERS` is set. Follow the canonical recipe in
+the `justfile`; tests that need fixed ports belong in the serial socket lane,
+and direct-fork tests use the dedicated `serial` marker.
 
 ## 8.8 Validation Lanes
 
@@ -407,7 +416,7 @@ asserts before using it as evidence for a broader claim.
 1. What three artifacts should you locate before editing?
 2. When is a live provider test warranted?
 3. Why does provider/surface marker pairing matter?
-4. What does `loadscope` protect?
+4. Why do the quick and socket lanes use different xdist scheduling policies?
 5. Which files must agree when adding a top-level import?
 6. Why is a green quick lane insufficient for a socket-only bug?
 

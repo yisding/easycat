@@ -609,6 +609,8 @@ def test_sweeps_for_distinct_roots_do_not_block_each_other(
     assert not thread.is_alive()
 
 
+@pytest.mark.serial
+@pytest.mark.timeout(0)
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
 def test_sweep_coordination_lock_is_reset_after_fork(tmp_path) -> None:
     read_fd, write_fd = os.pipe()
