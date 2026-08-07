@@ -395,6 +395,9 @@ preceding explicit teardown cancellation as expected, and journal unexpected
 exceptions. Tests: expected cancellation emits no failure, while a genuine
 finalizer exception is observable with its task name.
 
+Completed — see
+[completion log](2026-08-02-bug-resistant-completion-log.md#ws04).
+
 ### WS0.5 — Websocket resampler-tail fence [S] [behavior fix]
 
 Moved forward from the epoch workstream on review: this is a live race

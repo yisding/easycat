@@ -55,6 +55,17 @@ initialized in `__init__`), with the named STT accounting modules excluded;
 later resets do not inflate progress. Reviewed baseline changes require
 `--update-baseline` and a non-empty `--baseline-rationale`.
 
+## WS0.4
+
+WS0.4 result: all three planned server gathers now pair results with stable
+task names, suppress only cancellation that teardown explicitly requested,
+and report genuine finalizer failures through the owning module's operational
+error logger. The server lifecycles do not own an `ExecutionJournal`, so the
+logger is the pre-scope journal seam; later injected scopes can translate the
+same classified outcomes into structured task records. Hard-timeout paths also
+inspect already-settled siblings before returning, so one task resisting
+cancellation cannot hide another task's failure.
+
 ## WS1.1
 
 Implementation result: the leaf primitive starts at generation zero,
