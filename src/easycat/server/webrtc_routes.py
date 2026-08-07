@@ -844,8 +844,8 @@ async def serve_webrtc_config_sessions(
     routes.register(app, prefix="", web=web)
     runner = web.AppRunner(app)
 
-    async def start_site() -> Any:
-        site = web.TCPSite(runner, settings.host, settings.port)
+    async def start_site(bind_host: str) -> Any:
+        site = web.TCPSite(runner, bind_host, settings.port)
         await site.start()
         return site
 
