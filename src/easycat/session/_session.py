@@ -126,6 +126,7 @@ from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
 _BARGE_IN_CLEANUP_TASK = "barge_in_cleanup"
+_SUPERVISOR_STREAM_COHORT = "supervisor-streams"
 _EventT = TypeVar("_EventT", bound=Event)
 
 
@@ -385,11 +386,15 @@ class Session:
                     self._runtime_scope,
                     name=f"{role}-provider-events",
                 )
-        for role, provider in (("stt", self.stt), ("tts", self.tts)):
+        for scope_name, provider in (
+            ("transport-runtime", self.transport),
+            ("stt-provider-runtime", self.stt),
+            ("tts-provider-runtime", self.tts),
+        ):
             if isinstance(provider, RuntimeScopeBindable):
                 provider.set_runtime_scope(
                     self._runtime_scope,
-                    name=f"{role}-provider-runtime",
+                    name=scope_name,
                 )
         self._turn_manager.bind_session(self.session_id)
         for event_producer in (self.transport, *cfg.telephony_helpers):
@@ -1432,6 +1437,10 @@ class Session:
                         on_unhealthy=self._on_provider_unhealthy,
                         on_recovered=self._on_provider_recovered,
                     )
+                    checker.set_runtime_scope(
+                        self._runtime_scope,
+                        name=f"{name}-health-check",
+                    )
                     checker.start()
                     self._health_checkers.append(checker)
 
@@ -1772,6 +1781,11 @@ class Session:
             for checker in self._health_checkers:
                 await checker.stop()
             self._health_checkers = []
+            if not force:
+                await self._runtime_scope.drain_cohort(
+                    _SUPERVISOR_STREAM_COHORT,
+                    force=False,
+                )
             self._stop_helpers()
             if not self._outbound_queue_external:
                 self._outbound_queue.close()

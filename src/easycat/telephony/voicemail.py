@@ -26,6 +26,7 @@ from easycat.events import (
 from easycat.runtime.scope import BackgroundTaskScope
 
 logger = logging.getLogger(__name__)
+_POST_SCREENING_TIMER_MEMBER = "post_screening_voicemail_timeout"
 _STT_AMD_TIMEOUT_TASK = "stt_amd_timeout"
 _CallBoundaryAcceptor = Callable[[str, str], bool]
 
@@ -743,6 +744,7 @@ class PostScreeningVoicemailDetector:
         self._active = False
         self._started = False
         self._classified = False
+        self._timer_tasks = BackgroundTaskScope(name="post-screening-voicemail")
         self._timeout_task: asyncio.Task[None] | None = None
 
     @property
@@ -769,9 +771,18 @@ class PostScreeningVoicemailDetector:
         self._classified = False
 
     def _cancel_timeout(self) -> None:
-        if self._timeout_task and not self._timeout_task.done():
-            self._timeout_task.cancel()
-        self._timeout_task = None
+        task = self._timeout_task
+        if task is None:
+            return
+        self._timer_tasks.cancel(_POST_SCREENING_TIMER_MEMBER)
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if task is not current and not task.done():
+            task.cancel()
+        if task is not current:
+            self._timeout_task = None
 
     async def _on_call_initiated(self, event: CallInitiated) -> None:
         if not event.call_sid or event.call_sid == self._call_sid:
@@ -801,10 +812,14 @@ class PostScreeningVoicemailDetector:
 
     def _start_timeout(self) -> None:
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._timeout_task = loop.create_task(self._timeout_coro())
+        self._timeout_task = self._timer_tasks.create_task(
+            _POST_SCREENING_TIMER_MEMBER,
+            self._timeout_coro(),
+            replace=True,
+        )
 
     async def _timeout_coro(self) -> None:
         """Fall back to 'unknown' if no decisive classification within timeout."""
@@ -821,8 +836,9 @@ class PostScreeningVoicemailDetector:
                         call_sid=self._call_sid,
                     )
                 )
-        except asyncio.CancelledError:
-            pass
+        finally:
+            if self._timeout_task is asyncio.current_task():
+                self._timeout_task = None
 
     async def _on_stt_final(self, event: STTFinal) -> None:
         if not self._active or self._classified:

@@ -16,6 +16,8 @@ from collections.abc import Callable
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from easycat._concurrency import shielded_cleanup
+from easycat._epoch import Epoch, Lease
 from easycat.events import (
     CallAnswered,
     CallEnded,
@@ -289,7 +291,7 @@ class OutboundCallManager:
         # Advance an epoch on every real start/stop transition instead, so an
         # in-flight REST create can detect that the lifecycle which authorized
         # it no longer exists before publishing its SID.
-        self._lifecycle_epoch = 0
+        self._lifecycle_epoch: Epoch[None] = Epoch(None)
         # Serialize the full eligibility -> REST create -> activation
         # transaction.  ``place_call`` awaits both DNC storage and the Twilio
         # thread offload, so a state check alone lets concurrent callers both
@@ -317,7 +319,7 @@ class OutboundCallManager:
     def start(self) -> None:
         if self._started:
             return
-        self._lifecycle_epoch += 1
+        self._lifecycle_epoch.bump(None)
         self._event_bus.subscribe(CallRinging, self._on_call_ringing)
         self._event_bus.subscribe(CallAnswered, self._on_call_answered)
         self._event_bus.subscribe(CallEnded, self._on_call_ended)
@@ -330,7 +332,7 @@ class OutboundCallManager:
         # Invalidate an in-flight placement before resetting visible state.
         # ``place_call`` retains ownership of its uncancellable REST worker and
         # will immediately complete any SID returned for this stale epoch.
-        self._lifecycle_epoch += 1
+        self._lifecycle_epoch.bump(None)
         if self._started:
             self._event_bus.unsubscribe(CallRinging, self._on_call_ringing)
             self._event_bus.unsubscribe(CallAnswered, self._on_call_answered)
@@ -381,7 +383,7 @@ class OutboundCallManager:
                 create_error,
                 lifecycle_error,
                 stale_cleanup_error,
-                placement_epoch,
+                placement,
             ) = await self._place_call_transaction(to)
 
         if lifecycle_error is not None:
@@ -398,7 +400,7 @@ class OutboundCallManager:
             call_sid=call_sid if create_error is None else None,
             cancellation=cancellation,
             create_error=create_error,
-            placement_epoch=placement_epoch,
+            placement=placement,
         )
 
     async def _place_call_transaction(
@@ -410,19 +412,19 @@ class OutboundCallManager:
         Exception | None,
         RuntimeError | None,
         Exception | None,
-        int,
+        Lease[None],
     ]:
         """Run eligibility, provider creation, and epoch reconciliation under the lock."""
         self._ensure_can_place_call()
-        placement_epoch = self._lifecycle_epoch
+        placement = self._lifecycle_epoch.capture()
         await self._check_pre_call_gates(to)
-        if not self._placement_epoch_is_current(placement_epoch):
+        if not self._placement_is_current(placement):
             # A stop while awaiting a DNC store invalidates the transaction
             # before it reaches Twilio, so no provider reconciliation is needed.
             # Keep this lifecycle error in the create_error tuple slot:
             # place_call must route it through _finish_call_placement instead
             # of the stale-call path, which requires a provider call SID.
-            return None, None, self._lifecycle_changed_error(), None, None, placement_epoch
+            return None, None, self._lifecycle_changed_error(), None, None, placement
 
         # ``asyncio.to_thread`` cannot stop its worker when the awaiting
         # coroutine is cancelled. Retain placement ownership until it settles.
@@ -430,24 +432,24 @@ class OutboundCallManager:
             self._build_create_kwargs(to)
         )
         if create_error is not None:
-            return None, cancellation, create_error, None, None, placement_epoch
+            return None, cancellation, create_error, None, None, placement
         assert call is not None
         try:
             call_sid = call.sid
             if not isinstance(call_sid, str) or not call_sid:
                 raise ValueError("Twilio call creation returned an empty call SID")
         except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-            return None, cancellation, exc, None, None, placement_epoch
+            return None, cancellation, exc, None, None, placement
 
-        if self._placement_epoch_is_current(placement_epoch) and cancellation is None:
+        if self._placement_is_current(placement) and cancellation is None:
             self._owned_call_sids.add(call_sid)
             self._set_active_call(call_sid)
-            return call_sid, cancellation, None, None, None, placement_epoch
+            return call_sid, cancellation, None, None, None, placement
 
         self._reconciling_call_sids.add(call_sid)
         stale_cleanup_error, cleanup_cancellation = await self._complete_call_owned(call_sid)
         cancellation = cancellation or cleanup_cancellation
-        if self._placement_epoch_is_current(placement_epoch):
+        if self._placement_is_current(placement):
             lifecycle_error = self._placement_cancelled_error(
                 call_sid=call_sid,
                 cleanup_error=stale_cleanup_error,
@@ -469,7 +471,7 @@ class OutboundCallManager:
             None,
             lifecycle_error,
             stale_cleanup_error,
-            placement_epoch,
+            placement,
         )
 
     def _ensure_can_place_call(self) -> None:
@@ -518,8 +520,8 @@ class OutboundCallManager:
             ]
         return create_kwargs
 
-    def _placement_epoch_is_current(self, placement_epoch: int) -> bool:
-        return self._started and self._lifecycle_epoch == placement_epoch
+    def _placement_is_current(self, placement: Lease[None]) -> bool:
+        return self._started and placement.guard()
 
     @staticmethod
     def _lifecycle_changed_error(
@@ -550,49 +552,32 @@ class OutboundCallManager:
         create_kwargs: dict[str, Any],
     ) -> tuple[Any | None, asyncio.CancelledError | None, Exception | None]:
         """Await one uncancellable REST worker while retaining placement ownership."""
-        cancellation: asyncio.CancelledError | None = None
-        create_task = asyncio.create_task(
-            asyncio.to_thread(self._client.calls.create, **create_kwargs)
+        settlement = await shielded_cleanup(
+            lambda: asyncio.to_thread(self._client.calls.create, **create_kwargs)
         )
-        while not create_task.done():
-            try:
-                await asyncio.shield(create_task)
-            except asyncio.CancelledError as exc:
-                if cancellation is None:
-                    cancellation = exc
-            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
-                # Read the provider exception from ``result`` below after
-                # leaving the wait loop.
-                break
-        try:
-            return create_task.result(), cancellation, None
-        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-            return None, cancellation, exc
+        cancellation = asyncio.CancelledError() if settlement.cancellation_requests else None
+        if settlement.error is None:
+            return settlement.result, cancellation, None
+        if isinstance(settlement.error, Exception):
+            return None, cancellation, settlement.error
+        raise settlement.error
 
     async def _complete_call_owned(
         self,
         call_sid: str,
     ) -> tuple[Exception | None, asyncio.CancelledError | None]:
         """Complete a Twilio call without abandoning its REST worker."""
-        cancellation: asyncio.CancelledError | None = None
-        cleanup_task = asyncio.create_task(
-            asyncio.to_thread(
+        settlement = await shielded_cleanup(
+            lambda: asyncio.to_thread(
                 self._client.calls(call_sid).update,
                 status="completed",
             )
         )
-        while not cleanup_task.done():
-            try:
-                await asyncio.shield(cleanup_task)
-            except asyncio.CancelledError as exc:
-                if cancellation is None:
-                    cancellation = exc
-            except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
-                break
-        try:
-            cleanup_task.result()
-        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-            return exc, cancellation
+        cancellation = asyncio.CancelledError() if settlement.cancellation_requests else None
+        if settlement.error is not None:
+            if isinstance(settlement.error, Exception):
+                return settlement.error, cancellation
+            raise settlement.error
         return None, cancellation
 
     async def _finish_stale_call_placement(
@@ -638,7 +623,7 @@ class OutboundCallManager:
         call_sid: str | None,
         cancellation: asyncio.CancelledError | None,
         create_error: Exception | None,
-        placement_epoch: int,
+        placement: Lease[None],
     ) -> str:
         """Dispatch placement events after unlocking, then propagate the caller outcome."""
         # EventBus dispatch is inline and async handlers are awaited. Never hold
@@ -685,7 +670,7 @@ class OutboundCallManager:
                 error=exc,
                 cancellation=cancellation,
             )
-        if not self._placement_epoch_is_current(placement_epoch):
+        if not self._placement_is_current(placement):
             return await self._finish_dispatch_failed_call(
                 call_sid=call_sid,
                 error=self._lifecycle_changed_error(call_sid=call_sid),

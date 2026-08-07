@@ -9,7 +9,8 @@ import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import EventBus, TransportAudioDelivered
-from easycat.transports._webrtc_audio import OutboundAudioSource
+from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
+from easycat.transports._webrtc_audio import OutboundAudioSource, _background_emit_scope
 from easycat.transports.webrtc import WebRTCTransport
 
 from ._webrtc_fakes import (
@@ -20,6 +21,21 @@ from ._webrtc_fakes import (
 
 
 class TestOutboundAudioSource:
+    def test_transport_scope_is_shared_with_outbound_delivery_workers(self):
+        transport = WebRTCTransport()
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="test-root:webrtc-outbound",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+
+        transport.set_runtime_scope(root, name="transport-runtime")
+
+        assert transport._emit_scope is not None
+        assert transport._outbound._event_tasks.scope is transport._emit_scope
+        assert transport._receive_tasks.scope is transport._emit_scope
+
     def test_create_track_uses_shared_fake_dependency_seam(self, monkeypatch):
         _install_fake_webrtc_modules(monkeypatch)
 
@@ -341,6 +357,13 @@ class TestOutboundAudioAecReference:
     ):
         monkeypatch.setattr(OutboundAudioSource, "_ACLOSE_TIMEOUT_S", 0.01)
         source = OutboundAudioSource()
+        root = RuntimeScope.create_root(
+            name="session",
+            root_id="test-root:webrtc-stubborn-delivery",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        source._bind_event_scope(root)
         bus = EventBus()
         entered = asyncio.Event()
         cancelled = asyncio.Event()
@@ -359,16 +382,25 @@ class TestOutboundAudioAecReference:
         chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
         source._queue_delivery_events([(chunk, None, None, None)])
         await asyncio.wait_for(entered.wait(), timeout=1)
+        signal = root.signal_cohort("transport-events", force=True)
 
         closing = asyncio.create_task(source.aclose())
         try:
             await asyncio.wait_for(asyncio.shield(closing), timeout=0.1)
+            await asyncio.wait_for(root.drain_cohort(signal), timeout=0.1)
             assert cancelled.is_set()
             assert not source._emit_tasks
+            assert root.empty
         finally:
             release.set()
             if not closing.done():
                 await asyncio.wait_for(asyncio.shield(closing), timeout=0.5)
+            for _ in range(5):
+                if not _background_emit_scope().tasks():
+                    break
+                await asyncio.sleep(0)
+            assert not _background_emit_scope().tasks()
+            await root.close()
 
     @pytest.mark.asyncio
     async def test_aclose_is_safe_from_delivery_event_subscriber(self):

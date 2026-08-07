@@ -703,11 +703,14 @@ class TestMultiContextWSManager:
         assert not leader.done()
         assert mgr._close_owner_task is not None
         assert not mgr._close_owner_task.done()
+        assert len(mgr._close_waiters.tasks()) == 2
 
         release_close.set()
         await leader
+        await asyncio.sleep(0)
         assert ws.closed
         assert ws.close.await_count == 1
+        assert mgr._close_waiters.empty
 
     async def test_close_wait_preserves_cancellation_pending_at_entry(self):
         ws = FakeMultiContextWS()

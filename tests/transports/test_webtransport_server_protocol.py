@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import easycat.transports.webtransport as webtransport_module
+from easycat.runtime.scope import RuntimeScope, RuntimeScopeState, RuntimeSupervisor
 from easycat.server.auth import BearerTokenAuth
 from easycat.server.webtransport import (
     run_webtransport_config_server,
@@ -235,6 +236,60 @@ class TestWebTransportServerWiring:
             "require_module",
             lambda *_args, **_kwargs: SimpleNamespace(serve=serve),
         )
+
+    @pytest.mark.asyncio
+    async def test_start_authorizes_the_backend_capability(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.server.auth as auth_module
+
+        serve = AsyncMock()
+        self._patch_server_start_dependencies(monkeypatch, serve)
+        error = RuntimeError("rejected at backend capability")
+        guard_calls = 0
+
+        def guard(*_args: object, **_kwargs: object) -> None:
+            nonlocal guard_calls
+            guard_calls += 1
+            if guard_calls == 2:
+                raise error
+
+        monkeypatch.setattr(auth_module, "enforce_bind_guard", guard)
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+
+        with pytest.raises(RuntimeError, match="rejected at backend capability") as exc_info:
+            await server.start()
+
+        assert exc_info.value is error
+        assert guard_calls == 2
+        serve.assert_not_awaited()
+        assert server._server is None
+        assert server._started is False
+
+    @pytest.mark.asyncio
+    async def test_start_preserves_exact_backend_exception(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        error = RuntimeError("quic bind failed")
+        serve = AsyncMock(side_effect=error)
+        self._patch_server_start_dependencies(monkeypatch, serve)
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+
+        with pytest.raises(RuntimeError, match="quic bind failed") as exc_info:
+            await server.start()
+
+        assert exc_info.value is error
+        serve.assert_awaited_once()
+        assert server._server is None
+        assert server._started is False
 
     @pytest.mark.asyncio
     async def test_concurrent_starts_bind_one_server(
@@ -586,7 +641,7 @@ class TestWebTransportServerWiring:
         server._server = bound
         server._started = True
         handler = asyncio.create_task(ignores_cancellation())
-        server._handler_tasks.add(handler)
+        server._handler_task_scope.adopt_task(handler)
         await handler_started.wait()
 
         with pytest.raises(RuntimeError, match="session handler.*did not stop"):
@@ -635,6 +690,11 @@ class TestWebTransportServerWiring:
 
         stopping = asyncio.create_task(server.stop())
         await wait_entered.wait()
+        standalone = server._listener_task_scope.scope
+        assert standalone is not None
+        assert standalone.tasks("webtransport_listener_close") == (
+            server._server_wait_closed_task,
+        )
         with pytest.raises(RuntimeError, match="listener did not close"):
             await asyncio.wait_for(stopping, timeout=1)
 
@@ -657,6 +717,86 @@ class TestWebTransportServerWiring:
         assert server._server is None
         assert server._cleanup_error is None
         assert bound.wait_closed.await_count == 1
+        assert standalone.state is RuntimeScopeState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_listener_close_uses_attached_server_scope(self) -> None:
+        wait_entered = asyncio.Event()
+        release_wait_closed = asyncio.Event()
+
+        async def wait_closed() -> None:
+            wait_entered.set()
+            await release_wait_closed.wait()
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+        root = RuntimeScope.create_root(
+            name="application",
+            root_id="test-root:webtransport-listener",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        server.set_runtime_scope(root, name="webtransport-server-runtime")
+        server._server = SimpleNamespace(close=Mock(), wait_closed=wait_closed)
+        server._started = True
+
+        stopping = asyncio.create_task(server.stop())
+        await wait_entered.wait()
+
+        assert root.tasks("webtransport_listener_close") == (server._server_wait_closed_task,)
+        assert "transport-listener" in root.cohorts(force=False)
+
+        release_wait_closed.set()
+        await stopping
+
+        assert not root.tasks("webtransport_listener_close")
+
+    @pytest.mark.asyncio
+    async def test_attached_listener_timeout_detaches_waiter_from_root(self) -> None:
+        wait_entered = asyncio.Event()
+        release_wait_closed = asyncio.Event()
+
+        async def ignores_cancellation() -> None:
+            wait_entered.set()
+            while not release_wait_closed.is_set():
+                try:
+                    await release_wait_closed.wait()
+                except asyncio.CancelledError:
+                    pass
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(
+                certfile="cert.pem",
+                keyfile="key.pem",
+                force_shutdown_timeout_s=0.01,
+            ),
+            lambda _transport: asyncio.sleep(0),
+        )
+        root = RuntimeScope.create_root(
+            name="application",
+            root_id="test-root:stubborn-webtransport-listener",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        server.set_runtime_scope(root, name="webtransport-server-runtime")
+        server._server = SimpleNamespace(close=Mock(), wait_closed=ignores_cancellation)
+        server._started = True
+
+        stopping = asyncio.create_task(server.stop())
+        await wait_entered.wait()
+        signal = root.signal_cohort("transport-listener", force=True)
+        with pytest.raises(RuntimeError, match="listener did not close"):
+            await stopping
+
+        await asyncio.wait_for(root.drain_cohort(signal), timeout=0.1)
+        assert root.empty
+        assert server._detached_listener_task_scope.tasks() == (server._server_wait_closed_task,)
+
+        release_wait_closed.set()
+        await server.stop()
+        await root.close()
 
     @pytest.mark.asyncio
     async def test_stop_safe_when_called_from_within_handler(self) -> None:
@@ -677,10 +817,11 @@ class TestWebTransportServerWiring:
         async def handler_calls_stop() -> None:
             handler_task = asyncio.current_task()
             assert handler_task is not None
-            server._handler_tasks.add(handler_task)
+            server._handler_task_scope.adopt_task(handler_task)
             await server.stop()
 
         await asyncio.wait_for(asyncio.create_task(handler_calls_stop()), timeout=1)
+        await server.stop()
 
     @pytest.mark.asyncio
     async def test_max_concurrent_sessions_force_closes_overflow(self) -> None:
@@ -733,6 +874,109 @@ class TestWebTransportServerWiring:
         await asyncio.gather(*server._handler_tasks, return_exceptions=True)
 
     @pytest.mark.asyncio
+    async def test_dispatch_handler_uses_attached_server_scope(self) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def handler(_transport: WebTransportConnectionTransport) -> None:
+            started.set()
+            await release.wait()
+
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            handler,
+        )
+        root = RuntimeScope.create_root(
+            name="application",
+            root_id="test-root:webtransport-handlers",
+            supervisor=RuntimeSupervisor(capacity=1),
+            survivor_capacity=1,
+        )
+        server.set_runtime_scope(root, name="webtransport-server-runtime")
+        server._started = True
+        server._accepting_sessions = True
+        transport = WebTransportConnectionTransport(
+            _h3=_FakeH3(),  # type: ignore[arg-type]
+            _quic_protocol=_FakeQuicProtocol(),  # type: ignore[arg-type]
+            _session_id=0,
+        )
+
+        server._dispatch_session(transport)
+        await started.wait()
+        task = root.tasks("webtransport_handler")[0]
+
+        assert server._handler_tasks == {task}
+        assert "transport-handlers" in root.cohorts(force=False)
+
+        release.set()
+        await task
+        await asyncio.sleep(0)
+
+        assert not root.tasks("webtransport_handler")
+        await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_completed_standalone_handler_closes_local_runtime_root(self) -> None:
+        release = asyncio.Event()
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: release.wait(),
+        )
+        server._started = True
+        server._accepting_sessions = True
+        transport = WebTransportConnectionTransport(
+            _h3=_FakeH3(),  # type: ignore[arg-type]
+            _quic_protocol=_FakeQuicProtocol(),  # type: ignore[arg-type]
+            _session_id=0,
+        )
+
+        server._dispatch_session(transport)
+        await asyncio.sleep(0)
+        standalone = server._handler_task_scope.scope
+        assert standalone is not None
+        task = server._handler_tasks.pop()
+
+        release.set()
+        await task
+        await server.stop()
+        assert standalone.state is RuntimeScopeState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_standalone_handler_remains_visible_through_transport_cleanup(self) -> None:
+        disconnect_started = asyncio.Event()
+        release_disconnect = asyncio.Event()
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+        server._started = True
+        server._accepting_sessions = True
+        transport = WebTransportConnectionTransport(
+            _h3=_FakeH3(),  # type: ignore[arg-type]
+            _quic_protocol=_FakeQuicProtocol(),  # type: ignore[arg-type]
+            _session_id=0,
+        )
+        transport.connect = AsyncMock()
+
+        async def disconnect() -> None:
+            disconnect_started.set()
+            await release_disconnect.wait()
+
+        transport.disconnect = disconnect  # type: ignore[method-assign]
+        server._dispatch_session(transport)
+        await disconnect_started.wait()
+
+        task = next(iter(server._handler_tasks))
+        assert not task.done()
+
+        release_disconnect.set()
+        await task
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not server._handler_tasks
+        await server.stop()
+
+    @pytest.mark.asyncio
     async def test_can_accept_session_gate_reflects_cap(self) -> None:
         """``_can_accept_session`` is the pre-200 gate: the protocol consults
         it before sending the 200 so an over-cap CONNECT gets a clean 503
@@ -757,14 +1001,17 @@ class TestWebTransportServerWiring:
             await release_slots.wait()
 
         held = [asyncio.create_task(hold_slot()) for _ in range(2)]
-        server._handler_tasks.update(held)
+        for task in held:
+            server._handler_task_scope.adopt_task(task)
         try:
             # At the cap → the protocol would send 503 and create no transport.
             assert server._can_accept_session() is False
         finally:
             release_slots.set()
             await asyncio.gather(*held, return_exceptions=True)
-            server._handler_tasks.difference_update(held)
+            for task in held:
+                server._handler_task_scope.discard_task(task)
+            await server._handler_task_scope.release_standalone_if_empty()
         assert server._can_accept_session() is True
 
 

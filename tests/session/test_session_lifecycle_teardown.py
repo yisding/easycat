@@ -81,7 +81,7 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
 
 
 @pytest.mark.asyncio
-async def test_session_attaches_provider_error_emitters_to_its_runtime_tree() -> None:
+async def test_session_attaches_runtime_bindables_and_provider_emitters() -> None:
     class ScopedFakeSTT(ProviderErrorEmitter, STTBase):
         _error_stage = ErrorStage.STT
         _provider_error_name = "fake-stt"
@@ -98,9 +98,18 @@ async def test_session_attaches_provider_error_emitters_to_its_runtime_tree() ->
         def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
             self.runtime_scope = parent.create_child(name)
 
+    class ScopedFakeTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.runtime_scope: RuntimeScope | None = None
+
+        def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+            self.runtime_scope = parent.create_child(name)
+
     stt = ScopedFakeSTT()
     tts = ScopedFakeTTS()
-    session = Session(_full_config(stt=stt, tts=tts))
+    transport = ScopedFakeTransport()
+    session = Session(_full_config(stt=stt, tts=tts, transport=transport))
 
     assert stt._emit_scope is not None
     assert stt._emit_scope.parent is session._runtime_scope
@@ -111,6 +120,9 @@ async def test_session_attaches_provider_error_emitters_to_its_runtime_tree() ->
     assert tts.runtime_scope is not None
     assert tts.runtime_scope.parent is session._runtime_scope
     assert tts.runtime_scope.name == "tts-provider-runtime"
+    assert transport.runtime_scope is not None
+    assert transport.runtime_scope.parent is session._runtime_scope
+    assert transport.runtime_scope.name == "transport-runtime"
 
     await session.stop(force=True)
 

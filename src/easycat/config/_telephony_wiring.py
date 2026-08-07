@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from easycat.events import EventBus, EventSubscription, ScreeningResponse, TTSAudio
+from easycat.runtime.scope import BackgroundTaskScope
 from easycat.session.actions import SessionActionExecutor
 
 if TYPE_CHECKING:
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from .easy import OutboundCallConfig, TelephonyConfig
 
 logger = logging.getLogger("easycat.config")
+_HOLD_AUDIO_MEMBER = "outbound_hold_audio"
 
 
 @dataclass
@@ -132,6 +134,7 @@ class _OutboundPipelineWiring:
         self._event_bus = event_bus
         self._screening_detector = screening_detector
         self._lock = asyncio.Lock()
+        self._hold_audio_tasks = BackgroundTaskScope(name="outbound-pipeline")
         self._hold_audio_task: asyncio.Task[None] | None = None
         self._screening_subscription: EventSubscription | None = None
 
@@ -153,6 +156,7 @@ class _OutboundPipelineWiring:
 
         task = self._hold_audio_task
         self._hold_audio_task = None
+        self._hold_audio_tasks.cancel(_HOLD_AUDIO_MEMBER)
         if task is None or task.done():
             return
         try:
@@ -164,17 +168,20 @@ class _OutboundPipelineWiring:
 
     async def flush_gated_audio(self, events: list[TTSAudio]) -> None:
         async with self._lock:
-            if self._hold_audio_task is not None and not self._hold_audio_task.done():
-                self._hold_audio_task.cancel()
+            task = self._hold_audio_task
+            if task is not None and not task.done():
+                self._hold_audio_tasks.cancel(_HOLD_AUDIO_MEMBER)
+                task.cancel()
                 try:
-                    await self._hold_audio_task
+                    await task
                 except asyncio.CancelledError:
                     current_task = asyncio.current_task()
                     if current_task is not None and current_task.cancelling():
                         raise
                 except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
                     pass
-                self._hold_audio_task = None
+                if self._hold_audio_task is task:
+                    self._hold_audio_task = None
         await self._session.replay_gated_audio(events)
 
     def play_hold_audio(self, text: str) -> None:
@@ -184,21 +191,26 @@ class _OutboundPipelineWiring:
         async def _synthesize_hold() -> None:
             try:
                 await self._session.synthesize_bypass(text)
-            except asyncio.CancelledError:
-                raise
             except Exception:
                 logger.exception("Hold audio synthesis failed")
+            finally:
+                if self._hold_audio_task is asyncio.current_task():
+                    self._hold_audio_task = None
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             logger.warning("No running event loop — hold audio skipped")
             return
 
-        # The lock is async-only; since this is a sync callback we just
-        # do a best-effort swap — the flush side holds the lock and will
-        # cancel whatever task reference it sees.
-        self._hold_audio_task = loop.create_task(_synthesize_hold())
+        # This synchronous callback cannot acquire the async flush lock. The
+        # named scope still makes replacement deterministic, while flush()
+        # captures one handle and only clears that same generation.
+        self._hold_audio_task = self._hold_audio_tasks.create_task(
+            _HOLD_AUDIO_MEMBER,
+            _synthesize_hold(),
+            replace=True,
+        )
 
     async def _on_screening_response(self, event: ScreeningResponse) -> None:
         detector = self._screening_detector

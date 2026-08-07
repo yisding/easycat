@@ -78,6 +78,24 @@ async def test_background_scope_prunes_completed_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_background_scope_can_delegate_error_logging(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scope = BackgroundTaskScope()
+
+    async def fail() -> None:
+        raise RuntimeError("handled by caller")
+
+    task = scope.create_task("delegated", fail(), log_errors=False)
+    with pytest.raises(RuntimeError, match="handled by caller"):
+        await task
+    await asyncio.sleep(0)
+
+    assert scope.empty
+    assert "Background task 'delegated' failed" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_background_scope_replaces_named_task() -> None:
     scope = BackgroundTaskScope()
     first_started = asyncio.Event()
@@ -1002,6 +1020,28 @@ async def test_cohort_signal_reports_selected_task_actions() -> None:
 
     blocker.set()
     await root.drain_cohort(finish)
+
+
+@pytest.mark.asyncio
+async def test_cohort_signal_does_not_drain_task_after_ownership_transfer() -> None:
+    root = _attached_root("session")
+    detached = RuntimeScope(name="detached")
+    release = asyncio.Event()
+    task = root.create_task(
+        "delivery",
+        release.wait(),
+        policy=_task_policy(force_action=RuntimeTaskAction.FINISH),
+    )
+    signal = root.signal_cohort("work", force=True)
+
+    root.discard(task)
+    detached.add_task("delivery", task)
+
+    await root.drain_cohort(signal)
+    assert not task.done()
+
+    release.set()
+    await detached.drain("delivery")
 
 
 @pytest.mark.asyncio

@@ -52,6 +52,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.runtime.scope import (
+    BackgroundTaskScope,
     RuntimeMemberPolicy,
     RuntimeScope,
     RuntimeScopeState,
@@ -212,6 +213,8 @@ class MultiContextWSManager:
         # retryable finalizer. Track its current task only for reentrant close
         # detection and local-scope release; the scope owns its result ledger.
         self._close_owner_task: asyncio.Task[Any] | None = None
+        self._close_waiters = BackgroundTaskScope(name="tts-close-finalizer-waiters")
+        self._close_waiter_sequence = 0
         self._runtime_scope.add_finalizer(_CLOSE_FINALIZER, self._aclose_transaction)
         self._closed = False
         # Set during deliberate teardown (aclose / cancel-fallback socket close)
@@ -238,7 +241,7 @@ class MultiContextWSManager:
         source_tasks = source.tasks()
         if self._runtime_scope is not source or any(task is not reader for task in source_tasks):
             raise RuntimeError("Cannot reattach active TTS manager runtime work")
-        reader_moved = False
+        moved_reader: asyncio.Task[None] | None = None
         if reader is not None and reader in source_tasks:
             source.discard(reader)
             try:
@@ -247,7 +250,7 @@ class MultiContextWSManager:
                     reader,
                     policy=_TTS_RECEIVE_FINISH_POLICY,
                 )
-                reader_moved = True
+                moved_reader = reader
             except BaseException:
                 source.add_task(
                     _READER_TASK,
@@ -258,11 +261,11 @@ class MultiContextWSManager:
         try:
             source._move_finalizer_to(_CLOSE_FINALIZER, target)
         except BaseException:
-            if reader_moved:
-                target.discard(reader)
+            if moved_reader is not None:
+                target.discard(moved_reader)
                 source.add_task(
                     _READER_TASK,
-                    reader,
+                    moved_reader,
                     policy=_TTS_RECEIVE_FINISH_POLICY,
                 )
             raise
@@ -518,11 +521,12 @@ class MultiContextWSManager:
 
     async def _await_close_finalizer(self) -> None:
         """Join the close finalizer without misclassifying child cancellation."""
-        attempt = asyncio.create_task(
+        self._close_waiter_sequence += 1
+        attempt = self._close_waiters.create_task(
+            f"tts_close_finalizer_waiter_{self._close_waiter_sequence}",
             self._runtime_scope.run_finalizer(_CLOSE_FINALIZER),
-            name="tts_close_finalizer_waiter",
+            log_errors=False,
         )
-        attempt.add_done_callback(self._consume_close_waiter_result)
         waiter = asyncio.current_task()
         # Preserve a cancellation already pending at helper entry. A
         # previously caught request keeps cancelling() non-zero but does not
@@ -550,11 +554,6 @@ class MultiContextWSManager:
                 "Multi-context WebSocket cleanup was cancelled internally; "
                 "retry close() to finish cleanup"
             ) from close_error
-
-    @staticmethod
-    def _consume_close_waiter_result(task: asyncio.Task[None]) -> None:
-        if not task.cancelled():
-            task.exception()
 
     async def _close_owned_socket(self, ws: Any) -> None:
         """Close one exact wrapper, retaining ownership on every failure."""

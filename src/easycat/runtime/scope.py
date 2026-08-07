@@ -6,7 +6,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
@@ -122,8 +122,14 @@ class BackgroundTaskScope:
         *,
         replace: bool = False,
         retain_result: bool = False,
+        log_errors: bool = True,
     ) -> asyncio.Task[_T]:
-        """Create a named task, optionally cancelling an active predecessor."""
+        """Create a named task, optionally cancelling an active predecessor.
+
+        ``log_errors=False`` still consumes the terminal exception; use it
+        when a synchronous done callback or an ordinary awaiter applies the
+        owner's error policy instead.
+        """
         if not name:
             coro.close()
             raise ValueError("BackgroundTaskScope task name must be non-empty")
@@ -141,7 +147,7 @@ class BackgroundTaskScope:
             coro.close()
             raise
         self._tasks[name] = task
-        task.add_done_callback(partial(self._on_done, name, retain_result))
+        task.add_done_callback(partial(self._on_done, name, retain_result, log_errors))
         return task
 
     def active(self, name: str) -> bool:
@@ -205,6 +211,7 @@ class BackgroundTaskScope:
         self,
         name: str,
         retain_result: bool,
+        log_errors: bool,
         task: asyncio.Task[Any],
     ) -> None:
         if self._tasks.get(name) is task:
@@ -223,7 +230,8 @@ class BackgroundTaskScope:
         except asyncio.CancelledError:
             pass
         except Exception:
-            logger.exception("Background task %r failed", name)
+            if log_errors:
+                logger.exception("Background task %r failed", name)
 
 
 @runtime_checkable
@@ -643,6 +651,56 @@ class RuntimeScope:
             task = asyncio.create_task(coro, name=task_name or name)
         except BaseException:
             coro.close()
+            raise
+        return self._track_task(
+            name,
+            task,
+            policy=selected_policy,
+            token_signal=token_signal,
+            retain_result=retain_result,
+        )
+
+    def create_awaitable_task(
+        self,
+        name: str,
+        awaitable: Awaitable[_T],
+        *,
+        task_name: str | None = None,
+        policy: RuntimeTaskPolicy | None = None,
+        token_signal: Callable[[], object] | None = None,
+        retain_result: bool = False,
+    ) -> asyncio.Task[_T]:
+        """Create and track a task for an SDK awaitable that is not a coroutine.
+
+        Async-iterator ``__anext__`` implementations may return specialized
+        awaitables such as ``async_generator_asend``. ``asyncio.create_task``
+        rejects those even though ``ensure_future`` can schedule them. Keep
+        that compatibility start centralized in the runtime scope rather than
+        forcing callers to create a raw task before adoption.
+        """
+        close = getattr(awaitable, "close", None)
+        if not name:
+            if callable(close):
+                close()
+            raise ValueError("RuntimeScope task name must be non-empty")
+        if isinstance(awaitable, asyncio.Future) or not inspect.isawaitable(awaitable):
+            if callable(close):
+                close()
+            raise TypeError("create_awaitable_task requires an unstarted non-Future awaitable")
+        selected_policy = policy or self._default_policy
+        try:
+            self._bind_running_loop()
+            self._validate_policy_signal(selected_policy, token_signal)
+            self._validate_policy_cohorts(selected_policy)
+            self._validate_raw_task_policy(selected_policy)
+            self._require_open()
+            task = asyncio.ensure_future(awaitable)
+            if not isinstance(task, asyncio.Task):  # pragma: no cover - Future rejected above
+                raise TypeError("Awaitable did not produce an asyncio Task")
+            task.set_name(task_name or name)
+        except BaseException:
+            if callable(close):
+                close()
             raise
         return self._track_task(
             name,
@@ -1309,7 +1367,11 @@ class RuntimeScope:
         return await coroutine
 
     async def _drain_cohort_signal(self, signal: RuntimeCohortSignal) -> None:
-        pending = {member.task: member for member in signal._members}
+        pending = {
+            member.task: member
+            for member in signal._members
+            if member.scope._members.get(member.task) is member
+        }
         escalated: set[asyncio.Task[Any]] = set()
         errors = [] if signal._signal_error is None else [signal._signal_error]
         current = asyncio.current_task()
