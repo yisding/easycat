@@ -675,7 +675,11 @@ class TestRemoteLlamaAgentsBridge:
         assert bridge.snapshot_state().fields["waiting_for_input"] is True
 
         bridge.reset()
-        await asyncio.gather(*list(bridge._reset_cleanup_tasks))
+        cleanup_tasks = bridge._reset_cleanup_task_scope.tasks()
+        assert [task.get_name() for task in cleanup_tasks] == [
+            "easycat-llama-reset-remote-handler"
+        ]
+        await asyncio.gather(*cleanup_tasks)
 
         assert client.cancelled == ["h1"]
         assert bridge.snapshot_state().fields["waiting_for_input"] is False

@@ -40,12 +40,16 @@ from easycat.integrations.agents.base import (
     UnitKind,
     run_interruption_journal_protocol,
 )
+from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.runtime.records import ErrorInfo
 from easycat.teardown_budgets import (
     REMOTE_RESPONSES_COMPLETED_STREAM_DRAIN_TIMEOUT_S as _COMPLETED_STREAM_DRAIN_TIMEOUT_S,
 )
 
 logger = logging.getLogger(__name__)
+
+_STREAM_RACE_TASK = "responses_stream_race"
+_STREAM_RACE_COHORT = "responses-stream-race"
 
 
 class _ResponseStreamCancelled(Exception):
@@ -121,6 +125,10 @@ def _update_tool_lifecycle(
         pending_tool_calls.remove(call_id)
 
 
+async def _wait_for_cancel(cancel_token: CancelToken) -> None:
+    await cancel_token.wait()
+
+
 async def _aiter_lines_with_cancellation(
     source: AsyncIterator[str],
     cancel_token: CancelToken | None,
@@ -138,9 +146,21 @@ async def _aiter_lines_with_cancellation(
     exhausted = False
     cancel_wait: asyncio.Task[None] | None = None
     next_line: asyncio.Task[str] | None = None
+    race_tasks = RuntimeTaskScope(
+        owner_label="responses-api-stream-race",
+        member_name=_STREAM_RACE_TASK,
+        cohort=_STREAM_RACE_COHORT,
+        logger=logger,
+        failure_message="Responses API stream race task failed",
+        drop_if_closed=False,
+    )
 
     if cancel_token is not None:
-        cancel_wait = asyncio.ensure_future(cancel_token.wait())
+        cancel_wait = race_tasks.create_task(
+            _wait_for_cancel(cancel_token),
+            task_name="easycat-responses-stream-cancel",
+        )
+        assert cancel_wait is not None
 
     try:
         while True:
@@ -164,7 +184,11 @@ async def _aiter_lines_with_cancellation(
                 yield line
                 continue
 
-            next_line = asyncio.ensure_future(iterator.__anext__())
+            next_line = race_tasks.create_awaitable_task(
+                iterator.__anext__(),
+                task_name="easycat-responses-stream-next",
+            )
+            assert next_line is not None
             await asyncio.wait(
                 (next_line, cancel_wait),
                 return_when=asyncio.FIRST_COMPLETED,
@@ -183,27 +207,35 @@ async def _aiter_lines_with_cancellation(
                 except StopAsyncIteration:
                     exhausted = True
                     return
+            race_tasks.discard_task(next_line)
             next_line = None
             yield line
     finally:
-        if next_line is not None:
-            if not next_line.done():
-                next_line.cancel()
-            with contextlib.suppress(
-                asyncio.CancelledError,
-                StopAsyncIteration,
-                Exception,
-            ):
-                await next_line
-        if cancel_wait is not None:
-            cancel_wait.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await cancel_wait
-        if not exhausted:
-            aclose = getattr(iterator, "aclose", None)
-            if aclose is not None:
-                with contextlib.suppress(Exception):
-                    await aclose()
+        try:
+            if next_line is not None:
+                if not next_line.done():
+                    next_line.cancel()
+                with contextlib.suppress(
+                    asyncio.CancelledError,
+                    StopAsyncIteration,
+                    Exception,
+                ):
+                    await next_line
+                race_tasks.discard_task(next_line)
+            if cancel_wait is not None:
+                cancel_wait.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await cancel_wait
+                race_tasks.discard_task(cancel_wait)
+        finally:
+            try:
+                await race_tasks.release_standalone_if_empty()
+            finally:
+                if not exhausted:
+                    aclose = getattr(iterator, "aclose", None)
+                    if aclose is not None:
+                        with contextlib.suppress(Exception):
+                            await aclose()
 
 
 async def _drain_completed_stream(lines: AsyncIterator[str]) -> None:

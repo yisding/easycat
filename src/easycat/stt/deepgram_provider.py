@@ -15,8 +15,8 @@ from easycat._provider_helpers import get_package_version, word_timestamps_from_
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
 from easycat.runtime.scope import RuntimeScope
-from easycat.stt.base import _STT_RUNTIME_CANCEL_POLICY
-from easycat.stt.websocket_base import WebSocketSTTBase
+from easycat.stt.base import _STT_RECEIVE_FINISH_POLICY, _STT_RUNTIME_CANCEL_POLICY
+from easycat.stt.websocket_base import _RECEIVE_TASK, WebSocketSTTBase
 
 logger = logging.getLogger(__name__)
 
@@ -160,17 +160,39 @@ class DeepgramSTT(WebSocketSTTBase):
             super().set_runtime_scope(parent, name=name)
             return
 
+        receive = self._receive_task
+        current_tasks = current.tasks()
+        if keepalive not in current_tasks or (
+            receive is not None and not receive.done() and receive not in current_tasks
+        ):
+            raise RuntimeError("Cannot reattach unowned Deepgram runtime work")
+
+        task_members = [
+            (_KEEPALIVE_TASK, keepalive, _STT_RUNTIME_CANCEL_POLICY),
+        ]
+        if receive is not None and receive in current_tasks:
+            task_members.insert(0, (_RECEIVE_TASK, receive, _STT_RECEIVE_FINISH_POLICY))
+        movable_tasks = {task for _, task, _ in task_members}
+        if any(task not in movable_tasks for task in current_tasks):
+            raise RuntimeError("Cannot reattach active Deepgram runtime work")
+
         # Validate loop affinity before registering the child so an off-loop
         # caller cannot leave a duplicate child behind after a failed attach.
-        if asyncio.get_running_loop() is not keepalive.get_loop():
-            raise RuntimeError("Cannot reattach Deepgram keepalive from another event loop")
+        running_loop = asyncio.get_running_loop()
+        if any(task.get_loop() is not running_loop for task in movable_tasks):
+            raise RuntimeError("Cannot reattach Deepgram runtime work from another event loop")
         attached = parent.create_child(name)
-        attached.add_task(
-            _KEEPALIVE_TASK,
-            keepalive,
-            policy=_STT_RUNTIME_CANCEL_POLICY,
-        )
-        current.discard(keepalive)
+        added: list[asyncio.Task[None]] = []
+        try:
+            for task_name, task, policy in task_members:
+                attached.add_task(task_name, task, policy=policy)
+                added.append(task)
+        except BaseException:
+            for task in added:
+                attached.discard(task)
+            raise
+        for task in added:
+            current.discard(task)
         self._runtime_scope = attached
         self._owns_runtime_scope = False
 

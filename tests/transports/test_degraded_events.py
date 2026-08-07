@@ -316,7 +316,7 @@ class _RaceWebSocketTransport(WebSocketTransport):
     async def _receive_loop(
         self,
         ws: object,
-        _connection_generation: int | None = None,
+        _connection: object | None = None,
     ) -> None:
         if ws is self.old_ws:
             self.old_receive_entered.set()

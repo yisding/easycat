@@ -498,7 +498,7 @@ class _WebSocketLifecycleDriver:
         self._set_transport(transport)
         transport._connected = True
         transport._socket_consumed = True
-        transport._connection_generation = 1
+        transport._connection_epoch.bump(ws)  # type: ignore[arg-type]
         self.publications.append("connection-1")
         child_cancelled = asyncio.Event()
         release_child = asyncio.Event()
@@ -635,7 +635,7 @@ class _WebSocketLifecycleDriver:
         self.transport = retry
         self.backend_start_calls += 1
         await retry.connect()
-        retry_generation = f"connection-2:{retry._connection_generation}"
+        retry_generation = f"connection-2:{retry._connection_epoch.generation}"
         await retry.disconnect()
         self.backend_close_calls = failing_ws.close_calls + retry_ws.close_calls
         return StartupRollbackObservation(
@@ -667,7 +667,7 @@ class _WebSocketLifecycleDriver:
                 transport._disconnect_cleanup_error is not None and transport._ws is not None
             )
             if connected:
-                active_generation = str(transport._connection_generation)
+                active_generation = str(transport._connection_epoch.generation)
         else:
             retained_cleanup = int(
                 transport._disconnect_cleanup_pending

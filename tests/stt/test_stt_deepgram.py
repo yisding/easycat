@@ -702,8 +702,10 @@ async def test_deepgram_prewarmed_keepalive_moves_to_session_scope() -> None:
     )
     await stt.warmup()
     standalone = stt._runtime_scope
+    receive = stt._receive_task
     keepalive = stt._keepalive_task
     assert standalone is not None
+    assert receive is not None
     assert keepalive is not None
 
     root = RuntimeScope.create_root(
@@ -715,6 +717,7 @@ async def test_deepgram_prewarmed_keepalive_moves_to_session_scope() -> None:
     stt.set_runtime_scope(root, name="stt-provider-runtime")
 
     assert standalone.empty
+    assert root.tasks("stt_receive_loop") == (receive,)
     assert root.tasks("deepgram_keepalive") == (keepalive,)
 
     await stt.aclose()
