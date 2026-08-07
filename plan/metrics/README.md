@@ -1,20 +1,31 @@
 # Refactor outcome measurement
 
-Status: pre-registered inputs for WS6.1a in the
+Status: pre-registered inputs from WS6.1a and the WS6.1b report engine for the
 [bug-resistant refactor plan](../roadmap/2026-08-02-bug-resistant-refactor-plan.md).
 
 These files freeze the measurement choices before the bug-resistant refactor
-changes production code. They are inputs, not evidence that an outcome gate has
-passed:
+changes production code. The report is longitudinal telemetry and never blocks
+refactor sequencing:
 
 - `refactor-families.json` owns cohorts, controls, bug classes, thresholds, and
   completion anchors;
 - `adjudications.json` owns the human classifications used by fix-density and
-  recurrence calculations; and
-- `incidents.json` owns the 14-day vertical-slice soak record.
+  recurrence calculations;
+- `report.schema.json` owns the generated JSON output contract; and
+- `report.json` and `report.md` are the checked generated views.
 
-WS6.1b will add the sole report generator and checked-in JSON/Markdown output.
-Generated reports must never be edited to supply classifications or incidents.
+`scripts/refactor_metrics.py` is the sole report generator. Generated reports
+must never be edited to supply classifications or incidents. Use an explicit
+UTC decision timestamp so reruns are reproducible:
+
+```bash
+uv run python scripts/refactor_metrics.py --as-of 2026-08-02T00:00:00Z
+uv run python scripts/refactor_metrics.py --as-of 2026-08-02T00:00:00Z --check
+```
+
+For a real observation, replace the example timestamp with the chosen review
+time. `--check` compares both checked outputs byte-for-byte with a fresh
+first-parent history calculation.
 
 ## Frozen history and exposure rules
 
@@ -61,7 +72,8 @@ The bridge and transport cohorts were locked on 2026-08-04 by the peer-set ADR
 and five transports. `candidate_members` was removed at lock time — keeping both
 would let the two drift with no rule saying which one counts. The exact member
 ids are pinned by `tests/test_refactor_metrics.py`, so a later addition or
-removal fails loudly rather than silently changing what a B60 result means.
+removal fails loudly rather than silently changing what a peer-family outcome
+means.
 
 A peer cannot be added after treatment begins; removing one after treatment begins invalidates that
 cohort rather than silently changing the denominator.
@@ -96,13 +108,16 @@ duplicate, contradictory, or unresolved classifications make the cohort
 `insufficient_data`. The named cohort reviewer owns classifications; a subject
 author may provide evidence but cannot self-resolve a dispute.
 
-For each bug class, order fix commits by `(committer timestamp, SHA)`. Starting
-with the earliest unassigned commit, a candidate cluster contains it and every
-subsequent unassigned fix less than or equal to seven days after that first
-timestamp. A cluster is a recurrence candidate only when it has at least two
-distinct commits and the union of affected members has at least two members. A
-single well-factored commit touching several members is therefore counted once
-as a fix, not as a recurrence.
+For each bug class and each window independently, order treated fix commits by
+`(committer timestamp, SHA)`. Starting with the earliest unassigned commit, a
+candidate cluster contains it and every subsequent unassigned fix less than or
+equal to seven days after that first timestamp. A cluster is a recurrence
+candidate only when it has at least two distinct commits and the union of
+affected members has at least two members. A fix attributed only to a control
+does not enter a treated recurrence cluster, even if its commit also touched a
+treated path. A single well-factored commit touching several members is
+therefore counted once as a fix, not as a recurrence. Clusters never bridge the
+pre/post boundary.
 
 Each candidate needs one `recurrence_adjudications` entry:
 
@@ -123,7 +138,7 @@ Each candidate needs one `recurrence_adjudications` entry:
 `verdict` is `same_fix` or `not_same_fix`. The commit list must exactly match
 the generated candidate. Missing or disputed adjudication is
 `insufficient_data`. Any `same_fix` candidate is a multi-member recurrence and
-fails the cohort gate.
+makes the cohort observation fail.
 
 ## Formula and pass threshold
 
@@ -161,24 +176,13 @@ treatment target. Record the first contaminating SHA in `invalidated_by`.
 Do not select a replacement control after seeing results. Any invalid control,
 unreachable anchor, membership change after treatment start, force-pushed
 history, unresolved reviewer dispute, or missing migration SHA yields
-`insufficient_data` and stops the corresponding gate.
+`insufficient_data`. This affects only the observation result; it does not stop
+the corresponding implementation workstream.
 
-## Fourteen-day vertical-slice soak
+## Sequencing policy
 
-The soak starts at the merge timestamp of WS2.1's first vertical slice and is
-the half-open interval `[D,D+14d)`. `incidents.json` accepts linked issues,
-regression PRs, reverts, and release-blocking CI failures.
-
-- **P1:** security or cross-session corruption, irreversible data loss, or
-  service-wide unavailability.
-- **P2:** a supported lifecycle path hangs, leaks owned work, misroutes state,
-  or requires a hotfix, rollback, or release block.
-- **Below threshold:** does not satisfy P1 or P2; it remains recorded but does
-  not fail the soak.
-
-Each incident records severity, affected cohort/slice, source link, evidence,
-and attribution as `attributable`, `not_attributable`, or `disputed`, with the
-named reviewer and UTC review time. Attribution requires evidence that the
-slice introduced or exposed the incident and that it would not occur absent
-the treatment. An attributable P1/P2 fails the soak. A disputed or unreviewed
-P1/P2 makes it `insufficient_data`; silence never counts as a pass.
+The fixed 60-day pre/post windows are deliberately observational. A result of
+`pass`, `fail`, or `insufficient_data` never authorizes or blocks a refactor
+slice. Work advances when its named code dependencies, focused tests, global
+checks, and review requirements are satisfied. Regressions discovered at any
+time use the normal issue, regression-test, fix, or rollback workflow.

@@ -462,9 +462,9 @@ these rules, which are part of the design, not implementation detail:
 Migration order is semantic. The writer/phase inventory, canonical owners,
 private publication compatibility, predicate conversion, phase-latch
 classification, and commit guards land in Tier A.
-`_cancel_cleanup_owns_turn` remains until the named scope slice passes its
-14-day soak, the WS2.1 foundation is complete, and every turn child belongs to
-the bound scope. Replacement preserves manager-started, session-only,
+`_cancel_cleanup_owns_turn` remains until the WS2.1 foundation is complete and
+every turn child belongs to the bound scope. Replacement preserves
+manager-started, session-only,
 application, VAD, push-to-talk, replay, hand-built-event, reset/clear, and
 successor-during-cleanup behavior. Scope cancellation does not remove commit
 guards. Only then may the old identity generation carrier be removed.
@@ -644,11 +644,8 @@ The work is therefore tiered (severable, each tier valuable if the next
 never ships), strangler-style, one-concern PRs, each independently
 revertible. Honest total: summing the refactor plan's own items gives
 roughly 45-60 PR-days of engineering effort, not the 4-8 an earlier draft
-implied. A60 and B60 are serial, so observation alone is at least 120 days;
-with Tier-A/Tier-B engineering, earliest Tier-C eligibility is roughly five to
-six months after work begins, before maintainer scheduling delay. Review
-bandwidth of one maintainer is the binding constraint; gates stop spend when
-the evidence stops supporting it.
+implied. Review bandwidth of one maintainer is the binding constraint. Work
+advances on verified code and dependency readiness rather than elapsed time.
 
 - **Tier A — ship unconditionally (~3 engineering weeks).** Foundations:
   the `_concurrency.py` helpers plus one ownership-proving vertical adoption,
@@ -661,17 +658,15 @@ the evidence stops supporting it.
   stop()-ordering observation tests, the missing bridge contract rows, and
   the extension/fix of the existing secret-repr test. Every item is valuable
   standalone.
-- **Tier B foundation — structurally gated.** When all Tier-A contracts,
-  parity tests, source ratchets, and inventories are green, one peer-neutral
-  scope-tree vertical slice may land. A 14-day no-P1/P2 soak then permits the
-  rest of the peer-neutral scope foundation and epoch-to-scope binding, but
-  not bulk adoption.
-- **Tier B bulk — conditional on the Tier-A 60-day outcome.** The remaining
-  package-by-package scope adoption, the
+- **Tier B — structurally gated.** When all Tier-A contracts, parity tests,
+  source ratchets, inventories, and normal PR checks are green, the
+  peer-neutral scope-tree vertical slice and its dependent slices may proceed
+  in reviewable order. Tier B then covers the remaining package-by-package
+  scope adoption, the
   `Session.stop()` rewrite, remaining epoch conversions
   (transports/telephony), `bind()`, TTS residue.
-- **Tier C — conditional on the T1 peer-set decision and the Tier-B 60-day
-  outcome.** The retained bridge and transport lifecycle engines. The
+- **Tier C — conditional on the T1 peer-set decision and named Tier-B code/test
+  prerequisites.** The retained bridge and transport lifecycle engines. The
   peer-set decision also precedes the Tier-B transport/integration/epoch
   migrations, not merely Tier C.
 
@@ -684,9 +679,9 @@ commits), plus `post-pre` deltas against controls. Zero denominators,
 underexposure, and treated controls are `insufficient_data`, not success;
 healthy zero-fix baselines use zero-post/non-inferiority instead of impossible
 strict decrease. Tier A measures Session lifecycle/staleness members; peer
-families use peers at B60. The 14-day incident source, severity, attribution,
-and exact formulas live in the refactor plan. Raw rolling-90-day share remains
-context, never a gate.
+families use their retained peers. The exact formulas live in the refactor
+plan. These fixed-window outcomes and raw rolling-90-day share remain
+observational context, never sequencing gates.
 
 ## 11. Non-goals and rejected alternatives
 

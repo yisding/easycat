@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easycat.dev/schemas/refactor-metrics-report-v1.json",
+  "title": "Bug-resistant refactor outcome report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "as_of",
+    "cohorts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "as_of": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "cohorts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/cohort"
+      }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "result": {
+      "enum": [
+        "pass",
+        "fail",
+        "insufficient_data"
+      ]
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "end": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "touching_commits",
+        "touching_commit_count",
+        "changed_lines",
+        "fix_commits",
+        "fix_commit_count",
+        "fix_density",
+        "fixes_per_kloc"
+      ],
+      "properties": {
+        "touching_commits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sha"
+          }
+        },
+        "touching_commit_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "changed_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fix_commits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sha"
+          }
+        },
+        "fix_commit_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fix_density": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fixes_per_kloc": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "measured_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end",
+        "treated",
+        "pooled_control"
+      ],
+      "properties": {
+        "start": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "end": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "treated": {
+          "$ref": "#/$defs/metrics"
+        },
+        "pooled_control": {
+          "$ref": "#/$defs/metrics"
+        }
+      }
+    },
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "window",
+        "bug_class",
+        "commit_shas",
+        "affected_members",
+        "first_committed_at",
+        "last_committed_at",
+        "verdict"
+      ],
+      "properties": {
+        "candidate_id": {
+          "type": "string"
+        },
+        "window": {
+          "enum": [
+            "pre",
+            "post"
+          ]
+        },
+        "bug_class": {
+          "type": "string"
+        },
+        "commit_shas": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/sha"
+          }
+        },
+        "affected_members": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string"
+          }
+        },
+        "first_committed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "last_committed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "verdict": {
+          "enum": [
+            "same_fix",
+            "not_same_fix",
+            null
+          ]
+        }
+      }
+    },
+    "cohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cohort_id",
+        "observation",
+        "anchor_status",
+        "result",
+        "reasons",
+        "windows",
+        "deltas",
+        "recurrence_candidates"
+      ],
+      "properties": {
+        "cohort_id": {
+          "type": "string"
+        },
+        "observation": {
+          "type": "string"
+        },
+        "anchor_status": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/result"
+        },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "windows": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pre",
+            "post"
+          ],
+          "properties": {
+            "pre": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/measured_window"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "post": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/measured_window"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "deltas": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "treated",
+                "pooled_control",
+                "epsilon"
+              ],
+              "properties": {
+                "treated": {
+                  "type": "number"
+                },
+                "pooled_control": {
+                  "type": "number"
+                },
+                "epsilon": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recurrence_candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/candidate"
+          }
+        }
+      }
+    }
+  }
+}
