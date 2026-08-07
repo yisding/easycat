@@ -865,6 +865,58 @@ async def test_session_start_rolls_back_after_connect_failure():
 
 
 @pytest.mark.asyncio
+async def test_session_start_failure_rolls_back_agent_warmup_and_allows_retry() -> None:
+    class RestartableWarmupAgent:
+        def __init__(self) -> None:
+            self.warmup_calls = 0
+            self.rollback_calls = 0
+            self.close_calls = 0
+
+        async def warmup(self) -> None:
+            self.warmup_calls += 1
+
+        async def rollback_warmup(self) -> None:
+            self.rollback_calls += 1
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+        async def run(self, text: str) -> str:
+            return text
+
+    class FlakyTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connect_calls = 0
+
+        async def connect(self) -> None:
+            self.connect_calls += 1
+            if self.connect_calls == 1:
+                raise RuntimeError("boom")
+            await super().connect()
+
+    agent = RestartableWarmupAgent()
+    transport = FlakyTransport()
+    session = Session(_full_config(agent=agent, transport=transport))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await session.start()
+
+    assert agent.warmup_calls == 1
+    assert agent.rollback_calls == 1
+    assert agent.close_calls == 0
+
+    await session.start()
+
+    assert agent.warmup_calls == 2
+    assert agent.rollback_calls == 1
+    assert session.is_running
+
+    await session.stop()
+    assert agent.close_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_session_stop_idempotent():
     session = Session(_full_config())
     await session.stop()

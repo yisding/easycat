@@ -57,6 +57,7 @@ def _completion_text(accumulated: str, structured_output: Any) -> str:
 
 
 _DEFAULT_HISTORY_KEY = "__default__"
+_PYDANTIC_AI_WARMUP_TIMEOUT_SECONDS = 5.0
 
 
 class PydanticAIBridge:
@@ -145,6 +146,122 @@ class PydanticAIBridge:
         self._graph_states: dict[str, Any] = {}
         self._last_history_key = _DEFAULT_HISTORY_KEY
         self._last_output: Any = None
+        self._entered_warmup_agents: list[Any] = []
+        self._warmup_lifecycle_lock = asyncio.Lock()
+        self._warmup_closed = False
+
+    async def warmup(self) -> None:
+        """Enter static agents and prime their persistent model clients.
+
+        PydanticAI otherwise creates and closes a deferred string model around
+        each run. Resolving it once and keeping the agent context entered lets
+        the first real turn reuse the connection established by the unbilled
+        model-metadata request. Unsupported models and provider failures stay
+        best-effort so warmup never becomes an availability gate.
+        """
+        async with self._warmup_lifecycle_lock:
+            if self._warmup_closed:
+                return
+            agents = (self._agent,) if self._mode == "agent" else tuple(self._agents or ())
+            for agent in agents:
+                if agent is None or any(
+                    entered is agent for entered in self._entered_warmup_agents
+                ):
+                    continue
+                await self._warmup_agent(agent)
+
+    async def _warmup_agent(self, agent: Any) -> None:
+        try:
+            model = self._resolve_warmup_model(agent)
+        except Exception as exc:  # noqa: BLE001 intentional best-effort warmup boundary
+            logger.debug("PydanticAI agent warmup skipped: %s", exc)
+            return
+        if not await self._enter_warmup_agent_context(agent):
+            return
+        await self._prime_warmup_model(model)
+
+    @staticmethod
+    def _resolve_warmup_model(agent: Any) -> Any:
+        model = getattr(agent, "model", None)
+        if isinstance(model, str):
+            from pydantic_ai.models import infer_model
+
+            model = infer_model(model)
+            agent.model = model
+        return model
+
+    async def _enter_warmup_agent_context(self, agent: Any) -> bool:
+        enter = getattr(agent, "__aenter__", None)
+        exit_ = getattr(agent, "__aexit__", None)
+        if enter is None or exit_ is None:
+            return False
+        try:
+            async with asyncio.timeout(_PYDANTIC_AI_WARMUP_TIMEOUT_SECONDS):
+                await enter()
+        except asyncio.CancelledError as exc:
+            await self._rollback_failed_warmup_entry(exit_, exc)
+            raise
+        except TimeoutError as exc:
+            await self._rollback_failed_warmup_entry(exit_, exc)
+            logger.debug("PydanticAI agent context warmup timed out")
+            return False
+        except Exception as exc:  # noqa: BLE001 intentional best-effort warmup boundary
+            logger.debug("PydanticAI agent warmup skipped: %s", exc)
+            return False
+        self._entered_warmup_agents.append(agent)
+        return True
+
+    async def _prime_warmup_model(self, model: Any) -> None:
+        client = getattr(model, "client", None)
+        models = getattr(client, "models", None)
+        retrieve = getattr(models, "retrieve", None)
+        model_name = getattr(model, "model_name", None)
+        if retrieve is None or not isinstance(model_name, str) or not model_name:
+            return
+        try:
+            async with asyncio.timeout(_PYDANTIC_AI_WARMUP_TIMEOUT_SECONDS):
+                result = retrieve(model_name)
+                if inspect.isawaitable(result):
+                    await result
+        except Exception as exc:  # noqa: BLE001 intentional best-effort warmup boundary
+            logger.debug("PydanticAI model warmup skipped: %s", exc)
+
+    async def _rollback_failed_warmup_entry(self, exit_: Any, exc: BaseException) -> None:
+        """Best-effort unwind a context whose bounded entry did not complete."""
+        try:
+            async with asyncio.timeout(_PYDANTIC_AI_WARMUP_TIMEOUT_SECONDS):
+                await exit_(type(exc), exc, exc.__traceback__)
+        except BaseException:
+            logger.debug(
+                "PydanticAI partial agent context rollback failed",
+                exc_info=True,
+            )
+
+    async def rollback_warmup(self) -> None:
+        """Release entered contexts after failed startup while allowing retry."""
+        async with self._warmup_lifecycle_lock:
+            await self._close_warmup_agents()
+
+    async def aclose(self) -> None:
+        """Exit agent contexts entered by :meth:`warmup`."""
+        async with self._warmup_lifecycle_lock:
+            self._warmup_closed = True
+            await self._close_warmup_agents()
+
+    async def _close_warmup_agents(self) -> None:
+        """Exit and forget contexts entered by warmup while lifecycle is serialized."""
+        entered, self._entered_warmup_agents = (
+            self._entered_warmup_agents,
+            [],
+        )
+        for agent in reversed(entered):
+            try:
+                await agent.__aexit__(None, None, None)
+            except Exception:
+                logger.debug(
+                    "PydanticAI agent context close failed",
+                    exc_info=True,
+                )
 
     @property
     def _message_history(self) -> list[Any]:
@@ -355,7 +472,9 @@ class PydanticAIBridge:
                     history.append(ModelResponse(parts=[TextPart(content=replacement)]))
                 break
             if isinstance(msg, ModelResponse):
-                text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
+                text_parts: list[Any] = [
+                    part for part in msg.parts if type(part).__name__ == "TextPart"
+                ]
                 for idx, part in enumerate(text_parts):
                     value = replacement if idx == 0 else ""
                     try:
@@ -405,7 +524,9 @@ class PydanticAIBridge:
                 return
             if not isinstance(msg, ModelResponse):
                 continue
-            text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
+            text_parts: list[Any] = [
+                part for part in msg.parts if type(part).__name__ == "TextPart"
+            ]
             if not text_parts:
                 return
             originals = [p.content for p in text_parts]

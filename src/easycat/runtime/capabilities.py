@@ -148,6 +148,17 @@ async def warmup_if_supported(provider: Any) -> bool:
     return True
 
 
+async def rollback_warmup_if_supported(provider: Any) -> None:
+    """Release resources opened by warmup while keeping the provider reusable."""
+    rollback = getattr(provider, "rollback_warmup", None)
+    if not callable(rollback):
+        return
+
+    result = rollback()
+    if inspect.isawaitable(result):
+        await result
+
+
 async def aclose_if_supported(provider: Any) -> None:
     """Close async resources when a provider exposes ``aclose``."""
     aclose = getattr(provider, "aclose", None)

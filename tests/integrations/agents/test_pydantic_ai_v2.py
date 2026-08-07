@@ -16,6 +16,16 @@ class TextPartDelta:
         self.content_delta = content_delta
 
 
+class TextPart:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+class PartStartEvent:
+    def __init__(self, part: Any) -> None:
+        self.part = part
+
+
 class ToolCallPartDelta:
     def __init__(self, args_delta: Any, tool_call_id: str | None = None) -> None:
         self.args_delta = args_delta
@@ -315,6 +325,30 @@ def test_v2_tool_result_with_none_content_is_empty_string(event_cls: type[Any]) 
 
 def test_v2_final_result_without_output_is_not_done_event() -> None:
     assert translate_event(FinalResultEvent()) is None
+
+
+def test_text_part_start_preserves_the_initial_stream_content() -> None:
+    event = translate_event(PartStartEvent(TextPart("Loverboy")))
+
+    assert event is not None
+    assert event.kind == "text_delta"
+    assert event.text == "Loverboy"
+
+
+def test_empty_text_part_start_is_not_emitted() -> None:
+    assert translate_event(PartStartEvent(TextPart(""))) is None
+
+
+def test_real_v2_text_part_start_preserves_the_initial_stream_content() -> None:
+    pytest.importorskip("pydantic_ai")
+    from pydantic_ai.messages import PartStartEvent as RealPartStartEvent
+    from pydantic_ai.messages import TextPart as RealTextPart
+
+    event = translate_event(RealPartStartEvent(index=0, part=RealTextPart(content="Loverboy")))
+
+    assert event is not None
+    assert event.kind == "text_delta"
+    assert event.text == "Loverboy"
 
 
 def test_tool_call_delta_dict_is_serialized_as_text() -> None:

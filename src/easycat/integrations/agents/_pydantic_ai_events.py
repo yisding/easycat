@@ -16,6 +16,17 @@ from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder
 _EventTranslator = Callable[[Any, AgentRecorder | None], AgentBridgeEvent | None]
 
 
+def _translate_part_start(
+    event: Any,
+    _recorder: AgentRecorder | None,
+) -> AgentBridgeEvent | None:
+    part = getattr(event, "part", None)
+    if type(event).__name__ != "PartStartEvent" or type(part).__name__ != "TextPart":
+        return None
+    content = getattr(part, "content", "") or ""
+    return AgentBridgeEvent(kind="text_delta", text=content) if content else None
+
+
 def _translate_delta(
     event: Any,
     recorder: AgentRecorder | None,
@@ -96,6 +107,7 @@ def _translate_final_result(
 
 
 _EVENT_TRANSLATORS: dict[str, _EventTranslator] = {
+    "PartStartEvent": _translate_part_start,
     "FunctionToolCallEvent": _translate_tool_started,
     "FunctionToolResultEvent": _translate_tool_result,
     "OutputToolCallEvent": _translate_tool_started,
