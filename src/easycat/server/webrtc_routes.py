@@ -57,6 +57,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -86,6 +87,7 @@ _FORCE_CLEANUP_TASK = "webrtc_force_cleanup"
 _FORCE_CLEANUP_COHORT = "webrtc-force-cleanup"
 _STANDALONE_SWEEP_TASK = "standalone_webrtc_session_sweep"
 _STANDALONE_SWEEP_COHORT = "standalone-webrtc-session-sweep"
+_STANDALONE_SWEEP_SCOPES: set[RuntimeTaskScope] = set()
 
 # Per-connection factory seam (NO ``ConnectionContext`` type): a per-transport
 # ``Callable[[WebRTCTransport], EasyConfig | Session]``.
@@ -113,6 +115,23 @@ def _standalone_sweep_error(
     ):
         return None
     return RuntimeError(f"Standalone WebRTC shutdown retained {len(report.failures)} session(s)")
+
+
+def _discard_settled_standalone_sweep_scope(
+    scope: RuntimeTaskScope,
+    _task: asyncio.Task[Any],
+) -> None:
+    """Release the module anchor only after its sweep task has settled."""
+    _STANDALONE_SWEEP_SCOPES.discard(scope)
+
+
+def _retain_standalone_sweep_scope(
+    scope: RuntimeTaskScope,
+    task: asyncio.Task[Any],
+) -> None:
+    """Anchor a standalone sweep scope until its owned task settles."""
+    _STANDALONE_SWEEP_SCOPES.add(scope)
+    task.add_done_callback(partial(_discard_settled_standalone_sweep_scope, scope))
 
 
 class WebRTCRoutes:
@@ -753,6 +772,7 @@ async def _shutdown_standalone_webrtc(  # noqa: C901 - independent cleanup stage
                 task_name="easycat-standalone-webrtc-session-sweep",
             )
             assert sweep_task is not None
+            _retain_standalone_sweep_scope(sweep_scope, sweep_task)
             swept = await wait_for_owned_future(
                 sweep_task,
                 timeout_s=max(force_shutdown_timeout_s, 0.0),

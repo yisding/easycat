@@ -1780,6 +1780,64 @@ async def test_serve_webrtc_config_sessions_bounds_shutdown(
 
 
 @pytest.mark.asyncio
+async def test_standalone_sweep_scope_survives_timeout_until_task_settles() -> None:
+    import gc
+
+    from easycat.server import webrtc_routes as routes_module
+
+    class _Gate:
+        def start_draining(self) -> None:
+            pass
+
+        async def drain(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    async def stop_all(*, force: bool) -> None:
+        assert force is True
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+
+    manager = SimpleNamespace(stop_all=stop_all)
+    before = set(routes_module._STANDALONE_SWEEP_SCOPES)
+
+    await routes_module._shutdown_standalone_webrtc(
+        site=SimpleNamespace(stop=AsyncMock()),
+        runner=SimpleNamespace(cleanup=AsyncMock()),
+        gate=_Gate(),  # type: ignore[arg-type]
+        active_sessions={},
+        routes=SimpleNamespace(
+            _stop_managed_session=AsyncMock(),
+            cancel_cleanup_tasks=AsyncMock(),
+        ),
+        manager=manager,  # type: ignore[arg-type]
+        drain_timeout_s=0.0,
+        force_shutdown_timeout_s=0.01,
+    )
+    await cancellation_seen.wait()
+
+    retained = routes_module._STANDALONE_SWEEP_SCOPES - before
+    assert len(retained) == 1
+    scope = retained.pop()
+    tasks = scope.tasks()
+    assert len(tasks) == 1
+    sweep_task = tasks[0]
+    gc.collect()
+    assert not sweep_task.done()
+
+    release.set()
+    await sweep_task
+    await asyncio.sleep(0)
+
+    assert scope not in routes_module._STANDALONE_SWEEP_SCOPES
+
+
+@pytest.mark.asyncio
 async def test_serve_webrtc_config_sessions_drains_after_listener_stop_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
