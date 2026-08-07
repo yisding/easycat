@@ -227,6 +227,16 @@ conflicts = [
 ]
 
 [dependency-groups]
+docs = [
+    # Keep the Pages toolchain explicit and reproducible in uv.lock. These
+    # packages have had compatibility-sensitive releases in the past, so bump
+    # them deliberately and verify ``uv run --group docs mkdocs build --strict``
+    # after each change.
+    "mkdocs==1.6.1",
+    "mkdocs-material==9.7.7",
+    "pygments==2.20.0",
+    "pymdown-extensions==11.0.1",
+]
 dev = [
     "diff-cover>=10.4.1",
     "hypothesis>=6.161.5",

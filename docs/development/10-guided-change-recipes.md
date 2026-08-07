@@ -441,7 +441,7 @@ document and test the submodule contract instead.
    ```bash
    uv run easycat docs --audience maintainers
    uv run python scripts/regen_llms_txt.py --check
-   uv run mkdocs build --strict
+   uv run --group docs mkdocs build --strict
    just guard-docs
    ```
 

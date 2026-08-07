@@ -29,6 +29,12 @@ updates:
           - "*"
         update-types:
           - "major"
+    # Both compatibility extras use the same PyPI distribution. Dependabot
+    # cannot address one occurrence independently, so keep the v1 extra on its
+    # documented compatibility line until its dated removal window.
+    ignore:
+      - dependency-name: "pydantic-ai"
+        update-types: ["version-update:semver-major"]
   # Keep the SHA-pinned GitHub Actions current. Dependabot bumps the pin and
   # rewrites the trailing `# vX.Y.Z` comment, so pins never silently rot.
   - package-ecosystem: "github-actions"
@@ -57,32 +63,3 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
-  # Docs toolchain (requirements-docs.txt, hash-pinned). Best-effort: if the
-  # first PR cannot regenerate `--require-hashes` cleanly, drop this block.
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    cooldown:
-      default-days: 7
-    groups:
-      pip-minor-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      pip-major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
-    # The pip ecosystem also parses pyproject.toml, where the `pydantic-ai`
-    # extra is deliberately capped at the v1 line (`pydantic-ai-v2` covers 2.x).
-    # Left alone, pip re-proposes widening that cap to <3.0.0 (see closed #397)
-    # and edits pyproject.toml without regenerating uv.lock, breaking CI. The
-    # uv ecosystem is the real owner of pyproject.toml/uv.lock and respects the
-    # cap, so keep pip off pydantic-ai major bumps.
-    ignore:
-      - dependency-name: "pydantic-ai"
-        update-types: ["version-update:semver-major"]

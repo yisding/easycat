@@ -8,8 +8,8 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - ".mkdocs/**"
-      - "requirements-docs.in"
-      - "requirements-docs.txt"
+      - "pyproject.toml"
+      - "uv.lock"
       - "scripts/regen_teaching_chapters.py"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
@@ -37,12 +37,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # actions/setup-python v6.3.0
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
+          version: "0.12.0"
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - name: Install docs dependencies
-        run: pip install --require-hashes -r requirements-docs.txt
+      - name: Sync docs and teaching dependencies
+        run: uv sync --locked --no-default-groups --group docs --extra quickstart --python 3.12
       - name: Check chapter auto-blocks are in sync with source
         # `scripts/regen_teaching_chapters.py` refreshes the auto:snippet /
         # auto:diff / auto:linerange / auto:linkhash blocks in each chapter
@@ -50,9 +52,9 @@ jobs:
         # chapter's source without re-running the script, the README drifts
         # silently (deep links point at the wrong lines, snippets show the
         # old code). `--check` exits non-zero with a diff on stderr.
-        run: python scripts/regen_teaching_chapters.py --check
+        run: uv run --no-sync python scripts/regen_teaching_chapters.py --check
       - name: Build the site (--strict)
-        run: mkdocs build --strict
+        run: uv run --no-sync mkdocs build --strict
       - name: Import-check teaching scripts not covered by pytest
         # `naive_threshold.py`, `blocking_tool.py`, `wrong_order.py` and the
         # other teaching scripts aren't collected by pytest (they live under
@@ -62,14 +64,13 @@ jobs:
         # tree on PYTHONPATH so cross-imports resolve.
         run: |
           set -eu
-          pip install -e ".[quickstart]"
-          PYTHONPATH=src python -m compileall -q docs/teaching/
+          PYTHONPATH=src uv run --no-sync python -m compileall -q docs/teaching/
           find docs/teaching -name '*.py' -print0 | while IFS= read -r -d '' f; do
-            python -c "import ast; ast.parse(open('$f').read())"
+            uv run --no-sync python -c "import ast; ast.parse(open('$f').read())"
           done
           # Spot-check the three wrong-version-first scripts compile *and*
           # their easycat imports resolve.
-          python -c "
+          uv run --no-sync python -c "
           import importlib.util, sys
           for path in [
               'docs/teaching/04-vad-preroll/naive_threshold.py',
