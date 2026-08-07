@@ -1946,8 +1946,8 @@ class WebTransportServer:
             self._config.host,
             auth=self._auth_policy,
             unsafe_allow_no_auth=self._config.unsafe_allow_no_auth,
-            binder=lambda: aioquic_server.serve(
-                self._config.host,
+            binder=lambda bind_host: aioquic_server.serve(
+                bind_host,
                 self._config.port,
                 configuration=quic_config,
                 create_protocol=factory,
