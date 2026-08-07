@@ -154,7 +154,7 @@ class _TwilioLifecycleDriver:
         await asyncio.sleep(0)
         transport.release_start.set()
         await asyncio.gather(first, second)
-        generation = str(transport._connection_generation)
+        generation = str(transport._connection_epoch.generation)
         self.publications.append(generation)
         self.backend_start_calls = transport.start_calls
         await transport.disconnect()
@@ -226,7 +226,7 @@ class _TwilioLifecycleDriver:
         self._set_transport(transport, ws)
         transport._connected = True
         transport._socket_consumed = True
-        transport._connection_generation = 1
+        transport._connection_epoch.bump(ws)  # type: ignore[arg-type]
         self.publications.append("1")
         child_cancelled = asyncio.Event()
         release_child = asyncio.Event()
@@ -362,7 +362,7 @@ class _TwilioLifecycleDriver:
         self.ws = retry_ws
         await retry.connect()
         self.backend_start_calls += retry.start_calls
-        retry_generation = f"connection-2:{retry._connection_generation}"
+        retry_generation = f"connection-2:{retry._connection_epoch.generation}"
         await retry.disconnect()
         self.backend_close_calls = failing_ws.close_calls + retry_ws.close_calls
         return StartupRollbackObservation(
@@ -388,7 +388,7 @@ class _TwilioLifecycleDriver:
         ]
         return NormalizedTransportLifecycleState(
             connected=connected,
-            active_generation=(str(transport._connection_generation) if connected else None),
+            active_generation=(str(transport._connection_epoch.generation) if connected else None),
             owned_work=sum(not task.done() for task in tasks),
             queued_frames=(transport._in_queue.qsize() if connected else 0),
             retained_cleanup=int(

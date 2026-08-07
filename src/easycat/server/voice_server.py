@@ -30,8 +30,8 @@ from typing import TYPE_CHECKING, Any
 
 from easycat._extras import require_module
 from easycat._signals import create_shutdown_event
-from easycat.runtime._event_tasks import RuntimeTaskScope
-from easycat.server.auth import from_websocket
+from easycat.runtime._event_tasks import RuntimeTaskScope, wait_for_owned_future
+from easycat.server.auth import authorized_bind, from_websocket
 from easycat.server.config import VoiceServerConfig
 from easycat.server.health import VoiceServerHealth
 from easycat.server.routes import (
@@ -42,7 +42,7 @@ from easycat.server.routes import (
     register_metrics_route,
     register_plan_route,
 )
-from easycat.server.transports import CapacityGate, _await_with_hard_timeout
+from easycat.server.transports import CapacityGate
 from easycat.session_manager import (
     SessionManager,
     SessionStopReport,
@@ -81,6 +81,8 @@ _WS_HANDLER_TASK = "voice_server_ws_handler"
 _WS_HANDLER_COHORT = "voice-server-ws-handler"
 _LISTENER_CLEANUP_TASK = "voice_server_listener_cleanup"
 _LISTENER_CLEANUP_COHORT = "voice-server-listener-cleanup"
+_SESSION_SWEEP_TASK = "voice_server_session_sweep"
+_SESSION_SWEEP_COHORT = "voice-server-session-sweep"
 
 
 class VoiceServer:
@@ -112,6 +114,14 @@ class VoiceServer:
         # Bare session registry only: add/remove/stop_all/connection. Capacity
         # and draining are NOT attributed to it (it has neither).
         self._manager: SessionManager[int] = SessionManager()
+        self._session_sweep_task_scope = RuntimeTaskScope(
+            owner_label="voice-server-session-sweep",
+            member_name=_SESSION_SWEEP_TASK,
+            cohort=_SESSION_SWEEP_COHORT,
+            logger=logger,
+            failure_message="VoiceServer SessionManager sweep task failed",
+            drop_if_closed=False,
+        )
 
         # Shared capacity + draining collaborator (the M5 lift). It owns the
         # reservation counter, the active-connection set, and the draining flag
@@ -356,10 +366,21 @@ class VoiceServer:
         """Start aiohttp transactionally, retaining failed rollback ownership."""
         runner = web.AppRunner(app)
         site: Any | None = None
+
+        async def start_site(bind_host: str) -> Any:
+            nonlocal site
+            site = web.TCPSite(runner, bind_host, self.config.port)
+            await site.start()
+            return site
+
         try:
             await runner.setup()
-            site = web.TCPSite(runner, self.config.host, self.config.port)
-            await site.start()
+            site = await authorized_bind(
+                self.config.host,
+                auth=self.config.auth,
+                unsafe_allow_no_auth=self.config.unsafe_allow_no_auth,
+                binder=start_site,
+            )
         except BaseException as startup_error:
             # A site can fail after it has partially started. Publish both
             # listener references before rolling back so the regular bounded
@@ -559,24 +580,15 @@ class VoiceServer:
         # backstop: even a pathological handler that resists cancellation cannot
         # make ``stop()`` block forever.
         if ws_server is not None:
-            wait_succeeded, closed = await self._attempt_cleanup(
-                "raw-WebSocket listener wait",
-                _await_with_hard_timeout(
-                    ws_server.wait_closed(),
-                    timeout_s=self.config.force_shutdown_timeout_s,
-                ),
+            closed = await self._attempt_bounded_listener_cleanup(
+                "raw-WebSocket listener",
+                ws_server.wait_closed,
                 cleanup_errors,
+                cancel_on_timeout=True,
+                timeout_action="close",
             )
-            if wait_succeeded:
-                if not closed:
-                    timeout_error = RuntimeError(
-                        "raw-WebSocket listener did not close within "
-                        f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s"
-                    )
-                    logger.warning("VoiceServer: %s", timeout_error)
-                    cleanup_errors.append(timeout_error)
-                elif self._ws_server is ws_server:
-                    self._ws_server = None
+            if closed and self._ws_server is ws_server:
+                self._ws_server = None
 
         # Cancel the per-offer WebRTC ``wait_closed`` cleanup tasks. The drain
         # step already force-stopped the sessions via the shared active set;
@@ -605,10 +617,14 @@ class VoiceServer:
         # retries it after the handler has unwound. Bound the sweep with
         # ``force_shutdown_timeout_s`` so a force-stop that never returns cannot
         # block server teardown.
-        sweep_task = asyncio.create_task(self._manager.stop_all(force=True))
+        sweep_task = self._session_sweep_task_scope.create_task(
+            self._manager.stop_all(force=True),
+            task_name="easycat-voice-server-session-sweep",
+        )
+        assert sweep_task is not None
         sweep_succeeded, swept = await self._attempt_cleanup(
             "SessionManager hard sweep",
-            _await_with_hard_timeout(
+            wait_for_owned_future(
                 sweep_task,
                 timeout_s=self.config.force_shutdown_timeout_s,
             ),
@@ -620,6 +636,7 @@ class VoiceServer:
                 report=sweep_task.result() if swept else None,
                 cleanup_errors=cleanup_errors,
             )
+        await self._session_sweep_task_scope.release_standalone_if_empty()
 
         # Keep session/resource references when any cleanup stage failed so a
         # later stop can retry them. The gate itself is always reset to a
@@ -710,6 +727,9 @@ class VoiceServer:
         stage: str,
         cleanup: Callable[[], Awaitable[Any]],
         cleanup_errors: list[Exception],
+        *,
+        cancel_on_timeout: bool = False,
+        timeout_action: str = "finish",
     ) -> bool:
         """Run one listener cleanup stage under the force-shutdown deadline.
 
@@ -718,6 +738,8 @@ class VoiceServer:
         that same task instead of concurrently invoking the listener cleanup a
         second time. The surrounding drain can therefore still force-stop
         sessions promptly while the gate remains fenced as ``draining``.
+        ``cancel_on_timeout`` preserves stages whose legacy hard bound first
+        requested cooperative cancellation before retaining a survivor.
         """
         task, previously_completed = self._prepare_listener_cleanup_task(
             stage,
@@ -728,9 +750,12 @@ class VoiceServer:
             return True
         if task is None:
             return False
-        if not await self._wait_for_listener_cleanup_task(task):
+        if not await self._wait_for_listener_cleanup_task(
+            task,
+            cancel_on_timeout=cancel_on_timeout,
+        ):
             timeout_error = RuntimeError(
-                f"{stage} did not finish within "
+                f"{stage} did not {timeout_action} within "
                 f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s"
             )
             logger.warning("VoiceServer: %s", timeout_error)
@@ -777,7 +802,12 @@ class VoiceServer:
         """Invoke one listener cleanup operation inside its named owner task."""
         return await cleanup()
 
-    async def _wait_for_listener_cleanup_task(self, task: asyncio.Task[Any]) -> bool:
+    async def _wait_for_listener_cleanup_task(
+        self,
+        task: asyncio.Task[Any],
+        *,
+        cancel_on_timeout: bool,
+    ) -> bool:
         """Wait one bounded slice while preserving a listener cleanup task's ownership."""
         try:
             done, _ = await asyncio.wait(
@@ -792,7 +822,15 @@ class VoiceServer:
             if not task.done():
                 task.cancel()
             raise
-        return task in done
+        if task in done:
+            return True
+        if cancel_on_timeout and not task.done():
+            task.cancel()
+            # Preserve the old hard-timeout behavior: request cooperative
+            # cancellation and give it one event-loop turn without waiting for
+            # a cancellation-resistant listener.
+            await asyncio.sleep(0)
+        return False
 
     async def _finish_listener_cleanup_task(
         self,
@@ -907,7 +945,7 @@ class VoiceServer:
             assert task is not None
             close_tasks.append(task)
         close_group = asyncio.gather(*close_tasks, return_exceptions=True)
-        closed = await _await_with_hard_timeout(
+        closed = await wait_for_owned_future(
             close_group,
             timeout_s=max(self.config.force_shutdown_timeout_s, 0.0),
         )
@@ -1003,7 +1041,7 @@ class VoiceServer:
             if timeout_s is None:
                 results = await gathered
             else:
-                completed = await _await_with_hard_timeout(gathered, timeout_s=timeout_s)
+                completed = await wait_for_owned_future(gathered, timeout_s=timeout_s)
                 results = gathered.result() if completed else None
             if results is not None:
                 self._report_shutdown_task_results(
@@ -1338,12 +1376,17 @@ class VoiceServer:
 
         from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 
-        return await websockets.serve(
-            self._handle_websocket_connection,
+        return await authorized_bind(
             self.config.host,
-            self._websocket_port(),
-            compression=None,
-            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+            auth=self.config.auth,
+            unsafe_allow_no_auth=self.config.unsafe_allow_no_auth,
+            binder=lambda bind_host: websockets.serve(
+                self._handle_websocket_connection,
+                bind_host,
+                self._websocket_port(),
+                compression=None,
+                max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+            ),
         )
 
     def _websocket_port(self) -> int:

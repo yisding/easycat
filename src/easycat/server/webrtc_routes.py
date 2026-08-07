@@ -57,12 +57,12 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from easycat.runtime._event_tasks import RuntimeTaskScope
+from easycat.runtime._event_tasks import RuntimeTaskScope, wait_for_owned_future
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
-from easycat.server.transports import _await_with_hard_timeout
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
 from easycat.teardown_budgets import (
     SERVER_DRAIN_TIMEOUT_S,
@@ -87,6 +87,7 @@ _FORCE_CLEANUP_TASK = "webrtc_force_cleanup"
 _FORCE_CLEANUP_COHORT = "webrtc-force-cleanup"
 _STANDALONE_SWEEP_TASK = "standalone_webrtc_session_sweep"
 _STANDALONE_SWEEP_COHORT = "standalone-webrtc-session-sweep"
+_STANDALONE_SWEEP_SCOPES: set[RuntimeTaskScope] = set()
 
 # Per-connection factory seam (NO ``ConnectionContext`` type): a per-transport
 # ``Callable[[WebRTCTransport], EasyConfig | Session]``.
@@ -114,6 +115,23 @@ def _standalone_sweep_error(
     ):
         return None
     return RuntimeError(f"Standalone WebRTC shutdown retained {len(report.failures)} session(s)")
+
+
+def _discard_settled_standalone_sweep_scope(
+    scope: RuntimeTaskScope,
+    _task: asyncio.Task[Any],
+) -> None:
+    """Release the module anchor only after its sweep task has settled."""
+    _STANDALONE_SWEEP_SCOPES.discard(scope)
+
+
+def _retain_standalone_sweep_scope(
+    scope: RuntimeTaskScope,
+    task: asyncio.Task[Any],
+) -> None:
+    """Anchor a standalone sweep scope until its owned task settles."""
+    _STANDALONE_SWEEP_SCOPES.add(scope)
+    task.add_done_callback(partial(_discard_settled_standalone_sweep_scope, scope))
 
 
 class WebRTCRoutes:
@@ -594,7 +612,7 @@ class WebRTCRoutes:
             if timeout_s is None:
                 results = await cleanup
             else:
-                completed = await _await_with_hard_timeout(cleanup, timeout_s=timeout_s)
+                completed = await wait_for_owned_future(cleanup, timeout_s=timeout_s)
                 results = cleanup.result() if completed else None
             if results is not None:
                 self._report_cleanup_results(
@@ -754,7 +772,8 @@ async def _shutdown_standalone_webrtc(  # noqa: C901 - independent cleanup stage
                 task_name="easycat-standalone-webrtc-session-sweep",
             )
             assert sweep_task is not None
-            swept = await _await_with_hard_timeout(
+            _retain_standalone_sweep_scope(sweep_scope, sweep_task)
+            swept = await wait_for_owned_future(
                 sweep_task,
                 timeout_s=max(force_shutdown_timeout_s, 0.0),
             )
@@ -791,7 +810,7 @@ async def serve_webrtc_config_sessions(
     from easycat._extras import require_module
     from easycat._net import normalize_auth_token
     from easycat._signals import create_shutdown_event
-    from easycat.server.auth import BearerTokenAuth, enforce_bind_guard
+    from easycat.server.auth import BearerTokenAuth, authorized_bind, enforce_bind_guard
     from easycat.server.transports import CapacityGate
     from easycat.session_manager import SessionManager
 
@@ -824,10 +843,20 @@ async def serve_webrtc_config_sessions(
     app = web.Application()
     routes.register(app, prefix="", web=web)
     runner = web.AppRunner(app)
+
+    async def start_site(bind_host: str) -> Any:
+        site = web.TCPSite(runner, bind_host, settings.port)
+        await site.start()
+        return site
+
     try:
         await runner.setup()
-        site = web.TCPSite(runner, settings.host, settings.port)
-        await site.start()
+        site = await authorized_bind(
+            settings.host,
+            auth=bind_auth,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+            binder=start_site,
+        )
     except BaseException:
         await runner.cleanup()
         raise

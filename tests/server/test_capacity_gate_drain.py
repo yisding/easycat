@@ -231,6 +231,18 @@ async def test_safe_await_propagates_new_cancellation_count() -> None:
     assert owned.cancelled()
 
 
+async def test_timed_safe_await_rejects_and_closes_unowned_coroutine() -> None:
+    async def cleanup() -> None:
+        await asyncio.Event().wait()
+
+    awaitable = cleanup()
+
+    with pytest.raises(TypeError, match="already-owned Future or Task"):
+        await server_transports._safe_await(awaitable, timeout_s=0.01)
+
+    assert awaitable.cr_frame is None
+
+
 @pytest.mark.parametrize("max_sessions", [True, 1.5, float("nan"), float("inf"), 0, -1])
 def test_capacity_gate_rejects_invalid_session_caps(max_sessions: object) -> None:
     with pytest.raises(ValueError, match="max_sessions"):
@@ -448,10 +460,15 @@ async def test_force_timeout_is_hard_when_stop_resists_cancellation() -> None:
     assert session.force_started.is_set()
     assert session.cancel_seen.is_set()
     assert gate.active_keys() == ()
+    owned = gate._drain_task_scope.tasks()
+    assert len(owned) == 1
+    assert owned[0].get_name().startswith("easycat-capacity-drain-escalate-")
 
     session.release.set()
     await asyncio.wait_for(session.finished.wait(), timeout=1)
+    await asyncio.gather(*gate._drain_task_scope.tasks())
     await asyncio.sleep(0)
+    assert gate._drain_task_scope.tasks() == ()
 
 
 async def test_forced_shutdown_runs_all_sessions_concurrently() -> None:
@@ -491,13 +508,17 @@ async def test_cancelled_drain_keeps_teardown_owned_and_force_escalates() -> Non
         )
     )
     await session.graceful_started.wait()
+    graceful = gate._drain_task_scope.tasks()
+    assert len(graceful) == 1
+    assert graceful[0].get_name().startswith("easycat-capacity-drain-graceful-")
     drain_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await drain_task
 
     await asyncio.wait_for(session.force_started.wait(), timeout=1)
-    await asyncio.gather(*list(gate._drain_tasks))
+    await asyncio.gather(*gate._drain_task_scope.tasks())
     assert gate.active_keys() == ()
+    assert gate._drain_task_scope.tasks() == ()
 
 
 @pytest.mark.parametrize("disconnect_error", [None, RuntimeError("peer close failed")])
@@ -825,6 +846,23 @@ async def test_drain_with_no_active_sessions_is_a_noop() -> None:
     gate: CapacityGate[int] = CapacityGate(max_sessions=4)
     await gate.drain(list, drain_timeout_s=1.0, force_after=True)
     assert gate.active_keys() == ()
+
+
+def test_capacity_gate_releases_drain_scope_before_cross_loop_reuse() -> None:
+    gate: CapacityGate[int] = CapacityGate(max_sessions=1)
+
+    async def drain_once(key: int) -> None:
+        session = _GracefulSession()
+        gate.track(key)
+        await gate.drain(
+            lambda: [(key, session)],
+            drain_timeout_s=0.1,
+            force_after=True,
+        )
+        assert gate.active_keys() == ()
+
+    asyncio.run(drain_once(1))
+    asyncio.run(drain_once(2))
 
 
 async def test_drain_without_force_cancels_pending_graceful_stop() -> None:

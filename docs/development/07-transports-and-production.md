@@ -172,7 +172,14 @@ flowchart TD
 
 WebSocket and WebRTC share the same gate and active-session map. A WebRTC-only
 load therefore counts against the same server capacity and drain behavior as
-WebSocket clients.
+WebSocket clients. `CapacityGate` also owns graceful stop workers, its
+cancellation-shielded drain finisher, and per-session force escalations in one
+named task scope. Cancelling the caller or reaching the hard force deadline
+therefore leaves any cancellation-resistant teardown attached directly to the
+gate until it settles.
+Best-effort drain awaits run inline unless they need a hard timeout. Timed
+drain awaits must receive a task or future that its caller already owns; the
+helper never turns a bare cleanup coroutine into detached work.
 
 The aiohttp health/signaling application and raw WebSocket listener are
 distinct listener resources but one process lifecycle. `VoiceServer.run()` is
@@ -182,13 +189,27 @@ are reported with the connection-close task identity, while the hard deadline
 keeps cancellation-resistant closes owned after the stop path advances.
 Listener-created WebSocket handler tasks are adopted into their own cohort so
 expected stop cancellation stays quiet and cleanup failures retain the handler
-task identity.
-HTTP site and runner cleanup stages use a third named cohort plus a stage-keyed
-retry ledger, preventing a later `stop()` from racing a second cleanup call
-against an operation that survived the prior hard deadline.
+task identity. The raw-WebSocket runtime's final manager sweep also starts in a
+named cleanup scope, so a Session that resists the shared force deadline stays
+attached to that runtime after `drain()` returns. Its surviving connection
+closes use a separate named scope with the same property; invalid connection
+objects and asynchronous close failures retain the existing best-effort policy.
+HTTP site, runner, and raw-WebSocket listener-wait cleanup stages use a third
+named cohort plus a stage-keyed retry ledger, preventing a later `stop()` from
+racing a second cleanup call against an operation that survived the prior hard
+deadline. The raw-WebSocket waiter still receives the historical cooperative
+cancellation request at timeout; a waiter that resists it remains the one task
+joined by the retry.
+The final `SessionManager.stop_all(force=True)` sweep is named and scope-owned
+as well, so a cancellation-resistant Session remains attached to the server's
+cleanup owner after the hard deadline records an incomplete stop.
+Every remaining server hard deadline now waits on a future that one of these
+scopes or ledgers already owns. The shared wait primitive never creates a task
+or retains work in a module-global set; it only requests cancellation at the
+deadline and leaves the surviving task with its lifecycle owner.
 
 Read [`server/transports.py`](../../src/easycat/server/transports.py) for
-`CapacityGate` and hard-timeout helpers, and
+`CapacityGate` and raw-WebSocket runtime ownership, and
 [`tests/server/test_voice_server_lifecycle.py`](../../tests/server/test_voice_server_lifecycle.py)
 for lifecycle behavior.
 
