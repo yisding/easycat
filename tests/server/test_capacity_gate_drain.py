@@ -836,6 +836,23 @@ async def test_drain_with_no_active_sessions_is_a_noop() -> None:
     assert gate.active_keys() == ()
 
 
+def test_capacity_gate_releases_drain_scope_before_cross_loop_reuse() -> None:
+    gate: CapacityGate[int] = CapacityGate(max_sessions=1)
+
+    async def drain_once(key: int) -> None:
+        session = _GracefulSession()
+        gate.track(key)
+        await gate.drain(
+            lambda: [(key, session)],
+            drain_timeout_s=0.1,
+            force_after=True,
+        )
+        assert gate.active_keys() == ()
+
+    asyncio.run(drain_once(1))
+    asyncio.run(drain_once(2))
+
+
 async def test_drain_without_force_cancels_pending_graceful_stop() -> None:
     # With ``force_after=False`` a still-pending graceful stop must be cancelled,
     # not awaited forever, so the drain still returns.

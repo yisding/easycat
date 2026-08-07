@@ -444,6 +444,7 @@ class CapacityGate(Generic[KeyT]):
             logger=logger,
             failure_message="CapacityGate drain task failed",
             drop_if_closed=False,
+            release_standalone_when_idle=True,
         )
         self._drain_task_serial = 0
 
