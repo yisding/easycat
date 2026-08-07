@@ -372,9 +372,9 @@ class WebRTCTransport(AudioQueueMixin):
         runner = web.AppRunner(app)
         site: Any | None = None
 
-        async def start_site() -> Any:
+        async def start_site(bind_host: str) -> Any:
             nonlocal site
-            site = web.TCPSite(runner, self._config.host, self._config.port)
+            site = web.TCPSite(runner, bind_host, self._config.port)
             await site.start()
             return site
 
