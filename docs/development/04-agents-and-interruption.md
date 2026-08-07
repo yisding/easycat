@@ -102,6 +102,17 @@ cheap, ordered, testable, and fail with actionable input errors for shapes
 that require explicit configuration. See
 [`tests/integrations/agents/test_factory.py`](../../tests/integrations/agents/test_factory.py).
 
+Bridge cleanup must remain owned even when an SDK exposes a synchronous reset
+hook. `LlamaAgentsBridge` starts paused-handler reset work in a named task
+scope, and uses a separate scope for handler cancellation that survives its
+best-effort deadline. `aclose()` joins reset work without turning the bounded
+cancel path back into an unbounded shutdown wait.
+Llama and Remote Responses also run each cancel-token-versus-next-item race in
+a short-lived named scope. Both sides are cancelled and joined before the
+iterator closes; Llama still lets cancellation win immediately, while Remote
+Responses still drains an in-flight tool lifecycle when its commit rule
+requires that behavior.
+
 ## 4.3 The Agent Stage
 
 [`AgentStage`](../../src/easycat/stages/agent.py) is the recordable execution

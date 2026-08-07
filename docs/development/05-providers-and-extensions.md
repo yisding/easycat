@@ -233,10 +233,12 @@ fallback, not the contract.
 
 STT and TTS providers yield provider-scoped normal events, while provider
 failures may publish session `Error` events through the injected bus.
-[`ProviderErrorEmitter`](../../src/easycat/_provider_helpers.py) retains strong
-references to asynchronous error-emission tasks and drains them on teardown.
-That avoids garbage collection of a pending task and avoids leaving emissions
-dangling during interpreter shutdown.
+[`ProviderErrorEmitter`](../../src/easycat/_provider_helpers.py) places
+asynchronous error-emission tasks in a named child of the Session runtime
+scope. Standalone providers use a local scope with the same drain semantics.
+That explicit ownership keeps pending publications alive, joins them during
+provider teardown, and leaves no detached task dangling during interpreter
+shutdown.
 
 ## 5.8 Failure and Teardown Semantics
 
@@ -265,6 +267,13 @@ locking and application behavior do not deadlock.
 Providers holding sockets, HTTP clients, model state, or worker resources
 should implement `aclose()` or `close()`. These remain optional protocol
 capabilities, and Session calls the capability helper during stop.
+Built-in STT providers also expose the internal `RuntimeScopeBindable`
+capability: Session attaches interruptible provider writes to its
+`stt-runtime` cohort. Persistent provider housekeeping such as Deepgram's
+idle keepalive and OpenAI Realtime's failed-handshake close transaction join
+that same owner. Standalone providers create and close a local scope. This
+makes cancellation ownership visible without adding lifecycle methods to the
+minimal public STT protocol.
 
 Cancellation operations should be idempotent and prompt. `TTSProvider.stop()`
 means graceful synthesis stop; `cancel()` means immediate discard. STT

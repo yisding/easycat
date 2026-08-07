@@ -43,6 +43,7 @@ _BUDGET_HELPER_LEAVES = frozenset(
         "hard_timeout",
         "timeout",
         "timeout_at",
+        "wait_for_owned_future",
     }
 )
 

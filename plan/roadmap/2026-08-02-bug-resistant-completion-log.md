@@ -253,6 +253,7 @@ policy.
 | `greeting` | call-answered greeting task | Preserves the current cancel/drain point before STT cleanup. |
 | `stt-runtime` | pause commit, segment commit, concurrent final close, and event consumer | Drains before the STT provider finalizer; provider-local timeout/error handling stays inside `STTCommitter`. |
 | `stt-finalize` | finalizer wrapping `STTCommitter.cancel()` and handle clearing | Runs while providers, transport, and journal are live. |
+| `stt-receive` | provider WebSocket receive loops | Drains only after `stt-finalize` has sent provider finalization and closed or released the socket; force may still cancel it through the earlier whole-root broadcast used by the current stop path. |
 | `tts-finalize` | mode-aware finalizer wrapping the current graceful scheduler cancellation and handle clearing | Preserves the graceful-only provider cleanup; force has already applied its task policy. |
 | `tts-runtime` | active voice/TTS turn after the graceful scheduler finalizer | Accounts for the task the scheduler has drained; its force row instead belongs to the earlier `pipeline` barrier. |
 | `ingress-stop` | finalizer wrapping `AudioRouter.stop_ingress()` | Completes before health checkers and all externally visible resource finalizers. |
@@ -262,9 +263,17 @@ policy.
 | `outbound` | outbound pump, AEC-degraded emit, and the audio-router inline-send child scope | Drains before transport disconnect. Cancellation-resistant inline sends keep their supervisor reservation and use the reviewed owned-task hard-deadline/parking path. |
 | `heartbeat` | pipeline heartbeat task | Settles after outbound shutdown and before transport disconnect. |
 | `transport-disconnect` | finalizer wrapping `transport.disconnect()` | Transport remains connected until outbound and inline writes settle or park. |
+| `transport-handlers` | transport-server connection handler tasks | Accounts for handlers cancelled and reaped by transport disconnect before connection I/O drains. |
+| `transport-listener` | transport-server listener-close tasks | Accounts for the exact listener waiter retained across bounded disconnect retries. |
+| `transport-write` | transport connection protocol writer loops | Accounts for writers settled by transport disconnect before receive and event drains. |
+| `transport-receive` | transport connection receive loops | Accounts for readers settled by transport disconnect before event drains and manager shutdown. |
+| `transport-events` | transport diagnostic and delivery event tasks | Finishes best-effort event dispatch after disconnect has stopped new transport work and before manager shutdown. |
+| `supervisor-events` | supervisor listener audit event tasks | Finishes Session-attached audit dispatch before manager shutdown; standalone broadcaster drains keep the same boundary. |
 | `manager-shutdown` | finalizer wrapping `TurnManager.shutdown()` | Follows transport disconnect. |
 | `agent-close` | finalizer wrapping `aclose_if_supported(agent)` | Follows manager shutdown and retains the existing log-and-continue policy. |
 | `audio-providers-close` | one composite finalizer over deduplicated STT/TTS/VAD/NR/AEC providers | Follows agent close; provider siblings retain no contractual total order and keep per-provider log-and-continue handling. |
+| `tts-socket-close` | retryable persistent TTS manager close finalizer | Explicit provider close invokes this shared transaction from `audio-providers-close`; the named phase lets root close observe the same retained result without spawning or repeating cleanup. |
+| `tts-receive` | persistent provider WebSocket receive loops | Drains after `audio-providers-close` has released the persistent socket; force may still cancel it through the earlier whole-root broadcast used by the current stop path. |
 | `identity-clear` | finalizer wrapping `TurnLifecycle.clear_identity()` | Runs after every provider sibling and before debug backend finalization. |
 | `debug-finalize` | finalizer wrapping `_finalize_debug_backends()` | Preserves the read-only journal/artifact postmortem view. |
 | `closed-publish` | finalizer wrapping `_mark_closed()` | Wakes `wait_closed()` only after live backends are finalized. |
@@ -287,7 +296,15 @@ behavior remains unbounded.
 | `barge_in_cleanup` | `barge-in-cleanup`, no token, `finish`, no new deadline | `barge-in-cleanup`, no token, `cancel`, no new deadline |
 | `call_answered_greeting` | `greeting`, no token, `cancel`, no new deadline | `greeting`, no token, `cancel`, no new deadline |
 | STT pause/segment/final-close/event-loop tasks | `stt-runtime`, no member-local token signal, current action and provider-local bounds | same cohort with the reviewed force action; the earlier `turn-token` phase supplies cooperative cancellation and no scope-level bound replaces a provider bound |
+| provider WebSocket receive loop | `stt-receive`, no token, `finish`, no scope deadline; `stt-finalize` closes the socket first | same; the current force path's earlier whole-root cancellation remains preserved until the Session rewrite |
+| persistent TTS WebSocket receive loop | `tts-receive`, no token, `finish`, no scope deadline; `audio-providers-close` closes the socket first | same; the current force path's earlier whole-root cancellation remains preserved until the Session rewrite |
 | `pipeline_heartbeat` | `heartbeat`, no token, `cancel`, no new deadline | same |
+| transport diagnostic and delivery event tasks | `transport-events`, no token, `finish`, no new deadline | same |
+| transport-server connection handler tasks | `transport-handlers`, no token, `finish`, existing server force-shutdown bound; `transport-disconnect` cancels and reaps the handlers first | same |
+| transport-server listener-close tasks | `transport-listener`, no token, `finish`, existing server force-shutdown bound; `transport-disconnect` requests listener close and retains a cancellation-resistant waiter for retry | same |
+| transport connection protocol writer loops | `transport-write`, no token, `finish`, no new deadline; `transport-disconnect` settles the writer first | same |
+| transport connection receive loops | `transport-receive`, no token, `finish`, no new deadline; `transport-disconnect` settles the reader first | same |
+| supervisor listener audit event tasks | `supervisor-events`, no token, `finish`, no new deadline | same |
 
 The inline-send hard deadline is the one planned **[behavior change]** in this
 mapping: after the existing cancellation grace and transport-termination
@@ -316,10 +333,10 @@ wait above remains unbounded.
 | Force pipeline/TTS/outbound collection, synchronous cancel barrier, and task awaits | force row of `pipeline` | Every pipeline member is signalled before the first drain; siblings gain no invented total order. |
 | Force STT cleanup, remaining scoped drain, and task-handle clearing | `stt-runtime`, `stt-finalize`, and retained-result inspection | STT/runtime work finishes while providers live; handle clearing follows settlement; suppressed cleanup failures remain inspectable when policy requires it. |
 | Graceful pipeline cancellation and expected cancellation logging | graceful row of `pipeline` | Keeps the existing graceful action and diagnostic. |
-| Graceful barge-in, greeting, STT, and TTS cleanup chain | `barge-in-cleanup`, `greeting`, `stt-runtime`, `stt-finalize`, and `tts-finalize` | Preserves every WS2.7a partial-order edge without asserting sibling order. |
+| Graceful barge-in, greeting, STT, and TTS cleanup chain | `barge-in-cleanup`, `greeting`, `stt-runtime`, `stt-finalize`, `stt-receive`, and `tts-finalize` | Preserves every WS2.7a partial-order edge without asserting sibling order. |
 | `stop_ingress`, checker loop/list reset, helper stop, and conditional queue close | `ingress-stop` through `queue-close` finalizers | Exact ownership checks and error policies stay inside their wrappers. |
 | `stop_outbound`, inline-send drain, heartbeat drain, and handle clearing | `outbound` and `heartbeat` cohorts plus their small handle-clear finalizers | All outbound work precedes transport disconnect; owned survivors remain anchored and observable. |
-| Transport disconnect, manager shutdown, suppressed agent close, and deduplicated audio-provider closes | ordered resource finalizers | Existing propagation/suppression rules remain local; provider siblings remain unordered by contract. |
+| Transport disconnect and handler/listener/write/receive/event drains, supervisor audit drain, manager shutdown, suppressed agent close, deduplicated audio-provider closes, and persistent TTS reader drain | ordered resource finalizers plus `transport-handlers`, `transport-listener`, `transport-write`, `transport-receive`, `transport-events`, and `supervisor-events`, followed by `tts-socket-close` and `tts-receive` | Existing propagation/suppression rules remain local; provider siblings remain unordered by contract, the explicit socket-close phase reuses the provider-triggered finalizer result, and each socket closes before its handler or I/O worker is joined. |
 | Identity clear, debug backend destruction/postmortem swap, closed publication, and optional emergency-export unregister | finalizers `identity-clear` through `emergency-export-release` | Journal readability and close notification retain their current order. |
 | `except BaseException` conversion into `stop_error` followed by re-raise | Session policy | Caller outcome remains primary; cancellation is stored as the existing cleanup error shape. |
 | `owns_stop` check and failed-stop EventBus poisoning | Session policy in `finally` | A superseded graceful caller cannot release the force owner's resources. |

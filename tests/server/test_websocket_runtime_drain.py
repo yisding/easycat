@@ -18,7 +18,6 @@ from easycat._concurrency import (
     reap,
     start_owned,
 )
-from easycat.server import transports as server_transports
 from easycat.server.transports import WebSocketSessionRuntime
 from easycat.session_manager import SessionManager
 
@@ -428,8 +427,15 @@ async def test_bounded_cleanup_keeps_hard_deadline_for_cancellation_resistant_wo
 
     loop = asyncio.get_running_loop()
     started = loop.time()
+    runtime = WebSocketSessionRuntime(
+        manager=_Manager([]),
+        max_sessions=1,
+        runtime_supervisor=RuntimeSupervisor(capacity=1),
+        runtime_id="bounded-cleanup-runtime",
+        session_factory=lambda _connection: None,
+    )
 
-    await WebSocketSessionRuntime._bounded_cleanup(
+    await runtime._bounded_cleanup(
         _resist_cancellation(),
         timeout_s=0.01,
         label="test cleanup",
@@ -437,8 +443,15 @@ async def test_bounded_cleanup_keeps_hard_deadline_for_cancellation_resistant_wo
 
     assert loop.time() - started < 0.2
     assert not finished.is_set()
+    owned = runtime._cleanup_task_scope.tasks()
+    assert len(owned) == 1
+    assert owned[0].get_name() == "easycat-websocket-runtime-cleanup"
     release.set()
     await asyncio.wait_for(finished.wait(), timeout=1)
+    await asyncio.gather(*runtime._cleanup_task_scope.tasks())
+    await asyncio.sleep(0)
+    await runtime._cleanup_task_scope.release_standalone_if_empty()
+    assert runtime._cleanup_task_scope.tasks() == ()
 
 
 async def test_force_timeout_is_shared_across_all_runtime_cleanup_steps() -> None:
@@ -488,14 +501,20 @@ async def test_force_timeout_is_shared_across_all_runtime_cleanup_steps() -> Non
     elapsed = loop.time() - started
 
     assert elapsed < 0.15
+    close_tasks = runtime._connection_close_task_scope.tasks()
+    assert len(close_tasks) == 1
+    assert close_tasks[0].get_name().startswith("easycat-websocket-close-")
 
     release.set()
     await asyncio.gather(
         handler,
+        *close_tasks,
+        *runtime._cleanup_task_scope.tasks(),
         *runtime.survivor_registry.supervisor.tasks(),
-        *tuple(server_transports._BACKGROUND_TIMEOUT_TASKS),
         return_exceptions=True,
     )
+    await asyncio.sleep(0)
+    assert runtime._connection_close_task_scope.tasks() == ()
 
 
 class _CancellationResistantServer:

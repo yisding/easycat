@@ -10,8 +10,10 @@ from typing import Any
 
 import pytest
 
+from easycat._concurrency import RuntimeSupervisor
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
+from easycat.runtime.scope import RuntimeScope
 from easycat.stt import openai_realtime_provider as realtime_provider
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from tests.stt.helpers import (
@@ -966,6 +968,50 @@ async def test_openai_realtime_close_cancels_stuck_receive_loop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_realtime_scheduled_close_is_runtime_scoped_and_retained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="session:test",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt.set_runtime_scope(root, name="stt-provider-runtime")
+    stt._ws = object()  # type: ignore[assignment]
+    close_started = asyncio.Event()
+    release_close = asyncio.Event()
+
+    async def blocking_close(*, close_before_drain: bool = False) -> None:
+        _ = close_before_drain
+        close_started.set()
+        await release_close.wait()
+
+    monkeypatch.setattr(stt, "_close_active_websocket", blocking_close)
+    stt._schedule_close()
+    close_task = stt._close_task
+    assert close_task is not None
+    await close_started.wait()
+
+    draining = asyncio.create_task(stt._drain_scheduled_close())
+    await asyncio.sleep(0)
+    draining.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await draining
+
+    assert close_task in root.tasks("openai_realtime_close")
+    assert close_task.cancelled() is False
+
+    release_close.set()
+    await stt._drain_scheduled_close()
+    assert stt._close_task is None
+    assert root.tasks("openai_realtime_close") == ()
+    stt._ws = None
+    await root.close()
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_receive_loop_end_fails_pending_handshake() -> None:
     """When the socket drops before ``session.updated`` arrives, the
     base receive-loop-end hook rejects the pending ``_session_ready``
@@ -1054,6 +1100,42 @@ async def test_openai_realtime_warmup_swallows_start_errors():
 
     # Returns cleanly despite start_stream raising.
     await stt.warmup()
+
+
+@pytest.mark.asyncio
+async def test_one_shot_warmup_drains_failed_handshake_close_before_attach() -> None:
+    factory = _MockWSFactory([])
+    stt = OpenAIRealtimeSTT(
+        OpenAIRealtimeSTTConfig(
+            api_key="sk-test",
+            persistent_ws=False,
+            ws_connect=factory,
+        )
+    )
+
+    async def fail_session_update() -> None:
+        raise ConnectionError("handshake failed")
+
+    stt._send_session_update = fail_session_update  # type: ignore[method-assign]
+
+    await stt.warmup()
+
+    assert stt._close_task is None
+    assert stt._runtime_scope is not None
+    assert stt._runtime_scope.empty
+
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="session:warmup-failure",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    stt.set_runtime_scope(root, name="stt-provider-runtime")
+
+    assert stt._runtime_scope is not None
+    assert stt._runtime_scope.parent is root
+    await stt.aclose()
+    await root.close()
 
 
 @pytest.mark.asyncio

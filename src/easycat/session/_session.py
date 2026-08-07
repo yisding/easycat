@@ -28,6 +28,7 @@ from easycat._bounded_queue import BoundedAudioQueue
 from easycat._concurrency import RuntimeSupervisor
 from easycat._health_check import PeriodicHealthChecker
 from easycat._log_context import bind_session, bind_turn, reset_session
+from easycat._provider_helpers import ProviderErrorEmitter
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
@@ -68,6 +69,7 @@ from easycat.providers import (
     VADProvider,
 )
 from easycat.runtime.capabilities import (
+    RuntimeScopeBindable,
     aclose_if_supported,
     clear_audio_if_supported,
     close_if_supported,
@@ -78,7 +80,7 @@ from easycat.runtime.capabilities import (
 from easycat.runtime.journal import JournalView
 from easycat.runtime.record_contracts import BUILTIN_JOURNAL_RECORD_CONTRACTS
 from easycat.runtime.records import JournalRecordKind
-from easycat.runtime.scope import RuntimeScope
+from easycat.runtime.scope import RuntimeCohortSignal, RuntimeScope, RuntimeTaskAction
 from easycat.session._builder import (
     _OUTBOUND_QUEUE_MAX_SIZE,
     _OUTBOUND_QUEUE_NAME,
@@ -124,6 +126,7 @@ from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
 _BARGE_IN_CLEANUP_TASK = "barge_in_cleanup"
+_SUPERVISOR_STREAM_COHORT = "supervisor-streams"
 _EventT = TypeVar("_EventT", bound=Event)
 
 
@@ -377,6 +380,22 @@ class Session:
             supervisor=self._runtime_supervisor,
             survivor_capacity=1,
         )
+        for role, provider in (("stt", self.stt), ("tts", self.tts)):
+            if isinstance(provider, ProviderErrorEmitter):
+                provider._attach_provider_event_scope(
+                    self._runtime_scope,
+                    name=f"{role}-provider-events",
+                )
+        for scope_name, provider in (
+            ("transport-runtime", self.transport),
+            ("stt-provider-runtime", self.stt),
+            ("tts-provider-runtime", self.tts),
+        ):
+            if isinstance(provider, RuntimeScopeBindable):
+                provider.set_runtime_scope(
+                    self._runtime_scope,
+                    name=scope_name,
+                )
         self._turn_manager.bind_session(self.session_id)
         for event_producer in (self.transport, *cfg.telephony_helpers):
             self._maybe_bind_session_id(event_producer)
@@ -1418,6 +1437,10 @@ class Session:
                         on_unhealthy=self._on_provider_unhealthy,
                         on_recovered=self._on_provider_recovered,
                     )
+                    checker.set_runtime_scope(
+                        self._runtime_scope,
+                        name=f"{name}-health-check",
+                    )
                     checker.start()
                     self._health_checkers.append(checker)
 
@@ -1700,7 +1723,14 @@ class Session:
                 # Signal scoped work before awaiting other task handles so
                 # migrated shutdown work preserves the previous force-cancel
                 # ordering. Drain below after every task observed cancellation.
-                self._runtime_scope.cancel()
+                runtime_signals = tuple(
+                    self._runtime_scope.signal_cohort(
+                        cohort,
+                        force=True,
+                        _exclude_tasks={current_task} if current_task is not None else None,
+                    )
+                    for cohort in self._runtime_scope.cohorts(force=True)
+                )
                 for task in tasks:
                     try:
                         await task
@@ -1712,7 +1742,7 @@ class Session:
                 # tasks. These can outlive the pipeline/STT consumer handles
                 # above, so the force path drains the scope before provider
                 # teardown.
-                await self._runtime_scope.cancel_and_drain()
+                await self._drain_force_runtime_signals(runtime_signals, deferred=False)
                 self._stt_committer.clear_task_handles()
                 self._greeting.clear_task()
                 self._heartbeat_task = None
@@ -1751,6 +1781,11 @@ class Session:
             for checker in self._health_checkers:
                 await checker.stop()
             self._health_checkers = []
+            if not force:
+                await self._runtime_scope.drain_cohort(
+                    _SUPERVISOR_STREAM_COHORT,
+                    force=False,
+                )
             self._stop_helpers()
             if not self._outbound_queue_external:
                 self._outbound_queue.close()
@@ -1768,6 +1803,8 @@ class Session:
             except Exception:
                 logger.debug("Error closing agent during stop", exc_info=True)
             await self._close_audio_providers()
+            if force:
+                await self._drain_force_runtime_signals(runtime_signals, deferred=True)
             self._turn_lifecycle.clear_identity()
             self._finalize_debug_backends()
             self._mark_closed()
@@ -2172,6 +2209,27 @@ class Session:
                 await close_if_supported(provider)
             except Exception:
                 logger.debug("Error closing %s provider", name, exc_info=True)
+
+    async def _drain_force_runtime_signals(
+        self,
+        signals: tuple[RuntimeCohortSignal, ...],
+        *,
+        deferred: bool,
+    ) -> None:
+        """Drain force-signalled work in its owner-safe teardown phase."""
+        current = asyncio.current_task()
+        for signal in signals:
+            requires_owner_close = signal.includes_action(RuntimeTaskAction.FINISH)
+            if requires_owner_close is not deferred:
+                continue
+            try:
+                await self._runtime_scope.drain_cohort(signal)
+            except asyncio.CancelledError:
+                if current is not None and current.cancelling():
+                    raise
+            except Exception:  # noqa: BLE001, S110 - preserve best-effort force drain
+                # Preserve the legacy force drain's best-effort settlement.
+                pass
 
     # ── Internal helpers ───────────────────────────────────────
 

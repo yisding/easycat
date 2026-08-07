@@ -6,7 +6,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
@@ -122,8 +122,14 @@ class BackgroundTaskScope:
         *,
         replace: bool = False,
         retain_result: bool = False,
+        log_errors: bool = True,
     ) -> asyncio.Task[_T]:
-        """Create a named task, optionally cancelling an active predecessor."""
+        """Create a named task, optionally cancelling an active predecessor.
+
+        ``log_errors=False`` still consumes the terminal exception; use it
+        when a synchronous done callback or an ordinary awaiter applies the
+        owner's error policy instead.
+        """
         if not name:
             coro.close()
             raise ValueError("BackgroundTaskScope task name must be non-empty")
@@ -141,7 +147,7 @@ class BackgroundTaskScope:
             coro.close()
             raise
         self._tasks[name] = task
-        task.add_done_callback(partial(self._on_done, name, retain_result))
+        task.add_done_callback(partial(self._on_done, name, retain_result, log_errors))
         return task
 
     def active(self, name: str) -> bool:
@@ -205,6 +211,7 @@ class BackgroundTaskScope:
         self,
         name: str,
         retain_result: bool,
+        log_errors: bool,
         task: asyncio.Task[Any],
     ) -> None:
         if self._tasks.get(name) is task:
@@ -223,7 +230,8 @@ class BackgroundTaskScope:
         except asyncio.CancelledError:
             pass
         except Exception:
-            logger.exception("Background task %r failed", name)
+            if log_errors:
+                logger.exception("Background task %r failed", name)
 
 
 @runtime_checkable
@@ -360,6 +368,13 @@ class RuntimeCohortSignal:
     _members: tuple[_RuntimeTaskMember, ...]
     _signal_error: BaseException | None = None
 
+    def includes_action(self, action: RuntimeTaskAction) -> bool:
+        """Whether any snapshotted member selected ``action`` for this mode."""
+        return any(
+            member.policy.for_mode(force=self.force).task_action is action
+            for member in self._members
+        )
+
 
 class RuntimeScope:
     """Track named runtime tasks in an explicit lifecycle hierarchy.
@@ -481,6 +496,38 @@ class RuntimeScope:
             name=name,
             factory=factory,
         )
+
+    def _move_finalizer_to(self, name: str, target: RuntimeScope) -> None:
+        """Move an unstarted finalizer between open lifecycle roots."""
+        self._require_open()
+        target._require_open()
+        node = self._finalizers.get(name)
+        if node is None:
+            raise ValueError(f"RuntimeScope finalizer {name!r} is not registered")
+        if node.task is not None or node.retained_task is not None or node.completed:
+            raise RuntimeError(f"RuntimeScope finalizer {name!r} has already started")
+        if target.root._finalizer_named(name) is not None:
+            raise RuntimeError(f"RuntimeScope finalizer {name!r} already exists")
+        if name in target.root._policy_cohort_names():
+            raise RuntimeError(f"RuntimeScope finalizer {name!r} collides with a task cohort")
+        self._finalizers.pop(name)
+        node.scope = target
+        target._finalizers[name] = node
+
+    async def run_finalizer(self, name: str) -> None:
+        """Run one registered finalizer without closing ordinary admission.
+
+        Concurrent callers join the same attempt. A successful attempt is not
+        repeated by a later caller or :meth:`close`; a failed attempt retains
+        its terminal result and the next call retries the registered factory.
+        """
+        if not name:
+            raise ValueError("RuntimeScope finalizer name must be non-empty")
+        self.root._require_open()
+        node = self.root._finalizer_named(name)
+        if node is None:
+            raise ValueError(f"RuntimeScope finalizer {name!r} is not registered")
+        await self.root._run_finalizer(node)
 
     def terminal_results(self, name: str | None = None) -> tuple[RuntimeTerminalResult, ...]:
         """Return retained task and finalizer results across this subtree."""
@@ -604,6 +651,56 @@ class RuntimeScope:
             task = asyncio.create_task(coro, name=task_name or name)
         except BaseException:
             coro.close()
+            raise
+        return self._track_task(
+            name,
+            task,
+            policy=selected_policy,
+            token_signal=token_signal,
+            retain_result=retain_result,
+        )
+
+    def create_awaitable_task(
+        self,
+        name: str,
+        awaitable: Awaitable[_T],
+        *,
+        task_name: str | None = None,
+        policy: RuntimeTaskPolicy | None = None,
+        token_signal: Callable[[], object] | None = None,
+        retain_result: bool = False,
+    ) -> asyncio.Task[_T]:
+        """Create and track a task for an SDK awaitable that is not a coroutine.
+
+        Async-iterator ``__anext__`` implementations may return specialized
+        awaitables such as ``async_generator_asend``. ``asyncio.create_task``
+        rejects those even though ``ensure_future`` can schedule them. Keep
+        that compatibility start centralized in the runtime scope rather than
+        forcing callers to create a raw task before adoption.
+        """
+        close = getattr(awaitable, "close", None)
+        if not name:
+            if callable(close):
+                close()
+            raise ValueError("RuntimeScope task name must be non-empty")
+        if isinstance(awaitable, asyncio.Future) or not inspect.isawaitable(awaitable):
+            if callable(close):
+                close()
+            raise TypeError("create_awaitable_task requires an unstarted non-Future awaitable")
+        selected_policy = policy or self._default_policy
+        try:
+            self._bind_running_loop()
+            self._validate_policy_signal(selected_policy, token_signal)
+            self._validate_policy_cohorts(selected_policy)
+            self._validate_raw_task_policy(selected_policy)
+            self._require_open()
+            task = asyncio.ensure_future(awaitable)
+            if not isinstance(task, asyncio.Task):  # pragma: no cover - Future rejected above
+                raise TypeError("Awaitable did not produce an asyncio Task")
+            task.set_name(task_name or name)
+        except BaseException:
+            if callable(close):
+                close()
             raise
         return self._track_task(
             name,
@@ -1027,14 +1124,23 @@ class RuntimeScope:
                 task.cancel()
         return tasks
 
-    async def drain(self, name: str | None = None, *, cancel: bool = False) -> None:
+    async def drain(
+        self,
+        name: str | None = None,
+        *,
+        cancel: bool = False,
+        suppress_errors: bool = False,
+    ) -> None:
         """Wait for pending tasks to finish, optionally cancelling them first.
 
         Every snapshotted task is awaited and discarded even if one of
         them fails; the first observed exception (if any) is re-raised
         once the drain completes, so callers cannot silently leave
         sibling tasks pending. When *cancel* is True, expected
-        cancellation/exception teardown is swallowed.
+        cancellation/exception teardown is swallowed. ``suppress_errors``
+        preserves task execution while letting an owning emitter keep its
+        reviewed log-and-drop result policy. Caller cancellation always
+        propagates.
         """
         tasks = self.cancel(name) if cancel else self.tasks(name)
         current = asyncio.current_task()
@@ -1054,10 +1160,10 @@ class RuntimeScope:
             except asyncio.CancelledError as exc:
                 if current is not None and current.cancelling() > cancellation_requests:
                     raise
-                if not cancel and pending is None:
+                if not cancel and not suppress_errors and pending is None:
                     pending = exc
             except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-                if not cancel and pending is None:
+                if not cancel and not suppress_errors and pending is None:
                     pending = exc
             finally:
                 if task.done():
@@ -1148,7 +1254,7 @@ class RuntimeScope:
 
         selected_cohorts = self.cohorts(force=force)
         selected_finalizers = self._pending_finalizer_names()
-        selected = (*selected_cohorts, *selected_finalizers)
+        selected = (*selected_finalizers, *selected_cohorts)
         phase_order = selected if phases is None else phases
         if len(set(phase_order)) != len(phase_order) or any(not phase for phase in phase_order):
             raise ValueError("Runtime close phases must be unique non-empty names")
@@ -1261,7 +1367,11 @@ class RuntimeScope:
         return await coroutine
 
     async def _drain_cohort_signal(self, signal: RuntimeCohortSignal) -> None:
-        pending = {member.task: member for member in signal._members}
+        pending = {
+            member.task: member
+            for member in signal._members
+            if member.scope._members.get(member.task) is member
+        }
         escalated: set[asyncio.Task[Any]] = set()
         errors = [] if signal._signal_error is None else [signal._signal_error]
         current = asyncio.current_task()

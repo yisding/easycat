@@ -78,6 +78,24 @@ async def test_background_scope_prunes_completed_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_background_scope_can_delegate_error_logging(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scope = BackgroundTaskScope()
+
+    async def fail() -> None:
+        raise RuntimeError("handled by caller")
+
+    task = scope.create_task("delegated", fail(), log_errors=False)
+    with pytest.raises(RuntimeError, match="handled by caller"):
+        await task
+    await asyncio.sleep(0)
+
+    assert scope.empty
+    assert "Background task 'delegated' failed" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_background_scope_replaces_named_task() -> None:
     scope = BackgroundTaskScope()
     first_started = asyncio.Event()
@@ -981,6 +999,52 @@ async def test_force_cancel_retains_cleanup_failure_even_when_close_suppresses_i
 
 
 @pytest.mark.asyncio
+async def test_cohort_signal_reports_selected_task_actions() -> None:
+    root = _attached_root("session")
+    blocker = asyncio.Event()
+    root.create_task(
+        "finish",
+        blocker.wait(),
+        policy=_task_policy(force_action=RuntimeTaskAction.FINISH),
+    )
+    root.create_task(
+        "cancel",
+        blocker.wait(),
+        policy=_task_policy(force_action=RuntimeTaskAction.CANCEL),
+    )
+
+    finish = root.signal_cohort("work", force=True)
+
+    assert finish.includes_action(RuntimeTaskAction.FINISH)
+    assert finish.includes_action(RuntimeTaskAction.CANCEL)
+
+    blocker.set()
+    await root.drain_cohort(finish)
+
+
+@pytest.mark.asyncio
+async def test_cohort_signal_does_not_drain_task_after_ownership_transfer() -> None:
+    root = _attached_root("session")
+    detached = RuntimeScope(name="detached")
+    release = asyncio.Event()
+    task = root.create_task(
+        "delivery",
+        release.wait(),
+        policy=_task_policy(force_action=RuntimeTaskAction.FINISH),
+    )
+    signal = root.signal_cohort("work", force=True)
+
+    root.discard(task)
+    detached.add_task("delivery", task)
+
+    await root.drain_cohort(signal)
+    assert not task.done()
+
+    release.set()
+    await detached.drain("delivery")
+
+
+@pytest.mark.asyncio
 async def test_parked_owned_member_retains_result_when_it_eventually_settles() -> None:
     root = _attached_root("session", survivor_capacity=1)
     release = asyncio.Event()
@@ -1041,6 +1105,98 @@ async def test_runtime_scope_finalizer_registration_rejects_duplicates_and_cohor
     with pytest.raises(RuntimeError, match="collides with a task cohort"):
         other.add_finalizer("work", lambda: asyncio.sleep(0))
     await other.cancel_and_drain()
+
+
+@pytest.mark.asyncio
+async def test_run_finalizer_shares_attempt_without_closing_task_admission() -> None:
+    root = _attached_root("session")
+    child = root.create_child("provider")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def cleanup() -> str:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return "closed"
+
+    child.add_finalizer("provider-close", cleanup)
+    first = asyncio.create_task(root.run_finalizer("provider-close"))
+    await started.wait()
+    second = asyncio.create_task(child.run_finalizer("provider-close"))
+    await asyncio.sleep(0)
+
+    assert calls == 1
+
+    release.set()
+    await asyncio.gather(first, second)
+
+    admitted = child.create_task("after-finalize", asyncio.sleep(0))
+    await child.drain("after-finalize")
+    assert admitted.done()
+    assert root.state is RuntimeScopeState.OPEN
+    results = root.terminal_results("provider-close")
+    assert len(results) == 1
+    assert results[0].status is RuntimeResultStatus.COMPLETED
+    assert results[0].unwrap() == "closed"
+
+    assert await root.close() is RuntimeScopeState.CLOSED
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_run_finalizer_retains_failure_and_retries_factory() -> None:
+    root = _attached_root("session")
+    attempts = 0
+
+    async def cleanup() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("provider close failed")
+
+    root.add_finalizer("provider-close", cleanup)
+
+    with pytest.raises(RuntimeError, match="provider close failed"):
+        await root.run_finalizer("provider-close")
+
+    assert root.state is RuntimeScopeState.OPEN
+    assert root.terminal_results("provider-close")[0].status is RuntimeResultStatus.RAISED
+
+    await root.run_finalizer("provider-close")
+
+    assert attempts == 2
+    assert [result.status for result in root.terminal_results("provider-close")] == [
+        RuntimeResultStatus.RAISED,
+        RuntimeResultStatus.COMPLETED,
+    ]
+    assert await root.close() is RuntimeScopeState.CLOSED
+    assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_run_finalizer_rejects_new_attempt_after_close_starts() -> None:
+    root = _attached_root("session")
+    release = asyncio.Event()
+    calls = 0
+
+    async def finalizer() -> None:
+        nonlocal calls
+        calls += 1
+
+    root.create_task("work", release.wait())
+    root.add_finalizer("provider-close", finalizer)
+    closing = asyncio.create_task(root.close(phases=("default", "provider-close")))
+    await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="is closing"):
+        await root.run_finalizer("provider-close")
+
+    release.set()
+    assert await closing is RuntimeScopeState.CLOSED
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -1655,6 +1811,52 @@ async def test_runtime_scope_drain_observes_completed_task_exceptions() -> None:
         await scope.drain("worker")
 
     assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_drain_can_suppress_member_errors_without_cancelling_work() -> None:
+    scope = RuntimeScope()
+    sibling_finished = False
+
+    async def fail() -> None:
+        raise RuntimeError("emit failed")
+
+    async def sibling() -> None:
+        nonlocal sibling_finished
+        await asyncio.sleep(0)
+        sibling_finished = True
+
+    scope.create_task("emit", fail())
+    scope.create_task("emit", sibling())
+
+    await scope.drain("emit", suppress_errors=True)
+
+    assert sibling_finished
+    assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_suppressing_member_errors_still_propagates_drain_caller_cancellation() -> None:
+    scope = RuntimeScope()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def member() -> None:
+        started.set()
+        await release.wait()
+
+    task = scope.create_task("emit", member())
+    await started.wait()
+    draining = asyncio.create_task(scope.drain("emit", suppress_errors=True))
+    await asyncio.sleep(0)
+    draining.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await draining
+    assert not task.cancelled()
+
+    release.set()
+    await scope.drain("emit", suppress_errors=True)
 
 
 @pytest.mark.asyncio

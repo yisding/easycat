@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, TypeGuard
+from typing import TYPE_CHECKING, Any
 
 from easycat.events import WordTimestamp
+from easycat.runtime._event_tasks import RuntimeEventTaskScope
+from easycat.runtime.scope import RuntimeScope
 
 if TYPE_CHECKING:
     from easycat.events import ErrorStage
 
 logger = logging.getLogger(__name__)
 
-
-def has_usable_credential(value: object) -> TypeGuard[str]:
-    """Return whether ``value`` is a non-blank string credential."""
-    return isinstance(value, str) and bool(value.strip())
+_PROVIDER_EVENT_TASK_NAME = "provider_error_emit"
+_PROVIDER_EVENT_COHORT = "provider-events"
 
 
 class ProviderErrorEmitter:
@@ -47,14 +47,42 @@ class ProviderErrorEmitter:
     _provider_error_name: str = "unknown"
 
     def _init_emit_tasks(self) -> None:
-        """Initialize the fire-and-forget emit-task set.
+        """Initialize the lazily attached provider-event scope.
 
-        Called from the subclass ``__init__`` so the strong-reference set
-        exists before the first :meth:`_emit_provider_error`.
+        Session-owned providers attach this emitter beneath the Session root.
+        A provider used standalone lazily creates and drains its own supervised
+        lifecycle root instead.
         """
-        # Strong references to fire-and-forget Error-emit tasks so the event
-        # loop does not garbage-collect them before ``bus.emit`` completes.
-        self._emit_tasks: set[asyncio.Task[Any]] = set()
+        label = self._provider_error_name or "unknown"
+        self._event_tasks = RuntimeEventTaskScope(
+            owner_label=f"{label}-provider",
+            member_name=_PROVIDER_EVENT_TASK_NAME,
+            cohort=_PROVIDER_EVENT_COHORT,
+            logger=logger,
+            failure_message="Provider Error event emission failed",
+        )
+
+    @property
+    def _emit_scope(self) -> RuntimeScope | None:
+        """Compatibility inspection of the provider event scope."""
+        return self._event_tasks.scope
+
+    @property
+    def _owns_emit_root(self) -> bool:
+        """Compatibility inspection of standalone provider ownership."""
+        return self._event_tasks.owns_root
+
+    @property
+    def _emit_tasks(self) -> set[asyncio.Task[Any]]:
+        """Compatibility inspection of provider-event tasks owned by the scope."""
+        return set(self._event_tasks.tasks())
+
+    def _attach_provider_event_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach provider-event work to its owning application lifecycle."""
+        self._event_tasks.attach(parent, name=name)
+
+    def _ensure_emit_scope(self) -> RuntimeScope:
+        return self._event_tasks.ensure_scope()
 
     def _resolve_event_bus(self) -> Any | None:
         """Return the event bus to emit on, or ``None`` to skip emission.
@@ -78,23 +106,20 @@ class ProviderErrorEmitter:
 
         _add_exception_notes(exc, **context)
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:  # no running loop
             logger.debug("Could not emit provider error - no running loop", exc_info=True)
             return
-        task = loop.create_task(
+        self._event_tasks.create_task(
             bus.emit(
                 Error(
                     exception=exc,
                     stage=self._error_stage,
                     provider=self._provider_error_name,
                 )
-            )
+            ),
+            task_name=f"{self._provider_error_name}:error-emit",
         )
-        # Keep a strong reference until the emit completes; the event loop
-        # only holds a weak one, so an untracked task can be GC'd mid-flight.
-        self._emit_tasks.add(task)
-        task.add_done_callback(self._emit_tasks.discard)
 
     async def _drain_emit_tasks(self) -> None:
         """Await any in-flight fire-and-forget ``_emit_provider_error`` tasks.
@@ -104,17 +129,22 @@ class ProviderErrorEmitter:
         already safe (the journal sink no-ops after Session finalization), so
         this is lifecycle tidiness, not correctness.
         """
-        if not self._emit_tasks:
+        scope = self._event_tasks.scope
+        if scope is None:
             return
         current = asyncio.current_task()
-        if current in self._emit_tasks:
+        if current in scope.tasks(_PROVIDER_EVENT_TASK_NAME):
             # An Error subscriber may initiate provider/session teardown from
             # inside the tracked emit task. Do not await sibling emit tasks
             # here either: another subscriber can be joining this same
             # teardown, which would otherwise create a cross-task cycle.
             return
-        # Snapshot: the done-callback mutates ``_emit_tasks`` during gather.
-        await asyncio.gather(*list(self._emit_tasks), return_exceptions=True)
+        await scope.drain(_PROVIDER_EVENT_TASK_NAME, suppress_errors=True)
+        await self._event_tasks.release_standalone_if_empty()
+
+    async def _drain_provider_error_tasks(self) -> None:
+        """Implement STTBase's explicit provider-error drain hook."""
+        await self._drain_emit_tasks()
 
 
 def get_package_version(pkg: str) -> str:

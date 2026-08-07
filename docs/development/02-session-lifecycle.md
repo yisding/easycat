@@ -228,6 +228,7 @@ terminal journal records. It owns runtime work such as:
 - ingress and outbound loops;
 - pipeline heartbeat;
 - STT pause/commit tasks;
+- provider receive loops after their matching STT or TTS finalizer;
 - greeting work; and
 - post-cutoff barge-in cleanup.
 
@@ -257,6 +258,11 @@ supersedes graceful close. Finalizers always retain a typed terminal result;
 tasks opt into the same result mode when their caller must preserve raised
 cleanup errors. Callers can inspect or pop those results and use `unwrap()` to
 apply their existing exception-precedence policy.
+
+`RuntimeScope.run_finalizer()` can invoke a registered finalizer before the
+root close begins without closing ordinary task admission. Concurrent callers
+share one attempt, a successful attempt is not repeated by the later root
+close, and a failed attempt remains visible and retryable.
 
 ```mermaid
 stateDiagram-v2

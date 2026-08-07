@@ -13,6 +13,36 @@ from ._llama_agents_bridge_support import (
 )
 
 
+@pytest.mark.asyncio
+async def test_bounded_cancel_survivor_remains_scope_owned(monkeypatch):
+    from easycat.integrations.agents import llama_agents as llama_module
+    from easycat.integrations.agents.llama_agents import LlamaAgentsBridge
+
+    monkeypatch.setattr(llama_module, "_POST_CANCEL_AWAIT_TIMEOUT", 0.01)
+    bridge = LlamaAgentsBridge(workflow=object(), display_name="test")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def cleanup() -> None:
+        started.set()
+        await release.wait()
+
+    await bridge._best_effort_cancel(
+        cleanup(),
+        task_name="easycat-llama-test-cancel",
+    )
+
+    assert started.is_set()
+    owned = bridge._cancel_cleanup_task_scope.tasks()
+    assert len(owned) == 1
+    assert owned[0].get_name() == "easycat-llama-test-cancel"
+
+    release.set()
+    await asyncio.gather(*owned)
+    await asyncio.sleep(0)
+    assert bridge._cancel_cleanup_task_scope.tasks() == ()
+
+
 class TestAiterWithCancellation:
     """Regression coverage for the event-stream leak: a consumer that
     closes the wrapper mid-stream (the text-session interruption path
@@ -28,6 +58,10 @@ class TestAiterWithCancellation:
         agen = _aiter_with_cancellation(source, token)
 
         assert await agen.__anext__() == "first"
+        assert source.read_task_names == ["easycat-llama-stream-next"]
+        assert any(
+            task.get_name() == "easycat-llama-stream-cancel" for task in asyncio.all_tasks()
+        )
         await asyncio.wait_for(agen.aclose(), timeout=2.0)
 
         assert source.closed is True
