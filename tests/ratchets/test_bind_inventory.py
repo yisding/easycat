@@ -64,6 +64,7 @@ def test_scanner_resolves_backend_and_socket_binder_aliases(tmp_path: Path) -> N
 import socket as sockets
 import websockets as ws
 from aiohttp import web
+from aioquic.asyncio import serve as imported_quic_serve
 from websockets.asyncio.server import serve as imported_ws_serve
 
 async def run():
@@ -76,10 +77,12 @@ async def run():
     quic_binder = aioquic_server.serve
     await websocket_binder(handler, "127.0.0.1", 0)
     await imported_ws_serve(handler, "127.0.0.1", 0)
+    await imported_quic_serve("127.0.0.1", 0)
     site_factory(runner, "127.0.0.1", 0)
     app_runner(app, host="127.0.0.1", port=0)
     await quic_binder("127.0.0.1", 0)
     binder(("127.0.0.1", 0))
+    sockets.socket(sockets.AF_INET, sockets.SOCK_STREAM).bind(("127.0.0.1", 0))
 
 def bind_injected_socket(sock):
     injected_binder = sock.bind
@@ -92,8 +95,8 @@ def bind_injected_socket(sock):
     assert Counter(finding.site.backend for finding in findings) == {
         "aiohttp_run_app": 1,
         "aiohttp_tcp_site": 1,
-        "aioquic_serve": 1,
-        "socket_bind": 2,
+        "aioquic_serve": 2,
+        "socket_bind": 3,
         "websockets_serve": 2,
     }
 

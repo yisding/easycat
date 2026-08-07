@@ -237,6 +237,8 @@ class _BindVisitor(ast.NodeVisitor):
         if isinstance(node, ast.Attribute):
             base = self._resolve(node.value)
             return f"{base}.{node.attr}" if base else node.attr
+        if isinstance(node, ast.Call) and self._resolve(node.func) == "socket.socket":
+            return "@socket"
         return ""
 
     def _alias_for_value(self, value: ast.AST) -> str | None:
@@ -284,7 +286,7 @@ def _bind_backend(resolved: str) -> str | None:
         separator
         and leaf == "serve"
         and (
-            base == "aioquic.asyncio.server"
+            base in {"aioquic.asyncio", "aioquic.asyncio.server"}
             or base.rsplit(".", maxsplit=1)[-1] == "aioquic_server"
         )
     ):
