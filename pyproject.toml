@@ -218,6 +218,7 @@ source-exclude = [
 # --locked independently rejects dependency drift. Review both deliberately
 # before a uv minor-version upgrade.
 required-version = ">=0.11.0,<0.13.0"
+exclude-newer = "3 days"
 conflicts = [
     [
         { extra = "pydantic-ai" },
