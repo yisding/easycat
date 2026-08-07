@@ -16,12 +16,14 @@ from typing import Any
 
 import pytest
 
+from easycat._concurrency import RuntimeSupervisor
 from easycat._provider_helpers import (
     ProviderErrorEmitter,
     get_package_version,
     word_timestamps_from_words,
 )
 from easycat.events import Error, ErrorStage
+from easycat.runtime.scope import RuntimeScope, RuntimeScopeState
 
 
 @dataclass
@@ -151,20 +153,102 @@ async def test_drain_awaits_pending_tasks():
 
 
 @pytest.mark.asyncio
+async def test_standalone_drain_closes_and_releases_the_emitter_root():
+    bus = _RecordingBus()
+    probe = _ConfigProbe(_Config(event_bus=bus))
+    probe._emit_provider_error(RuntimeError("boom"))
+    scope = probe._emit_scope
+    assert scope is not None
+    assert scope.survivor_registry is None
+
+    await probe._drain_emit_tasks()
+
+    assert scope.state is RuntimeScopeState.CLOSED
+    assert probe._emit_scope is None
+
+
+@pytest.mark.asyncio
+async def test_attached_emitter_uses_parent_tree_and_stays_reusable_after_drain():
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="session:test",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    bus = _RecordingBus()
+    probe = _ConfigProbe(_Config(event_bus=bus))
+    probe._attach_provider_event_scope(root, name="tts-provider-events")
+
+    probe._emit_provider_error(RuntimeError("first"))
+    assert len(root.tasks("provider_error_emit")) == 1
+    await probe._drain_emit_tasks()
+
+    child = probe._emit_scope
+    assert child is not None
+    assert child.parent is root
+    assert child.state is RuntimeScopeState.OPEN
+
+    probe._emit_provider_error(RuntimeError("second"))
+    await probe._drain_emit_tasks()
+    assert len(bus.events) == 2
+    await root.close()
+
+
+@pytest.mark.asyncio
+async def test_emit_is_a_quiet_noop_after_attached_scope_closes(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="session:test",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    bus = _RecordingBus()
+    probe = _ConfigProbe(_Config(event_bus=bus))
+    probe._attach_provider_event_scope(root, name="tts-provider-events")
+    await root.close()
+
+    probe._emit_provider_error(RuntimeError("late"))
+    gc.collect()
+
+    assert bus.events == []
+    assert probe._emit_tasks == set()
+    assert not [warning for warning in recwarn if issubclass(warning.category, RuntimeWarning)]
+
+
+@pytest.mark.asyncio
+async def test_drain_preserves_log_and_drop_policy_for_emitter_failure():
+    class _FailingBus:
+        async def emit(self, _event: Any) -> None:
+            raise RuntimeError("subscriber failed")
+
+    probe = _ConfigProbe(_Config(event_bus=_FailingBus()))
+    probe._emit_provider_error(RuntimeError("provider failed"))
+
+    await probe._drain_emit_tasks()
+
+    assert probe._emit_tasks == set()
+
+
+@pytest.mark.asyncio
 async def test_drain_does_not_await_the_current_error_handler_task():
     probe = _ConfigProbe(_Config())
     current = asyncio.current_task()
     assert current is not None
     sibling = asyncio.create_task(asyncio.Event().wait())
-    probe._emit_tasks.add(current)
-    probe._emit_tasks.add(sibling)
+    scope = probe._ensure_emit_scope()
+    scope.add_task("provider_error_emit", current)
+    scope.add_task("provider_error_emit", sibling)
     try:
         async with asyncio.timeout(0.1):
             await probe._drain_emit_tasks()
     finally:
-        probe._emit_tasks.discard(current)
+        scope.discard(current)
         sibling.cancel()
         await asyncio.gather(sibling, return_exceptions=True)
+        scope.discard(sibling)
+        await probe._drain_emit_tasks()
 
 
 def test_get_package_version_returns_unknown_for_missing_package():

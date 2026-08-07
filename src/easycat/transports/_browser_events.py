@@ -47,6 +47,8 @@ from easycat.events import (
     STTPartial,
     TurnStarted,
 )
+from easycat.runtime._event_tasks import RuntimeEventTaskScope
+from easycat.runtime.scope import RuntimeScope
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,7 @@ _MAX_PENDING_TURNS = 32
 # backgrounded or congested client off the STT/agent event hot path.
 _DEFAULT_SEND_TIMEOUT_S = 0.25
 _DEFAULT_MAX_PENDING_EVENTS = 32
+_BROWSER_EVENT_COHORT = "transport-events"
 
 
 class BrowserEventForwarder:
@@ -95,6 +98,7 @@ class BrowserEventForwarder:
         *,
         send_timeout_s: float = _DEFAULT_SEND_TIMEOUT_S,
         max_pending_events: int = _DEFAULT_MAX_PENDING_EVENTS,
+        runtime_scope: RuntimeScope | None = None,
     ) -> None:
         if not math.isfinite(send_timeout_s) or send_timeout_s <= 0:
             raise ValueError("send_timeout_s must be a finite number > 0")
@@ -109,7 +113,30 @@ class BrowserEventForwarder:
         self._max_send_tasks = max_pending_events
         self._send_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max_pending_events)
         self._writer_task: asyncio.Task[None] | None = None
-        self._send_tasks: set[asyncio.Task[None]] = set()
+        self._writer_tasks = RuntimeEventTaskScope(
+            owner_label="browser-event-writer",
+            member_name="browser_event_writer",
+            cohort=_BROWSER_EVENT_COHORT,
+            logger=logger,
+            failure_message="Browser event writer stopped unexpectedly",
+        )
+        self._send_task_scope = RuntimeEventTaskScope(
+            owner_label="browser-event-send",
+            member_name="browser_event_send",
+            cohort=_BROWSER_EVENT_COHORT,
+            logger=logger,
+            failure_message="Detached browser event send failed",
+        )
+        self._detached_send_tasks = RuntimeEventTaskScope(
+            owner_label="browser-event-detached-send",
+            member_name="browser_event_send",
+            cohort=_BROWSER_EVENT_COHORT,
+            logger=logger,
+            failure_message="Detached browser event send failed",
+        )
+        if runtime_scope is not None:
+            self._writer_tasks.bind(runtime_scope)
+            self._send_task_scope.bind(runtime_scope)
         self._closed = False
         # turn_id -> monotonic timestamp of the final user transcript.
         self._stt_final_at: dict[str | None, float] = {}
@@ -122,6 +149,11 @@ class BrowserEventForwarder:
             bus.subscribe(Interruption, self._on_interruption),
             bus.subscribe(BotStartedSpeaking, self._on_bot_started_speaking),
         ]
+
+    @property
+    def _send_tasks(self) -> set[asyncio.Task[Any]]:
+        """Compatibility inspection of scope-owned browser sends."""
+        return set(self._send_task_scope.tasks())
 
     def close(self) -> None:
         """Unsubscribe from the event bus. Safe to call more than once."""
@@ -139,9 +171,12 @@ class BrowserEventForwarder:
                 self._send_queue.task_done()
         if self._writer_task is not None and not self._writer_task.done():
             self._writer_task.cancel()
-        for task in self._send_tasks:
+        for task in self._send_task_scope.tasks():
             if not task.done():
                 task.cancel()
+                if not self._send_task_scope.owns_root:
+                    self._send_task_scope.discard_task(task)
+                    self._detached_send_tasks.adopt_task(task)
 
     # ── Event handlers ────────────────────────────────────────────
 
@@ -206,8 +241,20 @@ class BrowserEventForwarder:
     def _ensure_writer(self) -> None:
         if self._writer_task is not None and not self._writer_task.done():
             return
-        self._writer_task = asyncio.create_task(self._writer_loop())
-        self._writer_task.add_done_callback(self._writer_done)
+        writer = self._writer_tasks.create_task(
+            self._writer_loop(),
+            task_name="browser-event-writer",
+        )
+        if writer is None:
+            while True:
+                try:
+                    self._send_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                else:
+                    self._send_queue.task_done()
+        self._writer_task = writer
+        writer.add_done_callback(self._writer_done)
 
     async def _writer_loop(self) -> None:
         while True:
@@ -228,9 +275,12 @@ class BrowserEventForwarder:
                 payload.get("type"),
             )
             return
-        task = asyncio.create_task(self._call_send_json(payload))
-        self._send_tasks.add(task)
-        task.add_done_callback(self._send_done)
+        task = self._send_task_scope.create_task(
+            self._call_send_json(payload),
+            task_name="browser-event-send",
+        )
+        if task is None:
+            return
         try:
             # Shielding is deliberate: wait_for cancels only the shield at the
             # deadline and therefore returns without waiting for a sender that
@@ -252,17 +302,6 @@ class BrowserEventForwarder:
 
     async def _call_send_json(self, payload: dict[str, Any]) -> None:
         await self._send_json(payload)
-
-    def _send_done(self, task: asyncio.Task[None]) -> None:
-        self._send_tasks.discard(task)
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            pass
-        except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
-            # _send_payload logs failures while it owns the task. This callback
-            # also retrieves exceptions from detached, timed-out sends.
-            pass
 
     def _writer_done(self, task: asyncio.Task[None]) -> None:
         if self._writer_task is task:

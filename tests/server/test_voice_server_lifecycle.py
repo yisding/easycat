@@ -40,6 +40,174 @@ def _idle_server(**kwargs: object) -> VoiceServer:
     return VoiceServer(config, session_factory=lambda _t: _FakeSession())
 
 
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_active_websocket_close_reports_only_failures_with_task_name(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    close_fails: bool,
+) -> None:
+    task_names: list[str] = []
+
+    class _Connection:
+        async def close(self, *, code: int, reason: str) -> None:
+            assert code == 1001
+            assert reason == "Server is draining"
+            current = asyncio.current_task()
+            assert current is not None
+            task_names.append(current.get_name())
+            if close_fails:
+                raise RuntimeError("connection close failed")
+
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.1,
+    )
+    server._ws_connections[41] = _Connection()
+
+    with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
+        await server._close_active_ws_connections()
+
+    expected = "VoiceServer raw-WebSocket close task easycat-raw-ws-close-41 failed"
+    messages = [record.getMessage() for record in caplog.records]
+    if close_fails:
+        assert expected in messages
+    else:
+        assert not any(
+            message.startswith("VoiceServer raw-WebSocket close task ") for message in messages
+        )
+    assert task_names == ["easycat-raw-ws-close-41"]
+    assert server._ws_close_task_scope.tasks() == ()
+
+
+def test_late_websocket_close_releases_scope_before_cross_loop_reuse() -> None:
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+
+    async def first_close() -> None:
+        release = asyncio.Event()
+
+        class _LateConnection:
+            async def close(self, *, code: int, reason: str) -> None:
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+
+        server._ws_connections[1] = _LateConnection()
+        await server._close_active_ws_connections()
+        late_tasks = server._ws_close_task_scope.tasks()
+        assert len(late_tasks) == 1
+        release.set()
+        await asyncio.gather(*late_tasks)
+        for _ in range(20):
+            if server._ws_close_task_scope.scope is None:
+                break
+            await asyncio.sleep(0)
+        assert server._ws_close_task_scope.scope is None
+
+    async def second_close() -> None:
+        server._ws_connections.clear()
+        server._ws_connections[2] = AsyncMock()
+        await server._close_active_ws_connections()
+
+    asyncio.run(first_close())
+    asyncio.run(second_close())
+
+
+def test_listener_cleanup_releases_scope_before_cross_loop_reuse() -> None:
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    cleanup = AsyncMock()
+
+    async def cleanup_once(stage: str) -> None:
+        errors: list[Exception] = []
+        assert await server._attempt_bounded_listener_cleanup(stage, cleanup, errors)
+        assert errors == []
+
+    asyncio.run(cleanup_once("first listener"))
+    asyncio.run(cleanup_once("second listener"))
+
+    assert cleanup.await_count == 2
+
+
+@pytest.mark.parametrize("handler_cleanup_fails", [False, True])
+async def test_cancel_websocket_handlers_reports_only_cleanup_failures(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    handler_cleanup_fails: bool,
+) -> None:
+    started = asyncio.Event()
+
+    async def handler() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as exc:
+            if handler_cleanup_fails:
+                raise RuntimeError("handler cleanup failed") from exc
+            raise
+
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    task = asyncio.create_task(handler(), name="easycat-raw-ws-handler-41")
+    server._ws_handler_task_scope.adopt_task(task)
+    await started.wait()
+
+    with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
+        await server._cancel_ws_handler_tasks()
+
+    expected = "VoiceServer raw-WebSocket handler task easycat-raw-ws-handler-41 failed"
+    messages = [record.getMessage() for record in caplog.records]
+    if handler_cleanup_fails:
+        assert expected in messages
+    else:
+        assert not any(
+            message.startswith("VoiceServer raw-WebSocket handler task ") for message in messages
+        )
+    assert server._ws_handler_task_scope.tasks() == ()
+
+
+async def test_cancel_websocket_handlers_reports_failure_after_hard_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler() -> None:
+        started.set()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+        raise RuntimeError("late handler cleanup failed")
+
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    task = asyncio.create_task(handler(), name="easycat-raw-ws-handler-41")
+    server._ws_handler_task_scope.adopt_task(task)
+    await started.wait()
+
+    with caplog.at_level(logging.ERROR, logger="easycat.server.voice_server"):
+        await server._cancel_ws_handler_tasks(timeout_s=0.01)
+        await cancellation_seen.wait()
+        release.set()
+        with pytest.raises(RuntimeError, match="late handler cleanup failed"):
+            await task
+        await asyncio.sleep(0)
+        await asyncio.gather(
+            *tuple(server._ws_handler_task_scope._release_tasks),
+            return_exceptions=True,
+        )
+
+    assert "VoiceServer raw-WebSocket handler task easycat-raw-ws-handler-41 failed" in caplog.text
+    assert "late handler cleanup failed" in caplog.text
+    assert server._ws_handler_task_scope.tasks() == ()
+    assert server._ws_handler_task_scope.scope is None
+
+
 # ── start/serve/stop ─────────────────────────────────────────────────
 
 
@@ -73,6 +241,108 @@ async def test_start_is_idempotent() -> None:
         assert server.http_address == first_http
     finally:
         await server.stop()
+
+
+async def test_http_listener_capability_rejects_before_site_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.server.auth as auth_module
+
+    guard_error = RuntimeError("bind authorization changed before construction")
+    runner = SimpleNamespace(setup=AsyncMock(), cleanup=AsyncMock())
+    web = SimpleNamespace(
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(),
+    )
+    monkeypatch.setattr(
+        auth_module,
+        "enforce_bind_guard",
+        Mock(side_effect=guard_error),
+    )
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await server._start_http_listener(web, object())
+
+    assert exc_info.value is guard_error
+    runner.setup.assert_awaited_once()
+    web.TCPSite.assert_not_called()
+    runner.cleanup.assert_awaited_once()
+    assert server._runner is None
+    assert server._site is None
+
+
+async def test_http_listener_preserves_backend_error_and_cleans_partial_site() -> None:
+    backend_error = OSError("http port busy")
+    runner = SimpleNamespace(setup=AsyncMock(), cleanup=AsyncMock())
+    site = SimpleNamespace(
+        start=AsyncMock(side_effect=backend_error),
+        stop=AsyncMock(),
+    )
+    web = SimpleNamespace(
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(return_value=site),
+    )
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+
+    with pytest.raises(OSError) as exc_info:
+        await server._start_http_listener(web, object())
+
+    assert exc_info.value is backend_error
+    web.TCPSite.assert_called_once_with(runner, "127.0.0.1", 0)
+    site.stop.assert_awaited_once()
+    runner.cleanup.assert_awaited_once()
+    assert server._runner is None
+    assert server._site is None
+
+
+async def test_websocket_listener_capability_rejects_before_backend_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import websockets
+
+    import easycat.server.auth as auth_module
+
+    guard_error = RuntimeError("bind authorization changed before backend call")
+    serve = Mock()
+    monkeypatch.setattr(websockets, "serve", serve)
+    monkeypatch.setattr(
+        auth_module,
+        "enforce_bind_guard",
+        Mock(side_effect=guard_error),
+    )
+    server = _idle_server(enable_webrtc=False)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await server._start_websocket_listener()
+
+    assert exc_info.value is guard_error
+    serve.assert_not_called()
+
+
+async def test_websocket_listener_preserves_backend_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import websockets
+
+    from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
+
+    backend_error = OSError("websocket port busy")
+    serve = AsyncMock(side_effect=backend_error)
+    monkeypatch.setattr(websockets, "serve", serve)
+    server = _idle_server(enable_webrtc=False)
+
+    with pytest.raises(OSError) as exc_info:
+        await server._start_websocket_listener()
+
+    assert exc_info.value is backend_error
+    serve.assert_awaited_once_with(
+        server._handle_websocket_connection,
+        "127.0.0.1",
+        0,
+        compression=None,
+        max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+    )
 
 
 async def test_start_rolls_back_http_listener_when_websocket_bind_fails(
@@ -452,6 +722,9 @@ async def test_listener_cleanup_timeout_keeps_drain_fence_and_drains_sessions() 
         await asyncio.wait_for(server.stop(force=True), timeout=0.5)
 
     assert stop_started.is_set()
+    listener_task = server._listener_cleanup_tasks["HTTP site stop"]
+    assert listener_task.get_name() == "easycat-voice-server-listener-cleanup-http-site-stop"
+    assert server._listener_cleanup_task_scope.tasks() == (listener_task,)
     assert session.stopped.is_set()
     # AppRunner.cleanup() stops its registered sites. Do not invoke it while
     # the retained site.stop() call is still pending, or aiohttp receives two
@@ -474,10 +747,61 @@ async def test_listener_cleanup_timeout_keeps_drain_fence_and_drains_sessions() 
     assert server._runner is None
     assert server._gate.is_draining is False
     assert server._lifecycle_cleanup_error is None
+    assert server._listener_cleanup_task_scope.tasks() == ()
+
+
+async def test_raw_websocket_listener_timeout_retries_same_owned_waiter() -> None:
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+    cancel_seen = asyncio.Event()
+    release_wait = asyncio.Event()
+
+    class _CancellationResistantListener:
+        def __init__(self) -> None:
+            self.wait_calls = 0
+
+        def close(self, close_connections: bool = True) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            self.wait_calls += 1
+            while not release_wait.is_set():
+                try:
+                    await release_wait.wait()
+                except asyncio.CancelledError:
+                    cancel_seen.set()
+
+    listener = _CancellationResistantListener()
+    server._ws_server = listener
+    server._started = True
+
+    with pytest.raises(RuntimeError, match="raw-WebSocket listener did not close"):
+        await server.stop(force=True)
+
+    await asyncio.wait_for(cancel_seen.wait(), timeout=1)
+    waiter = server._listener_cleanup_tasks["raw-WebSocket listener"]
+    assert waiter.get_name() == ("easycat-voice-server-listener-cleanup-raw-websocket-listener")
+    assert server._listener_cleanup_task_scope.tasks() == (waiter,)
+
+    with pytest.raises(RuntimeError, match="raw-WebSocket listener did not close"):
+        await server.stop(force=True)
+    assert listener.wait_calls == 1
+
+    release_wait.set()
+    await server.stop(force=True)
+
+    assert listener.wait_calls == 1
+    assert server._ws_server is None
+    assert "raw-WebSocket listener" not in server._listener_cleanup_tasks
+    assert server._listener_cleanup_task_scope.tasks() == ()
 
 
 async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_ownership(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FailingSession(_FakeSession):
         def __init__(self) -> None:
@@ -499,6 +823,16 @@ async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_owners
     server._active_session_objs[key] = session
     assert server._gate.try_acquire()
     server._gate.track(key)
+    sweep_task_names: list[str] = []
+    stop_all = server._manager.stop_all
+
+    async def named_stop_all(*, force: bool = False) -> object:
+        current = asyncio.current_task()
+        assert current is not None
+        sweep_task_names.append(current.get_name())
+        return await stop_all(force=force)
+
+    monkeypatch.setattr(server._manager, "stop_all", named_stop_all)
 
     with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="retained 1 session"):
         await server.stop(force=True)
@@ -507,6 +841,8 @@ async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_owners
     assert "session teardown failed" in caplog.text
     assert server._manager.get(key) is session
     assert server._active_session_objs == {key: session}
+    assert sweep_task_names == ["easycat-voice-server-session-sweep"]
+    assert server._session_sweep_task_scope.tasks() == ()
     assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
     with pytest.raises(RuntimeError, match="previous teardown cleanup is incomplete"):
         await server.start()
@@ -518,6 +854,47 @@ async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_owners
     assert server._manager.get(key) is None
     assert server._active_session_objs == {}
     assert server._lifecycle_cleanup_error is None
+
+
+async def test_hard_sweep_timeout_keeps_named_task_owned_until_settlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+    server._started = True
+    sweep_started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    release_sweep = asyncio.Event()
+
+    async def stop_all(*, force: bool = False) -> object:
+        assert force is True
+        sweep_started.set()
+        while not release_sweep.is_set():
+            try:
+                await release_sweep.wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+        return object()
+
+    monkeypatch.setattr(server._manager, "stop_all", stop_all)
+
+    with pytest.raises(RuntimeError, match="SessionManager.stop_all did not finish"):
+        await asyncio.wait_for(server.stop(force=True), timeout=0.5)
+
+    assert sweep_started.is_set()
+    assert cancellation_seen.is_set()
+    tasks = server._session_sweep_task_scope.tasks()
+    assert len(tasks) == 1
+    sweep_task = tasks[0]
+    assert sweep_task.get_name() == "easycat-voice-server-session-sweep"
+
+    release_sweep.set()
+    await asyncio.wait_for(sweep_task, timeout=0.5)
+    await server._session_sweep_task_scope.release_standalone_if_empty()
+    assert server._session_sweep_task_scope.tasks() == ()
 
 
 async def test_cancelled_stop_publishes_retryable_stopped_state_before_reraising() -> None:

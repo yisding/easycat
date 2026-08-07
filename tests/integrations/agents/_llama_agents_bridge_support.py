@@ -453,6 +453,7 @@ class _TrackingSource:
     def __init__(self) -> None:
         self.closed = False
         self.exhausted = False
+        self.read_task_names: list[str] = []
         self._never = asyncio.Event()
 
     def __aiter__(self) -> AsyncIterator[Any]:
@@ -460,7 +461,13 @@ class _TrackingSource:
 
     async def _iterate(self) -> AsyncIterator[Any]:
         try:
+            task = asyncio.current_task()
+            assert task is not None
+            self.read_task_names.append(task.get_name())
             yield "first"
+            task = asyncio.current_task()
+            assert task is not None
+            self.read_task_names.append(task.get_name())
             await self._never.wait()
             yield "second"
             self.exhausted = True

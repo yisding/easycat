@@ -14,9 +14,13 @@ from easycat._audio_utils import PCM16StreamResampler
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
-from easycat.stt.websocket_base import WebSocketSTTBase
+from easycat.runtime.scope import RuntimeScope
+from easycat.stt.base import _STT_RECEIVE_FINISH_POLICY, _STT_RUNTIME_CANCEL_POLICY
+from easycat.stt.websocket_base import _RECEIVE_TASK, WebSocketSTTBase
 
 logger = logging.getLogger(__name__)
+
+_KEEPALIVE_TASK = "deepgram_keepalive"
 
 
 @dataclass
@@ -142,6 +146,56 @@ class DeepgramSTT(WebSocketSTTBase):
         self._bare_finalize_ack_pending = False
         self._audio_resampler = PCM16StreamResampler(config.sample_rate)
 
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach provider work, preserving a pre-warmed keepalive task."""
+        current = self._runtime_scope
+        keepalive = self._keepalive_task
+        if (
+            current is None
+            or current.parent is parent
+            or not self._owns_runtime_scope
+            or keepalive is None
+            or keepalive.done()
+        ):
+            super().set_runtime_scope(parent, name=name)
+            return
+
+        receive = self._receive_task
+        current_tasks = current.tasks()
+        if keepalive not in current_tasks or (
+            receive is not None and not receive.done() and receive not in current_tasks
+        ):
+            raise RuntimeError("Cannot reattach unowned Deepgram runtime work")
+
+        task_members = [
+            (_KEEPALIVE_TASK, keepalive, _STT_RUNTIME_CANCEL_POLICY),
+        ]
+        if receive is not None and receive in current_tasks:
+            task_members.insert(0, (_RECEIVE_TASK, receive, _STT_RECEIVE_FINISH_POLICY))
+        movable_tasks = {task for _, task, _ in task_members}
+        if any(task not in movable_tasks for task in current_tasks):
+            raise RuntimeError("Cannot reattach active Deepgram runtime work")
+
+        # Validate loop affinity before registering the child so an off-loop
+        # caller cannot leave a duplicate child behind after a failed attach.
+        running_loop = asyncio.get_running_loop()
+        if any(task.get_loop() is not running_loop for task in movable_tasks):
+            raise RuntimeError("Cannot reattach Deepgram runtime work from another event loop")
+        attached = parent.create_child(name)
+        added: list[asyncio.Task[None]] = []
+        try:
+            for task_name, task, policy in task_members:
+                attached.add_task(task_name, task, policy=policy)
+                added.append(task)
+        except BaseException:
+            for task in added:
+                attached.discard(task)
+            raise
+        for task in added:
+            current.discard(task)
+        self._runtime_scope = attached
+        self._owns_runtime_scope = False
+
     def _persistent_enabled(self) -> bool:
         return bool(self._config.persistent_ws and not self._config.is_flux)
 
@@ -240,8 +294,18 @@ class DeepgramSTT(WebSocketSTTBase):
         self._ensure_keepalive_task()
 
     def _ensure_keepalive_task(self) -> None:
-        if self._keepalive_task is None or self._keepalive_task.done():
-            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        task = self._keepalive_task
+        if task is not None and not task.done():
+            return
+        scope = self._ensure_runtime_scope()
+        if task is not None:
+            scope.discard(task)
+        self._keepalive_task = scope.create_task(
+            _KEEPALIVE_TASK,
+            self._keepalive_loop(),
+            task_name=_KEEPALIVE_TASK,
+            policy=_STT_RUNTIME_CANCEL_POLICY,
+        )
 
     async def _keepalive_loop(self) -> None:
         try:
@@ -261,20 +325,11 @@ class DeepgramSTT(WebSocketSTTBase):
             logger.debug("Deepgram KeepAlive loop stopped", exc_info=True)
 
     async def _cancel_keepalive(self) -> None:
-        task = self._keepalive_task
         self._keepalive_task = None
-        if task is None or task.done():
+        scope = self._runtime_scope
+        if scope is None:
             return
-        current = asyncio.current_task()
-        cancellation_count = current.cancelling() if current is not None else 0
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            if current is not None and current.cancelling() > cancellation_count:
-                raise
-        if current is not None and current.cancelling() > cancellation_count:
-            raise asyncio.CancelledError
+        await scope.cancel_and_drain(_KEEPALIVE_TASK)
 
     async def _discard_connection(self) -> None:
         self._audio_resampler.reset()
@@ -431,10 +486,13 @@ class DeepgramSTT(WebSocketSTTBase):
             # making a later start_stream() fail as "already started".
             await super().close()
         finally:
-            await self._cancel_keepalive()
-            if self._ws is not None:
-                await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
-            await self._close_active_websocket(close_before_drain=True)
+            try:
+                await self._cancel_keepalive()
+                if self._ws is not None:
+                    await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
+                await self._close_active_websocket(close_before_drain=True)
+            finally:
+                await self._close_owned_runtime_scope_if_idle()
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
         # Deepgram may acknowledge Finalize with a bare

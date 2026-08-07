@@ -16,9 +16,11 @@ from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.errors import EASYCAT_E304
 from easycat.events import ErrorStage
 from easycat.reconnecting_ws import ReconnectCallback, ReconnectConfig, ReconnectingWebSocket
-from easycat.stt.base import STTBase
+from easycat.stt.base import _STT_RECEIVE_FINISH_POLICY, STTBase
 
 logger = logging.getLogger(__name__)
+
+_RECEIVE_TASK = "stt_receive_loop"
 
 
 async def _noop_reconnect() -> None:
@@ -135,7 +137,13 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         self._ws = ws
         self._provider_event_bus = event_bus
         await ws.connect()
-        self._receive_task = asyncio.create_task(self._receive_loop())
+        scope = self._ensure_runtime_scope()
+        self._receive_task = scope.create_task(
+            _RECEIVE_TASK,
+            self._receive_loop(),
+            task_name=f"{self._provider_error_name}:receive",
+            policy=_STT_RECEIVE_FINISH_POLICY,
+        )
         return ws
 
     async def _send_ws(self, message: str | bytes) -> None:
@@ -190,6 +198,8 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
             self._ws = None
         if self._receive_task is receive_task:
             self._receive_task = None
+        if receive_task is not None and receive_task.done() and self._runtime_scope is not None:
+            self._runtime_scope.discard(receive_task)
         self._provider_event_bus = None
 
     async def _on_start_failed(self) -> None:

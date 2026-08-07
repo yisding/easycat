@@ -223,6 +223,7 @@ Stages record input/output boundaries, but concurrency needs its own evidence.
 ```mermaid
 stateDiagram-v2
     [*] --> task_scheduled
+    [*] --> task_rejected
     task_scheduled --> task_completed
     task_scheduled --> task_cancelled
     task_scheduled --> task_raised
@@ -236,6 +237,11 @@ concurrent task and decision caused it?”
 
 Stable task and record names matter. Python object ids and wall-clock-only
 labels do not survive replay.
+
+Scope terminal results complement journal evidence when teardown code must
+preserve an exception for its direct caller. Each retained result identifies
+its lifecycle owner, member name, task/finalizer kind, and terminal status;
+the scope keeps it until the owner inspects or pops it.
 
 ## 6.8 Bundles
 

@@ -22,7 +22,18 @@ from easycat.runtime.records import (
     JournalRecordKind,
     TimingInfo,
 )
-from easycat.runtime.scope import BackgroundTaskScope, RuntimeScope
+from easycat.runtime.scope import (
+    BackgroundTaskScope,
+    RuntimeCohortSignal,
+    RuntimeMemberKind,
+    RuntimeMemberPolicy,
+    RuntimeResultStatus,
+    RuntimeScope,
+    RuntimeScopeState,
+    RuntimeTaskAction,
+    RuntimeTaskPolicy,
+    RuntimeTerminalResult,
+)
 
 __all__ = [
     "ArtifactStore",
@@ -39,7 +50,15 @@ __all__ = [
     "LibsqlJournal",
     "LitestreamSqliteJournal",
     "ReadonlySqliteJournal",
+    "RuntimeCohortSignal",
+    "RuntimeMemberKind",
+    "RuntimeMemberPolicy",
+    "RuntimeResultStatus",
     "RuntimeScope",
+    "RuntimeScopeState",
+    "RuntimeTaskAction",
+    "RuntimeTaskPolicy",
+    "RuntimeTerminalResult",
     "SqliteJournal",
     "TimingInfo",
     "create_journal",

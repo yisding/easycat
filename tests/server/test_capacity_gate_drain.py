@@ -231,6 +231,18 @@ async def test_safe_await_propagates_new_cancellation_count() -> None:
     assert owned.cancelled()
 
 
+async def test_timed_safe_await_rejects_and_closes_unowned_coroutine() -> None:
+    async def cleanup() -> None:
+        await asyncio.Event().wait()
+
+    awaitable = cleanup()
+
+    with pytest.raises(TypeError, match="already-owned Future or Task"):
+        await server_transports._safe_await(awaitable, timeout_s=0.01)
+
+    assert awaitable.cr_frame is None
+
+
 @pytest.mark.parametrize("max_sessions", [True, 1.5, float("nan"), float("inf"), 0, -1])
 def test_capacity_gate_rejects_invalid_session_caps(max_sessions: object) -> None:
     with pytest.raises(ValueError, match="max_sessions"):
@@ -448,10 +460,15 @@ async def test_force_timeout_is_hard_when_stop_resists_cancellation() -> None:
     assert session.force_started.is_set()
     assert session.cancel_seen.is_set()
     assert gate.active_keys() == ()
+    owned = gate._drain_task_scope.tasks()
+    assert len(owned) == 1
+    assert owned[0].get_name().startswith("easycat-capacity-drain-escalate-")
 
     session.release.set()
     await asyncio.wait_for(session.finished.wait(), timeout=1)
+    await asyncio.gather(*gate._drain_task_scope.tasks())
     await asyncio.sleep(0)
+    assert gate._drain_task_scope.tasks() == ()
 
 
 async def test_forced_shutdown_runs_all_sessions_concurrently() -> None:
@@ -491,13 +508,17 @@ async def test_cancelled_drain_keeps_teardown_owned_and_force_escalates() -> Non
         )
     )
     await session.graceful_started.wait()
+    graceful = gate._drain_task_scope.tasks()
+    assert len(graceful) == 1
+    assert graceful[0].get_name().startswith("easycat-capacity-drain-graceful-")
     drain_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await drain_task
 
     await asyncio.wait_for(session.force_started.wait(), timeout=1)
-    await asyncio.gather(*list(gate._drain_tasks))
+    await asyncio.gather(*gate._drain_task_scope.tasks())
     assert gate.active_keys() == ()
+    assert gate._drain_task_scope.tasks() == ()
 
 
 @pytest.mark.parametrize("disconnect_error", [None, RuntimeError("peer close failed")])
@@ -708,12 +729,12 @@ async def test_webrtc_cleanup_and_drain_share_one_force_escalatable_stop() -> No
         runtime_feedback=False,
         active_session_objs=active,
     )
-    cleanup = asyncio.create_task(
-        routes._cleanup_session(1, _NeverClosedTransport())  # type: ignore[arg-type]
+    cleanup = routes._start_cleanup_task(
+        1,
+        _NeverClosedTransport(),  # type: ignore[arg-type]
     )
-    routes._cleanup_tasks.add(cleanup)
-    routes._cleanup_task_keys[cleanup] = 1
-    cleanup.add_done_callback(routes._cleanup_task_done)
+
+    assert routes._cleanup_task_scope.tasks() == (cleanup,)
 
     gate.start_draining()
     drain = asyncio.create_task(
@@ -734,13 +755,114 @@ async def test_webrtc_cleanup_and_drain_share_one_force_escalatable_stop() -> No
     assert active == {}
     assert gate.active_keys() == ()
     assert gate.reserved_count == 0
-    assert routes._cleanup_tasks == set()
+    assert routes._cleanup_task_scope.tasks() == ()
+
+
+@pytest.mark.parametrize("finalizer_fails", [False, True])
+async def test_webrtc_cleanup_reports_only_unexpected_results_with_task_name(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    finalizer_fails: bool,
+) -> None:
+    routes = WebRTCRoutes(
+        WebRTCTransportConfig(static_dir=None),
+        auth=None,
+        config_factory=lambda _transport: _GracefulSession(),  # type: ignore[arg-type]
+        gate=CapacityGate(max_sessions=1),
+        manager=SessionManager(),
+        runtime_feedback=False,
+    )
+
+    async def finalize(_key: int, *, force: bool) -> None:
+        if force and finalizer_fails:
+            raise RuntimeError("forced finalizer failed")
+
+    monkeypatch.setattr(routes, "_finalize_session_cleanup", finalize)
+    cleanup = routes._start_cleanup_task(
+        7,
+        _NeverClosedTransport(),  # type: ignore[arg-type]
+    )
+
+    with caplog.at_level("ERROR", logger="easycat.server.webrtc_routes"):
+        await routes.cancel_cleanup_tasks()
+
+    messages = [record.getMessage() for record in caplog.records]
+    expected = "WebRTC cleanup task easycat-webrtc-force-cleanup-7 failed"
+    if finalizer_fails:
+        assert expected in messages
+    else:
+        assert not any(message.startswith("WebRTC cleanup task ") for message in messages)
+    assert cleanup.cancelled()
+    assert routes._cleanup_task_scope.tasks() == ()
+    assert routes._force_cleanup_task_scope.tasks() == ()
+
+
+async def test_webrtc_cleanup_reports_forced_finalizer_failure_after_timeout(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    routes = WebRTCRoutes(
+        WebRTCTransportConfig(static_dir=None),
+        auth=None,
+        config_factory=lambda _transport: _GracefulSession(),  # type: ignore[arg-type]
+        gate=CapacityGate(max_sessions=1),
+        manager=SessionManager(),
+        runtime_feedback=False,
+    )
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    async def finalize(_key: int, *, force: bool) -> None:
+        assert force is True
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            await release.wait()
+        raise RuntimeError("late forced finalizer failed")
+
+    monkeypatch.setattr(routes, "_finalize_session_cleanup", finalize)
+    routes._start_cleanup_task(
+        7,
+        _NeverClosedTransport(),  # type: ignore[arg-type]
+    )
+
+    with caplog.at_level("ERROR", logger="easycat.server.webrtc_routes"):
+        await routes.cancel_cleanup_tasks(timeout_s=0.0)
+        await cancellation_seen.wait()
+        release.set()
+        for _ in range(20):
+            if routes._force_cleanup_task_scope.tasks() == ():
+                break
+            await asyncio.sleep(0)
+
+    assert "WebRTC cleanup task easycat-webrtc-force-cleanup-7 failed" in caplog.text
+    assert "late forced finalizer failed" in caplog.text
+    assert routes._force_cleanup_task_scope.tasks() == ()
 
 
 async def test_drain_with_no_active_sessions_is_a_noop() -> None:
     gate: CapacityGate[int] = CapacityGate(max_sessions=4)
     await gate.drain(list, drain_timeout_s=1.0, force_after=True)
     assert gate.active_keys() == ()
+
+
+def test_capacity_gate_releases_drain_scope_before_cross_loop_reuse() -> None:
+    gate: CapacityGate[int] = CapacityGate(max_sessions=1)
+
+    async def drain_once(key: int) -> None:
+        session = _GracefulSession()
+        gate.track(key)
+        await gate.drain(
+            lambda: [(key, session)],
+            drain_timeout_s=0.1,
+            force_after=True,
+        )
+        assert gate.active_keys() == ()
+
+    asyncio.run(drain_once(1))
+    asyncio.run(drain_once(2))
 
 
 async def test_drain_without_force_cancels_pending_graceful_stop() -> None:

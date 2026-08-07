@@ -76,7 +76,7 @@ class TestWebRTCBrowserEventChannel:
         await transport._handle_offer(_FakeOfferRequest())
         assert transport._events_channel is None
 
-        # Stale-generation datachannel callbacks must not resurrect the slot.
+        # Stale-peer datachannel callbacks must not resurrect the slot.
         stale_pc._handlers["datachannel"](_FakeEventsChannel())
         assert transport._events_channel is None
 

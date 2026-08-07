@@ -512,7 +512,7 @@ class ElevenLabsTTS(_WSTTSBase):
                 on_global_frame=self._on_global_frame,
                 context_queue_maxsize=self._config.context_queue_maxsize,
             )
-            self._mgr = MultiContextWSManager(adapter)
+            self._mgr = self._make_multi_context_manager(adapter)
         return self._mgr
 
     @staticmethod

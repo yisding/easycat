@@ -32,8 +32,8 @@ from rich.markup import escape
 from rich.table import Table
 
 from easycat._audio_utils import resample_backend
+from easycat._credentials import has_usable_credential
 from easycat._extras import PORTAUDIO_INSTALL_FIX
-from easycat._provider_helpers import has_usable_credential
 from easycat._provider_registry import credential_env_vars
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, emit_json, json_envelope, stderr_console
