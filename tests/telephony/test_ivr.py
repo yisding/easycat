@@ -109,11 +109,17 @@ class TestIVRNavigator:
     def test_activate_deactivate(self) -> None:
         bus = EventBus()
         nav = IVRNavigator(bus)
+        inactive = nav._activation_epoch.capture()
         assert nav._active is False
         nav.activate()
+        active = nav._activation_epoch.capture()
         assert nav._active is True
+        assert not inactive.is_current()
+        nav.activate()
+        assert active.is_current()
         nav.deactivate()
         assert nav._active is False
+        assert not active.is_current()
 
 
 class TestIVRAgentDecision:
@@ -587,6 +593,33 @@ class TestIVRNavigation:
             assert len(waits) >= 1
         finally:
             nav.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_owned_prompt_timer(self) -> None:
+        bus = EventBus()
+
+        async def mock_agent(_ctx: dict) -> dict:
+            return {"action": "wait"}
+
+        nav = IVRNavigator(
+            bus,
+            agent_callback=mock_agent,
+            config=IVRNavigatorConfig(prompt_timeout_s=5.0),
+        )
+        nav.start()
+        nav.activate()
+        await bus.emit(STTFinal(text="Press 1 for sales"))
+
+        timer = nav._prompt_timeout_task
+        assert timer is not None
+        assert nav._timer_tasks.tasks() == (timer,)
+
+        nav.stop()
+        await asyncio.sleep(0)
+
+        assert timer.cancelled()
+        assert nav._timer_tasks.empty
+        assert nav._prompt_timeout_task is None
 
 
 class TestIVRDetection:

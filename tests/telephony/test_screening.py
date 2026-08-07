@@ -515,6 +515,30 @@ class TestScreeningResponseAgent:
             detector.stop()
 
     @pytest.mark.asyncio
+    async def test_stop_cancels_owned_agent_timeout(self) -> None:
+        bus = EventBus()
+        detector = CallScreeningDetector(
+            bus,
+            screening_use_agent=True,
+            agent_timeout_s=5.0,
+            track_filter=None,
+        )
+        detector.start()
+        await bus.emit(CallAnswered(call_sid="CA1"))
+        await bus.emit(STTPartial(text="please record your name and reason for calling"))
+
+        timeout = detector._agent_timeout_task
+        assert timeout is not None
+        assert detector._timer_tasks.tasks() == (timeout,)
+
+        detector.stop()
+        await asyncio.sleep(0)
+
+        assert timeout.cancelled()
+        assert detector._timer_tasks.empty
+        assert detector._agent_timeout_task is None
+
+    @pytest.mark.asyncio
     async def test_agent_timeout_falls_back_to_static(self) -> None:
         bus = EventBus()
         responses: list[ScreeningResponse] = []
@@ -571,6 +595,44 @@ class TestScreeningResponseAgent:
             await bus.emit(STTPartial(text="please record your name and reason for calling"))
             await asyncio.sleep(0.15)
             assert spoken == ["static_started", "static_done"]
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_fallback_while_static_subscriber_is_blocked(self) -> None:
+        bus = EventBus()
+        detector = CallScreeningDetector(
+            bus,
+            screening_use_agent=True,
+            screening_response="Fallback: Hi, this is Sarah",
+            agent_timeout_s=0.01,
+            track_filter=None,
+        )
+        delivery_started = asyncio.Event()
+        allow_delivery_finish = asyncio.Event()
+        delivered: list[ScreeningResponse] = []
+
+        async def block_static_response(event: ScreeningResponse) -> None:
+            if event.mode != "static":
+                return
+            delivery_started.set()
+            await allow_delivery_finish.wait()
+            delivered.append(event)
+
+        bus.subscribe(ScreeningResponse, block_static_response)
+        detector.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            await asyncio.wait_for(delivery_started.wait(), timeout=0.5)
+
+            detector.stop()
+            allow_delivery_finish.set()
+            await asyncio.sleep(0)
+
+            assert delivered == []
+            assert detector._timer_tasks.empty
+            assert detector._agent_timeout_task is None
         finally:
             detector.stop()
 

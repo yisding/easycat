@@ -22,7 +22,7 @@ from easycat import _observability as observability
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportDegraded
-from easycat.runtime._event_tasks import RuntimeEventTaskScope
+from easycat.runtime._event_tasks import RuntimeEventTaskScope, RuntimeTaskScope
 from easycat.runtime.scope import RuntimeScope
 from easycat.transports._browser_events import BrowserEventForwarder
 from easycat.transports._limits import (
@@ -42,6 +42,9 @@ _DEGRADED_MAX_PENDING_TASKS = 64
 _DEGRADED_MAX_DETAIL_CHARS = 256
 _TRANSPORT_EVENT_TASK_NAME = "transport_event_emit"
 _TRANSPORT_EVENT_COHORT = "transport-events"
+_TRANSPORT_DIAGNOSTIC_CLEANUP_TASK_NAME = "transport_diagnostic_cleanup"
+_TRANSPORT_LISTENER_TASK_NAME = "transport_listener_close"
+_TRANSPORT_LISTENER_COHORT = "transport-listener"
 
 
 def _require_positive_int(value: int, *, name: str) -> int:
@@ -557,9 +560,33 @@ class ServerTransportBase(AudioQueueMixin):
         # stale pre-disconnect ``_connected`` value as a live listener.
         self._disconnect_cleanup_pending = False
         self._disconnect_cleanup_error: Exception | None = None
-        self._server_wait_task: asyncio.Future[Any] | None = None
+        self._server_wait_task: asyncio.Task[Any] | None = None
         self._disconnect_emit_cleanup_task: asyncio.Task[None] | None = None
+        self._diagnostic_cleanup_tasks = RuntimeTaskScope(
+            owner_label=f"{self._transport_name.lower()}-diagnostic-cleanup",
+            member_name=_TRANSPORT_DIAGNOSTIC_CLEANUP_TASK_NAME,
+            cohort=_TRANSPORT_EVENT_COHORT,
+            logger=logger,
+            failure_message=f"{self._transport_name} diagnostic cleanup failed",
+            drop_if_closed=False,
+        )
+        self._listener_tasks = RuntimeTaskScope(
+            owner_label=f"{self._transport_name.lower()}-listener-close",
+            member_name=_TRANSPORT_LISTENER_TASK_NAME,
+            cohort=_TRANSPORT_LISTENER_COHORT,
+            logger=logger,
+            failure_message=f"{self._transport_name} listener close failed",
+            drop_if_closed=False,
+        )
         self._lifecycle_lock = asyncio.Lock()
+
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach diagnostic cleanup beside the transport event producers."""
+        super().set_runtime_scope(parent, name=name)
+        scope = self._emit_scope
+        assert scope is not None
+        self._diagnostic_cleanup_tasks.bind(scope)
+        self._listener_tasks.bind(scope)
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -676,7 +703,7 @@ class ServerTransportBase(AudioQueueMixin):
         self,
         server: Server,
         cleanup_errors: list[Exception],
-    ) -> asyncio.Future[Any] | None:
+    ) -> asyncio.Task[Any] | None:
         wait_task = self._server_wait_task
         if wait_task is not None:
             return wait_task
@@ -690,7 +717,15 @@ class ServerTransportBase(AudioQueueMixin):
             )
             cleanup_errors.append(exc)
             return None
-        wait_task = asyncio.ensure_future(server.wait_closed())
+
+        async def wait_for_server_close() -> None:
+            await server.wait_closed()
+
+        wait_task = self._listener_tasks.create_task(
+            wait_for_server_close(),
+            task_name=f"{self._transport_name.lower()}-listener-close",
+        )
+        assert wait_task is not None
         self._server_wait_task = wait_task
         return wait_task
 
@@ -727,10 +762,19 @@ class ServerTransportBase(AudioQueueMixin):
                 self._server = None
             if self._server_wait_task is wait_task:
                 self._server_wait_task = None
+        finally:
+            await self._release_settled_listener_wait(wait_task)
+
+    async def _release_settled_listener_wait(self, wait_task: asyncio.Task[Any]) -> None:
+        """Release a completed listener waiter and any empty standalone root."""
+        if not wait_task.done():
+            return
+        self._listener_tasks.discard_task(wait_task)
+        await self._listener_tasks.release_standalone_if_empty()
 
     def _handle_server_wait_cancellation(
         self,
-        wait_task: asyncio.Future[Any],
+        wait_task: asyncio.Task[Any],
         cleanup_errors: list[Exception],
         cancellation: asyncio.CancelledError,
         *,
@@ -760,10 +804,11 @@ class ServerTransportBase(AudioQueueMixin):
             return
         emit_cleanup_task = self._disconnect_emit_cleanup_task
         if emit_cleanup_task is None:
-            emit_cleanup_task = asyncio.create_task(
+            emit_cleanup_task = self._diagnostic_cleanup_tasks.create_task(
                 self._drain_emit_tasks(),
-                name=f"{self._transport_name.lower()}_diagnostic_cleanup",
+                task_name=f"{self._transport_name.lower()}-diagnostic-cleanup",
             )
+            assert emit_cleanup_task is not None
             self._disconnect_emit_cleanup_task = emit_cleanup_task
         caller = asyncio.current_task()
         cancellation_requests = caller.cancelling() if caller is not None else 0
@@ -794,6 +839,18 @@ class ServerTransportBase(AudioQueueMixin):
         else:
             if self._disconnect_emit_cleanup_task is emit_cleanup_task:
                 self._disconnect_emit_cleanup_task = None
+        finally:
+            await self._release_settled_diagnostic_cleanup(emit_cleanup_task)
+
+    async def _release_settled_diagnostic_cleanup(
+        self,
+        emit_cleanup_task: asyncio.Task[None],
+    ) -> None:
+        """Release a completed cleanup task and any empty standalone root."""
+        if not emit_cleanup_task.done():
+            return
+        self._diagnostic_cleanup_tasks.discard_task(emit_cleanup_task)
+        await self._diagnostic_cleanup_tasks.release_standalone_if_empty()
 
     @property
     def has_client(self) -> bool:

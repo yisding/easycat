@@ -593,6 +593,8 @@ class TestDrainCurrentUnit:
                 self.release = asyncio.Event()
                 self.lines_closed = False
                 self.context_closed = False
+                self.read_task_names: list[str] = []
+                self.second_read_started = asyncio.Event()
 
             async def __aenter__(self):
                 return self
@@ -605,7 +607,14 @@ class TestDrainCurrentUnit:
 
             async def aiter_lines(self):
                 try:
+                    task = asyncio.current_task()
+                    assert task is not None
+                    self.read_task_names.append(task.get_name())
                     yield ('data: {"type":"response.output_text.delta","delta":"partial"}')
+                    task = asyncio.current_task()
+                    assert task is not None
+                    self.read_task_names.append(task.get_name())
+                    self.second_read_started.set()
                     await self.release.wait()
                 finally:
                     self.lines_closed = True
@@ -639,8 +648,16 @@ class TestDrainCurrentUnit:
 
         first = await stream.__anext__()
         assert first.kind == "text_delta"
+        assert response.read_task_names == ["easycat-responses-stream-next"]
         pending = asyncio.create_task(stream.__anext__())
-        await asyncio.sleep(0)
+        await response.second_read_started.wait()
+        assert response.read_task_names == [
+            "easycat-responses-stream-next",
+            "easycat-responses-stream-next",
+        ]
+        task_names = {task.get_name() for task in asyncio.all_tasks()}
+        assert "easycat-responses-stream-cancel" in task_names
+        assert "easycat-responses-stream-next" in task_names
 
         token.cancel()
         terminal = await asyncio.wait_for(pending, timeout=5.0)

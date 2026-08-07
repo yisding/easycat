@@ -296,6 +296,7 @@ async def test_arm_dev_session_unregisters_on_close(monkeypatch: pytest.MonkeyPa
 
     from easycat.debugger import dev as dev_mod
     from easycat.debugger.session_registry import list_sessions
+    from easycat.runtime.scope import RuntimeScope
 
     monkeypatch.setenv("EASYCAT_DEV", "1")
 
@@ -303,6 +304,7 @@ async def test_arm_dev_session_unregisters_on_close(monkeypatch: pytest.MonkeyPa
         def __init__(self) -> None:
             super().__init__("closable")
             self._evt = asyncio.Event()
+            self._runtime_scope = RuntimeScope(name="debugger-test-session")
 
         async def wait_closed(self) -> None:
             await self._evt.wait()
@@ -313,11 +315,20 @@ async def test_arm_dev_session_unregisters_on_close(monkeypatch: pytest.MonkeyPa
     s = _ClosableSession()
     dev_mod.arm_dev_session(s)
     assert [x.session_id for x in list_sessions()] == ["closable"]
+    watcher_tasks = s._runtime_scope.tasks()
+    assert len(watcher_tasks) == 1
+
+    # Re-arming the same registered Session does not create a duplicate
+    # lifecycle watcher beneath its root.
+    dev_mod.arm_dev_session(s)
+    assert s._runtime_scope.tasks() == watcher_tasks
 
     s.close()
     await asyncio.sleep(0)  # let the watcher run
     await asyncio.sleep(0)
     assert list_sessions() == []
+    assert s._runtime_scope.empty
+    await s._runtime_scope.close()
 
 
 # ── Selection epoch (pure + state) ───────────────────────────────

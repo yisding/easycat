@@ -34,6 +34,7 @@ class TestOutboundAudioSource:
 
         assert transport._emit_scope is not None
         assert transport._outbound._event_tasks.scope is transport._emit_scope
+        assert transport._receive_tasks.scope is transport._emit_scope
 
     def test_create_track_uses_shared_fake_dependency_seam(self, monkeypatch):
         _install_fake_webrtc_modules(monkeypatch)

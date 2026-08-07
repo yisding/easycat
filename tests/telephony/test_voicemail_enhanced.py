@@ -306,6 +306,53 @@ class TestPostScreeningVoicemailDetection:
         finally:
             detector.stop()
 
+    @pytest.mark.asyncio
+    async def test_stop_cancels_owned_timeout(self) -> None:
+        bus = EventBus()
+        detector = PostScreeningVoicemailDetector(bus, timeout_s=5.0)
+        detector.start()
+        detector.activate()
+
+        timeout = detector._timeout_task
+        assert timeout is not None
+        assert detector._timer_tasks.tasks() == (timeout,)
+
+        detector.stop()
+        await asyncio.sleep(0)
+
+        assert timeout.cancelled()
+        assert detector._timer_tasks.empty
+        assert detector._timeout_task is None
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_timeout_while_result_subscriber_is_blocked(self) -> None:
+        bus = EventBus()
+        detector = PostScreeningVoicemailDetector(bus, timeout_s=0.01)
+        delivery_started = asyncio.Event()
+        allow_delivery_finish = asyncio.Event()
+        delivered: list[VoicemailDetected] = []
+
+        async def block_result(event: VoicemailDetected) -> None:
+            delivery_started.set()
+            await allow_delivery_finish.wait()
+            delivered.append(event)
+
+        bus.subscribe(VoicemailDetected, block_result)
+        detector.start()
+        detector.activate(call_sid="CA1")
+        try:
+            await asyncio.wait_for(delivery_started.wait(), timeout=0.5)
+
+            detector.stop()
+            allow_delivery_finish.set()
+            await asyncio.sleep(0)
+
+            assert delivered == []
+            assert detector._timer_tasks.empty
+            assert detector._timeout_task is None
+        finally:
+            detector.stop()
+
 
 # ── STT + AMD fusion ──────────────────────────────────────────────
 
