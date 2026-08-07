@@ -40,7 +40,7 @@ class _FakeAgent:
 async def test_warmup_resolves_and_reuses_the_agent_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pydantic_ai import models
+    models = pytest.importorskip("pydantic_ai.models")
 
     resolved_model = _FakeModel()
     monkeypatch.setattr(models, "infer_model", lambda _model: resolved_model)

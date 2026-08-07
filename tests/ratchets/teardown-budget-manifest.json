@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "update_rationale": "Replace server private hard-timeout calls with the shared owned-future deadline primitive",
+  "update_rationale": "Classify the Pydantic agent warmup timeout as provider setup latency",
   "counts": {
     "configurable": 23,
     "lifecycle_budget": 89,
-    "not_teardown": 32,
+    "not_teardown": 33,
     "protocol_local": 41
   },
   "entries": [
@@ -121,6 +121,7 @@
     "named_constant\tdebug/_issues.py\tIssueThresholds\tconstant timeout_names\t5b81887d12cf7dd9\t0\tnot_teardown\tNames diagnostic timeout issue categories.",
     "named_constant\tintegrations/agents/_agent_runner.py\tAgentRunnerConfig\tconstant timeout\t6efd731f838d7f2d\t0\tnot_teardown\tConfigures overall agent event latency.",
     "named_constant\tintegrations/agents/openai_agents.py\t<module>\tconstant _OPENAI_AGENTS_WARMUP_TIMEOUT_SECONDS\tda1cc5372bfac04e\t0\tnot_teardown\tBounds provider warmup rather than teardown.",
+    "named_constant\tintegrations/agents/pydantic_ai.py\t<module>\tconstant _PYDANTIC_AI_WARMUP_TIMEOUT_SECONDS\t87b6a717add38016\t0\tnot_teardown\tBounds provider warmup rather than teardown.",
     "named_constant\truntime/journal_sql.py\t_SqliteBatchCommitCoordinator\tconstant _deadlines\t172fefc1f90fca92\t0\tnot_teardown\tStores commit-scheduling deadlines.",
     "named_constant\truntime/scope.py\tRuntimeMemberPolicy\tconstant grace_deadline\t3906c6c4759f421a\t0\tconfigurable\tConfigures the member finish-to-cancel escalation budget from the cohort barrier.",
     "named_constant\truntime/scope.py\tRuntimeMemberPolicy\tconstant hard_deadline\t57ad3f9ab5aa3a56\t0\tconfigurable\tConfigures the member cancellation-to-survivor parking budget from the cohort barrier.",
