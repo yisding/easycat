@@ -238,6 +238,60 @@ class TestWebTransportServerWiring:
         )
 
     @pytest.mark.asyncio
+    async def test_start_authorizes_the_backend_capability(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import easycat.server.auth as auth_module
+
+        serve = AsyncMock()
+        self._patch_server_start_dependencies(monkeypatch, serve)
+        error = RuntimeError("rejected at backend capability")
+        guard_calls = 0
+
+        def guard(*_args: object, **_kwargs: object) -> None:
+            nonlocal guard_calls
+            guard_calls += 1
+            if guard_calls == 2:
+                raise error
+
+        monkeypatch.setattr(auth_module, "enforce_bind_guard", guard)
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+
+        with pytest.raises(RuntimeError, match="rejected at backend capability") as exc_info:
+            await server.start()
+
+        assert exc_info.value is error
+        assert guard_calls == 2
+        serve.assert_not_awaited()
+        assert server._server is None
+        assert server._started is False
+
+    @pytest.mark.asyncio
+    async def test_start_preserves_exact_backend_exception(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        error = RuntimeError("quic bind failed")
+        serve = AsyncMock(side_effect=error)
+        self._patch_server_start_dependencies(monkeypatch, serve)
+        server = WebTransportServer(
+            WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem"),
+            lambda _transport: asyncio.sleep(0),
+        )
+
+        with pytest.raises(RuntimeError, match="quic bind failed") as exc_info:
+            await server.start()
+
+        assert exc_info.value is error
+        serve.assert_awaited_once()
+        assert server._server is None
+        assert server._started is False
+
+    @pytest.mark.asyncio
     async def test_concurrent_starts_bind_one_server(
         self,
         monkeypatch: pytest.MonkeyPatch,

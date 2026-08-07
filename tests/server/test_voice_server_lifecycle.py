@@ -243,6 +243,108 @@ async def test_start_is_idempotent() -> None:
         await server.stop()
 
 
+async def test_http_listener_capability_rejects_before_site_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.server.auth as auth_module
+
+    guard_error = RuntimeError("bind authorization changed before construction")
+    runner = SimpleNamespace(setup=AsyncMock(), cleanup=AsyncMock())
+    web = SimpleNamespace(
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(),
+    )
+    monkeypatch.setattr(
+        auth_module,
+        "enforce_bind_guard",
+        Mock(side_effect=guard_error),
+    )
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await server._start_http_listener(web, object())
+
+    assert exc_info.value is guard_error
+    runner.setup.assert_awaited_once()
+    web.TCPSite.assert_not_called()
+    runner.cleanup.assert_awaited_once()
+    assert server._runner is None
+    assert server._site is None
+
+
+async def test_http_listener_preserves_backend_error_and_cleans_partial_site() -> None:
+    backend_error = OSError("http port busy")
+    runner = SimpleNamespace(setup=AsyncMock(), cleanup=AsyncMock())
+    site = SimpleNamespace(
+        start=AsyncMock(side_effect=backend_error),
+        stop=AsyncMock(),
+    )
+    web = SimpleNamespace(
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(return_value=site),
+    )
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+
+    with pytest.raises(OSError) as exc_info:
+        await server._start_http_listener(web, object())
+
+    assert exc_info.value is backend_error
+    web.TCPSite.assert_called_once_with(runner, "127.0.0.1", 0)
+    site.stop.assert_awaited_once()
+    runner.cleanup.assert_awaited_once()
+    assert server._runner is None
+    assert server._site is None
+
+
+async def test_websocket_listener_capability_rejects_before_backend_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import websockets
+
+    import easycat.server.auth as auth_module
+
+    guard_error = RuntimeError("bind authorization changed before backend call")
+    serve = Mock()
+    monkeypatch.setattr(websockets, "serve", serve)
+    monkeypatch.setattr(
+        auth_module,
+        "enforce_bind_guard",
+        Mock(side_effect=guard_error),
+    )
+    server = _idle_server(enable_webrtc=False)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await server._start_websocket_listener()
+
+    assert exc_info.value is guard_error
+    serve.assert_not_called()
+
+
+async def test_websocket_listener_preserves_backend_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import websockets
+
+    from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
+
+    backend_error = OSError("websocket port busy")
+    serve = AsyncMock(side_effect=backend_error)
+    monkeypatch.setattr(websockets, "serve", serve)
+    server = _idle_server(enable_webrtc=False)
+
+    with pytest.raises(OSError) as exc_info:
+        await server._start_websocket_listener()
+
+    assert exc_info.value is backend_error
+    serve.assert_awaited_once_with(
+        server._handle_websocket_connection,
+        "127.0.0.1",
+        0,
+        compression=None,
+        max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+    )
+
+
 async def test_start_rolls_back_http_listener_when_websocket_bind_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

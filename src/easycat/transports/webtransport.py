@@ -1920,7 +1920,7 @@ class WebTransportServer:
                 "remain; call stop() again to retry cleanup"
             )
         self._accepting_sessions = False
-        from easycat.server.auth import enforce_bind_guard
+        from easycat.server.auth import authorized_bind, enforce_bind_guard
 
         enforce_bind_guard(
             self._config.host,
@@ -1942,11 +1942,16 @@ class WebTransportServer:
             extra="webtransport",
             purpose="WebTransport transport",
         )
-        self._server = await aioquic_server.serve(
+        self._server = await authorized_bind(
             self._config.host,
-            self._config.port,
-            configuration=quic_config,
-            create_protocol=factory,
+            auth=self._auth_policy,
+            unsafe_allow_no_auth=self._config.unsafe_allow_no_auth,
+            binder=lambda bind_host: aioquic_server.serve(
+                bind_host,
+                self._config.port,
+                configuration=quic_config,
+                create_protocol=factory,
+            ),
         )
         self._started = True
         self._accepting_sessions = True

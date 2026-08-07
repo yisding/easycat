@@ -109,11 +109,17 @@ class TestIVRNavigator:
     def test_activate_deactivate(self) -> None:
         bus = EventBus()
         nav = IVRNavigator(bus)
+        inactive = nav._activation_epoch.capture()
         assert nav._active is False
         nav.activate()
+        active = nav._activation_epoch.capture()
         assert nav._active is True
+        assert not inactive.is_current()
+        nav.activate()
+        assert active.is_current()
         nav.deactivate()
         assert nav._active is False
+        assert not active.is_current()
 
 
 class TestIVRAgentDecision:

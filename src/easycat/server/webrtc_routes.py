@@ -810,7 +810,7 @@ async def serve_webrtc_config_sessions(
     from easycat._extras import require_module
     from easycat._net import normalize_auth_token
     from easycat._signals import create_shutdown_event
-    from easycat.server.auth import BearerTokenAuth, enforce_bind_guard
+    from easycat.server.auth import BearerTokenAuth, authorized_bind, enforce_bind_guard
     from easycat.server.transports import CapacityGate
     from easycat.session_manager import SessionManager
 
@@ -843,10 +843,20 @@ async def serve_webrtc_config_sessions(
     app = web.Application()
     routes.register(app, prefix="", web=web)
     runner = web.AppRunner(app)
+
+    async def start_site(bind_host: str) -> Any:
+        site = web.TCPSite(runner, bind_host, settings.port)
+        await site.start()
+        return site
+
     try:
         await runner.setup()
-        site = web.TCPSite(runner, settings.host, settings.port)
-        await site.start()
+        site = await authorized_bind(
+            settings.host,
+            auth=bind_auth,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+            binder=start_site,
+        )
     except BaseException:
         await runner.cleanup()
         raise
