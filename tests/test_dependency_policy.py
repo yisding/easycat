@@ -123,6 +123,18 @@ def test_declared_dependency_floors_are_compatibility_tested() -> None:
     assert "tests/server/test_webrtc_routes.py" in minimum_job
 
 
+def test_dependabot_uses_uv_for_python_dependencies_and_keeps_pydantic_ai_v1() -> None:
+    config = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
+
+    assert config.count('package-ecosystem: "uv"') == 1
+    assert 'package-ecosystem: "pip"' not in config
+    uv_updates = config.split('- package-ecosystem: "uv"', 1)[1].split(
+        "\n  - package-ecosystem:", 1
+    )[0]
+    assert '- dependency-name: "pydantic-ai"' in uv_updates
+    assert 'update-types: ["version-update:semver-major"]' in uv_updates
+
+
 def test_default_off_rnnoise_backend_stays_out_of_quickstart() -> None:
     extras = _pyproject()["project"]["optional-dependencies"]
     quickstart_names = {Requirement(dep).name for dep in extras["quickstart"]}

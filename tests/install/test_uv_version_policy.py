@@ -48,3 +48,25 @@ def test_every_setup_uv_step_uses_an_exact_ci_pin() -> None:
             assert 'version: "0.12.0"' in step, workflow_path.name
 
     assert setup_steps > 0
+
+
+def test_docs_toolchain_uses_the_shared_uv_lockfile() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    docs_group = pyproject["dependency-groups"]["docs"]
+    workflow = (WORKFLOWS / "docs.yml").read_text(encoding="utf-8")
+
+    assert docs_group == [
+        "mkdocs==1.6.1",
+        "mkdocs-material==9.7.7",
+        "pygments==2.20.0",
+        "pymdown-extensions==11.0.1",
+    ]
+    assert "astral-sh/setup-uv@" in workflow
+    assert (
+        "uv sync --locked --no-default-groups --group docs --extra quickstart --python 3.12"
+        in workflow
+    )
+    assert "uv run --no-sync mkdocs build --strict" in workflow
+    assert "pip install" not in workflow
+    assert not (ROOT / "requirements-docs.in").exists()
+    assert not (ROOT / "requirements-docs.txt").exists()
