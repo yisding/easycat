@@ -243,7 +243,7 @@ def test_bind_guard_honors_bearer_token_policy_escape_hatch() -> None:
 async def test_authorized_bind_rejects_before_constructing_binder() -> None:
     called = False
 
-    async def binder() -> object:
+    async def binder(_host: str) -> object:
         nonlocal called
         called = True
         return object()
@@ -257,15 +257,18 @@ async def test_authorized_bind_rejects_before_constructing_binder() -> None:
 @pytest.mark.asyncio
 async def test_authorized_bind_preserves_backend_result_and_error() -> None:
     result = object()
+    bound_hosts: list[str] = []
 
-    async def successful_binder() -> object:
+    async def successful_binder(host: str) -> object:
+        bound_hosts.append(host)
         return result
 
     assert await authorized_bind("127.0.0.1", auth=None, binder=successful_binder) is result
+    assert bound_hosts == ["127.0.0.1"]
 
     error = RuntimeError("bind failed")
 
-    async def failing_binder() -> object:
+    async def failing_binder(_host: str) -> object:
         raise error
 
     with pytest.raises(RuntimeError) as exc_info:

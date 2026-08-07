@@ -84,9 +84,9 @@ async def serve_websocket_sessions(
         settings.host,
         auth=auth_policy,
         unsafe_allow_no_auth=unsafe_allow_no_auth,
-        binder=lambda: websockets.serve(
+        binder=lambda bind_host: websockets.serve(
             runtime.handle,
-            settings.host,
+            bind_host,
             settings.port,
             process_request=process_request,
             compression=None,

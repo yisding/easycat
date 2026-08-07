@@ -305,19 +305,19 @@ async def authorized_bind(
     host: str,
     *,
     auth: AuthPolicy | None,
-    binder: Callable[[], Awaitable[_BindResult]],
+    binder: Callable[[str], Awaitable[_BindResult]],
     unsafe_allow_no_auth: bool = False,
 ) -> _BindResult:
     """Authorize ``host`` immediately before invoking one async binder.
 
-    Keeping the binder behind a zero-argument callback makes the guard part of
-    the socket-opening capability: a rejected bind cannot even construct or
-    call the backend awaitable. Backend exceptions and return values propagate
-    unchanged.
+    Passing the guarded host into the binder makes the guard part of the
+    socket-opening capability: a rejected bind cannot even construct the
+    backend awaitable, and an accepted callback cannot accidentally close over
+    a different host. Backend exceptions and return values propagate unchanged.
     """
     enforce_bind_guard(
         host,
         auth=auth,
         unsafe_allow_no_auth=unsafe_allow_no_auth,
     )
-    return await binder()
+    return await binder(host)
