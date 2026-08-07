@@ -1380,9 +1380,9 @@ class VoiceServer:
             self.config.host,
             auth=self.config.auth,
             unsafe_allow_no_auth=self.config.unsafe_allow_no_auth,
-            binder=lambda: websockets.serve(
+            binder=lambda bind_host: websockets.serve(
                 self._handle_websocket_connection,
-                self.config.host,
+                bind_host,
                 self._websocket_port(),
                 compression=None,
                 max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
