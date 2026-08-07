@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from easycat._epoch import Epoch
 from easycat.events import (
     CallAnswered,
     CallEnded,
@@ -39,7 +40,7 @@ def _make_bare_manager(**overrides: object) -> OutboundCallManager:
         "_synthetic_failure_event_ids": set(),
         "_session_id": None,
         "_started": False,
-        "_lifecycle_epoch": 0,
+        "_lifecycle_epoch": Epoch(None),
         "_place_call_lock": asyncio.Lock(),
     }
     defaults.update(overrides)
@@ -398,12 +399,19 @@ class TestOutboundCallManager:
     @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)
     def test_start_stop_idempotent(self, mock_init: MagicMock) -> None:
         manager = _make_bare_manager(_event_bus=EventBus())
+        initial = manager._lifecycle_epoch.capture()
         manager.start()
+        started = manager._lifecycle_epoch.capture()
+        assert not initial.is_current()
         manager.start()
         assert manager._started is True
+        assert started.is_current()
         manager.stop()
+        stopped = manager._lifecycle_epoch.capture()
         manager.stop()
         assert manager._started is False
+        assert not started.is_current()
+        assert not stopped.is_current()
 
     @patch("easycat.telephony.outbound.OutboundCallManager.__init__", return_value=None)
     def test_stop_resets_state(self, mock_init: MagicMock) -> None:
@@ -756,9 +764,11 @@ class TestOutboundCallManagerPlaceCall:
 
         first.cancel()
         await asyncio.sleep(0.05)
+        first.cancel()
+        await asyncio.sleep(0)
 
-        # Cancellation does not abandon the uncancellable REST worker or
-        # expose a provider-created SID to the caller.
+        # Repeated cancellation does not abandon the uncancellable REST
+        # worker or expose a provider-created SID to the caller.
         assert not first.done()
         assert create_count == 1
 

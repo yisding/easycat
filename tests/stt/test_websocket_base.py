@@ -9,9 +9,11 @@ from typing import Any
 import pytest
 import websockets
 
+from easycat._concurrency import RuntimeSupervisor
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import Error, ErrorStage, EventBus
 from easycat.reconnecting_ws import ReconnectConfig
+from easycat.runtime.scope import RuntimeScope
 from easycat.stt.websocket_base import WebSocketSTTBase, _noop_reconnect
 
 
@@ -508,6 +510,13 @@ async def test_connect_websocket_emits_e304_when_real_drop_reconnects():
     from easycat.events import Error, ErrorStage, ReconnectAttempt, ReconnectSuccess
 
     probe = _Probe()
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="session:test",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    probe.set_runtime_scope(root, name="stt-provider-runtime")
     bus = _RecordingBus()
     resumed = _CleanConnection()
     connections = iter([_DroppingConnection(), resumed])
@@ -525,6 +534,8 @@ async def test_connect_websocket_emits_e304_when_real_drop_reconnects():
         connect_fn=connect_fn,
     )
     assert probe._receive_task is not None
+    assert probe._receive_task in root.tasks("stt_receive_loop")
+    assert "stt-receive" in root.cohorts(force=False)
     await resumed.started.wait()
     await ws.close()
     resumed.release.set()
@@ -546,7 +557,9 @@ async def test_connect_websocket_emits_e304_when_real_drop_reconnects():
     ]
     assert ws.died_abnormally is False
     assert probe._event_queue.get_nowait() is None
-    await ws.close()
+    await probe._close_active_websocket(close_before_drain=True)
+    assert root.tasks("stt_receive_loop") == ()
+    await root.close()
 
 
 @pytest.mark.asyncio

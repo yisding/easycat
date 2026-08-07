@@ -19,7 +19,8 @@ from easycat._provider_helpers import ProviderErrorEmitter
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import ErrorStage
 from easycat.reconnecting_ws import ReconnectingWebSocket
-from easycat.tts._multi_context_ws import MultiContextWSManager
+from easycat.runtime.scope import RuntimeScope, RuntimeScopeState
+from easycat.tts._multi_context_ws import MultiContextAdapter, MultiContextWSManager
 from easycat.tts.base import TTSBase
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,41 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
         # config enables ``persistent_ws`` and the provider builds it lazily.
         # Deepgram and custom providers never create one.
         self._mgr: MultiContextWSManager | None = None
+        self._runtime_scope: RuntimeScope | None = None
+        self._owns_runtime_scope = False
         self._init_emit_tasks()
+
+    def set_runtime_scope(self, parent: RuntimeScope, *, name: str) -> None:
+        """Attach persistent WebSocket work to an application lifecycle."""
+        if not name:
+            raise ValueError("TTS RuntimeScope name must be non-empty")
+        current = self._runtime_scope
+        if current is not None:
+            if current.parent is parent:
+                return
+            if not self._owns_runtime_scope or (self._mgr is None and current.tasks()):
+                raise RuntimeError("Cannot reattach TTS runtime work after manager creation")
+        attached = parent.create_child(name)
+        if self._mgr is not None:
+            assert current is not None
+            self._mgr.rehome_runtime_scope(current, attached)
+        self._runtime_scope = attached
+        self._owns_runtime_scope = False
+
+    def _ensure_runtime_scope(self) -> RuntimeScope:
+        scope = self._runtime_scope
+        if scope is None:
+            scope = RuntimeScope(name="tts-provider-runtime")
+            self._runtime_scope = scope
+            self._owns_runtime_scope = True
+        return scope
+
+    def _make_multi_context_manager(
+        self,
+        adapter: MultiContextAdapter,
+    ) -> MultiContextWSManager:
+        """Build a manager beneath this provider's lifecycle scope."""
+        return MultiContextWSManager(adapter, runtime_scope=self._ensure_runtime_scope())
 
     def _persistent_enabled(self) -> bool:
         """Whether the opt-in persistent multi-context socket is enabled.
@@ -129,7 +164,26 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
                 await self._mgr.aclose()
             await self._close_ws()
         finally:
-            await self._drain_emit_tasks()
+            try:
+                await self._drain_emit_tasks()
+            finally:
+                await self._close_owned_runtime_scope_if_idle()
+
+    async def _close_owned_runtime_scope_if_idle(self) -> None:
+        scope = self._runtime_scope
+        manager = self._mgr
+        if (
+            not self._owns_runtime_scope
+            or scope is None
+            or scope.state is not RuntimeScopeState.OPEN
+            or not scope.empty
+            or (manager is not None and not manager.runtime_cleanup_complete)
+        ):
+            return
+        await scope.close()
+        if self._runtime_scope is scope:
+            self._runtime_scope = None
+            self._owns_runtime_scope = False
 
     def _require_terminal_response(self, terminal_received: bool, *, terminal_label: str) -> None:
         """Reject provider EOF before a terminal response unless cancelled."""

@@ -282,7 +282,7 @@ async def test_hung_guarded_session_does_not_deadlock_stop() -> None:
     assert sessions[0].force_path_ran is True
     assert sessions[0].teardown_completed.is_set()
     assert server._active_sessions == 0
-    assert not server._ws_handler_tasks
+    assert server._ws_handler_task_scope.tasks() == ()
 
 
 @pytest.mark.integration_socket
@@ -314,7 +314,7 @@ async def test_natural_disconnect_near_deadline_remains_force_escalatable() -> N
     assert sessions[0].teardown_completed.is_set()
     assert server._manager._sessions == {}
     assert server._active_sessions == 0
-    assert not server._ws_handler_tasks
+    assert server._ws_handler_task_scope.tasks() == ()
 
 
 @pytest.mark.integration_socket
@@ -359,7 +359,7 @@ async def test_session_hung_even_in_force_does_not_block_stop() -> None:
     assert sessions[0].force_started.is_set()
     assert elapsed < 3.0
     assert server._active_sessions == 0
-    assert not server._ws_handler_tasks
+    assert server._ws_handler_task_scope.tasks() == ()
 
 
 class _HangingWsServer:

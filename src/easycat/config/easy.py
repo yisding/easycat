@@ -21,8 +21,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
+from easycat._credentials import has_usable_credential
 from easycat._numeric import is_finite_number
-from easycat._provider_helpers import has_usable_credential
 from easycat._session_id import validate_session_id
 from easycat.echo_cancellation import (
     EchoCancellationConfig,

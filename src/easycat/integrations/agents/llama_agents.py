@@ -31,12 +31,20 @@ from easycat.integrations.agents.base import (
     UnitKind,
     apply_standard_interruption,
 )
+from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.runtime.records import ErrorInfo
 from easycat.teardown_budgets import (
     LLAMA_POST_CANCEL_AWAIT_TIMEOUT_S as _POST_CANCEL_AWAIT_TIMEOUT,
 )
 
 logger = logging.getLogger(__name__)
+
+_RESET_CLEANUP_TASK = "llama_reset_cleanup"
+_RESET_CLEANUP_COHORT = "llama-reset-cleanup"
+_CANCEL_CLEANUP_TASK = "llama_cancel_cleanup"
+_CANCEL_CLEANUP_COHORT = "llama-cancel-cleanup"
+_STREAM_RACE_TASK = "llama_stream_race"
+_STREAM_RACE_COHORT = "llama-stream-race"
 
 
 _TEXT_FIELDS = (
@@ -155,9 +163,22 @@ class LlamaAgentsBridge:
         self._last_output: Any = None
         self._last_output_text = ""
         self._run_count = 0
-        # Strong refs to background cancel/aclose tasks scheduled by reset()
-        # so they are not garbage-collected before they run to completion.
-        self._reset_cleanup_tasks: set[asyncio.Task[None]] = set()
+        self._reset_cleanup_task_scope = RuntimeTaskScope(
+            owner_label="llama-agents-reset-cleanup",
+            member_name=_RESET_CLEANUP_TASK,
+            cohort=_RESET_CLEANUP_COHORT,
+            logger=logger,
+            failure_message="LlamaAgents reset cleanup task failed",
+            drop_if_closed=False,
+        )
+        self._cancel_cleanup_task_scope = RuntimeTaskScope(
+            owner_label="llama-agents-cancel-cleanup",
+            member_name=_CANCEL_CLEANUP_TASK,
+            cohort=_CANCEL_CLEANUP_COHORT,
+            logger=logger,
+            failure_message="LlamaAgents bounded cancel task failed",
+            drop_if_closed=False,
+        )
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
@@ -300,22 +321,31 @@ class LlamaAgentsBridge:
         """
         handler = self._pending_local_handler
         if handler is not None:
-            self._fire_and_forget(self._cancel_local_handler(handler))
+            self._fire_and_forget(
+                self._cancel_local_handler(handler),
+                task_name="easycat-llama-reset-local-handler",
+            )
         stream = self._pending_local_stream
         if stream is not None:
             aclose = getattr(stream, "aclose", None)
             if callable(aclose):
-                self._fire_and_forget(aclose())
+                self._fire_and_forget(
+                    aclose(),
+                    task_name="easycat-llama-reset-local-stream",
+                )
         handler_id = self._pending_remote_handler_id
         if handler_id is not None and self._client is not None:
-            self._fire_and_forget(self._cancel_remote_handler(handler_id))
+            self._fire_and_forget(
+                self._cancel_remote_handler(handler_id),
+                task_name="easycat-llama-reset-remote-handler",
+            )
 
-    def _fire_and_forget(self, awaitable: Any) -> None:
+    def _fire_and_forget(self, awaitable: Any, *, task_name: str) -> None:
         """Best-effort drive an async teardown started from sync reset()."""
         if awaitable is None or not inspect.isawaitable(awaitable):
             return
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             # No running loop -- close the coroutine so it does not emit a
             # "coroutine was never awaited" warning; cleanup cannot be driven.
@@ -324,9 +354,11 @@ class LlamaAgentsBridge:
                 with contextlib.suppress(Exception):
                     close()
             return
-        task = loop.create_task(_swallow(awaitable))
-        self._reset_cleanup_tasks.add(task)
-        task.add_done_callback(self._reset_cleanup_tasks.discard)
+        task = self._reset_cleanup_task_scope.create_task(
+            _swallow(awaitable),
+            task_name=task_name,
+        )
+        assert task is not None
 
     async def aclose(self) -> None:
         """Release HITL-paused handlers when the session tears down.
@@ -343,10 +375,11 @@ class LlamaAgentsBridge:
         # reset() may have scheduled fire-and-forget teardown that has not
         # finished yet; await it too so aclose() does not return while a
         # paused handler is still being cancelled in the background.
-        pending = list(self._reset_cleanup_tasks)
+        pending = list(self._reset_cleanup_task_scope.tasks())
         if pending:
             with contextlib.suppress(Exception):
                 await asyncio.gather(*pending, return_exceptions=True)
+        await self._reset_cleanup_task_scope.release_standalone_if_empty()
         for target in (self._workflow, self._client):
             fn = getattr(target, "aclose", None)
             if callable(fn):
@@ -377,7 +410,10 @@ class LlamaAgentsBridge:
         """
         handler = self._pending_local_handler
         if handler is not None:
-            await self._best_effort_cancel(self._cancel_local_handler(handler))
+            await self._best_effort_cancel(
+                self._cancel_local_handler(handler),
+                task_name="easycat-llama-aclose-local-handler",
+            )
         stream = self._pending_local_stream
         if stream is not None:
             aclose = getattr(stream, "aclose", None)
@@ -386,7 +422,10 @@ class LlamaAgentsBridge:
                     await aclose()
         handler_id = self._pending_remote_handler_id
         if handler_id is not None and self._client is not None:
-            await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
+            await self._best_effort_cancel(
+                self._cancel_remote_handler(handler_id),
+                task_name="easycat-llama-aclose-remote-handler",
+            )
 
     # ── Local workflow mode ───────────────────────────────────────
 
@@ -493,7 +532,10 @@ class LlamaAgentsBridge:
             # and never calls cancel_run() -- the workflow keeps running and
             # contaminates the next turn.
             cancelled = True
-            await self._best_effort_cancel(self._cancel_local_handler(handler))
+            await self._best_effort_cancel(
+                self._cancel_local_handler(handler),
+                task_name="easycat-llama-invoke-local-cancel",
+            )
             raise
         except Exception:
             # A regular error from stream_events() or while awaiting the
@@ -507,7 +549,10 @@ class LlamaAgentsBridge:
             # Context/pending markers (failed) -- mirroring the remote path's
             # except Exception.
             failed = True
-            await self._best_effort_cancel(self._cancel_local_handler(handler))
+            await self._best_effort_cancel(
+                self._cancel_local_handler(handler),
+                task_name="easycat-llama-invoke-local-failure",
+            )
             raise
         finally:
             interrupted = cancelled or (cancel_token is not None and cancel_token.is_cancelled)
@@ -575,7 +620,7 @@ class LlamaAgentsBridge:
         event = self._build_human_response_event(turn_input)
         send_event(event, step=self._human_response_step)
 
-    async def _best_effort_cancel(self, coro: Any) -> None:
+    async def _best_effort_cancel(self, coro: Any, *, task_name: str) -> None:
         """Drive a handler-cancel to completion while this task is torn down.
 
         On hard task cancellation we still must stop the underlying
@@ -585,7 +630,11 @@ class LlamaAgentsBridge:
         non-cooperative handler cannot wedge task teardown; anything still
         running past the timeout is abandoned best-effort.
         """
-        task = asyncio.ensure_future(coro)
+        task = self._cancel_cleanup_task_scope.create_task(
+            _await_cleanup(coro),
+            task_name=task_name,
+        )
+        assert task is not None
         caller = asyncio.current_task()
         cancellation_count = caller.cancelling() if caller is not None else 0
         try:
@@ -602,6 +651,8 @@ class LlamaAgentsBridge:
             raise
         except Exception:  # noqa: BLE001, S110 intentional boundary or best-effort cleanup
             pass
+        finally:
+            await self._cancel_cleanup_task_scope.release_standalone_if_empty()
 
     async def _cancel_local_handler(self, handler: Any) -> None:
         cancel_run = getattr(handler, "cancel_run", None)
@@ -770,7 +821,10 @@ class LlamaAgentsBridge:
                 self._remote_event_sequence = getattr(
                     event_stream, "last_sequence", self._remote_event_sequence
                 )
-            await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
+            await self._best_effort_cancel(
+                self._cancel_remote_handler(handler_id),
+                task_name="easycat-llama-invoke-remote-cancel",
+            )
             # If the close/cancel arrived right after the InputRequiredEvent
             # prompt was yielded above, _pending_remote_handler_id was
             # already set. The handler is now cancelled, so leaving the
@@ -795,7 +849,10 @@ class LlamaAgentsBridge:
             # fresh run instead of resuming an abandoned/contaminated handler,
             # and clear the active marker so snapshot_state() stops advertising
             # a handler that invoke() has already failed out of.
-            await self._best_effort_cancel(self._cancel_remote_handler(handler_id))
+            await self._best_effort_cancel(
+                self._cancel_remote_handler(handler_id),
+                task_name="easycat-llama-invoke-remote-failure",
+            )
             self._remote_handler_id = None
             self._pending_remote_handler_id = None
             self._active_handler_id = None
@@ -1009,6 +1066,11 @@ async def _swallow(awaitable: Any) -> None:
         await awaitable
 
 
+async def _await_cleanup(awaitable: Any) -> None:
+    """Normalize one cleanup awaitable into a scope-owned coroutine."""
+    await awaitable
+
+
 async def _aclose_iterator(iterator: Any) -> None:
     """Best-effort close of ``iterator`` if it exposes ``aclose()``."""
     aclose = getattr(iterator, "aclose", None)
@@ -1053,6 +1115,38 @@ class _SuspendableSource:
         await _aclose_iterator(self._iter)
 
 
+async def _wait_for_cancel(cancel_token: CancelToken) -> None:
+    await cancel_token.wait()
+
+
+async def _close_stream_race(
+    race_tasks: RuntimeTaskScope,
+    cancel_wait: asyncio.Task[None],
+    next_item: asyncio.Task[Any] | None,
+    iterator: AsyncIterator[Any],
+    *,
+    exhausted: bool,
+) -> None:
+    """Reap both race arms, release their scope, then close the source."""
+    try:
+        if next_item is not None:
+            if not next_item.done():
+                next_item.cancel()
+            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
+                await next_item
+            race_tasks.discard_task(next_item)
+        cancel_wait.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cancel_wait
+        race_tasks.discard_task(cancel_wait)
+    finally:
+        try:
+            await race_tasks.release_standalone_if_empty()
+        finally:
+            if not exhausted:
+                await _aclose_iterator(iterator)
+
+
 async def _aiter_with_cancellation(
     source: AsyncIterator[Any],
     cancel_token: CancelToken | None,
@@ -1094,11 +1188,27 @@ async def _aiter_with_cancellation(
                 await _aclose_iterator(iterator)
         return
 
-    cancel_wait: asyncio.Task[None] = asyncio.ensure_future(cancel_token.wait())
+    race_tasks = RuntimeTaskScope(
+        owner_label="llama-agents-stream-race",
+        member_name=_STREAM_RACE_TASK,
+        cohort=_STREAM_RACE_COHORT,
+        logger=logger,
+        failure_message="LlamaAgents stream race task failed",
+        drop_if_closed=False,
+    )
+    cancel_wait = race_tasks.create_task(
+        _wait_for_cancel(cancel_token),
+        task_name="easycat-llama-stream-cancel",
+    )
+    assert cancel_wait is not None
     next_item: asyncio.Task[Any] | None = None
     try:
         while not cancel_token.is_cancelled:
-            next_item = asyncio.ensure_future(iterator.__anext__())
+            next_item = race_tasks.create_awaitable_task(
+                iterator.__anext__(),
+                task_name="easycat-llama-stream-next",
+            )
+            assert next_item is not None
             await asyncio.wait(
                 (next_item, cancel_wait),
                 return_when=asyncio.FIRST_COMPLETED,
@@ -1112,22 +1222,20 @@ async def _aiter_with_cancellation(
                 return
             # Read consumed; clear so the finally does not re-handle it and a
             # hard cancel during ``yield`` is not mistaken for a pending read.
+            race_tasks.discard_task(next_item)
             next_item = None
             yield item
     finally:
         # A hard task cancel can land on ``asyncio.wait()`` above while the
         # read is still pending; closing the iterator is not enough while
         # ``__anext__()`` runs, so cancel and await it first.
-        if next_item is not None:
-            if not next_item.done():
-                next_item.cancel()
-            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
-                await next_item
-        cancel_wait.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await cancel_wait
-        if not exhausted:
-            await _aclose_iterator(iterator)
+        await _close_stream_race(
+            race_tasks,
+            cancel_wait,
+            next_item,
+            iterator,
+            exhausted=exhausted,
+        )
 
 
 _REMOTE_FAILURE_STATUSES = frozenset(

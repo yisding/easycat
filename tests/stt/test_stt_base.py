@@ -6,8 +6,10 @@ import asyncio
 
 import pytest
 
+from easycat._concurrency import RuntimeSupervisor
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
+from easycat.runtime.scope import RuntimeScope, RuntimeScopeState
 from easycat.stt.base import STTBase
 from easycat.stt.websocket_base import WebSocketSTTBase
 from tests.stt.helpers import (
@@ -598,6 +600,56 @@ async def test_send_audio_propagates_new_caller_cancel_and_reaps_owned_send() ->
     assert stt.send_cancelled.is_set()
     assert stt._active_audio_send_task is None
     await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_interruptible_audio_send_attaches_to_the_session_runtime_tree() -> None:
+    class BlockingSendSTT(STTBase):
+        def __init__(self) -> None:
+            super().__init__(allow_end_during_audio_send=True)
+            self.send_started = asyncio.Event()
+
+        async def _on_audio(self, chunk: AudioChunk) -> None:
+            _ = chunk
+            self.send_started.set()
+            await asyncio.Future()
+
+    root = RuntimeScope.create_root(
+        name="session",
+        root_id="session:test",
+        supervisor=RuntimeSupervisor(capacity=1),
+        survivor_capacity=1,
+    )
+    stt = BlockingSendSTT()
+    stt.set_runtime_scope(root, name="stt-provider-runtime")
+    await stt.start_stream()
+
+    sending = asyncio.create_task(
+        stt.send_audio(AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K))
+    )
+    await stt.send_started.wait()
+
+    assert stt._active_audio_send_task in root.tasks("stt_audio_send")
+    assert "stt-runtime" in root.cohorts(force=False)
+
+    await stt.end_stream()
+    await sending
+    assert root.tasks("stt_audio_send") == ()
+    await root.close()
+
+
+@pytest.mark.asyncio
+async def test_standalone_close_releases_an_idle_stt_runtime_scope() -> None:
+    stt = STTBase(allow_end_during_audio_send=True)
+    await stt.start_stream()
+    await stt.send_audio(AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K))
+    scope = stt._runtime_scope
+    assert scope is not None
+
+    await stt.close()
+
+    assert scope.state is RuntimeScopeState.CLOSED
+    assert stt._runtime_scope is None
 
 
 @pytest.mark.asyncio

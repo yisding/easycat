@@ -57,15 +57,12 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from easycat.runtime._event_tasks import RuntimeTaskScope, wait_for_owned_future
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
-from easycat.server.transports import (
-    _await_with_hard_timeout,
-    _log_settled_task_failures,
-    _log_unexpected_task_results,
-)
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
 from easycat.teardown_budgets import (
     SERVER_DRAIN_TIMEOUT_S,
@@ -83,6 +80,14 @@ if TYPE_CHECKING:
     from easycat.transports.webrtc import WebRTCTransport
 
 logger = logging.getLogger(__name__)
+
+_OFFER_CLEANUP_TASK = "webrtc_offer_cleanup"
+_OFFER_CLEANUP_COHORT = "webrtc-offer-cleanup"
+_FORCE_CLEANUP_TASK = "webrtc_force_cleanup"
+_FORCE_CLEANUP_COHORT = "webrtc-force-cleanup"
+_STANDALONE_SWEEP_TASK = "standalone_webrtc_session_sweep"
+_STANDALONE_SWEEP_COHORT = "standalone-webrtc-session-sweep"
+_STANDALONE_SWEEP_SCOPES: set[RuntimeTaskScope] = set()
 
 # Per-connection factory seam (NO ``ConnectionContext`` type): a per-transport
 # ``Callable[[WebRTCTransport], EasyConfig | Session]``.
@@ -110,6 +115,23 @@ def _standalone_sweep_error(
     ):
         return None
     return RuntimeError(f"Standalone WebRTC shutdown retained {len(report.failures)} session(s)")
+
+
+def _discard_settled_standalone_sweep_scope(
+    scope: RuntimeTaskScope,
+    _task: asyncio.Task[Any],
+) -> None:
+    """Release the module anchor only after its sweep task has settled."""
+    _STANDALONE_SWEEP_SCOPES.discard(scope)
+
+
+def _retain_standalone_sweep_scope(
+    scope: RuntimeTaskScope,
+    task: asyncio.Task[Any],
+) -> None:
+    """Anchor a standalone sweep scope until its owned task settles."""
+    _STANDALONE_SWEEP_SCOPES.add(scope)
+    task.add_done_callback(partial(_discard_settled_standalone_sweep_scope, scope))
 
 
 class WebRTCRoutes:
@@ -179,9 +201,26 @@ class WebRTCRoutes:
         # helper, ``/webrtc`` for the mounted server). Threaded into the root
         # redirect so the served client points at the right routes.
         self._client_base = ""
-        # Tracks per-offer transport cleanup tasks so ``stop`` can cancel them.
-        self._cleanup_tasks: set[asyncio.Task[None]] = set()
-        self._cleanup_task_keys: dict[asyncio.Task[None], int] = {}
+        # Owns per-offer transport cleanup tasks so ``stop`` can cancel them.
+        self._cleanup_task_scope = RuntimeTaskScope(
+            owner_label="webrtc-routes",
+            member_name=_OFFER_CLEANUP_TASK,
+            cohort=_OFFER_CLEANUP_COHORT,
+            logger=logger,
+            failure_message="WebRTC offer cleanup task failed",
+            drop_if_closed=False,
+            release_standalone_when_idle=True,
+        )
+        self._force_cleanup_task_scope = RuntimeTaskScope(
+            owner_label="webrtc-routes-force-cleanup",
+            member_name=_FORCE_CLEANUP_TASK,
+            cohort=_FORCE_CLEANUP_COHORT,
+            logger=logger,
+            failure_message="WebRTC forced cleanup task failed",
+            drop_if_closed=False,
+            release_standalone_when_idle=True,
+        )
+        self._cleanup_task_keys: dict[asyncio.Task[Any], int] = {}
         self._released_cleanup_keys: set[int] = set()
         # aiohttp.web, resolved lazily inside ``register``.
         self._web: Any = None
@@ -477,13 +516,7 @@ class WebRTCRoutes:
             self._emit_connections_changed()
             transport._ensure_browser_event_forwarder()
             self._released_cleanup_keys.discard(key)
-            task = asyncio.create_task(
-                self._cleanup_session(key, transport),
-                name=f"easycat-webrtc-cleanup-{key}",
-            )
-            self._cleanup_tasks.add(task)
-            self._cleanup_task_keys[task] = key
-            task.add_done_callback(self._cleanup_task_done)
+            self._start_cleanup_task(key, transport)
             return True
         except Exception:
             # Stop + drop the started session (``manager.remove`` stops it) and
@@ -523,6 +556,21 @@ class WebRTCRoutes:
         finally:
             await self._finalize_session_cleanup(key, force=False)
 
+    def _start_cleanup_task(
+        self,
+        key: int,
+        transport: WebRTCTransport,
+    ) -> asyncio.Task[Any]:
+        """Start and index one scope-owned per-offer cleanup worker."""
+        task = self._cleanup_task_scope.create_task(
+            self._cleanup_session(key, transport),
+            task_name="easycat-webrtc-offer-cleanup",
+        )
+        assert task is not None
+        self._cleanup_task_keys[task] = key
+        task.add_done_callback(self._cleanup_task_done)
+        return task
+
     async def _finalize_session_cleanup(self, key: int, *, force: bool) -> None:
         """Stop and release one offer exactly once, including pre-start cancellation."""
         await self._manager.remove(key, force=force)
@@ -534,48 +582,79 @@ class WebRTCRoutes:
             self._gate.release()
             self._emit_connections_changed()
 
-    def _cleanup_task_done(self, task: asyncio.Task[None]) -> None:
-        self._cleanup_tasks.discard(task)
+    def _cleanup_task_done(self, task: asyncio.Task[Any]) -> None:
         self._cleanup_task_keys.pop(task, None)
 
     async def cancel_cleanup_tasks(self, *, timeout_s: float | None = None) -> None:
         """Cancel + await the per-offer cleanup tasks (called on server stop)."""
-        pending = [(task, self._cleanup_task_keys.get(task)) for task in self._cleanup_tasks]
+        pending = [
+            (task, self._cleanup_task_keys.get(task)) for task in self._cleanup_task_scope.tasks()
+        ]
         for task, _key in pending:
             task.cancel()
         if pending:
-            finalizers = [
-                asyncio.create_task(
+            finalizers: list[asyncio.Task[Any]] = []
+            for _task, key in pending:
+                if key is None:
+                    continue
+                finalizer = self._force_cleanup_task_scope.create_task(
                     self._finalize_session_cleanup(key, force=True),
-                    name=f"easycat-webrtc-finalizer-{key}",
+                    task_name=f"easycat-webrtc-force-cleanup-{key}",
                 )
-                for _task, key in pending
-                if key is not None
-            ]
-            tasks = [*(task for task, _key in pending), *finalizers]
+                assert finalizer is not None
+                finalizers.append(finalizer)
+            cleanup_tasks = [*(task for task, _key in pending), *finalizers]
             cleanup = asyncio.gather(
-                *tasks,
+                *cleanup_tasks,
                 return_exceptions=True,
             )
+            results: list[Any | BaseException] | None
             if timeout_s is None:
                 results = await cleanup
             else:
-                completed = await _await_with_hard_timeout(cleanup, timeout_s=timeout_s)
-                if not completed:
-                    _log_settled_task_failures(
-                        tasks,
-                        explicitly_cancelled=[task for task, _key in pending],
-                        context="WebRTC route cleanup teardown",
-                        log=logger,
-                    )
-                    return
-                results = cleanup.result()
-            _log_unexpected_task_results(
-                tasks,
-                results,
-                explicitly_cancelled=[task for task, _key in pending],
-                context="WebRTC route cleanup teardown",
-                log=logger,
+                completed = await wait_for_owned_future(cleanup, timeout_s=timeout_s)
+                results = cleanup.result() if completed else None
+            if results is not None:
+                self._report_cleanup_results(
+                    cleanup_tasks,
+                    results,
+                    explicitly_cancelled={task for task, _key in pending},
+                )
+            else:
+                for finalizer in finalizers:
+                    finalizer.add_done_callback(self._report_late_cleanup_result)
+        await self._cleanup_task_scope.release_standalone_if_empty()
+        await self._force_cleanup_task_scope.release_standalone_if_empty()
+
+    def _report_cleanup_results(
+        self,
+        tasks: list[asyncio.Task[Any]],
+        results: list[Any],
+        *,
+        explicitly_cancelled: set[asyncio.Task[Any]],
+    ) -> None:
+        """Log unexpected cleanup failures with the owning task's identity."""
+        for task, result in zip(tasks, results, strict=True):
+            if not isinstance(result, BaseException):
+                continue
+            if isinstance(result, asyncio.CancelledError) and task in explicitly_cancelled:
+                continue
+            logger.error(
+                "WebRTC cleanup task %s failed",
+                task.get_name(),
+                exc_info=result,
+            )
+
+    def _report_late_cleanup_result(self, task: asyncio.Task[Any]) -> None:
+        """Report a forced finalizer that settles after the hard deadline."""
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "WebRTC cleanup task %s failed",
+                task.get_name(),
+                exc_info=error,
             )
 
     async def _stop_managed_session(self, key: int, force: bool) -> None:
@@ -678,18 +757,34 @@ async def _shutdown_standalone_webrtc(  # noqa: C901 - independent cleanup stage
     except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         if body_error is None:
             body_error = exc
+    sweep_scope = RuntimeTaskScope(
+        owner_label="standalone-webrtc-shutdown",
+        member_name=_STANDALONE_SWEEP_TASK,
+        cohort=_STANDALONE_SWEEP_COHORT,
+        logger=logger,
+        failure_message="Standalone WebRTC session sweep failed",
+        drop_if_closed=False,
+    )
     try:
-        sweep_task = asyncio.create_task(manager.stop_all(force=True))
-        swept = await _await_with_hard_timeout(
-            sweep_task,
-            timeout_s=max(force_shutdown_timeout_s, 0.0),
-        )
-        report_error = _standalone_sweep_error(
-            swept=swept,
-            sweep_task=sweep_task,
-            timeout_s=force_shutdown_timeout_s,
-        )
-        body_error = body_error or report_error
+        try:
+            sweep_task = sweep_scope.create_task(
+                manager.stop_all(force=True),
+                task_name="easycat-standalone-webrtc-session-sweep",
+            )
+            assert sweep_task is not None
+            _retain_standalone_sweep_scope(sweep_scope, sweep_task)
+            swept = await wait_for_owned_future(
+                sweep_task,
+                timeout_s=max(force_shutdown_timeout_s, 0.0),
+            )
+            report_error = _standalone_sweep_error(
+                swept=swept,
+                sweep_task=sweep_task,
+                timeout_s=force_shutdown_timeout_s,
+            )
+            body_error = body_error or report_error
+        finally:
+            await sweep_scope.release_standalone_if_empty()
     except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
         if body_error is None:
             body_error = exc
@@ -715,7 +810,7 @@ async def serve_webrtc_config_sessions(
     from easycat._extras import require_module
     from easycat._net import normalize_auth_token
     from easycat._signals import create_shutdown_event
-    from easycat.server.auth import BearerTokenAuth, enforce_bind_guard
+    from easycat.server.auth import BearerTokenAuth, authorized_bind, enforce_bind_guard
     from easycat.server.transports import CapacityGate
     from easycat.session_manager import SessionManager
 
@@ -748,10 +843,20 @@ async def serve_webrtc_config_sessions(
     app = web.Application()
     routes.register(app, prefix="", web=web)
     runner = web.AppRunner(app)
+
+    async def start_site(bind_host: str) -> Any:
+        site = web.TCPSite(runner, bind_host, settings.port)
+        await site.start()
+        return site
+
     try:
         await runner.setup()
-        site = web.TCPSite(runner, settings.host, settings.port)
-        await site.start()
+        site = await authorized_bind(
+            settings.host,
+            auth=bind_auth,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+            binder=start_site,
+        )
     except BaseException:
         await runner.cleanup()
         raise

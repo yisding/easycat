@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Collection, Hashable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Hashable, Iterable
 from functools import partial
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
@@ -44,6 +44,7 @@ from easycat._concurrency import (
     start_owned,
 )
 from easycat._numeric import is_finite_number
+from easycat.runtime._event_tasks import RuntimeTaskScope, wait_for_owned_future
 from easycat.session_manager import SessionStopReport, log_session_stop_failures
 
 if TYPE_CHECKING:
@@ -54,47 +55,12 @@ ConnectionT = TypeVar("ConnectionT")
 SessionT = TypeVar("SessionT")
 logger = logging.getLogger(__name__)
 
-
-def _log_unexpected_task_results(
-    tasks: Sequence[asyncio.Task[Any]],
-    results: Sequence[object],
-    *,
-    explicitly_cancelled: Collection[asyncio.Task[Any]],
-    context: str,
-    log: logging.Logger,
-) -> None:
-    """Log exceptional teardown results without misreporting requested cancellation."""
-    for task, result in zip(tasks, results, strict=True):
-        if not isinstance(result, BaseException):
-            continue
-        if isinstance(result, asyncio.CancelledError) and task in explicitly_cancelled:
-            continue
-        log.error(
-            "%s task %r failed",
-            context,
-            task.get_name(),
-            exc_info=result,
-        )
-
-
-def _log_settled_task_failures(
-    tasks: Iterable[asyncio.Task[Any]],
-    *,
-    explicitly_cancelled: Collection[asyncio.Task[Any]],
-    context: str,
-    log: logging.Logger,
-) -> None:
-    """Log failures already settled when a hard timeout abandons a gather."""
-    for task in tasks:
-        if not task.done():
-            continue
-        if task.cancelled():
-            if task not in explicitly_cancelled:
-                log.error("%s task %r was cancelled unexpectedly", context, task.get_name())
-            continue
-        error = task.exception()
-        if error is not None:
-            log.error("%s task %r failed", context, task.get_name(), exc_info=error)
+_CAPACITY_DRAIN_TASK = "capacity_gate_drain"
+_CAPACITY_DRAIN_COHORT = "capacity-gate-drain"
+_WEBSOCKET_CLEANUP_TASK = "websocket_cleanup"
+_WEBSOCKET_CLEANUP_COHORT = "websocket-cleanup"
+_WEBSOCKET_CLOSE_TASK = "websocket_close"
+_WEBSOCKET_CLOSE_COHORT = "websocket-close"
 
 
 def _validate_timeout(name: str, value: object, *, allow_none: bool = False) -> None:
@@ -119,6 +85,7 @@ def _validate_max_sessions(value: object) -> None:
 async def close_websocket_connections(
     connections: Iterable[object],
     *,
+    task_scope: RuntimeTaskScope,
     timeout_s: float | None,
     code: int = 1001,
     reason: str = "Server shutdown after drain",
@@ -146,7 +113,12 @@ async def close_websocket_connections(
         except Exception:  # noqa: BLE001, S112 invalid remote item is skipped
             continue
         if isinstance(result, Awaitable):
-            close_tasks.append(asyncio.ensure_future(result))
+            task = task_scope.create_task(
+                _await_cleanup_result(result),
+                task_name=f"easycat-websocket-close-{identity}",
+            )
+            assert task is not None
+            close_tasks.append(task)
     if close_tasks:
         await _safe_await(
             asyncio.gather(*close_tasks, return_exceptions=True),
@@ -207,6 +179,22 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         self._sessions: dict[int, SessionT] = {}
         self._connections: dict[int, ConnectionT] = {}
         self._handler_tasks: set[asyncio.Task[object]] = set()
+        self._cleanup_task_scope = RuntimeTaskScope(
+            owner_label=f"{runtime_id}-cleanup",
+            member_name=_WEBSOCKET_CLEANUP_TASK,
+            cohort=_WEBSOCKET_CLEANUP_COHORT,
+            logger=logger,
+            failure_message="WebSocket runtime cleanup task failed",
+            drop_if_closed=False,
+        )
+        self._connection_close_task_scope = RuntimeTaskScope(
+            owner_label=f"{runtime_id}-connection-close",
+            member_name=_WEBSOCKET_CLOSE_TASK,
+            cohort=_WEBSOCKET_CLOSE_COHORT,
+            logger=logger,
+            failure_message="WebSocket connection close task failed",
+            drop_if_closed=False,
+        )
 
     @property
     def survivor_registry(self) -> SurvivorRegistry:
@@ -320,10 +308,14 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             force_timeout_s=max(force_timeout_s, 0.0),
         )
         assert force_deadline is not None
-        await close_websocket_connections(
-            self._connections.values(),
-            timeout_s=_remaining_timeout(force_deadline),
-        )
+        try:
+            await close_websocket_connections(
+                self._connections.values(),
+                task_scope=self._connection_close_task_scope,
+                timeout_s=_remaining_timeout(force_deadline),
+            )
+        finally:
+            await self._connection_close_task_scope.release_standalone_if_empty()
         await cancel_handler_tasks(
             self._handler_tasks,
             timeout_s=_remaining_timeout(force_deadline),
@@ -333,11 +325,14 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             deadline=force_deadline,
             label="WebSocket server handlers",
         )
-        sweep_completed, sweep_result = await self._bounded_cleanup(
-            self.manager.stop_all(),
-            timeout_s=_remaining_timeout(force_deadline),
-            label="WebSocket sessions",
-        )
+        try:
+            sweep_completed, sweep_result = await self._bounded_cleanup(
+                self.manager.stop_all(),
+                timeout_s=_remaining_timeout(force_deadline),
+                label="WebSocket sessions",
+            )
+        finally:
+            await self._cleanup_task_scope.release_standalone_if_empty()
         sweep_error: RuntimeError | None = None
         if isinstance(sweep_result, SessionStopReport) and log_session_stop_failures(
             sweep_result,
@@ -364,19 +359,23 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             (key, self._sessions[key]) for key in self.gate.active_keys() if key in self._sessions
         ]
 
-    @staticmethod
     async def _bounded_cleanup(
+        self,
         awaitable: Awaitable[object],
         *,
         timeout_s: float,
         label: str,
     ) -> tuple[bool, object | None]:
-        future = asyncio.ensure_future(awaitable)
-        completed = await _await_with_hard_timeout(future, timeout_s=timeout_s)
+        task = self._cleanup_task_scope.create_task(
+            _await_cleanup_result(awaitable),
+            task_name="easycat-websocket-runtime-cleanup",
+        )
+        assert task is not None
+        completed = await wait_for_owned_future(task, timeout_s=timeout_s)
         if not completed:
             logger.warning("%s did not close within force timeout %ss", label, timeout_s)
             return False, None
-        return True, future.result()
+        return True, task.result()
 
     async def _bounded_listener_wait(
         self,
@@ -475,7 +474,16 @@ class CapacityGate(Generic[KeyT]):
         self._reserved = 0
         self._active: set[KeyT] = set()
         self._draining = False
-        self._drain_tasks: set[asyncio.Task[None]] = set()
+        self._drain_task_scope = RuntimeTaskScope(
+            owner_label="capacity-gate-drain",
+            member_name=_CAPACITY_DRAIN_TASK,
+            cohort=_CAPACITY_DRAIN_COHORT,
+            logger=logger,
+            failure_message="CapacityGate drain task failed",
+            drop_if_closed=False,
+            release_standalone_when_idle=True,
+        )
+        self._drain_task_serial = 0
 
     # ── Capacity ─────────────────────────────────────────────────────
 
@@ -621,7 +629,14 @@ class CapacityGate(Generic[KeyT]):
                 # Nothing to stop; just drop it from the active set.
                 self.untrack(key)
                 continue
-            task = asyncio.ensure_future(result) if isinstance(result, Awaitable) else None
+            task = (
+                self._start_drain_task(
+                    _await_stop_result(result),
+                    stage="graceful",
+                )
+                if isinstance(result, Awaitable)
+                else None
+            )
             graceful[key] = (session, task)
 
         # (2) wait up to the grace window for the graceful stops to complete.
@@ -634,16 +649,15 @@ class CapacityGate(Generic[KeyT]):
             # Teardown ownership survives cancellation of the caller running
             # drain. This prevents graceful tasks from becoming detached and
             # preserves a keyed path for later force escalation.
-            finish_task = asyncio.create_task(
+            finish_task = self._start_drain_task(
                 self._finish_drain(
                     graceful,
                     force_after=force_after,
                     force_deadline=force_deadline,
                     stop_for_key=stop_for_key,
-                )
+                ),
+                stage="finish",
             )
-            self._drain_tasks.add(finish_task)
-            finish_task.add_done_callback(self._drain_tasks.discard)
 
         await asyncio.shield(finish_task)
         return force_deadline
@@ -659,14 +673,15 @@ class CapacityGate(Generic[KeyT]):
         """Escalate all remaining sessions concurrently under one deadline."""
         escalations: list[asyncio.Task[None]] = []
         for key, (session, task) in graceful.items():
-            escalation = asyncio.create_task(
+            escalation = self._start_drain_task(
                 _escalate_graceful_stop(
                     key,
                     session,
                     task,
                     force_after=force_after,
                     stop_for_key=stop_for_key,
-                )
+                ),
+                stage="escalate",
             )
             escalation.add_done_callback(partial(self._untrack_after_escalation, key))
             escalations.append(escalation)
@@ -680,6 +695,21 @@ class CapacityGate(Generic[KeyT]):
 
     def _untrack_after_escalation(self, key: KeyT, _task: asyncio.Task[None]) -> None:
         self.untrack(key)
+
+    def _start_drain_task(
+        self,
+        coro: Coroutine[Any, Any, None],
+        *,
+        stage: str,
+    ) -> asyncio.Task[None]:
+        """Start one named drain worker under the gate's lifecycle owner."""
+        self._drain_task_serial += 1
+        task = self._drain_task_scope.create_task(
+            coro,
+            task_name=f"easycat-capacity-drain-{stage}-{self._drain_task_serial}",
+        )
+        assert task is not None
+        return cast("asyncio.Task[None]", task)
 
 
 def _deadline_after(timeout_s: float | None) -> float | None:
@@ -715,6 +745,16 @@ def _call_stop(
     if stop is None:
         return None
     return stop(force=force)
+
+
+async def _await_stop_result(awaitable: Awaitable[object]) -> None:
+    """Normalize an arbitrary session stop awaitable into an owned coroutine."""
+    await awaitable
+
+
+async def _await_cleanup_result(awaitable: Awaitable[object]) -> object:
+    """Normalize a cleanup awaitable into the WebSocket runtime's task scope."""
+    return await awaitable
 
 
 async def _escalate_graceful_stop(
@@ -765,7 +805,6 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
     (the same idiom as
     :mod:`easycat.runtime.scope` and :mod:`easycat.config._telephony_wiring`).
     """
-    future = asyncio.ensure_future(awaitable)
     current_task = asyncio.current_task()
     # Deliver a cancellation already pending at helper entry before recording
     # the stale-request baseline. A previously caught request leaves
@@ -774,15 +813,20 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
         try:
             await asyncio.sleep(0)
         except asyncio.CancelledError:
-            future.cancel()
-            await asyncio.gather(future, return_exceptions=True)
+            await _discard_awaitable(awaitable)
             raise
     cancellation_requests = current_task.cancelling() if current_task is not None else 0
+    if timeout_s is not None and not isinstance(awaitable, asyncio.Future):
+        await _discard_awaitable(awaitable)
+        raise TypeError("Timed _safe_await requires an already-owned Future or Task")
     try:
         if timeout_s is not None:
-            await _await_with_hard_timeout(future, timeout_s=timeout_s)
+            await wait_for_owned_future(
+                cast("asyncio.Future[object]", awaitable),
+                timeout_s=timeout_s,
+            )
         else:
-            await future
+            await awaitable
     except asyncio.CancelledError:
         if current_task is not None and current_task.cancelling() > cancellation_requests:
             raise
@@ -790,51 +834,10 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
         pass
 
 
-_BACKGROUND_TIMEOUT_TASKS: set[asyncio.Future[object]] = set()
-
-
-async def _await_with_hard_timeout(
-    awaitable: Awaitable[object],
-    *,
-    timeout_s: float,
-) -> bool:
-    """Wait no longer than ``timeout_s`` without awaiting cancellation cleanup.
-
-    ``asyncio.wait_for`` is not a hard bound: after its deadline it cancels the
-    child and waits for that cancellation to finish. A teardown coroutine can
-    catch cancellation and keep the caller blocked indefinitely. This helper
-    instead requests cancellation, leaves any still-unfinished work owned in a
-    background set, and returns immediately at the deadline. It returns
-    ``True`` when the awaitable completed in time and ``False`` when it remains
-    in progress.
-    """
-    future = asyncio.ensure_future(awaitable)
-    try:
-        done, _pending = await asyncio.wait({future}, timeout=max(timeout_s, 0.0))
-    except asyncio.CancelledError:
-        _track_background_timeout(future)
-        raise
-    if future not in done:
-        future.cancel()
-        _track_background_timeout(future)
-        # Give cooperative cancellation one event-loop turn without waiting for
-        # a coroutine that deliberately resists it.
-        await asyncio.sleep(0)
-        return False
-    await future
-    return True
-
-
-def _track_background_timeout(future: asyncio.Future[object]) -> None:
-    """Keep timed-out teardown work owned and consume its eventual result."""
-    _BACKGROUND_TIMEOUT_TASKS.add(future)
-
-    def finish(done: asyncio.Future[object]) -> None:
-        _BACKGROUND_TIMEOUT_TASKS.discard(done)
-        if not done.cancelled():
-            try:
-                done.exception()
-            except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
-                pass
-
-    future.add_done_callback(finish)
+async def _discard_awaitable(awaitable: Awaitable[object]) -> None:
+    """Cancel an owned future or close a coroutine that was never started."""
+    if isinstance(awaitable, asyncio.Future):
+        awaitable.cancel()
+        await asyncio.gather(awaitable, return_exceptions=True)
+    elif isinstance(awaitable, Coroutine):
+        awaitable.close()
