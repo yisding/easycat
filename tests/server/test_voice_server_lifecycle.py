@@ -118,6 +118,21 @@ def test_late_websocket_close_releases_scope_before_cross_loop_reuse() -> None:
     asyncio.run(second_close())
 
 
+def test_listener_cleanup_releases_scope_before_cross_loop_reuse() -> None:
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    cleanup = AsyncMock()
+
+    async def cleanup_once(stage: str) -> None:
+        errors: list[Exception] = []
+        assert await server._attempt_bounded_listener_cleanup(stage, cleanup, errors)
+        assert errors == []
+
+    asyncio.run(cleanup_once("first listener"))
+    asyncio.run(cleanup_once("second listener"))
+
+    assert cleanup.await_count == 2
+
+
 @pytest.mark.parametrize("handler_cleanup_fails", [False, True])
 async def test_cancel_websocket_handlers_reports_only_cleanup_failures(
     caplog: pytest.LogCaptureFixture,

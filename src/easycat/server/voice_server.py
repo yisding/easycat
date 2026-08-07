@@ -184,6 +184,7 @@ class VoiceServer:
             logger=logger,
             failure_message="VoiceServer listener cleanup task failed",
             drop_if_closed=False,
+            release_standalone_when_idle=True,
         )
         self._listener_cleanup_tasks: dict[str, asyncio.Task[Any]] = {}
 
