@@ -28,6 +28,7 @@ class RuntimeTaskScope:
         logger: logging.Logger,
         failure_message: str,
         drop_if_closed: bool = True,
+        release_standalone_when_idle: bool = False,
         graceful_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
         force_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
     ) -> None:
@@ -40,6 +41,7 @@ class RuntimeTaskScope:
         self._logger = logger
         self._failure_message = failure_message
         self._drop_if_closed = drop_if_closed
+        self._release_standalone_when_idle = release_standalone_when_idle
         self._policy = RuntimeTaskPolicy(
             graceful=RuntimeMemberPolicy(
                 cohort=cohort,
@@ -55,6 +57,7 @@ class RuntimeTaskScope:
         self._scope: RuntimeScope | None = None
         self._owns_root = False
         self._retired_roots: list[RuntimeScope] = []
+        self._release_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def scope(self) -> RuntimeScope | None:
@@ -161,15 +164,17 @@ class RuntimeTaskScope:
         """Close and release an empty lazily created root."""
         for retired in tuple(self._retired_roots):
             if retired.empty:
-                await retired.close()
                 self._retired_roots.remove(retired)
+                await retired.close()
         scope = self._scope
         if not self._owns_root or scope is None or not scope.empty:
             return
+        # Detach before the first await. A new operation can then create a
+        # fresh root while this empty one closes, and a loop-shutdown
+        # cancellation cannot leave the owner pointing at the old loop.
+        self._scope = None
+        self._owns_root = False
         await scope.close()
-        if self._scope is scope:
-            self._scope = None
-            self._owns_root = False
 
     def _replace_scope(self, scope: RuntimeScope) -> None:
         """Install *scope*, promoting work from a standalone root if needed."""
@@ -207,12 +212,36 @@ class RuntimeTaskScope:
         scope = self._scope
         if scope is not None:
             scope.discard(task)
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                self._logger.debug(
+                    self._failure_message,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+        if self._release_standalone_when_idle:
+            self._schedule_standalone_release()
+
+    def _schedule_standalone_release(self) -> None:
+        """Release an idle standalone root on the loop that created it."""
+        scope = self._scope
+        if not self._owns_root or scope is None or not scope.empty:
+            return
+        release = asyncio.create_task(
+            self.release_standalone_if_empty(),
+            name=f"{self._owner_label}-release-idle-scope",
+        )
+        self._release_tasks.add(release)
+        release.add_done_callback(self._on_release_done)
+
+    def _on_release_done(self, task: asyncio.Task[None]) -> None:
+        self._release_tasks.discard(task)
         if task.cancelled():
             return
         error = task.exception()
         if error is not None:
             self._logger.debug(
-                self._failure_message,
+                "Could not release idle standalone runtime scope",
                 exc_info=(type(error), error, error.__traceback__),
             )
 

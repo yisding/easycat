@@ -107,6 +107,7 @@ class SessionManager(Generic[TKey]):
             logger=logger,
             failure_message="Session stop task failed",
             drop_if_closed=False,
+            release_standalone_when_idle=True,
         )
         self._force_requested: set[TKey] = set()
         self._lock = asyncio.Lock()

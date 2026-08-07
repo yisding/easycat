@@ -18,6 +18,7 @@ from easycat.runtime.scope import (
 
 def _task_scope(
     *,
+    release_standalone_when_idle: bool = False,
     graceful_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
     force_action: RuntimeTaskAction = RuntimeTaskAction.FINISH,
 ) -> RuntimeTaskScope:
@@ -28,9 +29,32 @@ def _task_scope(
         logger=logging.getLogger(__name__),
         failure_message="test task failed",
         drop_if_closed=False,
+        release_standalone_when_idle=release_standalone_when_idle,
         graceful_action=graceful_action,
         force_action=force_action,
     )
+
+
+@pytest.mark.asyncio
+async def test_idle_standalone_root_can_release_automatically() -> None:
+    tasks = _task_scope(release_standalone_when_idle=True)
+    task = tasks.create_task(asyncio.sleep(0), task_name="standalone-work")
+    assert task is not None
+    standalone = tasks.scope
+    assert standalone is not None
+
+    await task
+    for _ in range(20):
+        if tasks.scope is None:
+            break
+        await asyncio.sleep(0)
+
+    assert tasks.scope is None
+    for _ in range(20):
+        if standalone.state is RuntimeScopeState.CLOSED:
+            break
+        await asyncio.sleep(0)
+    assert standalone.state is RuntimeScopeState.CLOSED
 
 
 def _root(name: str) -> RuntimeScope:
