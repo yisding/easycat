@@ -629,6 +629,16 @@ its install/import smoke, while the credential-free capability driver remains
 the deterministic lifecycle proof. WS4.1 is complete as the Tier-A transport
 safety net.
 
+## WS5.2
+
+WS5.2 result: `WebTransportTransportConfig.auth_token` is excluded from its
+dataclass repr. The existing secret-repr suite now combines provider-catalog
+sentinels with a 17-entry top-level public-config registry and an exact AST
+inventory of all 25 direct credential fields in config dataclasses. The public
+registry is checked against lazy exports, the source inventory avoids optional
+SDK imports, and every direct credential declaration must use literal
+`field(..., repr=False)` before the runtime sentinel checks can pass.
+
 ## WS6.1b
 
 WS6.1b result: the sole report engine now derives reproducible JSON and

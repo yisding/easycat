@@ -944,6 +944,9 @@ runs without skip; duplicated lifecycle code is deleted.
   registry. A drift guard compares that registry with public exports. Do not
   use the internal transport union as a proxy for all configs or recursively
   import optional-SDK packages.
+
+  Completed — see
+  [completion log](2026-08-02-bug-resistant-completion-log.md#ws52).
 - **WS5.3 TTS residue [M] (Tier B)**: fold `_get_mgr`, `_route_key`,
   `_on_global_frame`, `_reset_persistent_audio_alignment`,
   `_discard_persistent_audio_state`, `_decode_message`

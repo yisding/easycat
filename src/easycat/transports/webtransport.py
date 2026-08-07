@@ -357,7 +357,7 @@ class WebTransportTransportConfig:
     # Bearer auth is enforced on the HTTP/3 CONNECT request before any session
     # transport or provider-backed EasyCat session is created. These auth fields
     # stay after the original positional config fields for compatibility.
-    auth_token: str | None = None
+    auth_token: str | None = field(default=None, repr=False)
     # Browser WebTransport cannot set arbitrary CONNECT headers. Query-token
     # auth therefore exists as an explicit opt-in and remains off by default.
     allow_query_token: bool = False
