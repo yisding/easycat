@@ -12,6 +12,7 @@ from easycat.runtime.capabilities import (
     clear_audio_if_supported,
     health_checkable,
     playback_acknowledgements,
+    rollback_warmup_if_supported,
     transport_reports_audio_delivery,
     warmup_if_supported,
     warmupable,
@@ -295,3 +296,30 @@ async def test_warmup_capability_accepts_sync_and_async_hooks() -> None:
     assert await warmup_if_supported(object()) is False
     assert async_provider.warmed is True
     assert sync_provider.warmed is True
+
+
+@pytest.mark.asyncio
+async def test_warmup_rollback_capability_accepts_sync_and_async_hooks() -> None:
+    class AsyncRollback:
+        def __init__(self) -> None:
+            self.rolled_back = False
+
+        async def rollback_warmup(self) -> None:
+            self.rolled_back = True
+
+    class SyncRollback:
+        def __init__(self) -> None:
+            self.rolled_back = False
+
+        def rollback_warmup(self) -> None:
+            self.rolled_back = True
+
+    async_provider = AsyncRollback()
+    sync_provider = SyncRollback()
+
+    await rollback_warmup_if_supported(async_provider)
+    await rollback_warmup_if_supported(sync_provider)
+    await rollback_warmup_if_supported(object())
+
+    assert async_provider.rolled_back is True
+    assert sync_provider.rolled_back is True

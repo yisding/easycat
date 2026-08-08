@@ -659,6 +659,12 @@ class AgentRunner:
         if fn is not None:
             await fn()
 
+    async def rollback_warmup(self) -> None:
+        """Release wrapped warmup resources without permanently closing the agent."""
+        fn = getattr(self._agent, "rollback_warmup", None)
+        if fn is not None:
+            await fn()
+
     async def aclose(self) -> None:
         """Close the wrapped agent, releasing any held resources."""
         fn = getattr(self._agent, "aclose", None)

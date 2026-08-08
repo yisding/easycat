@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "rationale": "Extract STT provider lifecycle settlement phases without changing cancellation semantics",
+  "rationale": "Merge main: STT lifecycle settlement phases plus PydanticAI warmup partial-context rollback",
   "counts": {
-    "cancelled_error_handler": 116,
+    "cancelled_error_handler": 117,
     "epoch_field": 12,
     "gather_return_exceptions": 22,
     "raw_task_spawn": 17,
@@ -18,6 +18,7 @@
     "cancelled_error_handler\tintegrations/agents/llama_agents.py\tLlamaAgentsBridge._invoke_remote\texcept asyncio.CancelledError\ted12c10820222b8e\t0",
     "cancelled_error_handler\tintegrations/agents/openai_agents.py\tOpenAIAgentsBridge.invoke\texcept asyncio.CancelledError\tb0cd6ed5f0979211\t0",
     "cancelled_error_handler\tintegrations/agents/pydantic_ai.py\tPydanticAIBridge._commit_interrupted_agent_run\texcept asyncio.CancelledError\t99c51236777c04b3\t0",
+    "cancelled_error_handler\tintegrations/agents/pydantic_ai.py\tPydanticAIBridge._enter_warmup_agent_context\texcept asyncio.CancelledError\tfc45bfd80ad57813\t0",
     "cancelled_error_handler\tintegrations/agents/responses_api.py\t_drain_completed_stream\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tpush_to_talk.py\trun_stdin_push_to_talk_session._run\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
     "cancelled_error_handler\treconnecting_ws.py\tReconnectingWebSocket._retry_pending_connection_closes\texcept asyncio.CancelledError\t35f48c271eb25538\t0",

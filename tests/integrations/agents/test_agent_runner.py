@@ -718,6 +718,24 @@ async def test_agent_runner_warmup_noops_without_inner_warmup():
     await runner.warmup()
 
 
+@pytest.mark.asyncio
+async def test_agent_runner_rollback_warmup_delegates_to_inner_bridge() -> None:
+    class _RollbackBridge(_FakeBridge):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rolled_back = False
+
+        async def rollback_warmup(self) -> None:
+            self.rolled_back = True
+
+    inner = _RollbackBridge()
+    runner = AgentRunner(inner)
+
+    await runner.rollback_warmup()
+
+    assert inner.rolled_back is True
+
+
 class _PostDoneHangingBridge:
     COMMITTABLE_BOUNDARIES: dict = {}  # noqa: RUF012 test fake uses shared class fixture
 
