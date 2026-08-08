@@ -1646,6 +1646,11 @@ class TurnRunner:
         try:
             if not self._publication_owns_turn(publication, turn):
                 return ""
+            # Admitting a spoken application turn re-enables playback, exactly
+            # like voice admission above: suppression from a predecessor's
+            # replacement conflict (or an explicit playback cancel) must not
+            # silence this turn's TTS.
+            self._tts.set_playback_suppressed(False)
             await self._emit_turn_started_observation(publication)
             if not self._publication_owns_turn(publication, turn):
                 return ""

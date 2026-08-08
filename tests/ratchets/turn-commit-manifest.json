@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "WS1.3b adds exact pause ownership to the delayed STT provider commit boundary",
+  "update_rationale": "AgentDelta observation now carries part_index and replacement metadata",
   "counts": {
     "categories": {
       "activity_commit": 5,
@@ -74,7 +74,7 @@
     "public_observation_commit\tsession/_stt_committer.py\tSTTCommitter.start_event_loop._consume\tawaited call self._emit<STTPartial>\t09f94e77d8946fb7\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tidentity",
     "public_observation_commit\tsession/_turn_runner.py\tTurnRunner._await_agent_task\tawaited call self._emit<Error>\tdaa59d53b21bbc40\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
     "public_observation_commit\tsession/_turn_runner.py\tTurnRunner._await_agent_task\tawaited call self._emit<Error>\tdaa59d53b21bbc40\t1\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
-    "public_observation_commit\tsession/_turn_runner.py\tTurnRunner._consume_text_event\tawaited call self._emit<AgentDelta>\tf18990aa400cfc09\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\ttext_task",
+    "public_observation_commit\tsession/_turn_runner.py\tTurnRunner._consume_text_event\tawaited call self._emit<AgentDelta>\t69c9d33ab688fa50\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\ttext_task",
     "public_observation_commit\tsession/_turn_runner.py\tTurnRunner._consume_text_event\tawaited call self._emit_text_tool_event<event>\t098f0039c80bbba3\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\ttext_task",
     "public_observation_commit\tsession/_turn_runner.py\tTurnRunner._consume_tts_payloads\tawaited call self._emit<Error>\tcb3b035c0000a1d3\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
     "public_observation_commit\tsession/_turn_runner.py\tTurnRunner._drain_cancelled_text_event\tawaited call self._emit_text_tool_event<event>\t098f0039c80bbba3\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\ttext_task",

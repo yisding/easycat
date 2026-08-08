@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "rationale": "Llama stream-race cleanup extracted into a typed lifecycle helper, removing its reviewed C901 exception",
+  "rationale": "Indexed text replacement consolidation simplified PydanticAIBridge._invoke_agent below the C901 threshold",
   "counts": {
-    "C901": 54,
+    "C901": 53,
     "PLR0912": 31,
     "PLR0915": 26
   },
@@ -60,7 +60,6 @@
     "src/easycat/integrations/agents/openai_agents.py\tC901\tOpenAIAgentsBridge.invoke",
     "src/easycat/integrations/agents/openai_agents.py\tPLR0912\tOpenAIAgentsBridge.invoke",
     "src/easycat/integrations/agents/openai_agents.py\tPLR0915\tOpenAIAgentsBridge.invoke",
-    "src/easycat/integrations/agents/pydantic_ai.py\tC901\tPydanticAIBridge._invoke_agent",
     "src/easycat/integrations/agents/pydantic_ai.py\tC901\tPydanticAIBridge._invoke_graph",
     "src/easycat/integrations/agents/pydantic_ai.py\tC901\tPydanticAIBridge._stream_via_iter",
     "src/easycat/integrations/agents/pydantic_ai.py\tPLR0912\tPydanticAIBridge._invoke_graph",

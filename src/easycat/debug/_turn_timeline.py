@@ -426,8 +426,9 @@ def extract_turn_transcripts(records: list[dict[str, Any]]) -> list[dict[str, An
 
     - User text: ``stt_final`` event records (``data.text`` / ``data.transcript``).
     - Agent reply: AgentStage ``stage_complete`` records (``data.response``) for
-      the basic path; concatenated ``agent_delta`` ``TEXT_DELTA`` records for the
-      streaming path; ``agent_final`` ``data.text`` as the non-streaming fallback.
+      the basic path; replayed ``agent_delta`` ``TEXT_DELTA`` / ``TEXT_REPLACE``
+      records for the streaming path; ``agent_final`` ``data.text`` as the
+      non-streaming fallback.
 
     Each entry keeps the first sequence each side was observed at so callers can
     deep-link to the originating record.
@@ -445,7 +446,8 @@ def extract_turn_transcripts(records: list[dict[str, Any]]) -> list[dict[str, An
                 "agent": "",
                 "user_seq": None,
                 "agent_seq": None,
-                "agent_delta": [],
+                "agent_delta_flat": [],
+                "agent_delta_parts": {},
                 "agent_delta_seq": None,
             },
         )
@@ -467,11 +469,7 @@ def extract_turn_transcripts(records: list[dict[str, Any]]) -> list[dict[str, An
                 bucket["agent"] = resp
                 bucket["agent_seq"] = seq
         elif name == AGENT_DELTA_RECORD_NAME:
-            txt = data.get("text")
-            if isinstance(txt, str) and txt and data.get("type") == "TEXT_DELTA":
-                bucket["agent_delta"].append(txt)
-                if bucket["agent_delta_seq"] is None:
-                    bucket["agent_delta_seq"] = seq
+            _fold_agent_delta_record(bucket, data, seq)
         elif name == "agent_final":
             txt = data.get("text")
             if isinstance(txt, str) and txt and not bucket["agent"]:
@@ -480,14 +478,51 @@ def extract_turn_transcripts(records: list[dict[str, Any]]) -> list[dict[str, An
 
     transcripts = []
     for turn_id, bucket in by_turn.items():
-        if not bucket["agent"] and bucket["agent_delta"]:
-            bucket["agent"] = "".join(bucket["agent_delta"])
-            if bucket["agent_seq"] is None:
-                bucket["agent_seq"] = bucket["agent_delta_seq"]
-        bucket.pop("agent_delta", None)
+        if not bucket["agent"]:
+            delta_text = _joined_agent_delta_text(bucket)
+            if delta_text:
+                bucket["agent"] = delta_text
+                if bucket["agent_seq"] is None:
+                    bucket["agent_seq"] = bucket["agent_delta_seq"]
+        bucket.pop("agent_delta_flat", None)
+        bucket.pop("agent_delta_parts", None)
         bucket.pop("agent_delta_seq", None)
         transcripts.append(bucket)
     return transcripts
+
+
+def _fold_agent_delta_record(bucket: dict[str, Any], data: dict[str, Any], seq: Any) -> None:
+    """Fold one streamed ``agent_delta`` record into the fallback transcript.
+
+    Mirrors ``AgentTextStream``: an indexed ``TEXT_REPLACE`` overwrites its
+    part, an indexed ``TEXT_DELTA`` appends to its part, and records without
+    ``part_index`` stay flat appends.
+    """
+    record_type = data.get("type")
+    txt = data.get("text")
+    if record_type not in ("TEXT_DELTA", "TEXT_REPLACE") or not isinstance(txt, str):
+        return
+    part_index = data.get("part_index")
+    if isinstance(part_index, int) and not isinstance(part_index, bool):
+        parts: dict[int, str] = bucket["agent_delta_parts"]
+        if record_type == "TEXT_REPLACE":
+            parts[part_index] = txt
+        elif txt:
+            parts[part_index] = parts.get(part_index, "") + txt
+        else:
+            return
+    elif record_type == "TEXT_DELTA" and txt:
+        bucket["agent_delta_flat"].append(txt)
+    else:
+        return
+    if bucket["agent_delta_seq"] is None:
+        bucket["agent_delta_seq"] = seq
+
+
+def _joined_agent_delta_text(bucket: dict[str, Any]) -> str:
+    parts: dict[int, str] = bucket["agent_delta_parts"]
+    indexed = "".join(parts[index] for index in sorted(parts))
+    return "".join(bucket["agent_delta_flat"]) + indexed
 
 
 __all__ = [
