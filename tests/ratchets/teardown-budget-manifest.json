@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "update_rationale": "Merge main: retain reviewed session abandonment/listener cancellation ownership and the Pydantic warmup setup-latency classification",
+  "update_rationale": "Bound rejected-start STT cleanup joins after caller cancellation",
   "counts": {
     "configurable": 23,
-    "lifecycle_budget": 91,
+    "lifecycle_budget": 95,
     "not_teardown": 34,
     "protocol_local": 41
   },
@@ -102,6 +102,8 @@
     "lifecycle_call\tsession/_session.py\tSession.stop\tcall asyncio.wait_for\t011f8565363cea1f\t0\tlifecycle_budget\tBounds forced session stop cleanup.",
     "lifecycle_call\tsession/_stt_committer.py\tSTTCommitter._cancel_segment_commit_handoff\tcall asyncio.wait_for\t89ee1033009d2fcc\t0\tlifecycle_budget\tBounds segment-commit handoff cancellation.",
     "lifecycle_call\tsession/_stt_committer.py\tSTTCommitter._cancel_segment_commit_handoff\tcall self._schedule_provider_operation_error\tac0c94403601d7f4\t0\tlifecycle_budget\tPropagates the STT lifecycle timeout to bounded error notification ownership.",
+    "lifecycle_call\tsession/_turn_runner.py\tTurnRunner._join_cancelled_stt_cleanup\tcall asyncio.wait\t3cca73209ec15d61\t0\tlifecycle_budget\tBounds joining rejected-start STT cleanup after caller cancellation.",
+    "lifecycle_call\tsession/_turn_runner.py\tTurnRunner._join_cancelled_stt_cleanup\tcall asyncio.wait\t599f34ae0c8df4bf\t0\tlifecycle_budget\tReaps a cancelled rejected-start STT cleanup task in one bounded stage.",
     "lifecycle_call\tsession/_turn_runner.py\tTurnRunner.cancel_application_prompt\tcall asyncio.wait\t26ef1e1a0bc222a1\t0\tlifecycle_budget\tBounds application-prompt drain before cancellation.",
     "lifecycle_call\tstt/websocket_base.py\tWebSocketSTTBase._drain_and_close\tcall asyncio.wait_for\tf3004ab296dcff32\t0\tprotocol_local\tBounds the provider WebSocket close exchange.",
     "lifecycle_call\ttelephony/server.py\t_shutdown_twilio_voice_app\tcall runtime.drain\t00540fd5c7274e3f\t0\tlifecycle_budget\tBounds Twilio application session drain.",
@@ -157,6 +159,8 @@
     "named_constant\tteardown_budgets.py\t<module>\tconstant SESSION_FORCE_START_LOCK_TIMEOUT_S\t9015965e38736f0f\t0\tlifecycle_budget\tCaps forced stop waiting for the startup lock.",
     "named_constant\tteardown_budgets.py\t<module>\tconstant SESSION_INLINE_SEND_CANCEL_GRACE_TIMEOUT_S\t95a043fb726dca67\t0\tlifecycle_budget\tCaps each inline-send cancellation grace stage.",
     "named_constant\tteardown_budgets.py\t<module>\tconstant SESSION_INLINE_SEND_TIMEOUT_S\t517fdac1d5e5234c\t0\tlifecycle_budget\tCaps protected inline send completion after caller cancellation.",
+    "named_constant\tteardown_budgets.py\t<module>\tconstant SESSION_STT_REJECTION_CLEANUP_CANCEL_GRACE_TIMEOUT_S\t97d75bb4e9437f9b\t0\tlifecycle_budget\tCaps reaping a cancelled rejected-start STT cleanup task.",
+    "named_constant\tteardown_budgets.py\t<module>\tconstant SESSION_STT_REJECTION_CLEANUP_JOIN_TIMEOUT_S\t5ba3f4e239ab83c7\t0\tlifecycle_budget\tCaps joining rejected-start STT cleanup after caller cancellation.",
     "named_constant\tteardown_budgets.py\t<module>\tconstant SESSION_SUPERSEDED_STOP_TIMEOUT_S\tf1a928c838fb6955\t0\tlifecycle_budget\tCaps graceful stop cleanup after force supersession.",
     "named_constant\tteardown_budgets.py\t<module>\tconstant STANDALONE_WEBRTC_FORCE_SHUTDOWN_TIMEOUT_S\t21d09dde28a49de6\t0\tconfigurable\tDefines the shorter default hard standalone WebRTC shutdown budget.",
     "named_constant\tteardown_budgets.py\t<module>\tconstant WEBRTC_AUDIO_ACLOSE_TIMEOUT_S\te967f326f293979d\t0\tlifecycle_budget\tCaps outbound WebRTC delivery-event drain.",

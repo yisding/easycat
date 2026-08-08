@@ -76,6 +76,12 @@ from easycat.strip_markdown import strip_markdown
 from easycat.teardown_budgets import (
     SESSION_APPLICATION_PROMPT_CANCEL_DRAIN_TIMEOUT_S as _APPLICATION_PROMPT_CANCEL_DRAIN_S,
 )
+from easycat.teardown_budgets import (
+    SESSION_STT_REJECTION_CLEANUP_CANCEL_GRACE_TIMEOUT_S as _STT_REJECTION_CLEANUP_GRACE_S,
+)
+from easycat.teardown_budgets import (
+    SESSION_STT_REJECTION_CLEANUP_JOIN_TIMEOUT_S as _STT_REJECTION_CLEANUP_JOIN_S,
+)
 from easycat.timeouts import (
     AgentTimeoutError,
     TimeoutConfig,
@@ -368,35 +374,75 @@ class TurnRunner:
 
         The caller may itself be cancelled while provider cleanup is running.
         Keep the cleanup task joined through settlement, then re-raise that
-        external cancellation. Reset shared turn state only while this exact
-        publication still owns both Session identity and manager activity, so
-        stale cleanup cannot roll back a newer owner.
+        external cancellation — but only within the teardown budget: a
+        provider whose cleanup never settles must not make the caller (and
+        transitively ``stop(force=True)``) uncancellable. Reset shared turn
+        state only while this exact publication still owns both Session
+        identity and manager activity, so stale cleanup cannot roll back a
+        newer owner.
         """
         cleanup = asyncio.create_task(
             self._stt.cancel(turn),
             name=f"stt-start-rejection-cleanup-{turn.id}",
         )
+        cleanup.add_done_callback(self._runtime_scope.log_task_exception)
         cancellation: asyncio.CancelledError | None = None
         while not cleanup.done():
             try:
                 await asyncio.shield(cleanup)
             except asyncio.CancelledError as exc:
-                cancellation = cancellation or exc
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    cancellation = cancellation or exc
+                    break
                 continue
             except Exception:  # noqa: BLE001 - inspect cleanup task result below
                 break
 
-        cleanup_complete = False
+        if cancellation is not None and not cleanup.done():
+            cancellation = await self._join_cancelled_stt_cleanup(cleanup, cancellation)
+
+        cleanup_complete = self._settled_stt_cleanup_result(cleanup)
+        if cleanup_complete and self._publication_owns_turn(publication, turn):
+            self._reset_turn_state()
+        return cleanup_complete, cancellation
+
+    @staticmethod
+    async def _join_cancelled_stt_cleanup(
+        cleanup: asyncio.Task[bool],
+        cancellation: asyncio.CancelledError,
+    ) -> asyncio.CancelledError:
+        """Join a rejected-start cleanup within the teardown budget only."""
         try:
-            cleanup_complete = cleanup.result()
+            done, _ = await asyncio.wait(
+                {cleanup},
+                timeout=_STT_REJECTION_CLEANUP_JOIN_S,
+            )
+            if not done:
+                cleanup.cancel()
+                await asyncio.wait({cleanup}, timeout=_STT_REJECTION_CLEANUP_GRACE_S)
+        except asyncio.CancelledError:
+            if not cleanup.done():
+                cleanup.cancel()
+        return cancellation
+
+    @staticmethod
+    def _settled_stt_cleanup_result(cleanup: asyncio.Task[bool]) -> bool:
+        """Read a settled cleanup result; an unsettled task stays observed."""
+        if not cleanup.done():
+            logger.warning(
+                "STT teardown after rejected start exceeded its cancellation join "
+                "budget; cleanup task %s remains observed in the background",
+                cleanup.get_name(),
+            )
+            return False
+        try:
+            return cleanup.result()
         except asyncio.CancelledError:
             logger.debug("STT teardown after rejected start was cancelled")
         except Exception:
             logger.debug("STT teardown after rejected start raised", exc_info=True)
-
-        if cleanup_complete and self._publication_owns_turn(publication, turn):
-            self._reset_turn_state()
-        return cleanup_complete, cancellation
+        return False
 
     def _rollback_rejected_start_activity(self, publication: TurnPublication) -> None:
         """Reset only the manager activity/token still owned by this publication."""

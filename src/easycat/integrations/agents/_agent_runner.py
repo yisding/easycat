@@ -56,6 +56,17 @@ def _require_agent_text(value: Any, *, source: str) -> str:
     return value
 
 
+def _bridge_event_text(event: Any, kind: Any) -> str:
+    """Validate text only for text-bearing kinds; tool/handoff events from
+    duck-typed bridges may legitimately carry ``text=None``."""
+    if kind not in ("text_delta", "done"):
+        return ""
+    return _require_agent_text(
+        getattr(event, "text", ""),
+        source=f"agent bridge {kind} event text",
+    )
+
+
 async def _await_with_timeout(awaitable: Awaitable[_T], timeout: float | None) -> _T:
     """Await in the caller task while enforcing an optional deadline.
 
@@ -453,10 +464,7 @@ class AgentRunner:
                 if event is None:
                     return
                 kind = getattr(event, "kind", None)
-                text = _require_agent_text(
-                    getattr(event, "text", ""),
-                    source=f"agent bridge {kind or 'unknown'} event text",
-                )
+                text = _bridge_event_text(event, kind)
                 if kind == "text_delta":
                     accumulated += text
                 elif kind == "done":

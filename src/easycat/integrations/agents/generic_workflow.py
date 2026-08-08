@@ -163,6 +163,8 @@ class GenericWorkflowBridge(BridgeTemplate):
         shared, so a blanket ``__dict__`` dump would otherwise leak API
         keys and auth headers stored on the workflow object.
         """
+        from easycat.runtime.safe_defaults import _is_secret_name
+
         try:
             state: dict[str, Any] | None = None
             if hasattr(self._workflow, "snapshot_state"):
@@ -175,7 +177,11 @@ class GenericWorkflowBridge(BridgeTemplate):
             if state is None:
                 raw = getattr(self._workflow, "__dict__", {})
                 if isinstance(raw, dict):
-                    state = raw
+                    # Substring-match attribute names (``authtoken``,
+                    # ``apisecret``) that the serializer's word-boundary
+                    # classifier would keep; a blanket ``__dict__`` dump
+                    # warrants the over-exclusion.
+                    state = {k: v for k, v in raw.items() if not _is_secret_name(str(k))}
                 else:
                     state = {}
             return serialize_framework_state(state)

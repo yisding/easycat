@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -1003,6 +1004,28 @@ async def test_bridge_nonstring_event_text_does_not_commit_shadow_history() -> N
         await _drain(runner, "hello")
 
     assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_bridge_tool_event_with_none_text_passes_through() -> None:
+    """Duck-typed tool events legitimately carry ``text=None``."""
+
+    class NoneTextToolBridge(_FakeBridge):
+        async def invoke(self, turn_input, recorder, cancel_token=None):
+            yield SimpleNamespace(
+                kind="tool_started",
+                text=None,
+                tool_name="lookup",
+                call_id="call-1",
+            )
+            yield AgentBridgeEvent(kind="done", text="answer")
+
+    runner = AgentRunner(NoneTextToolBridge())
+
+    events = [event async for event in runner.invoke(AgentTurnInput.from_text("hi"), _recorder())]
+
+    assert [getattr(event, "kind", None) for event in events] == ["tool_started", "done"]
+    assert events[-1].text == "answer"
 
 
 @pytest.mark.asyncio

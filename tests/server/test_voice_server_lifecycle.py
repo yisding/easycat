@@ -799,6 +799,64 @@ async def test_raw_websocket_listener_timeout_retries_same_owned_waiter() -> Non
     assert server._listener_cleanup_task_scope.tasks() == ()
 
 
+async def test_cooperative_listener_cancel_reports_timeout_and_retains_listener() -> None:
+    """A listener wait that accepts cancellation still counts as a timeout.
+
+    Regression test: ``_attempt_bounded_listener_cleanup`` used to treat a
+    cooperatively cancelled cleanup wait as success, so ``stop(force=True)``
+    reported a clean shutdown, dropped ``_ws_server``, and left no retry
+    path even though the listener never confirmed closing in time.
+    """
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+    release_wait = asyncio.Event()
+    cancel_seen = asyncio.Event()
+
+    class _CooperativeHangingListener:
+        def __init__(self) -> None:
+            self.wait_calls = 0
+
+        def close(self, close_connections: bool = True) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            self.wait_calls += 1
+            if release_wait.is_set():
+                return
+            try:
+                await release_wait.wait()
+            except asyncio.CancelledError:
+                cancel_seen.set()
+                raise
+
+    listener = _CooperativeHangingListener()
+    server._ws_server = listener
+    server._started = True
+
+    with pytest.raises(RuntimeError, match="cooperatively cancelled"):
+        await server.stop(force=True)
+
+    # The missed deadline is a reported failure: the listener stays retained
+    # for retry instead of being discarded as successfully closed, and the
+    # settled cleanup task was reaped so a later stop starts a fresh attempt.
+    assert cancel_seen.is_set()
+    assert server._ws_server is listener
+    assert "raw-WebSocket listener" not in server._listener_cleanup_tasks
+    assert server._listener_cleanup_task_scope.tasks() == ()
+    assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
+
+    release_wait.set()
+    await server.stop(force=True)
+
+    assert listener.wait_calls == 2
+    assert server._ws_server is None
+    assert server._lifecycle_cleanup_error is None
+    assert server._listener_cleanup_task_scope.tasks() == ()
+
+
 async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_ownership(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,

@@ -215,6 +215,28 @@ class TestInterruption:
         assert b"preserved" in payload
         assert b"[REDACTED_SECRET]" in payload
 
+    def test_dict_fallback_drops_concatenated_lowercase_credential_names(self):
+        class _CredentialAttrWorkflow:
+            """No ``snapshot_state``: forces the ``__dict__`` fallback."""
+
+            def __init__(self) -> None:
+                self.authtoken = "2fj9xkq-plain-shaped-value"
+                self.apisecret = "another-plain-shaped-value"
+                self.mode = "screening"
+
+            async def on_user_turn(self, text: str) -> str:
+                return text
+
+        bridge = GenericWorkflowBridge(workflow=_CredentialAttrWorkflow())
+
+        payload = bridge._serialize_framework_state()
+
+        assert b"2fj9xkq-plain-shaped-value" not in payload
+        assert b"another-plain-shaped-value" not in payload
+        assert b"authtoken" not in payload
+        assert b"apisecret" not in payload
+        assert b"screening" in payload
+
 
 class TestConstruction:
     def test_no_on_user_turn_raises(self):

@@ -789,15 +789,20 @@ class VoiceServer:
             cancel_on_timeout=cancel_on_timeout,
         )
         if wait_result is _ListenerCleanupWaitResult.COOPERATIVELY_CANCELLED:
+            # The wait was cancelled, but the stage still missed its deadline:
+            # report the timeout so the caller keeps the listener for retry
+            # instead of discarding it as successfully closed. The settled
+            # task is reaped so a later stop() starts a fresh attempt.
             self._listener_cleanup_tasks.pop(stage, None)
             await asyncio.gather(task, return_exceptions=True)
-            logger.warning(
-                "VoiceServer: %s exceeded force_shutdown_timeout_s=%ss and was "
-                "cooperatively cancelled",
-                stage,
-                self.config.force_shutdown_timeout_s,
+            timeout_error = RuntimeError(
+                f"{stage} did not {timeout_action} within "
+                f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s "
+                "(cleanup wait cooperatively cancelled)"
             )
-            return True
+            logger.warning("VoiceServer: %s", timeout_error)
+            cleanup_errors.append(timeout_error)
+            return False
         if wait_result is _ListenerCleanupWaitResult.RETAINED:
             timeout_error = RuntimeError(
                 f"{stage} did not {timeout_action} within "

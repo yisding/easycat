@@ -36,6 +36,12 @@ SESSION_INLINE_SEND_CANCEL_GRACE_TIMEOUT_S: Final = 0.1
 # A forced stop must not remain behind startup code that ignores cancellation.
 SESSION_FORCE_START_LOCK_TIMEOUT_S: Final = 0.5
 
+# Once the caller is cancelled, bound joining rejected-start STT cleanup.
+SESSION_STT_REJECTION_CLEANUP_JOIN_TIMEOUT_S: Final = 5.0
+
+# Reap a cancelled rejected-start STT cleanup task in one short bounded stage.
+SESSION_STT_REJECTION_CLEANUP_CANCEL_GRACE_TIMEOUT_S: Final = 0.5
+
 # Give a superseded graceful stop a bounded opportunity to unwind.
 SESSION_SUPERSEDED_STOP_TIMEOUT_S: Final = 0.5
 

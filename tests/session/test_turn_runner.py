@@ -777,6 +777,85 @@ async def test_rejected_manager_publication_rolls_back_and_retries_after_stt_cle
 
 
 @pytest.mark.asyncio
+async def test_rejected_start_cleanup_join_is_bounded_when_cleanup_resists_cancellation(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancelled caller escapes rejected-start cleanup within its join budget.
+
+    Regression test: the post-cancellation join used to loop on
+    ``asyncio.shield`` with no deadline, so an STT cleanup that swallowed
+    cancellation made the publication caller — and transitively
+    ``stop(force=True)`` awaiting the pipeline task — hang forever.
+    """
+    monkeypatch.setattr("easycat.session._turn_runner._STT_REJECTION_CLEANUP_JOIN_S", 0.05)
+    monkeypatch.setattr("easycat.session._turn_runner._STT_REJECTION_CLEANUP_GRACE_S", 0.05)
+
+    session = Session(_config())
+    session._is_running = True
+    cleanup_entered = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    original_cancel = session._stt_committer.cancel
+
+    async def _cancellation_resistant_cancel(turn: TurnContext | None = None) -> bool:
+        _ = turn
+        cleanup_entered.set()
+        while not release_cleanup.is_set():
+            try:
+                await release_cleanup.wait()
+            except asyncio.CancelledError:
+                pass
+        return True
+
+    def _rejection_cleanup_tasks(turn_id: str) -> list[asyncio.Task[object]]:
+        name = f"stt-start-rejection-cleanup-{turn_id}"
+        return [task for task in asyncio.all_tasks() if task.get_name() == name]
+
+    driver: asyncio.Task[tuple[bool, asyncio.CancelledError | None]] | None = None
+    turn_id = ""
+    try:
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="rejected-start"))
+        turn = session._turn
+        assert turn is not None
+        turn_id = turn.id
+        monkeypatch.setattr(
+            session._stt_committer,
+            "cancel",
+            _cancellation_resistant_cancel,
+        )
+        publication = TurnPublication(
+            source="voice",
+            session_id=session.session_id,
+            turn_id=turn.id,
+            cancel_token=turn.cancel_token,
+            activity=None,
+        )
+        driver = asyncio.create_task(
+            session._turn_runner._cleanup_rejected_stt_start(publication, turn)
+        )
+        await asyncio.wait_for(cleanup_entered.wait(), timeout=1)
+
+        driver.cancel()
+        # The bounded join must let the cancelled caller return promptly even
+        # though the cleanup task never settles; pre-fix this awaited forever.
+        cleanup_complete, cancellation = await asyncio.wait_for(driver, timeout=1)
+
+        assert cleanup_complete is False
+        assert isinstance(cancellation, asyncio.CancelledError)
+        assert "exceeded its cancellation join budget" in caplog.text
+        orphans = _rejection_cleanup_tasks(turn.id)
+        assert len(orphans) == 1
+        assert not orphans[0].done()
+    finally:
+        release_cleanup.set()
+        if driver is not None:
+            await asyncio.gather(driver, return_exceptions=True)
+        for task in _rejection_cleanup_tasks(turn_id):
+            await asyncio.gather(task, return_exceptions=True)
+        await original_cancel(session._turn)
+
+
+@pytest.mark.asyncio
 async def test_resistant_segment_timeout_notification_allows_rollback_and_force_stop(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

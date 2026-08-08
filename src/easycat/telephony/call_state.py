@@ -429,6 +429,7 @@ class OutboundCallStateMachine:
             f"easycat-call-transition-{id(self):x}",
             default=None,
         )
+        self._active_transition_owner: asyncio.Task[Any] | None = None
         self._started = False
         self._timers = BackgroundTaskScope()
         self._max_duration_hangup: Callable[[str], Awaitable[None]] | None = None
@@ -588,13 +589,15 @@ class OutboundCallStateMachine:
         if transition_owner is not None and current_task is transition_owner:
             await self._transition_owned(new_state)
             return
-        if transition_owner is not None:
+        if transition_owner is not None and transition_owner is self._active_transition_owner:
             # A task spawned by an inline state observer inherits the active
             # ContextVar but is not structurally joined to this transition.
             # Letting it bypass the lock can race the outer invariant
             # settlement; making it wait can deadlock when the observer awaits
             # the child. Require observers to await transition() directly in
-            # their own task, where reentry is safely serialized inline.
+            # their own task, where reentry is safely serialized inline. A
+            # stale inherited owner (that transition already settled) takes
+            # the ordinary serialized path below instead.
             raise RuntimeError(
                 "state observers must await transition() directly; "
                 "spawned transition tasks are not supported"
@@ -604,9 +607,11 @@ class OutboundCallStateMachine:
                 await self._transition_owned(new_state)
                 return
             context_token = self._transition_context.set(current_task)
+            self._active_transition_owner = current_task
             try:
                 await self._transition_owned(new_state)
             finally:
+                self._active_transition_owner = None
                 self._transition_context.reset(context_token)
 
     async def _transition_owned(self, new_state: OutboundCallState) -> None:

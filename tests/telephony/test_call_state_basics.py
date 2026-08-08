@@ -533,6 +533,37 @@ class TestOutboundCallStateMachine:
             bus.unsubscribe(CallStateChanged, spawn_redirect)
 
     @pytest.mark.asyncio
+    async def test_observer_spawned_task_may_transition_after_settlement(self) -> None:
+        """A stale inherited transition context must not reject later transitions."""
+        bus = EventBus(handler_error_policy="raise")
+        sm = OutboundCallStateMachine(bus)
+        release = asyncio.Event()
+        children: list[asyncio.Task[None]] = []
+
+        async def follow_up() -> None:
+            await release.wait()
+            await sm.transition(OutboundCallState.VOICEMAIL)
+
+        async def spawn_follow_up(event: CallStateChanged) -> None:
+            if event.new == OutboundCallState.HUMAN:
+                # The child copies the active transition context but first
+                # runs only after the owning transition has settled.
+                children.append(asyncio.create_task(follow_up()))
+
+        bus.subscribe(CallStateChanged, spawn_follow_up)
+        try:
+            await sm.transition(OutboundCallState.HUMAN)
+            assert sm.state == OutboundCallState.HUMAN
+            assert len(children) == 1
+
+            release.set()
+            await asyncio.wait_for(children[0], timeout=1)
+            assert sm.state == OutboundCallState.VOICEMAIL
+        finally:
+            release.set()
+            bus.unsubscribe(CallStateChanged, spawn_follow_up)
+
+    @pytest.mark.asyncio
     async def test_unrelated_concurrent_transition_waits_for_active_observer(self) -> None:
         bus = EventBus(handler_error_policy="raise")
         sm = OutboundCallStateMachine(bus)
