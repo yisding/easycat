@@ -48,6 +48,7 @@ jobs:
         run: >-
           uv run --python ${{ matrix.python-version }} pytest -q
           -o faulthandler_timeout=0
+          -o timeout=0
           --junitxml="$VALIDATION_ARTIFACTS_DIR/serial-junit.xml"
           --junit-prefix "nightly-serial-py${{ matrix.python-version }}"
           tests/runtime/test_artifacts.py

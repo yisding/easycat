@@ -100,6 +100,7 @@ jobs:
         run: >-
           uv run --python ${{ matrix.python-version }} pytest -q
           -o faulthandler_timeout=0
+          -o timeout=0
           --junitxml="$VALIDATION_ARTIFACTS_DIR/serial-junit.xml"
           --junit-prefix "serial-py${{ matrix.python-version }}"
           tests/runtime/test_artifacts.py
@@ -196,7 +197,7 @@ jobs:
       - name: Run safe slice with coverage
         run: >-
           uv run --python 3.12 pytest -q -n auto --dist load
-          -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not serial and not flaky"
+          -m "not integration_socket and not integration_live and not integration_external and not contract and not latency and not slow and not stress and not serial and not flaky"
           --cov --cov-report=term-missing --cov-report=xml:coverage.xml
       # Report-only: PRs see how much of the changed lines they cover.
       # Does NOT fail the build yet (see opt-in --fail-under below).

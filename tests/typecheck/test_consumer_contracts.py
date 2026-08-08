@@ -75,15 +75,19 @@ EasyConfig.phone(mcp_servers="stdio://tool")
     return {path: lines for path, (_, lines) in consumers.items()}
 
 
-def _render_twilio_server(tmp_path: Path) -> Path:
-    template = Path("src/easycat/cli/scaffold/templates/twilio-phone/server.py")
+def _render_twilio_scaffold(tmp_path: Path) -> tuple[Path, ...]:
+    # agent.py must keep its real name beside server.py: the server does
+    # `from agent import make_agent`, and mypy's ignore_missing_imports would
+    # silently degrade make_agent to Any if that import could not resolve.
+    template_dir = Path("src/easycat/cli/scaffold/templates/twilio-phone")
     mapping = _substitutions(InitConfig(template="twilio-phone"), project_name="demo")
-    rendered = tmp_path / "generated_twilio_server.py"
-    rendered.write_text(
-        _render_text(template.read_text(encoding="utf-8"), mapping),
-        encoding="utf-8",
-    )
-    return rendered
+    rendered: list[Path] = []
+    for name in ("agent.py", "server.py"):
+        target = tmp_path / name
+        source = (template_dir / name).read_text(encoding="utf-8")
+        target.write_text(_render_text(source, mapping), encoding="utf-8")
+        rendered.append(target)
+    return tuple(rendered)
 
 
 @pytest.mark.slow
@@ -98,7 +102,7 @@ def test_downstream_consumer_type_contracts(tmp_path: Path) -> None:
         Path("tests/typecheck/voice_app_consumer.py"),
         Path("tests/typecheck/websocket_runtime_consumer.py"),
         Path("examples/twilio_app.py"),
-        _render_twilio_server(tmp_path),
+        *_render_twilio_scaffold(tmp_path),
     )
     result = subprocess.run(
         [

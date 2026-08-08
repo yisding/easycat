@@ -22,11 +22,12 @@ sync-extra *EXTRAS:
     uv sync --group dev {{ prepend('--extra ', EXTRAS) }}
 
 # `loadscope` keeps each module on one worker. Direct-fork tests cannot safely
-# run in an xdist worker at all, so the second command runs them serially.
+# run in an xdist worker at all, so the second command runs them serially with
+# both watchdog threads (faulthandler and pytest-timeout) disabled.
 # Run the full credential-free local test suite.
 test:
     uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external and not serial"
-    uv run pytest -o faulthandler_timeout=0 -m "serial and not integration_live and not integration_external"
+    uv run pytest -o faulthandler_timeout=0 -o timeout=0 -m "serial and not integration_live and not integration_external"
 
 # This is intentionally serial and may make billable provider API calls.
 # Run every live-provider test explicitly (requires provider credentials).
@@ -38,7 +39,7 @@ test-live:
 # `quick` validation slice marker expression (validation/runner.py).
 # Run the deterministic quick validation slice in parallel.
 test-fast:
-    uv run pytest -n auto --dist load -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not serial and not flaky and not guard"
+    uv run pytest -n auto --dist load -m "not integration_socket and not integration_live and not integration_external and not contract and not latency and not slow and not stress and not serial and not flaky and not guard"
 
 # Run a single file or node id. Usage: just test-one tests/core/test_cancel_token.py
 # or: just test-one tests/core/test_cancel_token.py::TestCancelToken::test_cancel
@@ -80,7 +81,7 @@ typecheck-fast:
 # Uses pytest-cov because `coverage run -m pytest -n auto` reports 0% under xdist.
 # Run coverage over the credential-free quick slice.
 cov:
-    uv run pytest -n auto --dist load --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not serial and not flaky and not guard"
+    uv run pytest -n auto --dist load --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not latency and not slow and not stress and not serial and not flaky and not guard"
 
 # Guard root onboarding docs, install guidance, docs routes, public API docs, CLI JSON envelopes, and maintained Markdown links and anchors.
 guard-docs:

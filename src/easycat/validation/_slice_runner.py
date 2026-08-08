@@ -59,8 +59,8 @@ _SLICE_SPECS = {
         name="quick",
         selector=(
             "not integration_socket and not integration_live and not integration_external "
-            "and not contract and not slow and not stress and not serial and not flaky "
-            "and not guard"
+            "and not contract and not latency and not slow and not stress and not serial "
+            "and not flaky and not guard"
         ),
         pytest_args=("-n", "auto", "--dist", "load"),
     ),

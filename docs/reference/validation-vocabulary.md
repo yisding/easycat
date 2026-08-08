@@ -190,7 +190,7 @@ Runner selector for PR-local quick validation:
 
 ```bash
 uv run pytest -q --junitxml=<run-dir>/junit.xml \
-  -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not serial and not flaky and not guard"
+  -m "not integration_socket and not integration_live and not integration_external and not contract and not latency and not slow and not stress and not serial and not flaky and not guard"
 ```
 
 Expected coverage: unit tests, local integration tests, fake-provider agent
@@ -577,8 +577,8 @@ Current CI:
 
 - `lint`
 - `test` on Python 3.12 and 3.14 with the quick selector excluding socket,
-  live, external-dependency, contract, slow, stress, serial, and flaky tests,
-  followed by the direct-fork `serial` slice without xdist
+  live, external-dependency, contract, latency, slow, stress, serial, and
+  flaky tests, followed by the direct-fork `serial` slice without xdist
 - `integration-socket` on Python 3.12 and 3.14 with `integration_socket`
 - live provider tests run only in `nightly-validation.yml`'s `live-canaries`
   job (protected `live-validation` environment); ci.yml no longer carries a

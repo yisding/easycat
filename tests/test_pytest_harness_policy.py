@@ -7,6 +7,7 @@ half an hour.
 
 from __future__ import annotations
 
+import re
 import shlex
 import tomllib
 from pathlib import Path
@@ -73,6 +74,37 @@ def test_xdist_auto_workers_respect_explicit_override(monkeypatch: pytest.Monkey
     monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "3")
 
     assert _xdist_auto_worker_count() == 3
+
+
+@pytest.mark.parametrize("override", ["four", "", "2.5", "0", "-1"])
+def test_xdist_auto_workers_reject_invalid_overrides(
+    monkeypatch: pytest.MonkeyPatch, override: str
+) -> None:
+    monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", override)
+
+    with pytest.raises(pytest.UsageError, match="positive integer"):
+        _xdist_auto_worker_count()
+
+
+def test_ci_serial_lanes_list_every_serial_test_file() -> None:
+    """The CI serial commands enumerate files; a new serial file must be added.
+
+    Both workflows run the serial slice as an explicit file list (to skip a
+    full collection pass), so a ``serial``-marked test in a file missing from
+    those lists would silently never run in CI.
+    """
+    marker = re.compile(r"^\s*@pytest\.mark\.serial\b", re.MULTILINE)
+    serial_files = sorted(
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in (REPO_ROOT / "tests").rglob("*.py")
+        if marker.search(path.read_text(encoding="utf-8"))
+    )
+    assert serial_files, "expected at least one serial-marked test file"
+
+    for workflow in (".github/workflows/ci.yml", ".github/workflows/nightly-validation.yml"):
+        text = (REPO_ROOT / workflow).read_text(encoding="utf-8")
+        missing = [name for name in serial_files if name not in text]
+        assert missing == [], f"{workflow} serial lane is missing {missing}"
 
 
 def test_sync_tests_do_not_start_an_asyncio_runner(request: pytest.FixtureRequest) -> None:

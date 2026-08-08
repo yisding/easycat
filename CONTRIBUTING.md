@@ -43,9 +43,9 @@ raw equivalent in the table below. Install it with `uv tool install rust-just`,
 | --- | --- | --- |
 | Install dev deps | `just sync` | `uv sync --group dev` |
 | Install an extra | `just sync-extra openai` | `uv sync --group dev --extra openai` |
-| Full local test suite | `just test` | `uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external and not serial" && uv run pytest -o faulthandler_timeout=0 -m "serial and not integration_live and not integration_external"` |
+| Full local test suite | `just test` | `uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external and not serial" && uv run pytest -o faulthandler_timeout=0 -o timeout=0 -m "serial and not integration_live and not integration_external"` |
 | Live provider suite (may be billable) | `just test-live` | `uv run pytest -m integration_live` |
-| Fast parallel run | `just test-fast` | `uv run pytest -n auto --dist load -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not serial and not flaky and not guard"` |
+| Fast parallel run | `just test-fast` | `uv run pytest -n auto --dist load -m "not integration_socket and not integration_live and not integration_external and not contract and not latency and not slow and not stress and not serial and not flaky and not guard"` |
 | One file / node | `just test-one tests/core/test_cancel_token.py` | `uv run pytest tests/core/test_cancel_token.py` |
 | Lint | `just lint` | `uv run ruff check . && uv run lint-imports` |
 | Lint auto-fix | `just lint-fix` | `uv run ruff check --fix .` |
@@ -53,7 +53,7 @@ raw equivalent in the table below. Install it with `uv tool install rust-just`,
 | Format check | `just fmt-check` | `uv run ruff format --check .` |
 | Type gate (mypy, whole package) | `just typecheck` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
-| Coverage | `just cov` | `uv run pytest -n auto --dist load --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not serial and not flaky and not guard"` |
+| Coverage | `just cov` | `uv run pytest -n auto --dist load --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not latency and not slow and not stress and not serial and not flaky and not guard"` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
 | Validate (socket) | `just validate-socket` | `uv run easycat validate socket` |
 | Validate (stress) | `just validate-stress` | `uv run easycat validate stress` |
@@ -63,7 +63,7 @@ raw equivalent in the table below. Install it with `uv tool install rust-just`,
 | Validate (release) | `just validate-release` | `uv run easycat validate release` |
 | Validate report | `just validate-report .easycat/validation/latest.json` | `uv run easycat validate report .easycat/validation/latest.json` |
 | Pre-commit hooks | `just pre-commit` | `uv run pre-commit run --all-files` |
-| Pre-PR gauntlet | `just check` | `uv run pre-commit run --all-files && uv run mypy src/easycat && uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external and not serial" && uv run pytest -o faulthandler_timeout=0 -m "serial and not integration_live and not integration_external"` |
+| Pre-PR gauntlet | `just check` | `uv run pre-commit run --all-files && uv run mypy src/easycat && uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external and not serial" && uv run pytest -o faulthandler_timeout=0 -o timeout=0 -m "serial and not integration_live and not integration_external"` |
 
 `just check` mirrors CI's core source-quality gates, but it is not a literal
 replay of the workflow: CI also covers the supported Python matrix, minimum
@@ -160,10 +160,10 @@ workers by default; set `PYTEST_XDIST_AUTO_NUM_WORKERS` to override it.
 Tests marked `serial` call process primitives such as `os.fork()` that are
 unsafe after xdist has started worker-management threads. Bare pytest and the
 parallel command in `just test` exclude them; `just test` then runs that small
-slice without xdist or the faulthandler watchdog thread. Direct-fork tests also
-disable pytest-timeout's helper thread and must bound their child with
-`signal.alarm`, `select`, or an equivalent primitive. Quick and coverage runs
-omit them; CI and nightly run them serially.
+slice without xdist and with both watchdog threads (faulthandler and
+pytest-timeout) disabled. Direct-fork tests must instead bound their child
+with `signal.alarm`, `select`, or an equivalent primitive. Quick and coverage
+runs omit them; CI and nightly run them serially.
 
 If you add tests that bind a **fixed** port (rather than port `0`), keep them
 in one module and mark them `integration_socket` — the dedicated socket,
@@ -197,7 +197,7 @@ managed virtualenv. Each slice writes a JSON + JUnit report under
 
 | Slice | Command | Marker selection |
 | --- | --- | --- |
-| `quick` | `uv run easycat validate quick` | not integration_socket / live / external / contract / slow / stress / serial / flaky / guard |
+| `quick` | `uv run easycat validate quick` | not integration_socket / live / external / contract / latency / slow / stress / serial / flaky / guard |
 | `socket` | `uv run easycat validate socket` | integration_socket, not live, not flaky |
 | `stress` | `uv run easycat validate stress` | stress, not live, not flaky |
 | `contracts` | `uv run easycat validate contracts` | contract, not live, not flaky |
