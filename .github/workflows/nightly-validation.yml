@@ -43,7 +43,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --group dev --python ${{ matrix.python-version }}
       - run: mkdir -p "$VALIDATION_ARTIFACTS_DIR"
-      - run: uv run --python ${{ matrix.python-version }} pytest -q --junitxml="$VALIDATION_ARTIFACTS_DIR/junit.xml" --junit-prefix "nightly-full-local" -m "not integration_socket and not integration_live and not integration_external and not stress and not flaky"
+      - run: uv run --python ${{ matrix.python-version }} pytest -q --junitxml="$VALIDATION_ARTIFACTS_DIR/junit.xml" --junit-prefix "nightly-full-local" -m "not integration_socket and not integration_live and not integration_external and not stress and not serial and not flaky"
+      - name: Validate direct-fork tests serially
+        run: >-
+          uv run --python ${{ matrix.python-version }} pytest -q
+          -o faulthandler_timeout=0
+          -o timeout=0
+          --junitxml="$VALIDATION_ARTIFACTS_DIR/serial-junit.xml"
+          --junit-prefix "nightly-serial-py${{ matrix.python-version }}"
+          tests/runtime/test_artifacts.py
+          tests/runtime/test_crash_sweep.py
+          tests/vad/test_silero.py
+          -m serial
       - name: Upload full local validation artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

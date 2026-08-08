@@ -45,8 +45,13 @@ async def test_cancel_from_another_thread_wakes_waiter() -> None:
         waiter = asyncio.ensure_future(token.wait())
         # Yield so the waiter actually begins awaiting on the loop.
         await asyncio.sleep(0)
-        threading.Thread(target=worker).start()
-        await asyncio.wait_for(waiter, timeout=2.0)
+        thread = threading.Thread(target=worker)
+        thread.start()
+        try:
+            await asyncio.wait_for(waiter, timeout=2.0)
+        finally:
+            thread.join(timeout=1.0)
+        assert not thread.is_alive()
 
     await wait_then_assert()
     assert token.is_cancelled

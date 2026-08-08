@@ -116,6 +116,8 @@ def test_silero_onnx_cache_releases_failed_model_construction(
     assert vad_silero_module._ONNX_SESSION_CACHE == {}
 
 
+@pytest.mark.serial
+@pytest.mark.timeout(0)
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
 def test_silero_cache_lock_is_reset_after_fork() -> None:
     read_fd, write_fd = os.pipe()
