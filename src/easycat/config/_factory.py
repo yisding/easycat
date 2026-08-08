@@ -326,10 +326,10 @@ def _audio_runtime_config(config: EasyConfig) -> EasyConfig:
     runtime.action_executors = tuple(config.action_executors)
     telephony = config.telephony
     if telephony is not None:
-        if type(telephony) is not TelephonyConfig:
+        if not isinstance(telephony, TelephonyConfig):
             raise EasyConfigError("telephony must be a TelephonyConfig instance or None.")
         outbound = telephony.outbound
-        if outbound is not None and type(outbound) is not OutboundCallConfig:
+        if outbound is not None and not isinstance(outbound, OutboundCallConfig):
             raise EasyConfigError("telephony.outbound must be an OutboundCallConfig instance.")
         runtime.telephony = copy.copy(telephony)
         runtime.telephony.dtmf_aggregator = copy.copy(telephony.dtmf_aggregator)

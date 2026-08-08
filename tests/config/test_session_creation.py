@@ -816,6 +816,30 @@ def test_audio_runtime_config_copies_nested_retry_policy() -> None:
     assert runtime_retry.max_retries == 4
 
 
+def test_audio_runtime_config_accepts_telephony_config_subclasses() -> None:
+    class _PolicyTelephony(TelephonyConfig):
+        pass
+
+    class _PolicyOutbound(OutboundCallConfig):
+        pass
+
+    telephony = _PolicyTelephony(outbound=_PolicyOutbound(from_number="+15551234567"))
+    config = EasyConfig(
+        stt=_ProviderShapeSTT(),
+        tts=_ProviderShapeTTS(),
+        vad=_ProviderShapeVAD(),
+        transport=_IdentitySinkTransport(),
+        agent=_DummyAgent(),
+        telephony=telephony,
+    )
+
+    runtime = config_factory._audio_runtime_config(config)
+
+    assert type(runtime.telephony) is _PolicyTelephony
+    assert type(runtime.telephony.outbound) is _PolicyOutbound  # type: ignore[union-attr]
+    assert runtime.telephony is not telephony
+
+
 def test_create_session_revalidates_mutated_retry_policy_before_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

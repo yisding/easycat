@@ -1134,7 +1134,9 @@ class WebRTCTransport(AudioQueueMixin):
                     raise exc from cleanup_error
             return web.Response(
                 status=400,
-                text=json.dumps({"error": f"SDP negotiation failed: {exc}"}),
+                # Exception details stay in the log and degraded event; the
+                # external client only learns that negotiation failed.
+                text=json.dumps({"error": "SDP negotiation failed"}),
                 content_type="application/json",
                 headers=self._cors_headers(request),
             )
