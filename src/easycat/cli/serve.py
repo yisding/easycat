@@ -8,7 +8,9 @@ live transcript, interruption indicator, and per-turn latency readout).
 Security defaults mirror the WebSocket/docker golden path: the signaling
 server binds loopback (``127.0.0.1``) unless ``--host`` is overridden, and a
 non-loopback bind requires a shared ``--token`` (or ``EASYCAT_SERVE_TOKEN``)
-that the bundled client forwards from the page URL's ``#token=`` fragment.
+that the bundled client forwards from the page URL's ``#token=`` fragment. A
+token-bearing link is printed only for loopback or an explicit HTTPS
+``--public-url``; direct non-loopback HTTP would expose the bearer token.
 ``VoiceApp`` also enforces this guard internally (defense in depth); the CLI
 keeps its own pre-flight check so it can emit the exit-code-2 message contract.
 
@@ -25,7 +27,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import typer
 
@@ -68,8 +70,49 @@ def _url_host(host: str) -> str:
     return display_host
 
 
-def _playground_url(host: str, port: int, token: str | None) -> str:
-    url = f"http://{_url_host(host)}:{port}"
+def _normalize_public_url(value: str | None) -> str | None:
+    """Validate and normalize an HTTPS origin used only for operator-facing links."""
+    if value is None:
+        return None
+    parsed = urlsplit(value)
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise ValueError("--public-url must contain a valid HTTPS origin") from exc
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            "--public-url must be an HTTPS origin without credentials, path, query, or fragment"
+        )
+    netloc = parsed.hostname
+    if ":" in netloc and not netloc.startswith("["):
+        netloc = f"[{netloc}]"
+    if parsed_port is not None:
+        netloc = f"{netloc}:{parsed_port}"
+    return urlunsplit(("https", netloc, "", "", ""))
+
+
+def _playground_url(
+    host: str,
+    port: int,
+    token: str | None,
+    *,
+    public_url: str | None = None,
+) -> str:
+    normalized_public_url = _normalize_public_url(public_url)
+    if token and normalized_public_url is None and not _is_loopback(host):
+        raise ValueError(
+            "refusing to advertise a bearer token over non-loopback HTTP; "
+            "configure an HTTPS --public-url"
+        )
+    url = normalized_public_url or f"http://{_url_host(host)}:{port}"
     if token:
         fragment = urlencode({"token": token})
         return f"{url}/webrtc_client.html#{fragment}"
@@ -80,7 +123,14 @@ def _websocket_endpoint(host: str, port: int) -> str:
     return f"ws://{_url_host(host)}:{port}"
 
 
-def _announce_serve_endpoint(*, mode: str, host: str, port: int, token: str | None) -> None:
+def _announce_serve_endpoint(
+    *,
+    mode: str,
+    host: str,
+    port: int,
+    token: str | None,
+    public_url: str | None,
+) -> None:
     """Print a mode-appropriate endpoint hint before the (blocking) server starts.
 
     Only ``browser`` mode serves the HTTP playground page; ``websocket`` mode
@@ -97,7 +147,15 @@ def _announce_serve_endpoint(*, mode: str, host: str, port: int, token: str | No
         if token:
             stdout_console.print("Send the token as an `Authorization: Bearer <token>` header.")
         return
-    stdout_console.print(f"Open {_playground_url(host, port, token)}")
+    if token and not _is_loopback(host) and public_url is None:
+        stdout_console.print(f"Listening on http://{_url_host(host)}:{port}")
+        stdout_console.print(
+            "No token-bearing Open URL was printed because direct non-loopback HTTP "
+            "would expose the bearer token. Put the server behind HTTPS and pass "
+            "--public-url https://<public-host>."
+        )
+        return
+    stdout_console.print(f"Open {_playground_url(host, port, token, public_url=public_url)}")
     stdout_console.print(
         "The page shows the live transcript, interruption indicator, and per-turn latency."
     )
@@ -275,9 +333,20 @@ def serve(
         "--token",
         help=(
             "Shared secret required by the signaling endpoints. Defaults to "
-            "EASYCAT_SERVE_TOKEN when set. The printed Open URL includes it as #token=."
+            "EASYCAT_SERVE_TOKEN when set. A loopback or HTTPS Open URL includes "
+            "it as #token=."
         ),
         envvar="EASYCAT_SERVE_TOKEN",
+        show_envvar=True,
+    ),
+    public_url: str | None = typer.Option(
+        None,
+        "--public-url",
+        help=(
+            "External HTTPS origin used for the printed browser link when serving "
+            "behind a TLS-terminating proxy."
+        ),
+        envvar="EASYCAT_SERVE_PUBLIC_URL",
         show_envvar=True,
     ),
     agent_model: str = typer.Option(
@@ -318,6 +387,19 @@ def serve(
         )
         raise typer.Exit(2)
 
+    try:
+        public_url = _normalize_public_url(public_url)
+    except ValueError as exc:
+        emit_command_error("serve", str(exc), json_output=False)
+        raise typer.Exit(2) from exc
+    if public_url is not None and mode != "browser":
+        emit_command_error(
+            "serve",
+            "--public-url is only valid with --mode browser.",
+            json_output=False,
+        )
+        raise typer.Exit(2)
+
     token = token or _serve_token_from_env()
     # Local/mic mode opens no listener — host/port/token are ignored by
     # ``_run_voice_app`` there — so the non-loopback bind-token guard only
@@ -344,5 +426,11 @@ def serve(
     # Mode-appropriate hint: browser prints the playground URL, websocket prints
     # the ws:// endpoint, local prints the mic message — never the page URL for a
     # mode that does not serve it.
-    _announce_serve_endpoint(mode=mode, host=host, port=port, token=token)
+    _announce_serve_endpoint(
+        mode=mode,
+        host=host,
+        port=port,
+        token=token,
+        public_url=public_url,
+    )
     _run_voice_app(app, mode=mode, host=host, port=port, token=token)

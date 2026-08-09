@@ -45,6 +45,7 @@ def stub_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(serve_mod, "_build_voice_app", fake_build)
     monkeypatch.setattr(serve_mod, "_run_voice_app", fake_run)
     monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
+    monkeypatch.delenv("EASYCAT_SERVE_PUBLIC_URL", raising=False)
     monkeypatch.delenv("EASYCAT_MANIFEST", raising=False)
     # ``serve`` eagerly validates the playground config before announcing, which
     # requires the OpenAI key; provide one so these tests exercise the happy path.
@@ -57,6 +58,7 @@ def test_serve_help_describes_playground(cli: CliRunner, typer_app) -> None:
     assert result.exit_code == 0
     assert "playground" in result.stdout.lower()
     assert "--token" in result.stdout
+    assert "--public-url" in result.stdout
     assert "--mode" in result.stdout
     assert "--manifest" in result.stdout
     assert "--profile" in result.stdout
@@ -202,10 +204,77 @@ def test_serve_allows_non_loopback_host_with_token(
     result = cli.invoke(typer_app, ["serve", "--host", "0.0.0.0", "--token", "sekrit"])
 
     assert result.exit_code == 0
-    assert "#token=sekrit" in result.stdout
+    assert "sekrit" not in result.stdout
+    assert "No token-bearing Open URL was printed" in result.stdout
+    assert "--public-url" in result.stdout
     run = stub_runtime["ran"][0]
     assert run["token"] == "sekrit"
     assert run["host"] == "0.0.0.0"
+
+
+def test_serve_prints_nonloopback_token_only_for_explicit_https_public_url(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    result = cli.invoke(
+        typer_app,
+        [
+            "serve",
+            "--host",
+            "0.0.0.0",
+            "--token",
+            "a+b&c#d e",
+            "--public-url",
+            "https://voice.example.com",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (
+        "Open https://voice.example.com/webrtc_client.html#token=a%2Bb%26c%23d+e" in result.stdout
+    )
+    assert stub_runtime["ran"][0]["token"] == "a+b&c#d e"
+
+
+def test_serve_reads_https_public_url_from_env(
+    cli: CliRunner,
+    typer_app,
+    stub_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EASYCAT_SERVE_PUBLIC_URL", "https://voice.example.com/")
+
+    result = cli.invoke(
+        typer_app,
+        ["serve", "--host", "0.0.0.0", "--token", "sekrit"],
+    )
+
+    assert result.exit_code == 0
+    assert "https://voice.example.com/webrtc_client.html#token=sekrit" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "public_url",
+    [
+        "http://voice.example.com",
+        "https://voice.example.com/prefix",
+        "https://user:pass@voice.example.com",
+        "https://voice.example.com?token=sekrit",
+    ],
+)
+def test_serve_rejects_unsafe_public_url(
+    cli: CliRunner,
+    typer_app,
+    stub_runtime: dict[str, Any],
+    public_url: str,
+) -> None:
+    result = cli.invoke(
+        typer_app,
+        ["serve", "--token", "sekrit", "--public-url", public_url],
+    )
+
+    assert result.exit_code == 2
+    assert "HTTPS origin" in result.output
+    assert stub_runtime["ran"] == []
 
 
 def test_serve_reads_token_from_env(
@@ -523,16 +592,21 @@ def test_playground_factory_preserves_transport_echo_cancellation_default(
 def test_playground_url_shapes() -> None:
     assert _playground_url("127.0.0.1", 8080, None) == "http://localhost:8080"
     assert (
-        _playground_url("0.0.0.0", 8443, "t") == "http://0.0.0.0:8443/webrtc_client.html#token=t"
+        _playground_url("127.0.0.1", 8443, "t")
+        == "http://localhost:8443/webrtc_client.html#token=t"
     )
     assert (
-        _playground_url("0.0.0.0", 8443, "a+b&c#d e")
-        == "http://0.0.0.0:8443/webrtc_client.html#token=a%2Bb%26c%23d+e"
+        _playground_url(
+            "0.0.0.0",
+            8443,
+            "a+b&c#d e",
+            public_url="https://voice.example.com",
+        )
+        == "https://voice.example.com/webrtc_client.html#token=a%2Bb%26c%23d+e"
     )
-    assert (
-        _playground_url("2001:db8::1", 8443, "t")
-        == "http://[2001:db8::1]:8443/webrtc_client.html#token=t"
-    )
+    assert _playground_url("2001:db8::1", 8443, None) == "http://[2001:db8::1]:8443"
+    with pytest.raises(ValueError, match="non-loopback HTTP"):
+        _playground_url("0.0.0.0", 8443, "t")
 
 
 def test_websocket_endpoint_brackets_ipv6_hosts() -> None:

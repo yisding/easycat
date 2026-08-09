@@ -32,7 +32,7 @@ try:
 except ImportError as exc:
     raise SystemExit(
         "LangChain (<1.0) is required. For an app, run: "
-        "uv add 'easycat[quickstart]' 'langchain<1' 'langchain-openai<1'. "
+        "`uv add 'easycat[quickstart]' 'langchain<1' 'langchain-openai<1'`. "
         "In this repo, run: uv sync --extra quickstart --group dev; "
         'uv pip install "langchain<1" "langchain-openai<1"'
     ) from exc
