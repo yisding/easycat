@@ -849,8 +849,7 @@ async def test_push_to_talk_barge_in(
 async def test_cancel_turn_resets_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Calling cancel_turn() mid-processing should reset state cleanly."""
     transport = QueueTransport()
-    # Extra empty transcript: cancel_turn -> _cancel_stt -> end_stream() consumes one
-    stt = ScriptedSTT(["cancelled turn", "", "second turn"])
+    stt = ScriptedSTT(["cancelled turn", "second turn"])
     tts = RecordingTTS(chunk_sizes=(640,))
     vad = ScriptedVAD(["start", "stop", "noop", "noop", "start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
@@ -870,6 +869,7 @@ async def test_cancel_turn_resets_state(monkeypatch: pytest.MonkeyPatch) -> None
         # Cancel while agent is processing
         await asyncio.sleep(0.05)
         await session.cancel_turn()
+        assert stt.end_calls == 1
 
         # Session should be idle again, try another turn
         agent2 = UpperAgent()
@@ -880,6 +880,7 @@ async def test_cancel_turn_resets_state(monkeypatch: pytest.MonkeyPatch) -> None
 
         agent_final = await collector.wait_for(AgentFinal, timeout=3.0)
         assert agent_final.text == "SECOND TURN"
+        assert stt.end_calls == 2
     finally:
         await transport.finish_input()
         await session.stop()
@@ -1077,8 +1078,7 @@ async def test_shutdown_force_closes_everything(monkeypatch: pytest.MonkeyPatch)
 async def test_reset_state_clears_everything(monkeypatch: pytest.MonkeyPatch) -> None:
     """reset_state() should cancel active processing and return to idle."""
     transport = QueueTransport()
-    # Extra blank: reset_state -> _cancel_stt -> end_stream consumes one
-    stt = ScriptedSTT(["hello", "", "world"])
+    stt = ScriptedSTT(["hello", "world"])
     tts = RecordingTTS(chunk_sizes=(640,))
     vad = ScriptedVAD(["start", "stop", "noop", "noop", "start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
@@ -1100,6 +1100,7 @@ async def test_reset_state_clears_everything(monkeypatch: pytest.MonkeyPatch) ->
 
         # Reset mid-processing
         await session.reset_state()
+        assert stt.end_calls == 1
 
         # Session should now accept new turns
         session.agent = UpperAgent()
@@ -1108,6 +1109,7 @@ async def test_reset_state_clears_everything(monkeypatch: pytest.MonkeyPatch) ->
 
         agent_final = await collector.wait_for(AgentFinal, timeout=3.0)
         assert agent_final.text == "WORLD"
+        assert stt.end_calls == 2
     finally:
         await transport.finish_input()
         await session.stop()
@@ -1173,8 +1175,7 @@ async def test_agent_runner_history_cleared_on_reset(
 ) -> None:
     """reset_state() should clear agent conversation history."""
     transport = QueueTransport()
-    # Extra blank for double end_stream from reset
-    stt = ScriptedSTT(["hello", "", "world"])
+    stt = ScriptedSTT(["hello", "world"])
     tts = RecordingTTS(chunk_sizes=(640,))
     vad = ScriptedVAD(["start", "stop", "noop", "noop", "start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
@@ -1203,6 +1204,7 @@ async def test_agent_runner_history_cleared_on_reset(
         # Reset clears history
         await session.reset_state()
         assert len(runner.history) == 0
+        assert stt.end_calls == 1
 
         # Turn 2 should work with clean history
         for _ in range(4):
@@ -1214,6 +1216,7 @@ async def test_agent_runner_history_cleared_on_reset(
         )
         assert second.text == "WORLD"
         assert len(runner.history) == 2  # user + assistant
+        assert stt.end_calls == 2
     finally:
         await transport.finish_input()
         await session.stop()

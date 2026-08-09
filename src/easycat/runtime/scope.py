@@ -577,6 +577,34 @@ class RuntimeScope:
             self._children[name] = child
         return child
 
+    def prune_empty_child(self, child: RuntimeScope) -> bool:
+        """Close admission and unlink one settled direct child when empty.
+
+        A ``False`` result can still leave the child subtree in ``CLOSING``:
+        admission is closed before emptiness is checked so no new member can
+        race the prune. Callers must not use this method as a side-effect-free
+        emptiness probe.
+        """
+        if child.parent is not self:
+            raise ValueError("RuntimeScope child does not belong to this parent")
+        child._close_admission_recursive()
+        if (
+            child.tasks()
+            or child.children()
+            or child._pending_finalizer_names()
+            or child.terminal_results()
+        ):
+            return False
+        with self._state_lock:
+            if self._children.get(child.name) is not child:
+                return False
+            self._children.pop(child.name)
+        child._mark_terminal_recursive()
+        registry = child.survivor_registry
+        if registry is not None:
+            registry.forget_closed_owner(child.owner_id)
+        return True
+
     async def start_owned_task(
         self,
         name: str,

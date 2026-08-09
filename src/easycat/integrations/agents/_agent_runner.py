@@ -50,6 +50,24 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 
+def _require_agent_text(value: Any, *, source: str) -> str:
+    """Enforce the plain-text portion of the agent/bridge protocol."""
+    if not isinstance(value, str):
+        raise TypeError(f"{source} must be str, got {type(value).__name__}")
+    return value
+
+
+def _bridge_event_text(event: Any, kind: Any) -> str:
+    """Validate text only for text-bearing kinds; tool/handoff events from
+    duck-typed bridges may legitimately carry ``text=None``."""
+    if kind not in ("text_delta", "text_replace", "done"):
+        return ""
+    return _require_agent_text(
+        getattr(event, "text", None),
+        source=f"agent bridge {kind} event text",
+    )
+
+
 async def _await_with_timeout(awaitable: Awaitable[_T], timeout: float | None) -> _T:
     """Await in the caller task while enforcing an optional deadline.
 
@@ -188,10 +206,18 @@ class AgentRunnerConfig:
             raise ValueError("AgentRunnerConfig.timeout must be a finite number or None")
         if self.timeout is not None:
             self.timeout = float(self.timeout)
+        if not isinstance(self.preemptive_generation, bool):
+            raise ValueError(  # noqa: TRY004 domain-specific validation error
+                "AgentRunnerConfig.preemptive_generation must be a boolean"
+            )
         if isinstance(self.preemptive_max_retries, bool) or not isinstance(
             self.preemptive_max_retries, int
         ):
-            raise ValueError("AgentRunnerConfig.preemptive_max_retries must be an integer")  # noqa: TRY004 domain-specific validation error
+            raise ValueError(  # noqa: TRY004 domain-specific validation error
+                "AgentRunnerConfig.preemptive_max_retries must be an integer"
+            )
+        if self.preemptive_max_retries < 1:
+            raise ValueError("AgentRunnerConfig.preemptive_max_retries must be >= 1")
 
 
 @dataclass
@@ -242,7 +268,7 @@ class AgentRunner:
     @property
     def history(self) -> list[Any]:
         """Current conversation history (copy)."""
-        return list(self._history)
+        return [item.copy() for item in self._history]
 
     @property
     def is_bridge(self) -> bool:
@@ -262,7 +288,7 @@ class AgentRunner:
     @property
     def preemptive_max_retries(self) -> int:
         """Maximum speculative attempts allowed for one voice turn."""
-        return max(1, self._config.preemptive_max_retries)
+        return self._config.preemptive_max_retries
 
     @staticmethod
     def _validate_plain_turn_input(turn_input: AgentTurnInput) -> None:
@@ -310,6 +336,7 @@ class AgentRunner:
                 response = await self._agent.run(turn_input.text)
         except TimeoutError:
             raise AgentTimeoutError(self._config.timeout or 0) from None
+        response = _require_agent_text(response, source="plain agent response")
 
         return PreparedAgentResponse(
             input_text=turn_input.text,
@@ -334,6 +361,7 @@ class AgentRunner:
             cancel_token and cancel_token.is_cancelled
         ):
             return
+        response = _require_agent_text(prepared.response, source="prepared agent response")
 
         cursor = ExecutionCursor(
             unit_id=f"runner-{uuid4().hex[:8]}",
@@ -345,11 +373,11 @@ class AgentRunner:
         recorder.record_unit_entered(cursor)
         prepared.committed = True
         self._history.append({"role": "user", "content": prepared.input_text})
-        self._history.append({"role": "assistant", "content": prepared.response})
+        self._history.append({"role": "assistant", "content": response})
         recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
-        yield AgentBridgeEvent(kind="text_delta", text=prepared.response)
-        yield AgentBridgeEvent(kind="done", text=prepared.response)
+        yield AgentBridgeEvent(kind="text_delta", text=response)
+        yield AgentBridgeEvent(kind="done", text=response)
 
     # ── ExternalAgentBridge interface ────────────────────────────
 
@@ -410,7 +438,7 @@ class AgentRunner:
         if not manages_conversation_history and not turn_input.context and self._history:
             bridge_input = AgentTurnInput(
                 text=turn_input.text,
-                context=list(self._history),
+                context=[item.copy() for item in self._history],
                 turn_id=turn_input.turn_id,
                 role=turn_input.role,
             )
@@ -441,7 +469,7 @@ class AgentRunner:
                 if event is None:
                     return
                 kind = getattr(event, "kind", None)
-                text = getattr(event, "text", "") or ""
+                text = _bridge_event_text(event, kind)
                 if kind in {"text_delta", "text_replace"}:
                     accumulated.apply(event)
                 elif kind == "done":
@@ -500,6 +528,7 @@ class AgentRunner:
             response = await _await_with_timeout(
                 self._agent.run(turn_input.text), self._config.timeout
             )
+            response = _require_agent_text(response, source="plain agent response")
         except TimeoutError:
             self._history.pop()
             self._close_simple_cursor(recorder, cursor, reason="timeout")

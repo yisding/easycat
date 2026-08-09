@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import time
@@ -28,6 +27,7 @@ from easycat.integrations.agents._responses_api_events import (
     parse_sse_line,
     translate_sse_event,
 )
+from easycat.integrations.agents._state_serialization import serialize_framework_state
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -568,20 +568,16 @@ class RemoteResponsesAPIBridge:
 
     def _serialize_framework_state(self) -> bytes:
         """Serialize bridge state for artifact storage."""
-        try:
-            return json.dumps(
-                {
-                    "accumulated_items": self._last_accumulated_items,
-                    "user_text": self._last_user_text,
-                    "completed_response_ids": self._completed_response_ids,
-                    "last_turn_response_id": self._last_turn_response_id,
-                    "last_turn_replay_items": self._last_turn_replay_items,
-                    "interrupted_response_id": self._interrupted_response_id,
-                },
-                default=str,
-            ).encode()
-        except (TypeError, ValueError):
-            return b"{}"
+        return serialize_framework_state(
+            {
+                "accumulated_items": self._last_accumulated_items,
+                "user_text": self._last_user_text,
+                "completed_response_ids": self._completed_response_ids,
+                "last_turn_response_id": self._last_turn_response_id,
+                "last_turn_replay_items": self._last_turn_replay_items,
+                "interrupted_response_id": self._interrupted_response_id,
+            }
+        )
 
     def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
         truncated = delivered_text + "..." if delivered_text else ""

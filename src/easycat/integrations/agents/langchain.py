@@ -11,7 +11,6 @@ frameworks.
 from __future__ import annotations
 
 import inspect
-import json
 import logging
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -32,6 +31,7 @@ from easycat.integrations.agents._langchain_events import (
     route_tool_cancellation_events,
     translate_stream_event,
 )
+from easycat.integrations.agents._state_serialization import serialize_framework_state
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -851,9 +851,9 @@ class LangChainBridge:
             payload = [
                 {"role": _role_of(m), "content": _content_of(m)} for m in self._message_history
             ]
-            return json.dumps(payload, default=str).encode()
-        except (TypeError, ValueError):
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return b"[]"
+        return serialize_framework_state(payload, fallback=b"[]")
 
     def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
         replacement = delivered_text + "..." if delivered_text else ""

@@ -52,11 +52,12 @@ class TurnStage:
         started = time.perf_counter()
         result_attr = "pass"
         state_before = self.snapshot_state()
-        audio_bytes = _concat_chunks(input)
+        provider_input = _materialize_one_shot_iterable(input)
+        audio_bytes = _concat_chunks(provider_input)
         input_ref = await put_artifact_async(
             ctx,
             audio_bytes,
-            capture_allowed=audio_input_capture_allowed(ctx, input),
+            capture_allowed=audio_input_capture_allowed(ctx, provider_input),
         )
         start_sequence = journal_append_event(
             ctx,
@@ -70,7 +71,7 @@ class TurnStage:
             },
         )
         try:
-            result = await self._provider.detect(input)
+            result = await self._provider.detect(provider_input)
         except Exception as exc:
             result_attr = "fail"
             elapsed_ms = (time.perf_counter() - started) * 1000
@@ -201,3 +202,14 @@ def _concat_chunks(input_: Any) -> bytes:
         return b"".join(pieces)
     except TypeError:
         return b""
+
+
+def _materialize_one_shot_iterable(input_: Any) -> Any:
+    """Snapshot iterator inputs once so capture and detection see identical audio."""
+    try:
+        iterator = iter(input_)
+    except TypeError:
+        return input_
+    if iterator is input_:
+        return list(iterator)
+    return input_

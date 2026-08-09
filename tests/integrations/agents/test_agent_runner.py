@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -67,6 +68,18 @@ def test_config_rejects_noninteger_preemptive_retry_limit(retries: object) -> No
         AgentRunnerConfig(preemptive_max_retries=retries)
 
 
+@pytest.mark.parametrize("enabled", [0, 1, "true", None])
+def test_config_rejects_nonboolean_preemptive_generation(enabled: object) -> None:
+    with pytest.raises(ValueError, match="preemptive_generation must be a boolean"):
+        AgentRunnerConfig(preemptive_generation=enabled)
+
+
+@pytest.mark.parametrize("retries", [0, -1])
+def test_config_rejects_nonpositive_preemptive_retry_limit(retries: int) -> None:
+    with pytest.raises(ValueError, match="preemptive_max_retries must be >= 1"):
+        AgentRunnerConfig(preemptive_max_retries=retries)
+
+
 class UpperAgent:
     async def run(self, text: str) -> str:
         return text.upper()
@@ -95,6 +108,17 @@ def test_agent_runner_is_a_bridge():
     assert isinstance(runner, ExternalAgentBridge)
 
 
+@pytest.mark.asyncio
+async def test_history_returns_independent_message_dicts():
+    runner = AgentRunner(EchoAgent())
+    await _drain(runner, "hello")
+
+    history = runner.history
+    history[0]["content"] = "corrupted"
+
+    assert runner.history[0] == {"role": "user", "content": "hello"}
+
+
 # ── invoke() tests ────────────────────────────────────────────────
 
 
@@ -105,6 +129,20 @@ async def test_invoke_yields_text_delta_and_done():
     assert [e.kind for e in events] == ["text_delta", "done"]
     assert events[0].text == "Echo: hello"
     assert events[1].text == "Echo: hello"
+
+
+@pytest.mark.asyncio
+async def test_plain_agent_rejects_nonstring_response_without_committing_history() -> None:
+    class InvalidAgent:
+        async def run(self, text: str) -> object:
+            return {"text": text}
+
+    runner = AgentRunner(InvalidAgent())
+
+    with pytest.raises(TypeError, match="plain agent response must be str"):
+        await _drain(runner, "hello")
+
+    assert runner.history == []
 
 
 @pytest.mark.asyncio
@@ -223,6 +261,20 @@ async def test_prepare_response_defers_history_until_invoke_prepared():
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "Echo: hello"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_prepare_response_rejects_nonstring_agent_output() -> None:
+    class InvalidAgent:
+        async def run(self, _text: str) -> object:
+            return ["not", "text"]
+
+    runner = _preemptive_runner(InvalidAgent())
+
+    with pytest.raises(TypeError, match="plain agent response must be str"):
+        await runner.prepare_response(AgentTurnInput.from_text("hello"))
+
+    assert runner.history == []
 
 
 @pytest.mark.asyncio
@@ -938,6 +990,74 @@ async def test_bridge_delegation_forwards_runner_history_as_context():
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "reply-1"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_bridge_cannot_mutate_runner_history_through_forwarded_context() -> None:
+    class MutatingContextBridge(_ContextCapturingBridge):
+        async def invoke(self, turn_input, recorder, cancel_token=None):
+            if turn_input.context:
+                turn_input.context[0]["content"] = "corrupted"
+            async for event in super().invoke(turn_input, recorder, cancel_token):
+                yield event
+
+    inner = MutatingContextBridge()
+    runner = AgentRunner(inner)
+
+    await _drain(runner, "first")
+    await _drain(runner, "second")
+
+    assert runner.history[0] == {"role": "user", "content": "first"}
+
+
+@pytest.mark.asyncio
+async def test_bridge_nonstring_event_text_does_not_commit_shadow_history() -> None:
+    class InvalidTextBridge(_FakeBridge):
+        async def invoke(self, turn_input, recorder, cancel_token=None):
+            yield AgentBridgeEvent(kind="done", text=["not", "text"])  # type: ignore[arg-type]
+
+    runner = AgentRunner(InvalidTextBridge())
+
+    with pytest.raises(TypeError, match="agent bridge done event text must be str"):
+        await _drain(runner, "hello")
+
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_bridge_text_event_without_text_is_rejected() -> None:
+    class MissingTextBridge(_FakeBridge):
+        async def invoke(self, turn_input, recorder, cancel_token=None):
+            yield SimpleNamespace(kind="done")
+
+    runner = AgentRunner(MissingTextBridge())
+
+    with pytest.raises(TypeError, match="agent bridge done event text must be str"):
+        await _drain(runner, "hello")
+
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_bridge_tool_event_with_none_text_passes_through() -> None:
+    """Duck-typed tool events legitimately carry ``text=None``."""
+
+    class NoneTextToolBridge(_FakeBridge):
+        async def invoke(self, turn_input, recorder, cancel_token=None):
+            yield SimpleNamespace(
+                kind="tool_started",
+                text=None,
+                tool_name="lookup",
+                call_id="call-1",
+            )
+            yield AgentBridgeEvent(kind="done", text="answer")
+
+    runner = AgentRunner(NoneTextToolBridge())
+
+    events = [event async for event in runner.invoke(AgentTurnInput.from_text("hi"), _recorder())]
+
+    assert [getattr(event, "kind", None) for event in events] == ["tool_started", "done"]
+    assert events[-1].text == "answer"
 
 
 @pytest.mark.asyncio

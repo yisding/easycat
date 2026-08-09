@@ -56,7 +56,12 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.runtime.artifacts import ArtifactClass, ArtifactStore, FilesystemArtifactStore
+from easycat.runtime.artifacts import (
+    ArtifactClass,
+    ArtifactStore,
+    ArtifactWriteReceipt,
+    FilesystemArtifactStore,
+)
 from easycat.runtime.journal import ExecutionJournal, append_journal_record_async
 from easycat.runtime.record_contracts import validate_builtin_record
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
@@ -346,6 +351,64 @@ def _artifact_store_writes_block(store: ArtifactStore | None) -> bool:
     return bool(declared) or (declared is None and isinstance(store, FilesystemArtifactStore))
 
 
+@dataclass(frozen=True, slots=True)
+class _StoredArtifact:
+    ref: str | None
+    cleanup_token: str | None = None
+
+
+def _store_artifact_for_record(
+    store: ArtifactStore,
+    payload: bytes,
+    artifact_class: ArtifactClass,
+) -> _StoredArtifact:
+    put_with_token = getattr(store, "put_with_cleanup_token", None)
+    delete_with_token = getattr(store, "delete_if_cleanup_token", None)
+    if callable(put_with_token) and callable(delete_with_token):
+        receipt = put_with_token(payload, artifact_class=artifact_class)
+        if not isinstance(receipt, ArtifactWriteReceipt):
+            raise TypeError("put_with_cleanup_token() must return ArtifactWriteReceipt")
+        cleanup_token = receipt.cleanup_token if receipt.ref and receipt.created else None
+        return _StoredArtifact(receipt.ref or None, cleanup_token)
+    ref = store.put(payload, artifact_class=artifact_class)
+    return _StoredArtifact(ref or None)
+
+
+def _cleanup_rejected_artifacts(
+    store: ArtifactStore,
+    writes: tuple[_StoredArtifact, ...],
+) -> None:
+    delete_with_token = getattr(store, "delete_if_cleanup_token", None)
+    if not callable(delete_with_token):
+        return
+    seen: set[tuple[str, str]] = set()
+    for write in writes:
+        if write.ref is None or write.cleanup_token is None:
+            continue
+        cleanup = (write.ref, write.cleanup_token)
+        if cleanup in seen:
+            continue
+        seen.add(cleanup)
+        try:
+            delete_with_token(*cleanup)
+        except Exception:
+            logger.warning(
+                "Artifact cleanup failed after journal append rejection for ref=%s",
+                write.ref,
+                exc_info=True,
+            )
+
+
+def _shared_artifact_class(
+    input_class: ArtifactClass,
+    output_class: ArtifactClass,
+) -> ArtifactClass:
+    """Keep the stronger retention class when one payload serves both refs."""
+    if "replay_critical" in (input_class, output_class):
+        return "replay_critical"
+    return "debug_verbose"
+
+
 async def _await_owned_write(operation: asyncio.Task[None]) -> None:
     try:
         await asyncio.shield(operation)
@@ -440,29 +503,60 @@ class SessionJournalSink:
         if self.journal is None:
             return None
         validate_builtin_record(name=name, kind=kind, data=data)
-        input_ref = (
-            self.store_artifact(input_bytes, artifact_class=input_artifact_class)
-            if input_bytes is not None
-            else None
-        )
-        output_ref = (
-            self.store_artifact(output_bytes, artifact_class=output_artifact_class)
-            if output_bytes is not None
-            else None
-        )
-        resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
-        return self.journal.append(
-            kind=kind,
-            name=name,
-            session_id=self.session_id,
-            turn_id=resolved_turn_id,
-            data=data,
-            tags=tags,
-            input_ref=input_ref,
-            output_ref=output_ref,
-        )
+        journal = self.journal
+        artifact_store = self.artifact_store
+        writes: list[_StoredArtifact] = []
+        try:
+            shared_payload = input_bytes is not None and output_bytes == input_bytes
+            effective_input_class = (
+                _shared_artifact_class(input_artifact_class, output_artifact_class)
+                if shared_payload
+                else input_artifact_class
+            )
+            input_write = (
+                _store_artifact_for_record(
+                    artifact_store,
+                    input_bytes,
+                    effective_input_class,
+                )
+                if artifact_store is not None and input_bytes and not journal.degraded
+                else _StoredArtifact(None)
+            )
+            writes.append(input_write)
+            output_write = (
+                input_write
+                if shared_payload
+                else (
+                    _store_artifact_for_record(
+                        artifact_store,
+                        output_bytes,
+                        output_artifact_class,
+                    )
+                    if artifact_store is not None and output_bytes and not journal.degraded
+                    else _StoredArtifact(None)
+                )
+            )
+            writes.append(output_write)
+            resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
+            sequence = journal.append(
+                kind=kind,
+                name=name,
+                session_id=self.session_id,
+                turn_id=resolved_turn_id,
+                data=data,
+                tags=tags,
+                input_ref=input_write.ref,
+                output_ref=output_write.ref,
+            )
+        except BaseException:
+            if artifact_store is not None:
+                _cleanup_rejected_artifacts(artifact_store, tuple(writes))
+            raise
+        if sequence < 0 and artifact_store is not None:
+            _cleanup_rejected_artifacts(artifact_store, tuple(writes))
+        return sequence
 
-    async def append_record_async(
+    async def append_record_async(  # noqa: C901 - explicit artifact/journal cleanup stages
         self,
         *,
         name: str,
@@ -482,46 +576,81 @@ class SessionJournalSink:
             return
         validate_builtin_record(name=name, kind=kind, data=data)
         artifact_store = self.artifact_store
-        blocking_artifact_write = (
+        owns_artifact_write = (
             artifact_store is not None
             and not journal.degraded
             and (input_bytes is not None or output_bytes is not None)
-            and _artifact_store_writes_block(artifact_store)
+        )
+        blocking_artifact_write = owns_artifact_write and _artifact_store_writes_block(
+            artifact_store
         )
 
         async def _write_artifacts_and_record() -> None:
             async def _store(
                 payload: bytes | None,
                 artifact_class: ArtifactClass,
-            ) -> str | None:
-                if payload is None or artifact_store is None or journal.degraded:
-                    return None
+            ) -> _StoredArtifact:
+                if not payload or artifact_store is None or journal.degraded:
+                    return _StoredArtifact(None)
                 if blocking_artifact_write:
-                    ref = await asyncio.to_thread(
-                        artifact_store.put,
+                    return await asyncio.to_thread(
+                        _store_artifact_for_record,
+                        artifact_store,
                         payload,
-                        artifact_class=artifact_class,
+                        artifact_class,
                     )
-                    return ref or None
-                ref = artifact_store.put(payload, artifact_class=artifact_class)
-                return ref or None
+                return _store_artifact_for_record(artifact_store, payload, artifact_class)
 
-            input_ref = await _store(input_bytes, input_artifact_class)
-            output_ref = await _store(output_bytes, output_artifact_class)
-            resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
-            await append_journal_record_async(
-                journal,
-                kind=kind,
-                name=name,
-                session_id=self.session_id,
-                turn_id=resolved_turn_id,
-                data=data,
-                tags=tags,
-                input_ref=input_ref,
-                output_ref=output_ref,
-            )
+            writes: list[_StoredArtifact] = []
+            try:
+                shared_payload = input_bytes is not None and output_bytes == input_bytes
+                effective_input_class = (
+                    _shared_artifact_class(input_artifact_class, output_artifact_class)
+                    if shared_payload
+                    else input_artifact_class
+                )
+                input_write = await _store(input_bytes, effective_input_class)
+                writes.append(input_write)
+                output_write = (
+                    input_write
+                    if shared_payload
+                    else await _store(output_bytes, output_artifact_class)
+                )
+                writes.append(output_write)
+                resolved_turn_id = self.current_turn_id(turn_id) if inherit_turn_id else turn_id
+                sequence = await append_journal_record_async(
+                    journal,
+                    kind=kind,
+                    name=name,
+                    session_id=self.session_id,
+                    turn_id=resolved_turn_id,
+                    data=data,
+                    tags=tags,
+                    input_ref=input_write.ref,
+                    output_ref=output_write.ref,
+                )
+            except BaseException:
+                if artifact_store is not None:
+                    if blocking_artifact_write:
+                        await asyncio.to_thread(
+                            _cleanup_rejected_artifacts,
+                            artifact_store,
+                            tuple(writes),
+                        )
+                    else:
+                        _cleanup_rejected_artifacts(artifact_store, tuple(writes))
+                raise
+            if sequence < 0 and artifact_store is not None:
+                if blocking_artifact_write:
+                    await asyncio.to_thread(
+                        _cleanup_rejected_artifacts,
+                        artifact_store,
+                        tuple(writes),
+                    )
+                else:
+                    _cleanup_rejected_artifacts(artifact_store, tuple(writes))
 
-        if not blocking_artifact_write:
+        if not owns_artifact_write:
             await _write_artifacts_and_record()
             return
 

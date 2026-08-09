@@ -189,18 +189,22 @@ async def test_turn_state_changed_recorded_on_transition():
     """
     journal = InMemoryRingBuffer(capacity=64)
     session = Session(_full_config(journal=journal))
-    await session._turn_manager.start_turn()
-    await session._turn_manager.end_turn()
+    session._is_running = True
+    try:
+        await session.start_turn()
+        await session.end_turn()
 
-    transitions = [r for r in journal.read() if r.name == "turn_state_changed"]
-    assert transitions, "expected at least one turn_state_changed record"
-    reasons = {r.data["reason"] for r in transitions}
-    assert "manual_start" in reasons
-    assert "manual_end" in reasons
-    # Idle → UserSpeaking then UserSpeaking → Processing.
-    pairs = {(r.data["from"], r.data["to"]) for r in transitions}
-    assert ("idle", "user_speaking") in pairs
-    assert ("user_speaking", "processing") in pairs
+        transitions = [r for r in journal.read() if r.name == "turn_state_changed"]
+        assert transitions, "expected at least one turn_state_changed record"
+        reasons = {r.data["reason"] for r in transitions}
+        assert "manual_start" in reasons
+        assert "manual_end" in reasons
+        # Idle → UserSpeaking then UserSpeaking → Processing.
+        pairs = {(r.data["from"], r.data["to"]) for r in transitions}
+        assert ("idle", "user_speaking") in pairs
+        assert ("user_speaking", "processing") in pairs
+    finally:
+        await session.stop(force=True)
 
 
 def test_outbound_queue_default_policy_is_drop_newest():

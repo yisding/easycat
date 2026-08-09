@@ -102,14 +102,26 @@ def load_latency_samples(raw: str) -> list[LatencySample]:
     payload = json.loads(raw)
     if not isinstance(payload, list):
         raise ValueError("latency samples payload must be a list")  # noqa: TRY004 domain-specific validation error
-    return [LatencySample.from_dict(item) for item in payload if isinstance(item, dict)]
+    return [
+        LatencySample.from_dict(_sample_object(item, kind="latency", index=index))
+        for index, item in enumerate(payload)
+    ]
 
 
 def load_reliability_samples(raw: str) -> list[ReliabilitySample]:
     payload = json.loads(raw)
     if not isinstance(payload, list):
         raise ValueError("reliability samples payload must be a list")  # noqa: TRY004 domain-specific validation error
-    return [ReliabilitySample.from_dict(item) for item in payload if isinstance(item, dict)]
+    return [
+        ReliabilitySample.from_dict(_sample_object(item, kind="reliability", index=index))
+        for index, item in enumerate(payload)
+    ]
+
+
+def _sample_object(value: object, *, kind: str, index: int) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{kind} sample at index {index} must be an object")  # noqa: TRY004 domain-specific validation error
+    return value
 
 
 def append_reliability_sample(path: str | Path, sample: ReliabilitySample) -> None:

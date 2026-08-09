@@ -7,7 +7,9 @@ import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass, fields
 from enum import StrEnum
-from typing import Any, Literal, cast
+from typing import Any, Literal
+
+from easycat._numeric import is_finite_number
 
 __all__ = [
     "LatencyComparisonThresholds",
@@ -32,6 +34,21 @@ class LatencyComparisonThresholds:
     min_samples: int = 3
     regression_percentile: Literal["p50", "p90", "p95", "p99"] = "p95"
 
+    def __post_init__(self) -> None:
+        for name in ("relative_regression", "absolute_regression_ms"):
+            value = getattr(self, name)
+            if not is_finite_number(value) or value < 0:
+                raise ValueError(f"{name} must be a finite number >= 0")
+        if isinstance(self.min_samples, bool) or not isinstance(self.min_samples, int):
+            raise ValueError("min_samples must be an integer >= 1")  # noqa: TRY004 domain-specific validation error
+        if self.min_samples < 1:
+            raise ValueError("min_samples must be >= 1")
+        if self.regression_percentile not in ("p50", "p90", "p95", "p99"):
+            raise ValueError(
+                "regression_percentile must be one of p50, p90, p95, p99; "
+                f"got {self.regression_percentile!r}"
+            )
+
     def to_dict(self) -> dict[str, float | int | str]:
         return {
             "relative_regression": self.relative_regression,
@@ -49,6 +66,17 @@ class LatencyPercentileStats:
     p95: float | None
     p99: float | None
 
+    def __post_init__(self) -> None:
+        if isinstance(self.count, bool) or not isinstance(self.count, int) or self.count < 0:
+            raise ValueError("latency percentile count must be an integer >= 0")
+        for item in fields(self):
+            if item.name == "count":
+                continue
+            _require_non_negative_number(
+                f"latency percentile {item.name}",
+                getattr(self, item.name),
+            )
+
     def to_dict(self) -> dict[str, float | int | None]:
         return {
             "count": self.count,
@@ -60,7 +88,11 @@ class LatencyPercentileStats:
 
     @classmethod
     def from_values(cls, values: Sequence[float | None]) -> LatencyPercentileStats:
-        cleaned = [float(value) for value in values if value is not None]
+        cleaned = [
+            parsed
+            for value in values
+            if (parsed := _float_or_none(value, name="latency percentile value")) is not None
+        ]
         count = len(cleaned)
         if count == 0:
             return cls(count=0, p50=None, p90=None, p95=None, p99=None)
@@ -97,6 +129,10 @@ class LatencyStageDurations:
     interruption_cutoff_ms: float | None = None
     total_ms: float | None = None
 
+    def __post_init__(self) -> None:
+        for item in fields(self):
+            _require_non_negative_number(item.name, getattr(self, item.name))
+
     def to_dict(self) -> dict[str, float | None]:
         return {item.name: getattr(self, item.name) for item in fields(self)}
 
@@ -132,26 +168,35 @@ class LatencySample:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> LatencySample:
-        stages = payload.get("stages") or {}
+        stages = payload.get("stages", {})
         if not isinstance(stages, dict):
-            stages = {}
+            raise ValueError("latency sample stages must be an object")  # noqa: TRY004 domain-specific validation error
         return cls(
-            sample_id=str(payload["sample_id"]),
-            condition_id=str(payload["condition_id"]),
+            sample_id=_string_from_payload(payload["sample_id"], name="sample_id"),
+            condition_id=_string_from_payload(payload["condition_id"], name="condition_id"),
             warmup=_bool_from_payload(payload.get("warmup", False)),
-            timestamp_source=str(payload.get("timestamp_source", "unknown")),
-            provider=_string_dict(payload.get("provider")),
-            model=_string_dict(payload.get("model")),
-            transport=_string_dict(payload.get("transport")),
-            debug=_string_dict(payload.get("debug")),
+            timestamp_source=_string_from_payload(
+                payload.get("timestamp_source", "unknown"),
+                name="timestamp_source",
+            ),
+            provider=_string_dict(payload.get("provider"), name="provider"),
+            model=_string_dict(payload.get("model"), name="model"),
+            transport=_string_dict(payload.get("transport"), name="transport"),
+            debug=_string_dict(payload.get("debug"), name="debug"),
             stages=LatencyStageDurations(
                 **{
                     item.name: _float_or_none(stages.get(item.name))
                     for item in fields(LatencyStageDurations)
                 }
             ),
-            missing_stage_reason=_optional_string(payload.get("missing_stage_reason")),
-            failure_class=_optional_string(payload.get("failure_class")),
+            missing_stage_reason=_optional_string(
+                payload.get("missing_stage_reason"),
+                name="missing_stage_reason",
+            ),
+            failure_class=_optional_string(
+                payload.get("failure_class"),
+                name="failure_class",
+            ),
         )
 
 
@@ -164,6 +209,16 @@ class ReliabilitySignals:
     active_sessions: int | None = None
     memory_growth_kib: int | None = None
     unavailable_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_non_negative_number("event_loop_lag_ms", self.event_loop_lag_ms)
+        for name in (
+            "queue_depth",
+            "dropped_frames",
+            "active_sessions",
+            "memory_growth_kib",
+        ):
+            _require_non_negative_integer(name, getattr(self, name))
 
     def to_dict(self) -> dict[str, float | int | bool | str | None]:
         return {
@@ -181,7 +236,10 @@ class ReliabilitySignals:
             journal_degraded=_bool_or_none(payload.get("journal_degraded")),
             active_sessions=_int_or_none(payload.get("active_sessions")),
             memory_growth_kib=_int_or_none(payload.get("memory_growth_kib")),
-            unavailable_reason=_optional_string(payload.get("unavailable_reason")),
+            unavailable_reason=_optional_string(
+                payload.get("unavailable_reason"),
+                name="unavailable_reason",
+            ),
         )
 
 
@@ -206,48 +264,78 @@ class ReliabilitySample:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> ReliabilitySample:
-        signals = payload.get("signals") or {}
+        signals = payload.get("signals", {})
         if not isinstance(signals, dict):
-            signals = {}
+            raise ValueError("reliability sample signals must be an object")  # noqa: TRY004 domain-specific validation error
         return cls(
-            sample_id=str(payload["sample_id"]),
-            condition_id=str(payload["condition_id"]),
-            mode=str(payload.get("mode", "unknown")),
+            sample_id=_string_from_payload(payload["sample_id"], name="sample_id"),
+            condition_id=_string_from_payload(payload["condition_id"], name="condition_id"),
+            mode=_string_from_payload(payload.get("mode", "unknown"), name="mode"),
             informational=_bool_from_payload(payload.get("informational", True)),
             eligible=_bool_from_payload(payload.get("eligible", False)),
             signals=ReliabilitySignals.from_dict(signals),
         )
 
 
-def _float_or_none(value: object) -> float | None:
+def _require_non_negative_number(name: str, value: object) -> None:
+    if value is None:
+        return
+    if not is_finite_number(value) or value < 0:
+        raise ValueError(f"{name} must be a finite number >= 0")
+
+
+def _require_non_negative_integer(name: str, value: object) -> None:
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not is_finite_number(value)
+        or value < 0
+    ):
+        raise ValueError(f"{name} must be a finite integer >= 0")
+
+
+def _float_or_none(
+    value: object,
+    *,
+    name: str = "latency and reliability numeric value",
+) -> float | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a finite number >= 0")  # noqa: TRY004 domain-specific validation error
     try:
-        parsed = float(cast(float, value))
-    except OverflowError as exc:
-        raise ValueError("latency and reliability numeric values must be finite") from exc
-    if not math.isfinite(parsed):
-        raise ValueError("latency and reliability numeric values must be finite")
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be a finite number >= 0") from exc
+    if not math.isfinite(parsed) or parsed < 0:
+        raise ValueError(f"{name} must be a finite number >= 0")
     return parsed
 
 
 def _int_or_none(value: object) -> int | None:
     if value is None:
         return None
+    parsed: int
     if isinstance(value, bool):
-        raise ValueError("reliability integer values must be finite integers")  # noqa: TRY004 domain-specific validation error
+        raise ValueError("reliability integer values must be finite integers >= 0")  # noqa: TRY004 domain-specific validation error
     if isinstance(value, int):
-        return value
-    if isinstance(value, float):
+        parsed = value
+    elif isinstance(value, float):
         if not math.isfinite(value) or not value.is_integer():
-            raise ValueError("reliability integer values must be finite integers")
-        return int(value)
-    if isinstance(value, str):
+            raise ValueError("reliability integer values must be finite integers >= 0")
+        parsed = int(value)
+    elif isinstance(value, str):
         try:
-            return int(value)
-        except ValueError as exc:
-            raise ValueError("reliability integer values must be finite integers") from exc
-    raise ValueError("reliability integer values must be finite integers")
+            parsed = int(value)
+        except (ValueError, OverflowError) as exc:
+            raise ValueError("reliability integer values must be finite integers >= 0") from exc
+    else:
+        raise ValueError("reliability integer values must be finite integers >= 0")  # noqa: TRY004 domain-specific validation error
+    if not is_finite_number(parsed) or parsed < 0:
+        raise ValueError("reliability integer values must be finite integers >= 0")
+    return parsed
 
 
 def _bool_or_none(value: object) -> bool | None:
@@ -265,16 +353,26 @@ def _bool_from_payload(value: object) -> bool:
             return True
         if normalized in {"", "0", "false", "no", "off"}:
             return False
-    return bool(value)
+    raise ValueError("latency and reliability boolean values must be booleans or boolean strings")
 
 
-def _optional_string(value: object) -> str | None:
+def _string_from_payload(value: object, *, name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"latency and reliability {name} must be a string")  # noqa: TRY004 domain-specific validation error
+    return value
+
+
+def _optional_string(value: object, *, name: str) -> str | None:
     if value is None:
         return None
-    return str(value)
+    return _string_from_payload(value, name=name)
 
 
-def _string_dict(value: object) -> dict[str, str]:
-    if not isinstance(value, dict):
+def _string_dict(value: object, *, name: str) -> dict[str, str]:
+    if value is None:
         return {}
-    return {str(key): str(item) for key, item in value.items()}
+    if not isinstance(value, dict):
+        raise ValueError(f"latency sample {name} must be an object")  # noqa: TRY004 domain-specific validation error
+    if not all(isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
+        raise ValueError(f"latency sample {name} entries must be strings")
+    return dict(value)

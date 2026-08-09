@@ -419,6 +419,180 @@ class TestOutboundCallStateMachine:
         finally:
             sm.stop()
 
+    @pytest.mark.asyncio
+    async def test_state_observer_failure_preserves_committed_answer_invariants(self) -> None:
+        bus = EventBus(handler_error_policy="raise")
+        sm = OutboundCallStateMachine(
+            bus,
+            classification_timeout_s=60,
+            max_call_duration_s=60,
+            classification_gate=True,
+            smart_turn_suppress=True,
+        )
+        sm.start()
+
+        async def fail_state_observer(_event: CallStateChanged) -> None:
+            raise RuntimeError("observer failed")
+
+        bus.subscribe(CallStateChanged, fail_state_observer)
+        try:
+            with pytest.raises(RuntimeError, match="observer failed"):
+                await bus.emit(CallAnswered(call_sid="CA1"))
+
+            assert sm.state == OutboundCallState.CLASSIFYING
+            assert sm.smart_turn_suppressed is True
+            assert sm.gate.is_buffering is True
+            assert sm._timers.active("call_classification_timeout")
+            assert sm._timers.active("call_max_duration")
+
+            with pytest.raises(RuntimeError, match="observer failed"):
+                await sm.transition(OutboundCallState.VOICEMAIL)
+
+            assert sm.state == OutboundCallState.VOICEMAIL
+            assert sm.gate.is_buffering is False
+        finally:
+            bus.unsubscribe(CallStateChanged, fail_state_observer)
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_reentrant_state_observer_does_not_apply_stale_gate_transition(self) -> None:
+        bus = EventBus(handler_error_policy="raise")
+        sm = OutboundCallStateMachine(
+            bus,
+            classification_timeout_s=60,
+            classification_gate=True,
+        )
+        flushed: list[list[TTSAudio]] = []
+
+        async def flush(events: list[TTSAudio]) -> None:
+            flushed.append(events)
+
+        async def redirect_human_to_voicemail(event: CallStateChanged) -> None:
+            if event.new == OutboundCallState.HUMAN:
+                await sm.transition(OutboundCallState.VOICEMAIL)
+
+        sm.set_gate_flush_callback(flush)
+        sm.start()
+        bus.subscribe(CallStateChanged, redirect_human_to_voicemail)
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            opener = TTSAudio(
+                chunk=AudioChunk(
+                    data=b"opener",
+                    format=AudioFormat(sample_rate=16_000, channels=1, sample_width=2),
+                )
+            )
+            await bus.emit(opener)
+
+            await sm.transition(OutboundCallState.HUMAN)
+
+            assert sm.state == OutboundCallState.VOICEMAIL
+            assert not sm.gate.is_buffering
+            assert all(opener not in batch for batch in flushed)
+        finally:
+            bus.unsubscribe(CallStateChanged, redirect_human_to_voicemail)
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_child_task_state_observer_must_transition_directly(self) -> None:
+        bus = EventBus(handler_error_policy="raise")
+        sm = OutboundCallStateMachine(bus)
+
+        async def redirect_in_child(event: CallStateChanged) -> None:
+            if event.new == OutboundCallState.HUMAN:
+                await asyncio.gather(sm.transition(OutboundCallState.VOICEMAIL))
+
+        bus.subscribe(CallStateChanged, redirect_in_child)
+        try:
+            with pytest.raises(RuntimeError, match="must await transition.*directly"):
+                await asyncio.wait_for(sm.transition(OutboundCallState.HUMAN), timeout=1)
+            assert sm.state == OutboundCallState.HUMAN
+        finally:
+            bus.unsubscribe(CallStateChanged, redirect_in_child)
+
+    @pytest.mark.asyncio
+    async def test_fire_and_forget_observer_transition_cannot_race_settlement(self) -> None:
+        bus = EventBus(handler_error_policy="raise")
+        sm = OutboundCallStateMachine(bus)
+        children: list[asyncio.Task[None]] = []
+
+        async def spawn_redirect(event: CallStateChanged) -> None:
+            if event.new == OutboundCallState.HUMAN:
+                children.append(asyncio.create_task(sm.transition(OutboundCallState.VOICEMAIL)))
+                await asyncio.sleep(0)
+
+        bus.subscribe(CallStateChanged, spawn_redirect)
+        try:
+            await sm.transition(OutboundCallState.HUMAN)
+
+            assert sm.state == OutboundCallState.HUMAN
+            assert len(children) == 1
+            with pytest.raises(RuntimeError, match="must await transition.*directly"):
+                await children[0]
+        finally:
+            bus.unsubscribe(CallStateChanged, spawn_redirect)
+
+    @pytest.mark.asyncio
+    async def test_observer_spawned_task_may_transition_after_settlement(self) -> None:
+        """A stale inherited transition context must not reject later transitions."""
+        bus = EventBus(handler_error_policy="raise")
+        sm = OutboundCallStateMachine(bus)
+        release = asyncio.Event()
+        children: list[asyncio.Task[None]] = []
+
+        async def follow_up() -> None:
+            await release.wait()
+            await sm.transition(OutboundCallState.VOICEMAIL)
+
+        async def spawn_follow_up(event: CallStateChanged) -> None:
+            if event.new == OutboundCallState.HUMAN:
+                # The child copies the active transition context but first
+                # runs only after the owning transition has settled.
+                children.append(asyncio.create_task(follow_up()))
+
+        bus.subscribe(CallStateChanged, spawn_follow_up)
+        try:
+            await sm.transition(OutboundCallState.HUMAN)
+            assert sm.state == OutboundCallState.HUMAN
+            assert len(children) == 1
+
+            release.set()
+            await asyncio.wait_for(children[0], timeout=1)
+            assert sm.state == OutboundCallState.VOICEMAIL
+        finally:
+            release.set()
+            bus.unsubscribe(CallStateChanged, spawn_follow_up)
+
+    @pytest.mark.asyncio
+    async def test_unrelated_concurrent_transition_waits_for_active_observer(self) -> None:
+        bus = EventBus(handler_error_policy="raise")
+        sm = OutboundCallStateMachine(bus)
+        observer_started = asyncio.Event()
+        release_observer = asyncio.Event()
+
+        async def block_human_observer(event: CallStateChanged) -> None:
+            if event.new == OutboundCallState.HUMAN:
+                observer_started.set()
+                await release_observer.wait()
+
+        bus.subscribe(CallStateChanged, block_human_observer)
+        human_task = asyncio.create_task(sm.transition(OutboundCallState.HUMAN))
+        try:
+            await asyncio.wait_for(observer_started.wait(), timeout=1)
+            voicemail_task = asyncio.create_task(sm.transition(OutboundCallState.VOICEMAIL))
+            await asyncio.sleep(0)
+
+            assert not voicemail_task.done()
+            assert sm.state == OutboundCallState.HUMAN
+
+            release_observer.set()
+            await asyncio.wait_for(asyncio.gather(human_task, voicemail_task), timeout=1)
+            assert sm.state == OutboundCallState.VOICEMAIL
+        finally:
+            release_observer.set()
+            await asyncio.gather(human_task, return_exceptions=True)
+            bus.unsubscribe(CallStateChanged, block_human_observer)
+
     def test_start_stop_lifecycle(self) -> None:
         bus = EventBus()
         sm = OutboundCallStateMachine(bus)

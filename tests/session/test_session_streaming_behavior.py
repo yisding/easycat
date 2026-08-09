@@ -319,42 +319,50 @@ async def test_prompt_reclaims_turn_when_vad_races_initial_cancellation():
     bridge = _BlockingPromptBridge()
     bridge.release.set()
     session = _prompt_session(bridge)
-    await session._turn_manager.start_turn()
+    session._is_running = True
+    await session.start_turn()
     original_cancel = session.cancel_turn
 
     async def cancel_then_race_vad(*, barge_in: bool = False) -> None:
         await original_cancel(barge_in=barge_in)
-        await session._turn_manager.start_turn()
+        await session.start_turn()
 
     session.cancel_turn = cancel_then_race_vad  # type: ignore[method-assign]
-
-    assert (
-        await session.prompt_agent("Classify this call.", role="user", speak=False) == "finished"
-    )
-    assert session._turn_manager.state is TurnManagerState.IDLE
-    await session.stop(force=True)
+    try:
+        assert (
+            await session.prompt_agent("Classify this call.", role="user", speak=False)
+            == "finished"
+        )
+        assert session._turn_manager.state is TurnManagerState.IDLE
+    finally:
+        await session.stop(force=True)
 
 
 @pytest.mark.asyncio
 async def test_silent_prompt_owns_turn_until_voice_barge_in_drains_it():
     bridge = _BlockingPromptBridge()
     session = _prompt_session(bridge)
+    session._is_running = True
     prompt = asyncio.create_task(
         session.prompt_agent("Classify this call.", role="user", speak=False)
     )
-    await asyncio.wait_for(bridge.started.wait(), timeout=1)
+    try:
+        await asyncio.wait_for(bridge.started.wait(), timeout=1)
 
-    assert session._turn_manager.state is TurnManagerState.PROCESSING
-    assert bridge.active == 1
+        assert session._turn_manager.state is TurnManagerState.PROCESSING
+        assert bridge.active == 1
 
-    await session._turn_manager.start_turn()
+        await session.start_turn()
 
-    assert bridge.finished.is_set()
-    assert bridge.cancelled.is_set()
-    assert bridge.active == 0
-    assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
-    await asyncio.gather(prompt, return_exceptions=True)
-    await session.stop(force=True)
+        assert bridge.finished.is_set()
+        assert bridge.cancelled.is_set()
+        assert bridge.active == 0
+        assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
+    finally:
+        if not prompt.done():
+            prompt.cancel()
+        await asyncio.gather(prompt, return_exceptions=True)
+        await session.stop(force=True)
 
 
 @pytest.mark.asyncio
@@ -371,21 +379,23 @@ async def test_voice_barge_in_does_not_wait_for_resistant_prompt_cleanup():
             noise_reducer=FakeNoiseReducer(),
         )
     )
+    session._is_running = True
     prompt = asyncio.create_task(
         session.prompt_agent("Classify this call.", role="user", speak=False)
     )
-    await asyncio.wait_for(bridge.started.wait(), timeout=1)
+    try:
+        await asyncio.wait_for(bridge.started.wait(), timeout=1)
 
-    await asyncio.wait_for(session.start_turn(), timeout=0.5)
+        await asyncio.wait_for(session.start_turn(), timeout=0.5)
 
-    assert bridge.cancelled.is_set()
-    assert not bridge.finished.is_set()
-    assert transport.clear_count == 1
-    assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
-
-    bridge.release_cleanup.set()
-    await asyncio.gather(prompt, return_exceptions=True)
-    await session.stop(force=True)
+        assert bridge.cancelled.is_set()
+        assert not bridge.finished.is_set()
+        assert transport.clear_count == 1
+        assert session._turn_manager.state is TurnManagerState.USER_SPEAKING
+    finally:
+        bridge.release_cleanup.set()
+        await asyncio.gather(prompt, return_exceptions=True)
+        await session.stop(force=True)
 
 
 @pytest.mark.asyncio

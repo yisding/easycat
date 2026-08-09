@@ -348,6 +348,16 @@ class SurvivorRegistry:
         )
         return state
 
+    def forget_closed_owner(self, owner_id: str) -> bool:
+        """Drop settled owner metadata after its lifecycle scope is pruned."""
+        self._validate_label("owner_id", owner_id)
+        if self.owner_state(owner_id) is not OwnerState.CLOSED:
+            return False
+        if any(item.owner_id == owner_id for item in self._reservations.values()):
+            return False
+        self._owner_states.pop(owner_id, None)
+        return True
+
     def reservations(self, owner_id: str | None = None) -> tuple[OwnedTaskMetadata, ...]:
         return tuple(
             item.metadata()

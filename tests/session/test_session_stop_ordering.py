@@ -244,10 +244,16 @@ async def test_stop_preserves_reviewed_partial_order(  # noqa: C901, PLR0915
         "stop_ingress",
         lambda: record_async("ingress.stop"),
     )
+    expected_force = force
+
+    async def stop_outbound(*, force: bool = False) -> None:
+        assert force is expected_force
+        await record_async("outbound.stop")
+
     monkeypatch.setattr(
         session._audio_router,
         "stop_outbound",
-        lambda: record_async("outbound.stop"),
+        stop_outbound,
     )
 
     original_helpers_stop = session._stop_helpers

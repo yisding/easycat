@@ -32,7 +32,6 @@ import asyncio
 import copy
 import functools
 import inspect
-import json
 import logging
 import time
 import uuid
@@ -54,6 +53,7 @@ from easycat.integrations.agents._langchain_events import (
     route_tool_cancellation_events,
     translate_stream_event,
 )
+from easycat.integrations.agents._state_serialization import serialize_framework_state
 from easycat.integrations.agents.base import (
     NULL_RECORDER,
     AgentBridgeEvent,
@@ -1747,10 +1747,7 @@ def _serialize_state_values(state: Any) -> bytes:
     values = getattr(state, "values", None)
     if values is None:
         return b"{}"
-    try:
-        return json.dumps(_safe_values_for_serialization(values), default=str).encode()
-    except (TypeError, ValueError):
-        return b"{}"
+    return serialize_framework_state(_safe_values_for_serialization(values))
 
 
 def _sync_checkpoint_ids_since(

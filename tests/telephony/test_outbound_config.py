@@ -50,6 +50,18 @@ class TestVoicemailDetectionConfig:
         cfg = VoicemailDetectionConfig(mode="detect")
         assert cfg.to_twilio_params()["amd_mode"] == "Enable"
 
+    @pytest.mark.parametrize("value", ["false", 0, 1, None])
+    def test_async_mode_requires_boolean(self, value: object) -> None:
+        with pytest.raises(ValueError, match="async_mode must be a boolean"):
+            VoicemailDetectionConfig(async_mode=value)  # type: ignore[arg-type]
+
+    def test_validate_rejects_mutated_async_mode(self) -> None:
+        cfg = VoicemailDetectionConfig()
+        cfg.async_mode = "false"  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="async_mode must be a boolean"):
+            cfg.validate()
+
     def test_invalid_mode_rejected(self) -> None:
         with pytest.raises(ValueError, match="voicemail_detection.mode"):
             VoicemailDetectionConfig(mode="detect_end")  # type: ignore[arg-type]
@@ -224,8 +236,69 @@ class TestOutboundCallConfig:
         assert cfg.late_voicemail_window_s == 0.0
         assert cfg.voicemail_pickup_window_s == 0.0
 
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "enable_screening_detection",
+            "screening_use_agent",
+            "enable_realtime_transcription",
+            "classification_gate",
+            "enable_number_health",
+            "enable_disposition_tracker",
+            "enable_retry_strategy",
+        ],
+    )
+    def test_boolean_policy_rejects_wrong_type(self, field_name: str) -> None:
+        with pytest.raises(ValueError, match=rf"{field_name} must be a boolean"):
+            OutboundCallConfig(**{field_name: "false"})  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        ("field_name", "bad", "message"),
+        [
+            ("classification_gate_timeout_s", 0.0, "classification_gate_timeout_s"),
+            ("max_call_duration_s", 0.0, "max_call_duration_s"),
+            ("max_screening_turns", 0, "max_screening_turns"),
+            ("late_voicemail_window_s", -1.0, "late_voicemail_window_s"),
+            ("voicemail_pickup_window_s", -1.0, "voicemail_pickup_window_s"),
+        ],
+    )
+    def test_validate_rejects_post_construction_mutation(
+        self,
+        field_name: str,
+        bad: object,
+        message: str,
+    ) -> None:
+        cfg = OutboundCallConfig(from_number="+1555")
+        setattr(cfg, field_name, bad)
+
+        with pytest.raises(ValueError, match=message):
+            cfg.validate()
+
+    def test_validate_rechecks_nested_voicemail_detection(self) -> None:
+        cfg = OutboundCallConfig(from_number="+1555")
+        cfg.voicemail_detection.mode = "detect_end"  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="voicemail_detection.mode"):
+            cfg.validate()
+
 
 class TestTelephonyConfigExtension:
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "enable_dtmf_aggregator",
+            "enable_voicemail_detector",
+            "enable_outbound_call_manager",
+        ],
+    )
+    def test_enable_flags_require_booleans(self, field_name: str) -> None:
+        with pytest.raises(ValueError, match=rf"{field_name} must be a boolean"):
+            TelephonyConfig(**{field_name: "false"})  # type: ignore[arg-type]
+
+    def test_outbound_requires_outbound_config(self) -> None:
+        with pytest.raises(ValueError, match="telephony.outbound must be an OutboundCallConfig"):
+            TelephonyConfig(outbound=object())  # type: ignore[arg-type]
+
     def test_enable_outbound_flag(self) -> None:
         cfg = TelephonyConfig(enable_outbound_call_manager=True)
         assert cfg.enable_outbound_call_manager is True

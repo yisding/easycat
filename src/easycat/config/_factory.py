@@ -65,6 +65,8 @@ from easycat.vad import create_vad
 from .easy import (
     EasyConfig,
     EasyConfigError,
+    OutboundCallConfig,
+    TelephonyConfig,
     TextSessionConfig,
     TransportConfig,
     _AgentSessionConfig,
@@ -318,18 +320,27 @@ def _audio_runtime_config(config: EasyConfig) -> EasyConfig:
     """
     runtime = copy.copy(config)
     runtime.turn_taking = copy.copy(config.turn_taking)
+    runtime.timeouts = copy.copy(config.timeouts)
     runtime.mcp_servers = list(config.mcp_servers) if config.mcp_servers is not None else None
     runtime.output_processors = tuple(config.output_processors)
     runtime.action_executors = tuple(config.action_executors)
-    if config.telephony is not None:
-        runtime.telephony = copy.copy(config.telephony)
-        runtime.telephony.dtmf_aggregator = copy.copy(config.telephony.dtmf_aggregator)
-        runtime.telephony.voicemail_detector = copy.copy(config.telephony.voicemail_detector)
-        if config.telephony.outbound is not None:
-            runtime.telephony.outbound = copy.copy(config.telephony.outbound)
+    telephony = config.telephony
+    if telephony is not None:
+        if not isinstance(telephony, TelephonyConfig):
+            raise EasyConfigError("telephony must be a TelephonyConfig instance or None.")
+        outbound = telephony.outbound
+        if outbound is not None and not isinstance(outbound, OutboundCallConfig):
+            raise EasyConfigError("telephony.outbound must be an OutboundCallConfig instance.")
+        runtime.telephony = copy.copy(telephony)
+        runtime.telephony.dtmf_aggregator = copy.copy(telephony.dtmf_aggregator)
+        runtime.telephony.voicemail_detector = copy.copy(telephony.voicemail_detector)
+        if outbound is not None:
+            runtime.telephony.outbound = copy.copy(outbound)
             runtime.telephony.outbound.voicemail_detection = copy.copy(
-                config.telephony.outbound.voicemail_detection
+                outbound.voicemail_detection
             )
+            if outbound.retry_strategy is not None:
+                runtime.telephony.outbound.retry_strategy = copy.copy(outbound.retry_strategy)
     return runtime
 
 

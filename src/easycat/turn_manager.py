@@ -85,6 +85,7 @@ class TurnPublication:
     cancel_token: CancelToken | None
     activity: Lease[TurnManagerState] | None
     identity: Lease[TurnContext | None] | None = None
+    admission_rejected: bool = False
 
 
 class TurnMode(enum.Enum):
@@ -250,6 +251,8 @@ class TurnManager:
         # Silence timeout tracking
         self._silence_start_time: float | None = None
         self._silence_timer_task: asyncio.Task[None] | None = None
+        self._silence_timer_tasks: set[asyncio.Task[None]] = set()
+        self._shutting_down = False
         self._punctuated_transcript_event = asyncio.Event()
         self._pause_epoch: Epoch[None] = Epoch(None)
 
@@ -496,7 +499,7 @@ class TurnManager:
 
         In push-to-talk mode, VAD events are ignored.
         """
-        if self._mode == TurnMode.PUSH_TO_TALK:
+        if self._shutting_down or self._mode == TurnMode.PUSH_TO_TALK:
             return
 
         if isinstance(event, VADStartSpeaking):
@@ -568,6 +571,8 @@ class TurnManager:
         (push-to-talk) paths start from a state with no live in-flight turn, so
         they leave the (already-detached) prior token alone.
         """
+        if self._shutting_down:
+            return
         if cancel_previous_token and self._cancel_token is not None:
             self._cancel_token.cancel()
         cancel_token = CancelToken()
@@ -596,6 +601,15 @@ class TurnManager:
                 if publication.identity is not None:
                     assert publication.identity.value is not None
                     assert publication.identity.value.id == turn_id
+            if publication.admission_rejected:
+                # The private Session publication can reject admission when a
+                # predecessor provider operation remains lifecycle-owned past
+                # its timeout. Roll back the manager epoch and token instead
+                # of exposing a TurnStarted that has no Session TurnContext or
+                # active STT stream behind it.
+                if activity.guard():
+                    self.reset()
+                return
         await self._event_bus.emit(
             _mark_turn_started_observation(
                 TurnStarted(session_id=self._session_id, turn_id=turn_id)
@@ -604,6 +618,8 @@ class TurnManager:
 
     async def _complete_user_turn(self, reason: str) -> None:
         """Transition to processing and emit the correlated turn-end event."""
+        if self._shutting_down:
+            return
         self._transition(
             TurnManagerState.PROCESSING,
             reason=reason,
@@ -630,8 +646,11 @@ class TurnManager:
         # Bind the timer to this exact pause. A detector is third-party code
         # and may suppress cancellation, so state alone cannot distinguish an
         # old timer from a newer pause after speech resumes.
-        self._silence_timer_task = asyncio.create_task(self._silence_timeout(pause))
-        self._silence_timer_task.add_done_callback(RuntimeScope.log_task_exception)
+        timer = asyncio.create_task(self._silence_timeout(pause))
+        self._silence_timer_task = timer
+        self._silence_timer_tasks.add(timer)
+        timer.add_done_callback(self._silence_timer_tasks.discard)
+        timer.add_done_callback(RuntimeScope.log_task_exception)
 
     def _detector_audio_window(self) -> list[AudioChunk]:
         """Return the trailing audio the endpoint detector should consume.
@@ -832,6 +851,8 @@ class TurnManager:
 
         Can also be used in VAD mode to force-start a turn.
         """
+        if self._shutting_down:
+            return
         if self._state == TurnManagerState.PROCESSING:
             # PTT press while the agent is processing — treat as a barge-in
             # to cancel the stale response and start a fresh turn (mirrors the
@@ -853,6 +874,8 @@ class TurnManager:
 
         Bypasses VAD timeout and immediately transitions to Processing.
         """
+        if self._shutting_down:
+            return
         if self._state not in (
             TurnManagerState.USER_SPEAKING,
             TurnManagerState.USER_PAUSED,
@@ -864,6 +887,8 @@ class TurnManager:
 
     def begin_application_turn(self, turn_id: str, cancel_token: CancelToken) -> None:
         """Bind an application-initiated turn directly in the processing state."""
+        if self._shutting_down:
+            raise RuntimeError("Turn manager is shutting down")
         if self._state != TurnManagerState.IDLE:
             raise RuntimeError(
                 f"Cannot start an application turn while turn manager is {self._state.value}"
@@ -949,13 +974,37 @@ class TurnManager:
         self._silence_start_time = None
         self._current_turn_id = None
 
+    def close_admission(self) -> None:
+        """Prevent new voice, manual, or application turns during teardown."""
+        self._shutting_down = True
+
     async def shutdown(self) -> None:
         """Clean up any pending tasks."""
-        if self._silence_timer_task and not self._silence_timer_task.done():
-            self._silence_timer_task.cancel()
-            try:
-                await self._silence_timer_task
-            except asyncio.CancelledError:
-                pass
+        self.close_admission()
+        current = asyncio.current_task()
+        while True:
+            timers = tuple(task for task in self._silence_timer_tasks if task is not current)
+            if not timers:
+                break
+            completed = tuple(task for task in timers if task.done())
+            if completed:
+                # Do not rely on done callbacks running before this coroutine
+                # resumes. On Python 3.14 an already-complete gather can resume
+                # synchronously and repeatedly observe the same retained task,
+                # starving its scheduled discard callback.
+                self._silence_timer_tasks.difference_update(completed)
+            pending = tuple(task for task in timers if not task.done())
+            if not pending:
+                continue
+            for task in pending:
+                task.cancel()
+            # ``wait`` does not couple cancellation of shutdown() back into a
+            # detector task that already received its explicit cancellation.
+            # A cancellation-resistant detector therefore remains owned by
+            # the task set for a later shutdown retry.
+            await asyncio.wait(pending)
+            self._silence_timer_tasks.difference_update(pending)
+        if current is not None:
+            self._silence_timer_tasks.discard(current)
         self._silence_timer_task = None
         self.reset()

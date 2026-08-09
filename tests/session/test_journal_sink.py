@@ -638,18 +638,20 @@ async def test_async_artifact_write_finishes_referencing_record_before_cancellat
             self.release = threading.Event()
             self.finished = asyncio.Event()
 
-        def put(
+        def put_with_cleanup_token(
             self,
             payload: bytes,
             *,
             artifact_class: str = "debug_verbose",
-        ) -> str:
-            del artifact_class
+        ):
             self._loop.call_soon_threadsafe(self.started.set)
             try:
                 if not self.release.wait(timeout=5):
                     raise AssertionError("timed out waiting to release artifact write")
-                return super().put(payload)
+                return super().put_with_cleanup_token(
+                    payload,
+                    artifact_class=artifact_class,
+                )
             finally:
                 self._loop.call_soon_threadsafe(self.finished.set)
 
@@ -684,6 +686,88 @@ async def test_async_artifact_write_finishes_referencing_record_before_cancellat
     expected_ref = hashlib.sha256(payload).hexdigest()
     assert record.input_ref == expected_ref
     assert artifact_store.has(expected_ref)
+
+
+@pytest.mark.asyncio
+async def test_rejected_journal_append_reclaims_new_artifacts() -> None:
+    class RejectingJournal(InMemoryRingBuffer):
+        def append(self, *args, **kwargs) -> int:
+            del args, kwargs
+            return -1
+
+    artifact_store = InMemoryArtifactStore()
+    journal = RejectingJournal(artifact_store=artifact_store)
+    sink = SessionJournalSink(
+        event_bus=EventBus(),
+        journal=journal,
+        artifact_store=artifact_store,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    payloads = (
+        b"sync-input",
+        b"sync-output",
+        b"async-input",
+        b"async-output",
+        b"sync-shared",
+        b"async-shared",
+    )
+
+    assert (
+        sink.append_record(
+            name="artifact_record",
+            input_bytes=payloads[0],
+            output_bytes=payloads[1],
+        )
+        == -1
+    )
+    await sink.append_record_async(
+        name="artifact_record",
+        input_bytes=payloads[2],
+        output_bytes=payloads[3],
+    )
+    assert (
+        sink.append_record(
+            name="artifact_record",
+            input_bytes=payloads[4],
+            output_bytes=payloads[4],
+            input_artifact_class="debug_verbose",
+            output_artifact_class="replay_critical",
+        )
+        == -1
+    )
+    await sink.append_record_async(
+        name="artifact_record",
+        input_bytes=payloads[5],
+        output_bytes=payloads[5],
+        input_artifact_class="debug_verbose",
+        output_artifact_class="replay_critical",
+    )
+
+    assert all(not artifact_store.has(hashlib.sha256(payload).hexdigest()) for payload in payloads)
+    assert artifact_store._current_bytes == 0
+
+
+def test_rejected_journal_append_preserves_preexisting_artifact() -> None:
+    class RejectingJournal(InMemoryRingBuffer):
+        def append(self, *args, **kwargs) -> int:
+            del args, kwargs
+            return -1
+
+    artifact_store = InMemoryArtifactStore()
+    payload = b"shared"
+    ref = artifact_store.put(payload)
+    journal = RejectingJournal(artifact_store=artifact_store)
+    sink = SessionJournalSink(
+        event_bus=EventBus(),
+        journal=journal,
+        artifact_store=artifact_store,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+
+    assert sink.append_record(name="artifact_record", input_bytes=payload) == -1
+    assert artifact_store.has(ref)
 
 
 @pytest.mark.asyncio

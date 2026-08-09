@@ -17,10 +17,20 @@ from easycat.cli._app import app
 from easycat.cli.diagnose import doctor as doctor_module
 from easycat.errors import REGISTRY
 
+_DiskUsage = namedtuple("DiskUsage", ["total", "used", "free"])
+
 
 def _plain_console() -> tuple[StringIO, Console]:
     stream = StringIO()
     return stream, Console(file=stream, force_terminal=False, no_color=True, width=120)
+
+
+def _stub_sufficient_disk_space(monkeypatch: pytest.MonkeyPatch) -> None:
+    capacity = 2 * 1024**3
+    monkeypatch.setattr(
+        "shutil.disk_usage",
+        lambda _path: _DiskUsage(total=capacity, used=capacity // 2, free=capacity // 2),
+    )
 
 
 @pytest.fixture
@@ -948,6 +958,7 @@ def test_doctor_fix_creates_journal_dir(
     data_dir = tmp_path / "never-created"
     monkeypatch.setenv("EASYCAT_DATA_DIR", str(data_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    _stub_sufficient_disk_space(monkeypatch)
 
     # Pre-condition: the dir doesn't exist yet.
     journal_dir = data_dir / "journals"
@@ -970,6 +981,7 @@ def test_doctor_fix_json_reports_each_mutation_and_is_idempotent(
     data_dir = tmp_path / "data"
     journal_dir = data_dir / "journals"
     monkeypatch.setenv("EASYCAT_DATA_DIR", str(data_dir))
+    _stub_sufficient_disk_space(monkeypatch)
 
     first = cli.invoke(app, ["doctor", "--fix", "--json"])
 

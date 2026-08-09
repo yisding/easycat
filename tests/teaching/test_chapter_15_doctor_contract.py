@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import namedtuple
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ PROVIDER_KEYS = (
     "ELEVENLABS_API_KEY",
     "CARTESIA_API_KEY",
 )
+_DiskUsage = namedtuple("DiskUsage", ["total", "used", "free"])
 
 
 def _checks(result) -> tuple[dict, dict[str, dict]]:
@@ -27,6 +29,11 @@ def test_scoped_production_reports_distinguish_credentials_from_liveness(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    capacity = 2 * 1024**3
+    monkeypatch.setattr(
+        "shutil.disk_usage",
+        lambda _path: _DiskUsage(total=capacity, used=capacity // 2, free=capacity // 2),
+    )
     for key in PROVIDER_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("EASYCAT_DATA_DIR", str(tmp_path / ".easycat"))

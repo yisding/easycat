@@ -490,6 +490,54 @@ async def test_failed_stop_blocks_restart_until_cleanup_retry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_failed_provider_and_agent_close_keep_stop_retryable() -> None:
+    class FailingOnceTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise RuntimeError("tts close failed")
+
+    class FailingOnceAgent:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def run(self, text: str) -> str:
+            return text
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise RuntimeError("agent close failed")
+
+    tts = FailingOnceTTS()
+    agent = FailingOnceAgent()
+    session = Session(_full_config(tts=tts, agent=agent))
+    await session.start()
+
+    with pytest.raises(RuntimeError, match="agent close failed") as exc_info:
+        await session.stop(force=True)
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "tts close failed"
+    assert session._closed is False
+    assert session._stopping is True
+    assert agent.close_calls == 1
+    assert tts.close_calls == 1
+
+    await session.stop(force=True)
+
+    assert session._closed is True
+    assert session._stopping is False
+    assert session._lifecycle_cleanup_error is None
+    assert agent.close_calls == 2
+    assert tts.close_calls == 2
+
+
+@pytest.mark.asyncio
 async def test_cancelled_stop_blocks_restart_until_cleanup_retry() -> None:
     class BlockingOnceDisconnectTransport(FakeTransport):
         def __init__(self) -> None:
@@ -924,6 +972,61 @@ async def test_session_stop_idempotent():
 
 
 @pytest.mark.asyncio
+async def test_closed_session_stop_retries_pending_debug_backend_close() -> None:
+    class PendingCloseJournal(TrackingJournal):
+        @property
+        def close_complete(self) -> bool:
+            return self.close_calls >= 2
+
+    journal = PendingCloseJournal()
+    session = Session(_full_config(journal=journal))
+
+    await session.stop()
+
+    assert session._closed is True
+    assert journal.close_calls == 1
+    assert session._debug_backends._pending_journal_close is journal
+
+    await session.stop()
+
+    assert journal.close_calls == 2
+    assert session._debug_backends._pending_journal_close is None
+
+
+@pytest.mark.asyncio
+async def test_manual_turns_are_rejected_while_session_stop_is_in_progress() -> None:
+    class BlockingDisconnectTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.disconnect_started = asyncio.Event()
+            self.release_disconnect = asyncio.Event()
+
+        async def disconnect(self) -> None:
+            self.disconnect_started.set()
+            await self.release_disconnect.wait()
+            await super().disconnect()
+
+    transport = BlockingDisconnectTransport()
+    session = Session(_full_config(transport=transport))
+    stopping = asyncio.create_task(session.stop())
+    await transport.disconnect_started.wait()
+
+    try:
+        assert session._stopping is True
+        assert session._turn_manager._shutting_down is True
+        with pytest.raises(RuntimeError, match="stopping or has been stopped"):
+            await session.start_turn()
+        with pytest.raises(RuntimeError, match="stopping or has been stopped"):
+            await session.end_turn()
+    finally:
+        transport.release_disconnect.set()
+        await stopping
+
+    with pytest.raises(RuntimeError, match="stopping or has been stopped"):
+        await session.start_turn()
+
+
+@pytest.mark.asyncio
 async def test_cancel_turn_resets_state():
     session = Session(_full_config())
     session._turn_state = TurnState.LISTENING
@@ -962,9 +1065,8 @@ async def test_cancel_turn_reclaims_late_context_for_captured_manager_turn():
 
     transport = BlockingClearTransport()
     session = Session(_full_config(transport=transport))
-    await session._turn_manager.start_turn()
-    manager_token = session._turn_manager.cancel_token
-    assert manager_token is not None
+    manager_token = CancelToken()
+    session._turn_manager.begin_application_turn("manager-only-turn", manager_token)
     assert session._turn is None
 
     cancel_task = asyncio.create_task(session.cancel_turn())
@@ -1209,6 +1311,7 @@ async def test_graceful_stop_drains_barge_in_cleanup_before_provider_teardown():
 @pytest.mark.asyncio
 async def test_vad_barge_in_starts_successor_while_old_notifications_drain():
     session = Session(_full_config())
+    session._is_running = True
     old_turn = TurnContext("old-turn", CancelToken())
     session._turn = old_turn
     session._turn_manager._state = TurnManagerState.BOT_SPEAKING
@@ -1221,17 +1324,19 @@ async def test_vad_barge_in_starts_successor_while_old_notifications_drain():
 
     session.event_bus.subscribe(Interruption, slow_handler)
 
-    await asyncio.wait_for(
-        session._turn_manager.on_vad_event(VADStartSpeaking()),
-        timeout=0.25,
-    )
+    try:
+        await asyncio.wait_for(
+            session._turn_manager.on_vad_event(VADStartSpeaking()),
+            timeout=0.25,
+        )
 
-    assert session._turn_manager.state == TurnManagerState.USER_SPEAKING
-    assert old_turn.cancel_token.is_cancelled
-    await asyncio.wait_for(handler_started.wait(), timeout=0.25)
-
-    handler_release.set()
-    await session._runtime_scope.drain("barge_in_cleanup")
+        assert session._turn_manager.state == TurnManagerState.USER_SPEAKING
+        assert old_turn.cancel_token.is_cancelled
+        await asyncio.wait_for(handler_started.wait(), timeout=0.25)
+    finally:
+        handler_release.set()
+        await session._runtime_scope.drain("barge_in_cleanup")
+        await session.stop(force=True)
 
 
 @pytest.mark.asyncio

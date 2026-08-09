@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 from collections import deque
 from dataclasses import dataclass, field
@@ -78,8 +79,10 @@ def default_webrtc_stats_path() -> str | None:
 
 
 def _safe_stats_scalar(value: object) -> object | None:
-    if isinstance(value, bool | int | float) or value is None:
+    if isinstance(value, bool | int) or value is None:
         return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, str):
         return value.replace("\r", " ").replace("\n", " ")[:200]
     return None
@@ -121,9 +124,10 @@ def sanitize_webrtc_stats_snapshot(payload: object) -> dict[str, object]:
 
 def append_webrtc_stats_record(stats_path: Path, snapshot: dict[str, object]) -> None:
     """Append one sanitized stats record to ``stats_path`` using blocking I/O."""
+    record = json.dumps(snapshot, sort_keys=True, allow_nan=False) + "\n"
     stats_path.parent.mkdir(parents=True, exist_ok=True)
     with stats_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(snapshot, sort_keys=True) + "\n")
+        handle.write(record)
 
 
 @dataclass

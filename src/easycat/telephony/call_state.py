@@ -15,8 +15,9 @@ import asyncio
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from easycat._epoch import Epoch, Lease
 from easycat.events import (
@@ -39,6 +40,18 @@ if TYPE_CHECKING:
     from easycat.telephony.screening import ScreeningPatternSet
 
 logger = logging.getLogger(__name__)
+
+
+def _raise_prefer_cancellation(errors: list[BaseException]) -> NoReturn:
+    """Raise collected lifecycle failures, preferring caller cancellation."""
+    primary = next(
+        (error for error in errors if isinstance(error, asyncio.CancelledError)),
+        errors[0],
+    )
+    secondary = next((error for error in errors if error is not primary), None)
+    if secondary is not None:
+        raise primary from secondary
+    raise primary
 
 
 class OutboundCallState(Enum):
@@ -92,6 +105,9 @@ _CLASSIFICATION_TIMEOUT_TASK = "call_classification_timeout"
 _MAX_DURATION_TASK = "call_max_duration"
 _LATE_VOICEMAIL_TASK = "late_voicemail_window"
 _VOICEMAIL_PICKUP_TASK = "voicemail_pickup_window"
+_TRANSITION_CONTEXT: ContextVar[tuple[OutboundCallStateMachine, asyncio.Task[Any]] | None] = (
+    ContextVar("easycat-call-transition", default=None)
+)
 
 
 class ClassificationGate:
@@ -228,24 +244,56 @@ class ClassificationGate:
         self._hold_audio_playing = False
         buffered = list(self._buffer)
         self._buffer.clear()
-        # Replay while gate is still closed.  Invoke the callback even when
-        # the buffer is empty: session wiring uses it to cancel hold audio
-        # that was synthesized while classification was pending.
-        if self._on_flush_async:
-            await self._on_flush_async(buffered)
-        # Drain frames that arrived during the async flush (e.g. TTS
-        # produced by CallStateChanged subscribers while the gate was
-        # still closed).
+        return await self._replay_and_open(buffered)
+
+    async def _replay_and_open(  # noqa: C901 invariant settlement keeps failures ordered
+        self,
+        buffered: list[TTSAudio],
+        *,
+        timeout: Lease[None] | None = None,
+        include_sync_callback: bool = False,
+    ) -> list[TTSAudio]:
+        """Replay one dequeued batch and open this gate generation safely."""
+        errors: list[BaseException] = []
+        if include_sync_callback and self._on_flush and buffered:
+            try:
+                self._on_flush(buffered)
+            except Exception as exc:  # noqa: BLE001 - callback invariant boundary
+                errors.append(exc)
+        # Replay while the gate is still closed. Invoke the async callback even
+        # for an empty explicit flush: session wiring uses it to cancel hold
+        # audio synthesized while classification was pending.
+        try:
+            if self._on_flush_async:
+                await self._on_flush_async(buffered)
+        except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 - gate invariant
+            errors.append(exc)
+        if timeout is not None and not timeout.guard():
+            if errors:
+                _raise_prefer_cancellation(errors)
+            return buffered
+        # Drain frames that arrived during the async flush (e.g. TTS produced
+        # by CallStateChanged subscribers), then open the gate even when replay
+        # failed or the caller was cancelled. A committed HUMAN/UNKNOWN state
+        # must never retain a closed gate with no release timeout.
         late = list(self._buffer)
         self._buffer.clear()
-        # Now open the gate for future TTS chunks.
         self._closed = False
         if self._started:
-            self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
-            self._started = False
+            try:
+                self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
+            except Exception as exc:  # noqa: BLE001 - unsubscribe invariant boundary
+                errors.append(exc)
+            finally:
+                self._started = False
         # Replay late arrivals now that the gate is open.
         if self._on_flush_async and late:
-            await self._on_flush_async(late)
+            try:
+                await self._on_flush_async(late)
+            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 - gate invariant
+                errors.append(exc)
+        if errors:
+            _raise_prefer_cancellation(errors)
         return buffered + late
 
     async def discard(self) -> None:
@@ -335,19 +383,11 @@ class ClassificationGate:
             self._hold_audio_playing = False
             buffered = list(self._buffer)
             self._buffer.clear()
-            if self._on_flush and buffered:
-                self._on_flush(buffered)
-            if self._on_flush_async:
-                await self._on_flush_async(buffered)
-            if not timeout.guard():
-                return
-            # Open the gate after flushing so late TTS chunks cannot
-            # slip past the buffer during the async replay — matching
-            # the ordering in flush_and_release().
-            self._closed = False
-            if self._started:
-                self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
-                self._started = False
+            await self._replay_and_open(
+                buffered,
+                timeout=timeout,
+                include_sync_callback=True,
+            )
 
 
 class OutboundCallStateMachine:
@@ -386,6 +426,9 @@ class OutboundCallStateMachine:
         self._screening_patterns = screening_patterns
 
         self._state = OutboundCallState.INITIATING
+        self._transition_epoch = 0
+        self._transition_lock = asyncio.Lock()
+        self._active_transition_owner: asyncio.Task[Any] | None = None
         self._started = False
         self._timers = BackgroundTaskScope()
         self._max_duration_hangup: Callable[[str], Awaitable[None]] | None = None
@@ -540,46 +583,96 @@ class OutboundCallStateMachine:
         await self._transition(new_state)
 
     async def _transition(self, new_state: OutboundCallState) -> None:
+        current_task = asyncio.current_task()
+        transition_context = _TRANSITION_CONTEXT.get()
+        transition_machine, transition_owner = transition_context or (None, None)
+        if transition_machine is self and current_task is transition_owner:
+            await self._transition_owned(new_state)
+            return
+        if transition_machine is self and transition_owner is self._active_transition_owner:
+            # A task spawned by an inline state observer inherits the active
+            # ContextVar but is not structurally joined to this transition.
+            # Letting it bypass the lock can race the outer invariant
+            # settlement; making it wait can deadlock when the observer awaits
+            # the child. Require observers to await transition() directly in
+            # their own task, where reentry is safely serialized inline. A
+            # stale inherited owner (that transition already settled) takes
+            # the ordinary serialized path below instead.
+            raise RuntimeError(
+                "state observers must await transition() directly; "
+                "spawned transition tasks are not supported"
+            )
+        async with self._transition_lock:
+            if current_task is None:  # pragma: no cover - coroutine has an asyncio task
+                await self._transition_owned(new_state)
+                return
+            context_token = _TRANSITION_CONTEXT.set((self, current_task))
+            self._active_transition_owner = current_task
+            try:
+                await self._transition_owned(new_state)
+            finally:
+                self._active_transition_owner = None
+                _TRANSITION_CONTEXT.reset(context_token)
+
+    async def _transition_owned(self, new_state: OutboundCallState) -> None:
+        """Commit and settle one transition while its owner is serialized."""
         if self._state == new_state:
             return
         old = self._state
         self._state = new_state
-        await self._event_bus.emit(
-            CallStateChanged(old=old, new=new_state, call_sid=self._call_sid)
-        )
-        self._update_smart_turn_suppression()
+        self._transition_epoch += 1
+        transition_epoch = self._transition_epoch
+        dispatch_error: BaseException | None = None
+        try:
+            await self._event_bus.emit(
+                CallStateChanged(old=old, new=new_state, call_sid=self._call_sid)
+            )
+        except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 - invariant boundary
+            dispatch_error = exc
 
-        # Release classification gate when leaving CLASSIFYING.
-        # Only re-enqueue buffered opener audio for HUMAN/UNKNOWN — for
-        # VOICEMAIL, SCREENING, and IVR the opener should not be played, so
-        # discard() drops the buffered opener and fully opens the gate.
-        # Opening it (rather than leaving it closed) means later TTS — e.g. a
-        # leave-message voicemail drop, or agent speech once a non-human
-        # state resolves to HUMAN — is no longer silently buffered with no
-        # timeout to flush it.
-        if old == OutboundCallState.CLASSIFYING and self._gate.is_buffering:
+        invariant_errors = (
+            await self._settle_transition_invariants(new_state)
+            if self._transition_epoch == transition_epoch
+            else []
+        )
+        errors = ([dispatch_error] if dispatch_error is not None else []) + invariant_errors
+        if errors:
+            _raise_prefer_cancellation(errors)
+
+    async def _settle_transition_invariants(
+        self,
+        new_state: OutboundCallState,
+    ) -> list[BaseException]:
+        """Settle every invariant after state commit, retaining the first failures."""
+        invariant_errors: list[BaseException] = []
+        try:
+            self._update_smart_turn_suppression()
+        except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 - invariant boundary
+            invariant_errors.append(exc)
+        try:
+            await self._settle_transition_gate(new_state)
+        except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 - invariant boundary
+            invariant_errors.append(exc)
+        try:
+            self._start_transition_windows(new_state)
+        except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 - invariant boundary
+            invariant_errors.append(exc)
+        return invariant_errors
+
+    async def _settle_transition_gate(
+        self,
+        new_state: OutboundCallState,
+    ) -> None:
+        """Release or discard classified opener audio after a committed transition."""
+        if self._gate.is_buffering and new_state != OutboundCallState.CLASSIFYING:
             if new_state in {OutboundCallState.HUMAN, OutboundCallState.UNKNOWN}:
                 await self._gate.flush_and_release()
             else:
                 await self._gate.discard()
 
-        # Defensive reopen: if the gate is somehow still buffering when
-        # SCREENING, IVR, or VOICEMAIL resolves to HUMAN (e.g. it was closed
-        # by a future code path other than the CLASSIFYING entry above),
-        # flush it so normal agent TTS can reach the transport.  In the
-        # current flow discard() has already opened the gate, so this is a
-        # no-op.
-        if (
-            old
-            in {OutboundCallState.SCREENING, OutboundCallState.IVR, OutboundCallState.VOICEMAIL}
-            and new_state == OutboundCallState.HUMAN
-            and self._gate.is_buffering
-        ):
-            await self._gate.flush_and_release()
-
+    def _start_transition_windows(self, new_state: OutboundCallState) -> None:
         if new_state == OutboundCallState.HUMAN and self._late_voicemail_window_s > 0:
             self._start_late_voicemail_window()
-
         if new_state == OutboundCallState.VOICEMAIL and self._voicemail_pickup_window_s > 0:
             self._start_voicemail_pickup_window()
 
@@ -613,9 +706,12 @@ class OutboundCallStateMachine:
             # Close the gate before transitioning so that any TTS emitted by
             # CallStateChanged subscribers is captured by the buffer.
             self._gate.close()
-            await self._transition(OutboundCallState.CLASSIFYING)
+            # Once the answered event is accepted, these timers are owned by the
+            # committed CLASSIFYING lifecycle even if a public state observer
+            # raises while the transition is being dispatched.
             self._start_classification_timeout()
             self._start_max_duration_timer()
+            await self._transition(OutboundCallState.CLASSIFYING)
 
     async def _on_failed(self, event: CallFailed) -> None:
         if not self._matches_active_call(event.call_sid):

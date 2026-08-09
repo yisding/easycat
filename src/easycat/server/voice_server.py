@@ -25,6 +25,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import is_dataclass, replace
+from enum import Enum, auto
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -83,6 +84,12 @@ _LISTENER_CLEANUP_TASK = "voice_server_listener_cleanup"
 _LISTENER_CLEANUP_COHORT = "voice-server-listener-cleanup"
 _SESSION_SWEEP_TASK = "voice_server_session_sweep"
 _SESSION_SWEEP_COHORT = "voice-server-session-sweep"
+
+
+class _ListenerCleanupWaitResult(Enum):
+    COMPLETED = auto()
+    COOPERATIVELY_CANCELLED = auto()
+    RETAINED = auto()
 
 
 class VoiceServer:
@@ -631,9 +638,20 @@ class VoiceServer:
             cleanup_errors,
         )
         if sweep_succeeded:
-            self._record_incomplete_hard_sweep(
+            report = None
+            if swept:
+                try:
+                    report = sweep_task.result()
+                except Exception as exc:  # noqa: BLE001 intentional lifecycle boundary
+                    self._record_cleanup_error(
+                        "SessionManager hard sweep result retrieval",
+                        exc,
+                        cleanup_errors,
+                    )
+            await self._record_incomplete_hard_sweep(
                 completed=swept,
-                report=sweep_task.result() if swept else None,
+                report=report,
+                sweep_task=sweep_task,
                 cleanup_errors=cleanup_errors,
             )
         await self._session_sweep_task_scope.release_standalone_if_empty()
@@ -646,22 +664,48 @@ class VoiceServer:
         if cleanup_errors:
             raise cleanup_errors[0]
 
-    def _record_incomplete_hard_sweep(
+    async def _record_incomplete_hard_sweep(
         self,
         *,
         completed: bool,
         report: SessionStopReport[int] | None,
+        sweep_task: asyncio.Task[SessionStopReport[int]],
         cleanup_errors: list[Exception],
     ) -> None:
         """Retain lifecycle ownership when the manager still owns sessions."""
         if not completed:
-            timeout_error = RuntimeError(
-                "SessionManager.stop_all did not finish within "
-                f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s"
-            )
-            logger.warning("VoiceServer: %s", timeout_error)
-            cleanup_errors.append(timeout_error)
-            return
+            abandon_report = await self._manager.abandon_pending_stops()
+            # Cancelling the actual per-key tasks lets the already-cancelled
+            # stop_all waiter settle. Give its cancellation propagation one
+            # final turn without extending the hard deadline.
+            await asyncio.sleep(0)
+            if abandon_report.ok and sweep_task.cancelled():
+                logger.warning(
+                    "VoiceServer hard sweep exceeded force_shutdown_timeout_s=%ss; "
+                    "cancellation settled with no retained session work",
+                    self.config.force_shutdown_timeout_s,
+                )
+                return
+            if sweep_task.done() and not sweep_task.cancelled():
+                try:
+                    report = sweep_task.result()
+                except Exception as exc:  # noqa: BLE001 intentional lifecycle boundary
+                    self._record_cleanup_error(
+                        "SessionManager hard sweep cancellation cleanup",
+                        exc,
+                        cleanup_errors,
+                    )
+                    return
+                completed = True
+            else:
+                timeout_error = RuntimeError(
+                    "SessionManager.stop_all did not finish within "
+                    f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s; "
+                    f"retained {len(abandon_report.retained_keys)} session(s)"
+                )
+                logger.warning("VoiceServer: %s", timeout_error)
+                cleanup_errors.append(timeout_error)
+                return
         retained_keys = self._manager.active_keys()
         report_failed = report is not None and log_session_stop_failures(
             report,
@@ -750,10 +794,26 @@ class VoiceServer:
             return True
         if task is None:
             return False
-        if not await self._wait_for_listener_cleanup_task(
+        wait_result = await self._wait_for_listener_cleanup_task(
             task,
             cancel_on_timeout=cancel_on_timeout,
-        ):
+        )
+        if wait_result is _ListenerCleanupWaitResult.COOPERATIVELY_CANCELLED:
+            # The wait was cancelled, but the stage still missed its deadline:
+            # report the timeout so the caller keeps the listener for retry
+            # instead of discarding it as successfully closed. The settled
+            # task is reaped so a later stop() starts a fresh attempt.
+            self._listener_cleanup_tasks.pop(stage, None)
+            await asyncio.gather(task, return_exceptions=True)
+            timeout_error = RuntimeError(
+                f"{stage} did not {timeout_action} within "
+                f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s "
+                "(cleanup wait cooperatively cancelled)"
+            )
+            logger.warning("VoiceServer: %s", timeout_error)
+            cleanup_errors.append(timeout_error)
+            return False
+        if wait_result is _ListenerCleanupWaitResult.RETAINED:
             timeout_error = RuntimeError(
                 f"{stage} did not {timeout_action} within "
                 f"force_shutdown_timeout_s={self.config.force_shutdown_timeout_s}s"
@@ -807,7 +867,7 @@ class VoiceServer:
         task: asyncio.Task[Any],
         *,
         cancel_on_timeout: bool,
-    ) -> bool:
+    ) -> _ListenerCleanupWaitResult:
         """Wait one bounded slice while preserving a listener cleanup task's ownership."""
         try:
             done, _ = await asyncio.wait(
@@ -823,14 +883,18 @@ class VoiceServer:
                 task.cancel()
             raise
         if task in done:
-            return True
+            return _ListenerCleanupWaitResult.COMPLETED
         if cancel_on_timeout and not task.done():
             task.cancel()
             # Preserve the old hard-timeout behavior: request cooperative
             # cancellation and give it one event-loop turn without waiting for
             # a cancellation-resistant listener.
             await asyncio.sleep(0)
-        return False
+            if task.done():
+                if task.cancelled():
+                    return _ListenerCleanupWaitResult.COOPERATIVELY_CANCELLED
+                return _ListenerCleanupWaitResult.COMPLETED
+        return _ListenerCleanupWaitResult.RETAINED
 
     async def _finish_listener_cleanup_task(
         self,

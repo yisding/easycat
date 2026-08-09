@@ -544,6 +544,34 @@ class TestVoicemailPolicyHandler:
         finally:
             handler.stop()
 
+    async def test_stale_call_state_change_does_not_rearm_active_call(self) -> None:
+        bus = EventBus()
+        handler = VoicemailPolicyHandler(
+            bus,
+            VoicemailPolicyConfig(policy=VoicemailPolicy.HANG_UP),
+        )
+        handler.start()
+
+        try:
+            await bus.emit(CallInitiated(call_sid="CA-current", to="+1", from_="+2"))
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA-current"))
+            first_action = handler.last_action
+            assert first_action is not None
+
+            await bus.emit(
+                CallStateChanged(
+                    old=OutboundCallState.VOICEMAIL,
+                    new=OutboundCallState.HUMAN,
+                    call_sid="CA-stale",
+                )
+            )
+
+            assert handler._action_taken is True
+            await bus.emit(VoicemailDetected(result="machine", call_sid="CA-current"))
+            assert handler.last_action is first_action
+        finally:
+            handler.stop()
+
     async def test_non_pickup_state_change_does_not_rearm(self) -> None:
         # A transition that does not leave VOICEMAIL must not re-arm.
         bus = EventBus()

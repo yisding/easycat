@@ -72,7 +72,6 @@ in-tree reference implementation.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import AsyncIterator, Mapping
@@ -81,6 +80,7 @@ from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._helpers import aclose_quietly
+from easycat.integrations.agents._state_serialization import serialize_framework_state
 from easycat.integrations.agents._text_stream import AgentTextStream
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -190,19 +190,11 @@ class BridgeTemplate:
         can be shared, so secrets must never be dumped. Override when
         richer (still scrubbed!) state is available.
         """
-        from easycat.runtime.safe_defaults import _is_secret_name
-        from easycat.validation.redaction import redact_value
-
         try:
             fields = self.snapshot_state().fields
-            scrubbed = {
-                k: redact_value(v, str(k))
-                for k, v in fields.items()
-                if not _is_secret_name(str(k))
-            }
-            return json.dumps(scrubbed, default=str).encode()
         except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return b"{}"
+        return serialize_framework_state(fields)
 
     # ── Inherited boilerplate: invoke lifecycle ───────────────────
 

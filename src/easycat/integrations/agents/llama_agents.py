@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
-import json
 import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
@@ -18,6 +17,7 @@ from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
+from easycat.integrations.agents._state_serialization import serialize_framework_state
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -954,10 +954,7 @@ class LlamaAgentsBridge:
             "context": _jsonable_context(self._ctx),
             "remote_context": _jsonable_context(self._remote_context),
         }
-        try:
-            return json.dumps(state, default=str).encode("utf-8")
-        except (TypeError, ValueError):
-            return b"{}"
+        return serialize_framework_state(state)
 
     def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
         pre_ref = f"llama-pre-{id(self):x}"

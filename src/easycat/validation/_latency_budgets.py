@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Any
 
-from easycat.validation._latency_models import ReliabilitySample
+from easycat._numeric import is_finite_number
+from easycat.validation._latency_models import (
+    LatencyStageDurations,
+    ReliabilitySample,
+    ReliabilitySignals,
+)
 
 __all__ = [
     "DEFAULT_BUDGETS",
@@ -20,6 +25,11 @@ __all__ = [
     "evaluate_reliability_budgets",
 ]
 
+_LATENCY_BUDGET_STAGES = frozenset(item.name for item in fields(LatencyStageDurations))
+_RELIABILITY_BUDGET_SIGNALS = frozenset(
+    item.name for item in fields(ReliabilitySignals) if item.name != "unavailable_reason"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class LatencyBudget:
@@ -28,6 +38,13 @@ class LatencyBudget:
     percentile: str = "p95"
 
     def __post_init__(self) -> None:
+        if self.stage not in _LATENCY_BUDGET_STAGES:
+            raise ValueError(
+                "LatencyBudget stage must be one of "
+                f"{', '.join(sorted(_LATENCY_BUDGET_STAGES))}; got {self.stage!r}"
+            )
+        if not is_finite_number(self.max_ms) or self.max_ms < 0:
+            raise ValueError("LatencyBudget max_ms must be a finite number >= 0")
         if self.percentile not in ("p50", "p90", "p95", "p99"):
             raise ValueError(
                 f"LatencyBudget percentile must be one of p50, p90, p95, p99; "
@@ -72,16 +89,22 @@ def evaluate_budgets(
     budgets: Sequence[LatencyBudget],
 ) -> list[LatencyBudgetViolation]:
     violations: list[LatencyBudgetViolation] = []
-    overall = percentiles.get("overall")
-    if isinstance(overall, Mapping):
+    if "overall" in percentiles:
+        overall = percentiles["overall"]
+        if not isinstance(overall, Mapping):
+            raise ValueError("latency percentiles overall must be an object")
         violations.extend(_evaluate_scope(overall, budgets, scope="overall"))
-    by_condition = percentiles.get("by_condition")
-    if isinstance(by_condition, Mapping):
+    if "by_condition" in percentiles:
+        by_condition = percentiles["by_condition"]
+        if not isinstance(by_condition, Mapping):
+            raise ValueError("latency percentiles by_condition must be an object")
         for condition_id, stage_stats in sorted(
             by_condition.items(), key=lambda item: str(item[0])
         ):
             if not isinstance(stage_stats, Mapping):
-                continue
+                raise ValueError(  # noqa: TRY004 domain-specific validation error
+                    f"latency percentile condition {condition_id!r} must be an object"
+                )
             violations.extend(
                 _evaluate_scope(stage_stats, budgets, scope=f"condition:{condition_id}")
             )
@@ -96,12 +119,22 @@ def _evaluate_scope(
 ) -> list[LatencyBudgetViolation]:
     results: list[LatencyBudgetViolation] = []
     for budget in budgets:
-        stats = stage_stats.get(budget.stage)
-        if not isinstance(stats, Mapping):
+        if budget.stage not in stage_stats:
             continue
+        stats = stage_stats[budget.stage]
+        if not isinstance(stats, Mapping):
+            raise ValueError(  # noqa: TRY004 domain-specific validation error
+                "latency percentile stats must be an object; "
+                f"got {type(stats).__name__} for {scope}:{budget.stage}"
+            )
         observed = stats.get(budget.percentile)
         if observed is None:
             continue
+        if not is_finite_number(observed) or observed < 0:
+            raise ValueError(
+                "observed latency percentile must be a finite number >= 0; "
+                f"got {observed!r} for {scope}:{budget.stage}.{budget.percentile}"
+            )
         observed_ms = float(observed)
         if observed_ms > budget.max_ms:
             results.append(
@@ -122,6 +155,15 @@ class ReliabilityBudget:
 
     signal: str
     max_value: float
+
+    def __post_init__(self) -> None:
+        if self.signal not in _RELIABILITY_BUDGET_SIGNALS:
+            raise ValueError(
+                "ReliabilityBudget signal must be one of "
+                f"{', '.join(sorted(_RELIABILITY_BUDGET_SIGNALS))}; got {self.signal!r}"
+            )
+        if not is_finite_number(self.max_value) or self.max_value < 0:
+            raise ValueError("ReliabilityBudget max_value must be a finite number >= 0")
 
     def to_dict(self) -> dict[str, float | str]:
         return {"signal": self.signal, "max_value": self.max_value}

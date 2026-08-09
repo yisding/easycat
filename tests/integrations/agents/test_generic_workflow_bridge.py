@@ -19,6 +19,7 @@ from easycat.integrations.agents.base import (
 )
 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 from easycat.runtime import InMemoryRingBuffer
+from easycat.runtime.artifacts import InMemoryArtifactStore
 
 
 def _recorder(journal=None):
@@ -180,6 +181,61 @@ class TestInterruption:
         bridge = GenericWorkflowBridge(workflow=_DeepWorkflow())
         # Should not raise — falls back to cancel_token.
         bridge.apply_interruption("hello", CancellationMode.IMMEDIATE_STOP)
+
+    def test_state_snapshot_artifact_bytes_scrub_secret_keys_and_values(self):
+        class _SecretSnapshotWorkflow(_InterruptibleShallowWorkflow):
+            def snapshot_state(self):
+                return {
+                    "authorization": "Bearer top-level-secret",
+                    "config": {"api_key": "sk-nested-secret-value", "safe": "preserved"},
+                    "metadata": {"label": "sk-abcdefghijklmnop"},
+                }
+
+        journal = InMemoryRingBuffer(capacity=1000)
+        store = InMemoryArtifactStore()
+        recorder = JournalAgentRecorder(
+            journal=journal,
+            artifact_store=store,
+            context=RecorderContext(run_id="r1", session_id="s1", turn_id="t1"),
+        )
+
+        bridge = GenericWorkflowBridge(_SecretSnapshotWorkflow())
+        bridge.apply_interruption("hello", CancellationMode.IMMEDIATE_STOP, recorder)
+
+        refs = [
+            record.output_ref
+            for record in journal.read()
+            if record.name == "state_snapshot" and record.output_ref
+        ]
+        assert refs
+        payload = b"".join(store.get(ref) or b"" for ref in refs)
+        assert b"top-level-secret" not in payload
+        assert b"sk-nested-secret-value" not in payload
+        assert b"sk-abcdefghijklmnop" not in payload
+        assert b"preserved" in payload
+        assert b"[REDACTED_SECRET]" in payload
+
+    def test_dict_fallback_drops_concatenated_lowercase_credential_names(self):
+        class _CredentialAttrWorkflow:
+            """No ``snapshot_state``: forces the ``__dict__`` fallback."""
+
+            def __init__(self) -> None:
+                self.authtoken = "2fj9xkq-plain-shaped-value"
+                self.apisecret = "another-plain-shaped-value"
+                self.mode = "screening"
+
+            async def on_user_turn(self, text: str) -> str:
+                return text
+
+        bridge = GenericWorkflowBridge(workflow=_CredentialAttrWorkflow())
+
+        payload = bridge._serialize_framework_state()
+
+        assert b"2fj9xkq-plain-shaped-value" not in payload
+        assert b"another-plain-shaped-value" not in payload
+        assert b"authtoken" not in payload
+        assert b"apisecret" not in payload
+        assert b"screening" in payload
 
 
 class TestConstruction:

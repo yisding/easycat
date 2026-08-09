@@ -13,13 +13,13 @@ and state snapshots.
 from __future__ import annotations
 
 import inspect
-import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._helpers import aclose_quietly
+from easycat.integrations.agents._state_serialization import serialize_framework_state
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -177,11 +177,15 @@ class GenericWorkflowBridge(BridgeTemplate):
             if state is None:
                 raw = getattr(self._workflow, "__dict__", {})
                 if isinstance(raw, dict):
+                    # Substring-match attribute names (``authtoken``,
+                    # ``apisecret``) that the serializer's word-boundary
+                    # classifier would keep; a blanket ``__dict__`` dump
+                    # warrants the over-exclusion.
                     state = {k: v for k, v in raw.items() if not _is_secret_name(str(k))}
                 else:
                     state = {}
-            return json.dumps(state, default=str).encode()
-        except (TypeError, ValueError):
+            return serialize_framework_state(state)
+        except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             return b"{}"
 
     def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:

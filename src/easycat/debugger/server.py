@@ -101,6 +101,15 @@ _AUDIO_TRACK_MIC = "mic"
 _AUDIO_TRACK_REFERENCE = "reference"
 _VALID_AUDIO_TRACKS = frozenset({_AUDIO_TRACK_TTS, _AUDIO_TRACK_MIC, _AUDIO_TRACK_REFERENCE})
 
+# Rendering needs one contiguous PCM blob for peak decoding.  Bound that
+# waveform-only allocation independently from the streaming concat route,
+# which can safely backpressure arbitrarily long audio without joining it.
+_WAVEFORM_MAX_PCM_BYTES = 32 * 1024 * 1024
+
+
+class _WaveformAudioTooLarge(ValueError):
+    """Raised before waveform PCM would exceed its in-memory budget."""
+
 
 def _record_sequence(record: dict[str, Any]) -> int | None:
     seq = record.get("sequence")
@@ -119,7 +128,11 @@ def _websocket_control_payload(message: str) -> dict[str, Any] | None:
 
 
 def _collect_audio_frames(
-    source: DebuggerSource, turn_id: str, *, track: str
+    source: DebuggerSource,
+    turn_id: str,
+    *,
+    track: str,
+    max_total_bytes: int | None = None,
 ) -> tuple[list[bytes], dict[str, int]]:
     """Return ``(pcm_blobs_in_order, format)`` for one turn's audio frames.
 
@@ -146,6 +159,7 @@ def _collect_audio_frames(
     is_tts = track == _AUDIO_TRACK_TTS
     is_reference = track == _AUDIO_TRACK_REFERENCE
     frames: list[tuple[int, bytes, dict[str, Any]]] = []
+    raw_bytes = 0
     for r in source.records():
         if r.get("turn_id") != turn_id:
             continue
@@ -172,6 +186,9 @@ def _collect_audio_frames(
         seq = _record_sequence(r)
         if seq is None:
             continue
+        raw_bytes += len(blob)
+        if max_total_bytes is not None and raw_bytes > max_total_bytes:
+            raise _WaveformAudioTooLarge(f"waveform PCM exceeds {max_total_bytes} byte limit")
         frames.append((seq, blob, data))
 
     if not frames:
@@ -181,6 +198,8 @@ def _collect_audio_frames(
     fmt0 = frames[0][2]
     fmt = _safe_audio_format_from_metadata(fmt0)
     blobs, _dropped = _coerce_frames_to_format(frames, fmt, strict=is_tts)
+    if max_total_bytes is not None and sum(len(blob) for blob in blobs) > max_total_bytes:
+        raise _WaveformAudioTooLarge(f"waveform PCM exceeds {max_total_bytes} byte limit")
     return blobs, fmt
 
 
@@ -205,7 +224,12 @@ def _collect_concat_pcm(
     TTS track raises ``ValueError`` on inconsistent PCM formats; the mic and
     reference tracks are lenient (mismatched frames are dropped upstream).
     """
-    frames, fmt = _collect_audio_frames(source, turn_id, track=track)
+    frames, fmt = _collect_audio_frames(
+        source,
+        turn_id,
+        track=track,
+        max_total_bytes=_WAVEFORM_MAX_PCM_BYTES,
+    )
     return b"".join(frames), fmt
 
 
@@ -582,28 +606,69 @@ class _DebuggerRoutes:
     def _origin_is_safe(origin: str) -> bool:
         if not origin:
             return False
-        parsed = urlsplit(origin)
-        if parsed.scheme not in {"http", "https"}:
+        try:
+            parsed = urlsplit(origin)
+            port = parsed.port
+        except ValueError:
             return False
-        return is_loopback_host(parsed.hostname)
+        return not (
+            parsed.scheme not in {"http", "https"}
+            or not is_loopback_host(parsed.hostname)
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or port == 0
+        )
 
     @staticmethod
     def _host_is_safe(host: str) -> bool:
         if not host:
             return False
-        parsed = urlsplit(f"//{host}")
-        return is_loopback_host(parsed.hostname)
+        try:
+            parsed = urlsplit(f"//{host}")
+            port = parsed.port
+        except ValueError:
+            return False
+        return bool(
+            is_loopback_host(parsed.hostname)
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.path
+            and not parsed.query
+            and not parsed.fragment
+            and port != 0
+        )
+
+    @classmethod
+    def _origin_matches_request(cls, origin: str, *, scheme: str, host: str) -> bool:
+        """Return whether an Origin is the request's exact normalized origin."""
+        if not cls._origin_is_safe(origin) or scheme not in {"http", "https"}:
+            return False
+        try:
+            parsed_origin = urlsplit(origin)
+            parsed_request = urlsplit(f"{scheme}://{host}")
+            origin_port = parsed_origin.port or (443 if parsed_origin.scheme == "https" else 80)
+            request_port = parsed_request.port or (443 if scheme == "https" else 80)
+        except ValueError:
+            return False
+        return (
+            parsed_origin.scheme == scheme
+            and parsed_origin.hostname == parsed_request.hostname
+            and origin_port == request_port
+        )
 
     async def origin_guard(self, request: Any, handler: Any) -> Any:
         """Refuse cross-origin requests on the loopback default.
 
-        Three checks layered for defense-in-depth:
+        Four checks layered for defense-in-depth:
 
         1. ``Host`` must be an exact loopback hostname/address, blocking
            DNS-rebinding hostnames such as ``localhost.attacker.example``.
-        2. ``Origin`` header, when present, must parse to an exact loopback
-           hostname/address. Browsers always send Origin on cross-origin
-           fetches, ws upgrades, and POST.
+        2. ``Origin`` header, when present, must match the request's exact
+           scheme, hostname, and effective port. Browsers always send Origin
+           on cross-origin fetches, ws upgrades, and POST.
         3. ``Sec-Fetch-Site`` (set by all modern browsers) must be
            ``same-origin``, ``same-site``, or ``none`` (top-level nav).
            Any cross-site value is refused regardless of Origin.
@@ -612,7 +677,7 @@ class _DebuggerRoutes:
            Origin — kills the simple-form-POST CSRF vector that
            browsers wave through without preflight.
 
-        ``allow_remote=True`` disables all three: callers who want
+        ``allow_remote=True`` disables all four: callers who want
         network exposure are on their own.
         """
         web = self.web
@@ -625,7 +690,11 @@ class _DebuggerRoutes:
             return web.Response(status=403, text="non-loopback host refused")
         if site and site not in ("same-origin", "same-site", "none"):
             return web.Response(status=403, text="cross-site requests refused")
-        if origin and not self._origin_is_safe(origin):
+        if origin and not self._origin_matches_request(
+            origin,
+            scheme=request.scheme,
+            host=host,
+        ):
             return web.Response(status=403, text="cross-origin requests refused")
         if request.method in self._STATE_CHANGING_METHODS:
             ctype = (request.headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -636,8 +705,7 @@ class _DebuggerRoutes:
             # On state-changing requests, a missing Origin from a
             # browser is suspicious — refuse rather than trust the
             # caller blindly.  Server-to-server clients can pass an
-            # explicit ``Origin: http://localhost`` or use
-            # ``allow_remote``.
+            # explicit same-origin value or use ``allow_remote``.
             if not origin:
                 return web.Response(
                     status=403, text="state-changing requests require an Origin header"
@@ -742,6 +810,16 @@ class _DebuggerRoutes:
         height = _bounded("h", 80, 400)
         try:
             pcm, fmt = _collect_concat_pcm(source, turn_id, track=track)
+        except _WaveformAudioTooLarge as exc:
+            logger.warning("Cannot render %s waveform for %s: %s", track, turn_id, exc)
+            return web.json_response(
+                {
+                    "error_code": "WAVEFORM_AUDIO_TOO_LARGE",
+                    "message": "Waveform audio exceeds the in-memory rendering limit",
+                    "max_pcm_bytes": _WAVEFORM_MAX_PCM_BYTES,
+                },
+                status=413,
+            )
         except ValueError as exc:
             logger.warning("Cannot render %s waveform for %s: %s", track, turn_id, exc)
             return web.Response(status=409, text="cannot assemble audio for this turn")
@@ -1329,12 +1407,21 @@ class _DebuggerRoutes:
 
     async def shutdown(self, _app: Any) -> None:
         """Close every live WebSocket before aiohttp cancels handlers."""
-        if self.websockets:
-            await asyncio.gather(
-                *(ws.close(code=1001, message=b"server shutdown") for ws in self.websockets),
-                return_exceptions=True,
-            )
-        self.websockets.clear()
+        sockets = list(self.websockets)
+        if not sockets:
+            return
+        results = await asyncio.gather(
+            *(ws.close(code=1001, message=b"server shutdown") for ws in sockets),
+            return_exceptions=True,
+        )
+        failed: set[Any] = set()
+        for websocket, result in zip(sockets, results, strict=True):
+            if isinstance(result, BaseException):
+                failed.add(websocket)
+                logger.error("Debugger WebSocket close failed", exc_info=result)
+        self.websockets.difference_update(
+            websocket for websocket in sockets if websocket not in failed
+        )
 
     def route_table(self) -> list[Any]:
         """Return this controller's route table.

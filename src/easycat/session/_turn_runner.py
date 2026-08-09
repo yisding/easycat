@@ -77,6 +77,12 @@ from easycat.strip_markdown import strip_markdown
 from easycat.teardown_budgets import (
     SESSION_APPLICATION_PROMPT_CANCEL_DRAIN_TIMEOUT_S as _APPLICATION_PROMPT_CANCEL_DRAIN_S,
 )
+from easycat.teardown_budgets import (
+    SESSION_STT_REJECTION_CLEANUP_CANCEL_GRACE_TIMEOUT_S as _STT_REJECTION_CLEANUP_GRACE_S,
+)
+from easycat.teardown_budgets import (
+    SESSION_STT_REJECTION_CLEANUP_JOIN_TIMEOUT_S as _STT_REJECTION_CLEANUP_JOIN_S,
+)
 from easycat.timeouts import (
     AgentTimeoutError,
     TimeoutConfig,
@@ -287,9 +293,9 @@ class TurnRunner:
         if publication.source not in {"voice", "hand_built"}:
             return publication
         if not self._is_running():
-            return publication
+            return replace(publication, admission_rejected=True)
         if not await self._prepare_turn_publication(publication):
-            return publication
+            return replace(publication, admission_rejected=True)
 
         cancel_token = publication.cancel_token or CancelToken()
         turn = self._turn.begin(publication.turn_id, cancel_token)
@@ -299,15 +305,20 @@ class TurnRunner:
         # Tag startup records for this turn without leaving the EventBus task
         # pinned to the turn after this handler returns.
         turn_token = bind_turn(turn.id)
+        startup_cleanup_joined = False
         try:
             self._audio.reset_speech_detection()
             self._tts.set_playback_suppressed(False)
 
             # Start STT stream
             stt = self._stt_provider()
+            self._stt.begin_stream_attempt()
             await stt.start_stream()
             if not self._publication_owns_turn(publication, turn):
-                return publication
+                _, cancellation = await self._cleanup_rejected_stt_start(publication, turn)
+                startup_cleanup_joined = True
+                self._raise_rejected_start_cancellation(publication, cancellation)
+                return replace(publication, admission_rejected=True)
             self._stt.mark_active()
 
             # Prime STT with pre-roll frames captured by TurnManager.
@@ -318,28 +329,143 @@ class TurnRunner:
             for chunk in self._turn_manager.turn_audio:
                 await self._stt_stage.execute(chunk, self._run_ctx, turn)
                 if not self._publication_owns_turn(publication, turn):
-                    return publication
+                    _, cancellation = await self._cleanup_rejected_stt_start(publication, turn)
+                    startup_cleanup_joined = True
+                    self._raise_rejected_start_cancellation(publication, cancellation)
+                    return replace(publication, admission_rejected=True)
                 turn.stt_has_uncommitted_audio = True
 
             self._stt.start_event_loop(turn, identity=publication.identity)
+        except asyncio.CancelledError:
+            if not startup_cleanup_joined:
+                await self._cleanup_rejected_stt_start(publication, turn)
+            # A cleanup timeout deliberately retains Session identity as the
+            # provider survivor's lifecycle gate. The cancelled TurnManager
+            # callback will never receive an admission_rejected return value,
+            # though, so roll back its activity/token here while this exact
+            # publication still owns them. A newer publication makes the
+            # lease stale and is therefore preserved.
+            self._rollback_rejected_start_activity(publication)
+            raise
         except Exception as exc:
             logger.exception("Failed to start STT stream")
-            await self._emit(Error(exception=exc, stage=ErrorStage.STT))
             # Full per-turn teardown: close the (possibly half-open) stream,
             # cancel/await any STT consumer task, mark inactive, and resolve
             # pending futures so no live STT work or stale turn is left behind.
-            try:
-                await self._stt.cancel(turn)
-            except Exception:
-                logger.debug("STT teardown after start failure raised", exc_info=True)
-            # Clear the turn pointer and return the TurnManager toward IDLE so
-            # the caller doesn't sit in USER_SPEAKING until the silence timeout.
-            if self._publication_owns_turn(publication, turn):
-                self._reset_turn_state()
-            return publication
+            _, cancellation = await self._cleanup_rejected_stt_start(publication, turn)
+            self._raise_rejected_start_cancellation(
+                publication,
+                cancellation,
+                cause=exc,
+            )
+            # Cleanup and owned-state rollback must precede fallible public
+            # notification. Cancellation or a strict Error subscriber may
+            # propagate from emit(), but can no longer strand the partial
+            # provider stream or manager publication behind it.
+            await self._emit(Error(exception=exc, stage=ErrorStage.STT))
+            return replace(publication, admission_rejected=True)
         finally:
             reset_turn(turn_token)
         return publication
+
+    async def _cleanup_rejected_stt_start(
+        self,
+        publication: TurnPublication,
+        turn: TurnContext,
+    ) -> tuple[bool, asyncio.CancelledError | None]:
+        """Join bounded partial-start cleanup before rejecting publication.
+
+        The caller may itself be cancelled while provider cleanup is running.
+        Keep the cleanup task joined through settlement, then re-raise that
+        external cancellation — but only within the teardown budget: a
+        provider whose cleanup never settles must not make the caller (and
+        transitively ``stop(force=True)``) uncancellable. Reset shared turn
+        state only while this exact publication still owns both Session
+        identity and manager activity, so stale cleanup cannot roll back a
+        newer owner.
+        """
+        cleanup = asyncio.create_task(
+            self._stt.cancel(turn),
+            name=f"stt-start-rejection-cleanup-{turn.id}",
+        )
+        cleanup.add_done_callback(self._runtime_scope.log_task_exception)
+        cancellation: asyncio.CancelledError | None = None
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError as exc:
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    cancellation = cancellation or exc
+                    break
+                continue
+            except Exception:  # noqa: BLE001 - inspect cleanup task result below
+                break
+
+        if cancellation is not None and not cleanup.done():
+            cancellation = await self._join_cancelled_stt_cleanup(cleanup, cancellation)
+
+        cleanup_complete = self._settled_stt_cleanup_result(cleanup)
+        if cleanup_complete and self._publication_owns_turn(publication, turn):
+            self._reset_turn_state()
+        return cleanup_complete, cancellation
+
+    @staticmethod
+    async def _join_cancelled_stt_cleanup(
+        cleanup: asyncio.Task[bool],
+        cancellation: asyncio.CancelledError,
+    ) -> asyncio.CancelledError:
+        """Join a rejected-start cleanup within the teardown budget only."""
+        try:
+            done, _ = await asyncio.wait(
+                {cleanup},
+                timeout=_STT_REJECTION_CLEANUP_JOIN_S,
+            )
+            if not done:
+                cleanup.cancel()
+                await asyncio.wait({cleanup}, timeout=_STT_REJECTION_CLEANUP_GRACE_S)
+        except asyncio.CancelledError:
+            if not cleanup.done():
+                cleanup.cancel()
+        return cancellation
+
+    @staticmethod
+    def _settled_stt_cleanup_result(cleanup: asyncio.Task[bool]) -> bool:
+        """Read a settled cleanup result; an unsettled task stays observed."""
+        if not cleanup.done():
+            logger.warning(
+                "STT teardown after rejected start exceeded its cancellation join "
+                "budget; cleanup task %s remains observed in the background",
+                cleanup.get_name(),
+            )
+            return False
+        try:
+            return cleanup.result()
+        except asyncio.CancelledError:
+            logger.debug("STT teardown after rejected start was cancelled")
+        except Exception:
+            logger.debug("STT teardown after rejected start raised", exc_info=True)
+        return False
+
+    def _rollback_rejected_start_activity(self, publication: TurnPublication) -> None:
+        """Reset only the manager activity/token still owned by this publication."""
+        if publication.activity is not None and publication.activity.guard():
+            self._turn_manager.reset()
+
+    def _raise_rejected_start_cancellation(
+        self,
+        publication: TurnPublication,
+        cancellation: asyncio.CancelledError | None,
+        *,
+        cause: BaseException | None = None,
+    ) -> None:
+        """Roll back manager ownership before propagating captured cancellation."""
+        if cancellation is None:
+            return
+        self._rollback_rejected_start_activity(publication)
+        if cause is not None:
+            raise cancellation from cause
+        raise cancellation
 
     async def _prepare_turn_publication(self, publication: TurnPublication) -> bool:
         """Drain predecessor ownership and re-guard this admission request."""
@@ -353,12 +479,13 @@ class TurnRunner:
         if prev and not prev.cancel_token.is_cancelled:
             prev.cancel_token.cancel()
 
-        if prev is not None and self._stt.requires_successor_handoff:
+        if self._stt.requires_successor_handoff:
             # Fast barge-in returns immediately after the audible cutoff and
             # deliberately leaves provider cleanup detached. If the previous
             # turn was still waiting for an STT final, the same provider cannot
             # admit a successor stream until that old lifecycle has closed.
-            await self._stt.cancel(prev)
+            if (await self._stt.cancel(prev)) is False:
+                return False
         else:
             self._stt.cancel_scheduled()
             self._stt.cancel_inflight()
@@ -611,7 +738,7 @@ class TurnRunner:
     def _take_committed_transcript(
         self,
         turn: TurnContext | None,
-    ) -> tuple[str, asyncio.Task[None] | None]:
+    ) -> tuple[str, asyncio.Task[bool] | None]:
         """Start closing STT without delaying an already-final transcript.
 
         A final STT event clears ``stt_has_uncommitted_audio`` only after the
@@ -791,12 +918,12 @@ class TurnRunner:
             await self._stt.cancel(turn)
             return ""
 
-        if stt_needs_close:
-            await self._stt.end_stream(turn)
-            if not self._is_active_voice_turn(
-                turn, token=None, identity=identity, activity=activity
-            ):
-                return ""
+        if stt_needs_close and not await self._end_stt_stream_if_owned(
+            turn,
+            identity=identity,
+            activity=activity,
+        ):
+            return ""
 
         pending_ready = await self._stt.await_pending(turn)
         if not self._is_active_voice_turn(turn, token=None, identity=identity, activity=activity):
@@ -816,6 +943,23 @@ class TurnRunner:
         ):
             turn.stt_final_time = time.monotonic()
         return transcript
+
+    async def _end_stt_stream_if_owned(
+        self,
+        turn: TurnContext | None,
+        *,
+        identity: Lease[TurnContext | None],
+        activity: Lease[TurnManagerState],
+    ) -> bool:
+        """Close STT and confirm the same voice turn still owns publication."""
+        if (await self._stt.end_stream(turn)) is False:
+            return False
+        return self._is_active_voice_turn(
+            turn,
+            token=None,
+            identity=identity,
+            activity=activity,
+        )
 
     def _reset_turn_manager_preserving_token(self) -> None:
         """Reset the TurnManager to IDLE without cancelling the live turn token.

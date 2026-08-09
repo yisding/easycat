@@ -30,6 +30,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from easycat._concurrency import RuntimeSupervisor, SurvivorCapacityError
 from easycat.events import (
     Error,
     ErrorStage,
@@ -41,7 +42,13 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.providers import PendingCommitReporter, STTProvider
-from easycat.runtime.scope import RuntimeScope
+from easycat.runtime.capabilities import close_if_supported
+from easycat.runtime.scope import (
+    RuntimeMemberPolicy,
+    RuntimeScope,
+    RuntimeTaskAction,
+    RuntimeTaskPolicy,
+)
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.timeouts import STTTimeoutError, TimeoutConfig, resolve_provider_name
 from easycat.turn_manager import TurnManagerState
@@ -53,6 +60,10 @@ if TYPE_CHECKING:
     from easycat.turn_manager import TurnManager
 
 logger = logging.getLogger(__name__)
+
+_PROVIDER_CLOSE_RETRY_INITIAL_S = 0.05
+_PROVIDER_CLOSE_RETRY_MAX_S = 1.0
+_PROVIDER_CLOSE_RETRY_ATTEMPTS = 3
 
 
 def _pending_commit_bytes(provider: STTProvider) -> int | None:
@@ -70,6 +81,12 @@ class STTCommitter:
     """Schedules and commits STT segments for a Session."""
 
     FINAL_CLOSE_TASK_NAME = "stt_end_stream_after_final"
+    SEGMENT_COMMIT_TASK_NAME = "stt_segment_commit"
+    PROVIDER_END_TASK_NAME = "stt_provider_end_stream"
+    PROVIDER_END_COHORT = "stt-provider-end-stream"
+    PROVIDER_CLOSE_TASK_NAME = "stt_provider_close"
+    PROVIDER_CLOSE_COHORT = "stt-provider-close"
+    PROVIDER_ERROR_TASK_NAME = "stt_provider_error_notification"
 
     def __init__(
         self,
@@ -98,12 +115,72 @@ class STTCommitter:
         self._auto_turn_from_stt_final = wiring.auto_turn_from_stt_final
         self._stt_track_label = wiring.stt_track_label
         self._on_speech_detection_reset = on_speech_detection_reset
+        self._segment_commit_policy = RuntimeTaskPolicy(
+            graceful=RuntimeMemberPolicy(
+                cohort="stt-segment-commit",
+                signal_token=False,
+                task_action=RuntimeTaskAction.FINISH,
+            ),
+            force=RuntimeMemberPolicy(
+                cohort="stt-segment-commit",
+                signal_token=False,
+                task_action=RuntimeTaskAction.CANCEL,
+                hard_deadline=timeout_config.stt_timeout,
+            ),
+        )
+        self._provider_end_policy = RuntimeTaskPolicy(
+            graceful=RuntimeMemberPolicy(
+                cohort=self.PROVIDER_END_COHORT,
+                signal_token=False,
+                task_action=RuntimeTaskAction.FINISH,
+            ),
+            force=RuntimeMemberPolicy(
+                cohort=self.PROVIDER_END_COHORT,
+                signal_token=False,
+                task_action=RuntimeTaskAction.CANCEL,
+                hard_deadline=0.0,
+            ),
+        )
+        self._provider_close_policy = RuntimeTaskPolicy(
+            graceful=RuntimeMemberPolicy(
+                cohort=self.PROVIDER_CLOSE_COHORT,
+                signal_token=False,
+                task_action=RuntimeTaskAction.FINISH,
+            ),
+            force=RuntimeMemberPolicy(
+                cohort=self.PROVIDER_CLOSE_COHORT,
+                signal_token=False,
+                task_action=RuntimeTaskAction.CANCEL,
+                hard_deadline=0.0,
+            ),
+        )
 
         self._active: bool = False
         self._stt_task: asyncio.Task[None] | None = None
         self._pause_commit_task: asyncio.Task[None] | None = None
         self._segment_commit_task: asyncio.Task[None] | None = None
         self._pause_by_future: dict[asyncio.Future[str], Lease[None]] = {}
+        self._stream_end_pending = False
+        self._stream_end_completed = False
+        self._provider_end_scope: RuntimeScope | None = None
+        self._provider_end_scope_retired = False
+        self._provider_end_scope_generation = 0
+        self._provider_end_lock = asyncio.Lock()
+        self._provider_close_transferred = False
+        self._provider_close_pending = False
+        self._provider_close_error: Exception | None = None
+        self._provider_close_scope: RuntimeScope | None = None
+        self._provider_close_scope_retired = False
+        self._provider_close_scope_generation = 0
+        self._provider_close_lock = asyncio.Lock()
+        self._provider_error_supervisor = RuntimeSupervisor(capacity=1)
+        self._provider_error_runtime_scope = RuntimeScope.create_root(
+            name="stt-provider-errors",
+            root_id=f"{runtime_scope.owner_id}:stt-provider-errors",
+            supervisor=self._provider_error_supervisor,
+            survivor_capacity=1,
+        )
+        self._provider_error_scope_generation = 0
 
     # ── Track labelling ───────────────────────────────────────────
 
@@ -155,16 +232,27 @@ class STTCommitter:
             or any(
                 not task.done() for task in self._runtime_scope.tasks(self.FINAL_CLOSE_TASK_NAME)
             )
+            or self._stream_end_pending
+            or bool(self._runtime_scope.tasks(self.PROVIDER_END_TASK_NAME))
             # ``schedule_turn_ended`` clears the cached task handle as soon
             # as it requests cancellation. A cancellation-resistant provider
             # commit remains owned by RuntimeScope, though, and can still hold
             # the stream open. Include that authoritative task ledger before
             # admitting a successor stream.
-            or any(not task.done() for task in self._runtime_scope.tasks("stt_segment_commit"))
+            # A completed commit remains a handoff gate until cancel() drains
+            # its ledger entry and closes the provider stream. This matters
+            # after a prior bounded handoff timed out and returned without
+            # calling end_stream().
+            or bool(self._runtime_scope.tasks(self.SEGMENT_COMMIT_TASK_NAME))
         )
 
     def mark_active(self) -> None:
         self._active = True
+        self._stream_end_completed = False
+
+    def begin_stream_attempt(self) -> None:
+        """Invalidate prior end completion before provider startup can partially fail."""
+        self._stream_end_completed = False
 
     def mark_inactive(self) -> None:
         self._active = False
@@ -277,18 +365,63 @@ class STTCommitter:
             return
         if self._segment_commit_task is not None and not self._segment_commit_task.done():
             return
-        self._segment_commit_task = self._runtime_scope.create_journaled_task(
-            self.commit_now(
-                turn=turn,
-                pause=pause,
-                activity=activity,
-                identity=identity,
-            ),
-            name="stt_segment_commit",
-            journal_sink=self._journal_sink,
-            turn_id=turn.id,
+        start_gate = asyncio.Event()
+
+        async def _commit() -> None:
+            try:
+                await start_gate.wait()
+                await self.commit_now(
+                    turn=turn,
+                    pause=pause,
+                    activity=activity,
+                    identity=identity,
+                )
+            finally:
+                await self._finish_transferred_provider_close()
+
+        task = await self._runtime_scope.start_owned_task(
+            self.SEGMENT_COMMIT_TASK_NAME,
+            _commit,
+            policy=self._segment_commit_policy,
         )
-        self._segment_commit_task.add_done_callback(self._runtime_scope.log_task_exception)
+        self._segment_commit_task = task
+        try:
+            resolved_turn = self._journal_sink.current_turn_id(turn.id)
+            self._journal_sink.append_record(
+                name="task_scheduled",
+                turn_id=resolved_turn,
+                data={"task_name": self.SEGMENT_COMMIT_TASK_NAME},
+            )
+        except BaseException:
+            task.cancel()
+            start_gate.set()
+            task.add_done_callback(self._runtime_scope.log_task_exception)
+            raise
+
+        def _journal_terminal(completed: asyncio.Task[None]) -> None:
+            if completed.cancelled():
+                record_name = "task_cancelled"
+                data = {"task_name": self.SEGMENT_COMMIT_TASK_NAME}
+            else:
+                try:
+                    exc = completed.exception()
+                except asyncio.CancelledError:
+                    record_name = "task_cancelled"
+                    data = {"task_name": self.SEGMENT_COMMIT_TASK_NAME}
+                else:
+                    record_name = "task_completed" if exc is None else "task_raised"
+                    data = {"task_name": self.SEGMENT_COMMIT_TASK_NAME}
+                    if exc is not None:
+                        data["exc_type"] = type(exc).__name__
+            self._journal_sink.append_record(
+                name=record_name,
+                turn_id=resolved_turn,
+                data=data,
+            )
+
+        task.add_done_callback(_journal_terminal)
+        task.add_done_callback(self._runtime_scope.log_task_exception)
+        start_gate.set()
 
     async def commit_now(
         self,
@@ -422,7 +555,10 @@ class STTCommitter:
                 assert timeout is not None
                 name = resolve_provider_name(self._stt_getter(), "stt")
                 err = STTTimeoutError(name, timeout)
-                await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))
+                await self._schedule_provider_operation_error(
+                    Error(exception=err, stage=ErrorStage.STT, provider=name),
+                    timeout=timeout,
+                )
                 return False
             except asyncio.CancelledError:
                 raise
@@ -443,7 +579,7 @@ class STTCommitter:
         if task and not task.done():
             await task
 
-    async def end_stream(self, turn: TurnContext | None) -> None:
+    async def end_stream(self, turn: TurnContext | None) -> bool:
         """Finish the STT stream, enqueuing a future if uncommitted audio remains.
 
         ``TurnRunner.handle_end_of_speech`` calls this between two
@@ -455,30 +591,268 @@ class STTCommitter:
             turn.stt_has_uncommitted_audio = False
             future = asyncio.get_running_loop().create_future()
             turn.pending_stt_segment_futures.append(future)
-        timeout = self._timeout_config.stt_timeout if self._timeout_config else None
+        return await self._finish_provider_end_stream(turn)
+
+    async def _finish_provider_end_stream(
+        self,
+        turn: TurnContext | None,
+        *,
+        cancel_existing: bool = False,
+    ) -> bool:
+        """Bound one provider end-stream attempt while retaining unfinished work."""
+        async with self._provider_end_lock:
+            return await self._finish_provider_end_stream_locked(
+                turn,
+                cancel_existing=cancel_existing,
+            )
+
+    async def _finish_provider_end_stream_locked(
+        self,
+        turn: TurnContext | None,
+        *,
+        cancel_existing: bool,
+    ) -> bool:
+        """Serialize end-stream creation, bounded waiting, and retry state."""
+        tasks = self._runtime_scope.tasks(self.PROVIDER_END_TASK_NAME)
+        task = tasks[0] if tasks else None
+        if task is not None and cancel_existing:
+            task.cancel()
+            settled = await self._await_owned_provider_operation(
+                task,
+                name=self.PROVIDER_END_TASK_NAME,
+                cohort=self.PROVIDER_END_COHORT,
+                turn=turn,
+            )
+            if settled or not task.done():
+                return settled
+            # A prior close accepted cancellation. Retry the provider's
+            # retained cleanup obligation in a fresh owned task before a
+            # successor stream is admitted.
+            task = None
+        if task is None and self._stream_end_completed:
+            return True
+        if task is None:
+            self._stream_end_pending = True
+            self._stream_end_completed = False
+
+            async def _end_provider_stream() -> None:
+                try:
+                    await self._stt_getter().end_stream()
+                    self._stream_end_pending = False
+                    self._stream_end_completed = True
+                finally:
+                    await self._finish_transferred_provider_close()
+
+            try:
+                task = await self._provider_operation_scope(close=False).start_owned_task(
+                    self.PROVIDER_END_TASK_NAME,
+                    _end_provider_stream,
+                    policy=self._provider_end_policy,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - provider ownership boundary
+                provider = self._stt_getter()
+                name = resolve_provider_name(provider, "stt")
+                self.resolve_pending(turn, "")
+                await self._schedule_provider_operation_error(
+                    Error(exception=exc, stage=ErrorStage.STT, provider=name),
+                    timeout=self._timeout_config.stt_timeout,
+                )
+                return False
+            task.add_done_callback(self._runtime_scope.log_task_exception)
+
+        return await self._await_owned_provider_operation(
+            task,
+            name=self.PROVIDER_END_TASK_NAME,
+            cohort=self.PROVIDER_END_COHORT,
+            turn=turn,
+        )
+
+    async def _await_owned_provider_operation(
+        self,
+        task: asyncio.Task[None],
+        *,
+        name: str,
+        cohort: str,
+        turn: TurnContext | None,
+    ) -> bool:
+        """Wait one configured interval, then cancel and park unfinished work."""
+        timeout = self._timeout_config.stt_timeout
+        done, _pending = await asyncio.wait({task}, timeout=timeout)
+        if task in done:
+            return await self._finish_owned_provider_operation(
+                task,
+                turn=turn,
+                timeout=timeout,
+            )
+        return await self._handle_provider_operation_timeout(
+            task,
+            name=name,
+            cohort=cohort,
+            turn=turn,
+            timeout=timeout,
+        )
+
+    async def _finish_owned_provider_operation(
+        self,
+        task: asyncio.Task[None],
+        *,
+        turn: TurnContext | None,
+        timeout: float,
+    ) -> bool:
+        """Reap a terminal provider lifecycle task and report real failures."""
+        self._runtime_scope.discard(task)
         try:
-            if timeout:
-                await asyncio.wait_for(self._stt_getter().end_stream(), timeout=timeout)
-            else:
-                await self._stt_getter().end_stream()
-        except TimeoutError:
-            provider = self._stt_getter()
-            name = resolve_provider_name(provider, "stt")
-            err = STTTimeoutError(name, timeout or 0.0)
-            await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))
+            task.result()
+        except asyncio.CancelledError:
             self.resolve_pending(turn, "")
+            return False
+        except Exception as exc:
+            provider_name = resolve_provider_name(self._stt_getter(), "stt")
+            logger.debug("STT provider lifecycle operation failed", exc_info=True)
+            await self._schedule_provider_operation_error(
+                Error(exception=exc, stage=ErrorStage.STT, provider=provider_name),
+                timeout=timeout,
+            )
+            self.resolve_pending(turn, "")
+            return False
+        return True
+
+    async def _handle_provider_operation_timeout(
+        self,
+        task: asyncio.Task[None],
+        *,
+        name: str,
+        cohort: str,
+        turn: TurnContext | None,
+        timeout: float,
+    ) -> bool:
+        """Cancel a timed-out operation, retain survivors, and notify observers."""
+        task.cancel()
+        await asyncio.sleep(0)
+        try:
+            await self._runtime_scope.drain_cohort(cohort, force=True)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            # The trailing-final waiter belongs to this end_stream attempt.
-            # If a provider close fails, resolve it and surface a typed error
-            # so TurnRunner can reset the turn rather than remaining stuck in
-            # PROCESSING forever.
-            provider = self._stt_getter()
-            name = resolve_provider_name(provider, "stt")
-            logger.debug("STT end_stream failed", exc_info=True)
-            await self._emit(Error(exception=exc, stage=ErrorStage.STT, provider=name))
-            self.resolve_pending(turn, "")
+        except Exception:
+            logger.debug("STT provider operation hard-timeout drain failed", exc_info=True)
+        self._retain_timed_out_provider_operation(task, name=name)
+        provider = self._stt_getter()
+        provider_name = resolve_provider_name(provider, "stt")
+        err = STTTimeoutError(provider_name, timeout)
+        await self._schedule_provider_operation_error(
+            Error(exception=err, stage=ErrorStage.STT, provider=provider_name),
+            timeout=timeout,
+        )
+        self.resolve_pending(turn, "")
+        # A cooperatively-cancelled task may have been removed by drain_cohort;
+        # the pending flag still gates a retry because cancellation does not
+        # prove that provider finalization completed.
+        if name == self.PROVIDER_CLOSE_TASK_NAME and task.done() and not task.cancelled():
+            return not self._provider_close_pending
+        return False
+
+    def _retain_timed_out_provider_operation(
+        self,
+        task: asyncio.Task[None],
+        *,
+        name: str,
+    ) -> None:
+        """Retire the task's child scope until cancellation-resistant work settles."""
+        if task.done():
+            return
+        if name == self.PROVIDER_END_TASK_NAME:
+            self._provider_end_scope_retired = True
+            scope = self._provider_end_scope
+        elif name == self.PROVIDER_CLOSE_TASK_NAME:
+            self._provider_close_scope_retired = True
+            scope = self._provider_close_scope
+        else:  # pragma: no cover - internal callers use the two constants
+            scope = None
+        if scope is not None:
+            self._schedule_provider_scope_prune(scope, task)
+
+    async def _schedule_provider_operation_error(
+        self,
+        event: Error,
+        *,
+        timeout: float,
+    ) -> None:
+        """Notify timeout observers without gating provider ownership settlement."""
+        generation = self._provider_error_scope_generation
+        self._provider_error_scope_generation += 1
+        scope = self._provider_error_runtime_scope.create_child(f"notification-{generation}")
+        cohort = f"stt-provider-error-{generation}"
+        hard_deadline = max(timeout, 0.01)
+        policy = RuntimeTaskPolicy(
+            graceful=RuntimeMemberPolicy(
+                cohort=cohort,
+                signal_token=False,
+                task_action=RuntimeTaskAction.FINISH,
+                hard_deadline=hard_deadline,
+            ),
+            force=RuntimeMemberPolicy(
+                cohort=cohort,
+                signal_token=False,
+                task_action=RuntimeTaskAction.CANCEL,
+                hard_deadline=hard_deadline,
+            ),
+        )
+
+        async def _notify() -> None:
+            try:
+                await self._emit(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("STT provider Error notification failed", exc_info=True)
+
+        try:
+            task = await scope.start_owned_task(
+                self.PROVIDER_ERROR_TASK_NAME,
+                _notify,
+                policy=policy,
+            )
+        except SurvivorCapacityError:
+            self._provider_error_runtime_scope.prune_empty_child(scope)
+            logger.warning("STT provider Error notification skipped: survivor capacity full")
+            return
+
+        signal = scope.signal_cohort(cohort, force=False)
+
+        async def _bound_notification() -> None:
+            try:
+                await scope.drain_cohort(signal)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("STT provider Error notification drain failed", exc_info=True)
+
+        controller = self._provider_error_runtime_scope.create_task(
+            f"{self.PROVIDER_ERROR_TASK_NAME}_controller",
+            _bound_notification(),
+        )
+
+        def _prune_notification_scope(_completed: asyncio.Task[None]) -> None:
+            asyncio.get_running_loop().call_soon(
+                self._provider_error_runtime_scope.prune_empty_child,
+                scope,
+            )
+
+        def _observe_controller(completed: asyncio.Task[None]) -> None:
+            self._provider_error_runtime_scope.log_task_exception(completed)
+            self._provider_error_runtime_scope.discard(completed)
+            asyncio.get_running_loop().call_soon(
+                self._provider_error_runtime_scope.prune_empty_child,
+                scope,
+            )
+
+        task.add_done_callback(_prune_notification_scope)
+        controller.add_done_callback(_observe_controller)
+        # Let prompt synchronous/reserved observers run before returning the
+        # provider ownership result, without joining arbitrary public awaits.
+        await asyncio.sleep(0)
 
     # ── Background STT event consumer ─────────────────────────────
 
@@ -548,7 +922,11 @@ class STTCommitter:
                             await self._turn_manager.end_turn()
             except Exception as exc:
                 logger.exception("STT event loop error")
-                await self._emit(Error(exception=exc, stage=ErrorStage.STT))
+                self.resolve_pending(turn, "")
+                await self._schedule_provider_operation_error(
+                    Error(exception=exc, stage=ErrorStage.STT),
+                    timeout=self._timeout_config.stt_timeout,
+                )
             finally:
                 # A predecessor consumer canceled by ``start_event_loop()``
                 # must not clear futures that the successor has already
@@ -571,39 +949,191 @@ class STTCommitter:
             return None
         return self._pause_by_future.pop(turn.pending_stt_segment_futures[0], None)
 
+    @property
+    def provider_close_transferred(self) -> bool:
+        """Whether owned STT work has accepted the provider-close obligation."""
+        return self._provider_close_transferred
+
+    def transfer_provider_close_to_owned_work(self) -> bool:
+        """Move force-stop provider close behind a still-running owned operation."""
+        owned = (
+            *self._runtime_scope.tasks(self.SEGMENT_COMMIT_TASK_NAME),
+            *self._runtime_scope.tasks(self.PROVIDER_END_TASK_NAME),
+            *self._runtime_scope.tasks(self.PROVIDER_CLOSE_TASK_NAME),
+        )
+        if not any(not task.done() for task in owned):
+            return False
+        self._provider_close_transferred = True
+        self._provider_close_pending = True
+        return True
+
+    def _provider_operation_scope(self, *, close: bool) -> RuntimeScope:
+        """Return an open child owner, replacing one retired by survivor parking."""
+        if close:
+            scope = self._provider_close_scope
+            if scope is None or self._provider_close_scope_retired:
+                if scope is not None and scope.empty:
+                    self._runtime_scope.prune_empty_child(scope)
+                generation = self._provider_close_scope_generation
+                self._provider_close_scope_generation += 1
+                scope = self._runtime_scope.create_child(f"stt-provider-close-{generation}")
+                self._provider_close_scope = scope
+                self._provider_close_scope_retired = False
+            return scope
+
+        scope = self._provider_end_scope
+        if scope is None or self._provider_end_scope_retired:
+            if scope is not None and scope.empty:
+                self._runtime_scope.prune_empty_child(scope)
+            generation = self._provider_end_scope_generation
+            self._provider_end_scope_generation += 1
+            scope = self._runtime_scope.create_child(f"stt-provider-end-{generation}")
+            self._provider_end_scope = scope
+            self._provider_end_scope_retired = False
+        return scope
+
+    def _schedule_provider_scope_prune(
+        self,
+        scope: RuntimeScope,
+        task: asyncio.Task[None],
+    ) -> None:
+        """Prune a retired operation owner after its parked task is discarded."""
+
+        def _schedule(_completed: asyncio.Task[None]) -> None:
+            task.get_loop().call_soon(self._prune_provider_operation_scope, scope)
+
+        task.add_done_callback(_schedule)
+
+    def _prune_provider_operation_scope(self, scope: RuntimeScope) -> None:
+        """Unlink one settled retired scope and its closed-owner metadata."""
+        if not scope.empty or not self._runtime_scope.prune_empty_child(scope):
+            return
+        if self._provider_end_scope is scope:
+            self._provider_end_scope = None
+            self._provider_end_scope_retired = False
+        if self._provider_close_scope is scope:
+            self._provider_close_scope = None
+            self._provider_close_scope_retired = False
+
+    async def _finish_transferred_provider_close(self) -> None:
+        """Finish a force-transferred close inside the existing owned task."""
+        if not self._provider_close_pending:
+            return
+        retry_delay = _PROVIDER_CLOSE_RETRY_INITIAL_S
+        attempt = 0
+        while self._provider_close_pending:
+            async with self._provider_close_lock:
+                if not self._provider_close_pending:
+                    return
+                try:
+                    await close_if_supported(self._stt_getter())
+                except asyncio.CancelledError:
+                    # Do not detach the obligation from this owned task. A
+                    # fresh cancellation during close is reserved for loop /
+                    # process shutdown and must still be allowed to unwind.
+                    raise
+                except Exception as exc:
+                    attempt += 1
+                    self._provider_close_error = exc
+                    if attempt >= _PROVIDER_CLOSE_RETRY_ATTEMPTS:
+                        logger.warning(
+                            "Deferred STT provider close failed after %d attempts; "
+                            "retaining it for a later stop retry",
+                            attempt,
+                            exc_info=True,
+                        )
+                        return
+                    should_warn = attempt == 1 or (attempt & (attempt - 1)) == 0
+                    log = logger.warning if should_warn else logger.debug
+                    log(
+                        "Deferred STT provider close failed (attempt %d); retrying in %.2fs",
+                        attempt,
+                        retry_delay,
+                        exc_info=True,
+                    )
+                else:
+                    self._provider_close_pending = False
+                    self._provider_close_error = None
+                    return
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, _PROVIDER_CLOSE_RETRY_MAX_S)
+
+    async def retry_transferred_provider_close(self) -> bool:
+        """Bound a later retry after a transferred provider close failed."""
+        if not self._provider_close_pending:
+            return True
+        if any(
+            not task.done()
+            for task in (
+                *self._runtime_scope.tasks(self.SEGMENT_COMMIT_TASK_NAME),
+                *self._runtime_scope.tasks(self.PROVIDER_END_TASK_NAME),
+                *self._runtime_scope.tasks(self.PROVIDER_CLOSE_TASK_NAME),
+            )
+        ):
+            return False
+
+        async def _retry_close() -> None:
+            await self._finish_transferred_provider_close()
+
+        task = await self._provider_operation_scope(close=True).start_owned_task(
+            self.PROVIDER_CLOSE_TASK_NAME,
+            _retry_close,
+            policy=self._provider_close_policy,
+        )
+        task.add_done_callback(self._runtime_scope.log_task_exception)
+        settled = await self._await_owned_provider_operation(
+            task,
+            name=self.PROVIDER_CLOSE_TASK_NAME,
+            cohort=self.PROVIDER_CLOSE_COHORT,
+            turn=None,
+        )
+        return settled and not self._provider_close_pending
+
     # ── Cancellation ──────────────────────────────────────────────
 
-    async def _cancel_segment_commit_handoff(self, turn: TurnContext | None) -> None:
+    async def _cancel_segment_commit_handoff(
+        self,
+        turn: TurnContext | None,
+    ) -> bool:
         """Bound cancellation cleanup that gates a successor STT stream."""
         timeout = self._timeout_config.stt_timeout if self._timeout_config else None
         try:
             if timeout:
                 await asyncio.wait_for(
-                    self._runtime_scope.cancel_and_drain("stt_segment_commit"),
+                    self._runtime_scope.cancel_and_drain(self.SEGMENT_COMMIT_TASK_NAME),
                     timeout=timeout,
                 )
             else:
-                await self._runtime_scope.cancel_and_drain("stt_segment_commit")
+                await self._runtime_scope.cancel_and_drain(self.SEGMENT_COMMIT_TASK_NAME)
         except TimeoutError:
             assert timeout is not None
-            # A provider coroutine can catch cancellation and remain in
-            # cleanup indefinitely. Stop treating those expired tasks as a
-            # lifecycle gate so successor admission and later shutdown do not
-            # repeat the same unbounded drain.
-            for task in self._runtime_scope.tasks("stt_segment_commit"):
-                self._runtime_scope.discard(task)
-            self._segment_commit_task = None
             self.resolve_pending(turn, "")
             provider = self._stt_getter()
             name = resolve_provider_name(provider, "stt")
             err = STTTimeoutError(name, timeout)
             logger.warning("STT segment commit cancellation timed out: %s", err)
-            await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))
+            await self._schedule_provider_operation_error(
+                Error(exception=err, stage=ErrorStage.STT, provider=name),
+                timeout=timeout,
+            )
+            # Leave the provider call owned and abort this cancellation pass.
+            # A normal successor publication is deferred; force teardown has
+            # already signalled the task's force cohort and will park it at
+            # that cohort's hard deadline.
+            return False
+        return True
 
-    async def cancel(self, turn: TurnContext | None = None) -> None:
+    async def cancel(self, turn: TurnContext | None = None) -> bool:
         """Cancel all STT work; preserves the original ``_cancel_stt`` ordering."""
         await self._runtime_scope.cancel_and_drain("stt_pause_commit")
-        await self._cancel_segment_commit_handoff(turn)
+        segment_commit_drained = await self._cancel_segment_commit_handoff(turn)
+        if not segment_commit_drained:
+            self._active = False
+            self._on_speech_detection_reset()
+            await self._runtime_scope.cancel_and_drain("stt_event_loop")
+            self._stt_task = None
+            self.resolve_pending(turn, "")
+            return False
         # The committed-transcript fast path may still be closing the same
         # provider in parallel with agent work. Drain it before invoking the
         # provider teardown below so a barge-in cannot issue concurrent closes
@@ -611,21 +1141,13 @@ class STTCommitter:
         await self._runtime_scope.cancel_and_drain(self.FINAL_CLOSE_TASK_NAME)
         self._pause_commit_task = None
         self._segment_commit_task = None
-        timeout = self._timeout_config.stt_timeout if self._timeout_config else None
-        try:
-            if timeout:
-                await asyncio.wait_for(self._stt_getter().end_stream(), timeout=timeout)
-            else:
-                await self._stt_getter().end_stream()
-        except TimeoutError:
-            provider = self._stt_getter()
-            name = resolve_provider_name(provider, "stt")
-            err = STTTimeoutError(name, timeout or 0.0)
-            await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))
-        except Exception:
-            logger.debug("STT end_stream during cancel raised", exc_info=True)
+        provider_end_drained = await self._finish_provider_end_stream(
+            turn,
+            cancel_existing=True,
+        )
         self._active = False
         self._on_speech_detection_reset()
         await self._runtime_scope.cancel_and_drain("stt_event_loop")
         self._stt_task = None
         self.resolve_pending(turn, "")
+        return provider_end_drained

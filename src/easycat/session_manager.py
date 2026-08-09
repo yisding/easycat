@@ -45,6 +45,21 @@ class SessionStopReport(Generic[TKey]):
         return tuple(failure.key for failure in self.failures)
 
 
+@dataclass(frozen=True, slots=True)
+class SessionStopAbandonReport(Generic[TKey]):
+    """Result of abandoning manager-owned stop tasks at a hard deadline."""
+
+    attempted_keys: tuple[TKey, ...]
+    cancelled_keys: tuple[TKey, ...]
+    retained_keys: tuple[TKey, ...]
+    failures: tuple[SessionStopFailure[TKey], ...]
+
+    @property
+    def ok(self) -> bool:
+        """Whether no stop task or session registration remains owned."""
+        return not self.retained_keys and not self.failures
+
+
 def log_session_stop_failures(
     report: SessionStopReport[TKey],
     *,
@@ -244,6 +259,71 @@ class SessionManager(Generic[TKey]):
             failures=tuple(failures),
         )
 
+    async def abandon_pending_stops(self) -> SessionStopAbandonReport[TKey]:
+        """Cancel actual keyed stop tasks after their owner's hard deadline.
+
+        Callers normally cancel only their ``remove``/``stop_all`` waiters;
+        those waiters deliberately shield the manager-owned per-key task so a
+        later force sweep can retry it. A process-level hard deadline is the
+        one point where that ownership must be resolved explicitly. This
+        method requests cancellation and gives cooperative tasks one loop
+        turn. A cancelled stop task is reaped, but its session stays registered:
+        cancellation proves that no worker leaked, not that provider/session
+        teardown completed successfully.
+
+        Cancellation-resistant tasks and tasks that raised stay registered so
+        a lifecycle owner can report the failure, fence restart, and retry.
+        """
+        async with self._lock:
+            operations = tuple(
+                (key, session, task) for key, (session, task, _force) in self._stop_tasks.items()
+            )
+            for _key, _session, task in operations:
+                if not task.done():
+                    task.cancel()
+
+        if operations:
+            # Match the hard-deadline contract used throughout the runtime:
+            # cooperative cancellation gets one scheduling turn, while work
+            # that resists cancellation remains strongly owned for retry.
+            await asyncio.sleep(0)
+
+        cancelled: list[TKey] = []
+        failures: list[SessionStopFailure[TKey]] = []
+        async with self._lock:
+            for key, session, task in operations:
+                if not task.done():
+                    continue
+                # Settle scope ownership synchronously. The task's ordinary
+                # done callback may not run until the next loop turn, while a
+                # hard-abandon caller must return with no terminal task leak.
+                self._stop_task_scope.discard_task(task)
+                if task.cancelled():
+                    operation = self._stop_tasks.get(key)
+                    if operation is not None and operation[0] is session and operation[1] is task:
+                        self._stop_tasks.pop(key, None)
+                    if self._sessions.get(key) is session:
+                        self._force_requested.add(key)
+                    cancelled.append(key)
+                    continue
+                error = task.exception()
+                if error is not None:
+                    failures.append(SessionStopFailure(key=key, exception=error))
+                else:
+                    # Done callbacks normally settle this bookkeeping before
+                    # the lock is reacquired. Make the outcome deterministic
+                    # if callback scheduling has not run yet.
+                    self._finish_stop(key, session, task)
+            retained = tuple(self._sessions)
+
+        await self._stop_task_scope.release_standalone_if_empty()
+        return SessionStopAbandonReport(
+            attempted_keys=tuple(key for key, _session, _task in operations),
+            cancelled_keys=tuple(cancelled),
+            retained_keys=retained,
+            failures=tuple(failures),
+        )
+
     def _finish_stop(
         self,
         key: TKey,
@@ -315,6 +395,7 @@ async def _await_owned_stop(task: asyncio.Task[None]) -> bool:
 
 __all__ = [
     "SessionManager",
+    "SessionStopAbandonReport",
     "SessionStopFailure",
     "SessionStopReport",
     "log_session_stop_failures",

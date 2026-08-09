@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Coroutine, Hashable, Iterable
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
@@ -82,23 +83,28 @@ def _validate_max_sessions(value: object) -> None:
         raise ValueError("max_sessions must be >= 1")
 
 
-async def close_websocket_connections(
+@dataclass(frozen=True, slots=True)
+class _WebSocketCloseReport:
+    failed_ids: frozenset[int] = frozenset()
+    incomplete_ids: frozenset[int] = frozenset()
+
+    @property
+    def unsuccessful_ids(self) -> frozenset[int]:
+        return self.failed_ids | self.incomplete_ids
+
+
+def _start_websocket_close_tasks(
     connections: Iterable[object],
     *,
     task_scope: RuntimeTaskScope,
-    timeout_s: float | None,
-    code: int = 1001,
-    reason: str = "Server shutdown after drain",
-) -> None:
-    """Close surviving WebSocket connections after their session drain.
-
-    ``websockets.Server.close(close_connections=False)`` stops accepting but
-    intentionally leaves established connections open. Calling ``close()``
-    again cannot switch that mode because the method is idempotent, so servers
-    must retain the accepted connection objects and close survivors explicitly
-    after the graceful session window.
-    """
+    code: int,
+    reason: str,
+) -> tuple[list[asyncio.Task[object]], dict[asyncio.Task[object], int], set[int]]:
+    """Start or recover one owned close task per distinct connection."""
     close_tasks: list[asyncio.Task[object]] = []
+    task_identities: dict[asyncio.Task[object], int] = {}
+    failed_ids: set[int] = set()
+    existing_tasks = {task.get_name(): task for task in task_scope.tasks()}
     seen: set[int] = set()
     for connection in connections:
         identity = id(connection)
@@ -108,22 +114,113 @@ async def close_websocket_connections(
         close = getattr(connection, "close", None)
         if close is None:
             continue
+        task_name = f"easycat-websocket-close-{identity}"
+        existing = existing_tasks.get(task_name)
+        if existing is not None:
+            close_tasks.append(existing)
+            task_identities[existing] = identity
+            continue
         try:
             result = close(code=code, reason=reason)
-        except Exception:  # noqa: BLE001, S112 invalid remote item is skipped
+        except Exception as exc:
+            failed_ids.add(identity)
+            logger.error(
+                "WebSocket connection close %s failed",
+                identity,
+                exc_info=exc,
+            )
             continue
         if isinstance(result, Awaitable):
             task = task_scope.create_task(
                 _await_cleanup_result(result),
-                task_name=f"easycat-websocket-close-{identity}",
+                task_name=task_name,
             )
             assert task is not None
             close_tasks.append(task)
-    if close_tasks:
-        await _safe_await(
-            asyncio.gather(*close_tasks, return_exceptions=True),
-            timeout_s=timeout_s,
+            task_identities[task] = identity
+    return close_tasks, task_identities, failed_ids
+
+
+async def _settle_websocket_close_tasks(
+    close_tasks: list[asyncio.Task[object]],
+    task_identities: dict[asyncio.Task[object], int],
+    failed_ids: set[int],
+    *,
+    timeout_s: float | None,
+) -> _WebSocketCloseReport:
+    """Wait for close tasks and classify failures versus incomplete cleanup."""
+    if not close_tasks:
+        return _WebSocketCloseReport(failed_ids=frozenset(failed_ids))
+    done, pending = await asyncio.wait(
+        close_tasks,
+        timeout=None if timeout_s is None else max(timeout_s, 0.0),
+    )
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.sleep(0)
+        logger.warning(
+            "WebSocket connections did not close within shutdown timeout; "
+            "%s close task(s) remain unsuccessful",
+            len(pending),
         )
+        report_late = partial(
+            _report_late_shutdown_task_result,
+            "WebSocket connection close",
+        )
+        for task in pending:
+            task.add_done_callback(report_late)
+    for task in done:
+        identity = task_identities[task]
+        if task.cancelled():
+            failed_ids.add(identity)
+            logger.error(
+                "WebSocket connection close task %s was cancelled",
+                task.get_name(),
+            )
+            continue
+        error = task.exception()
+        if error is not None:
+            failed_ids.add(identity)
+            logger.error(
+                "WebSocket connection close task %s failed",
+                task.get_name(),
+                exc_info=error,
+            )
+    return _WebSocketCloseReport(
+        failed_ids=frozenset(failed_ids),
+        incomplete_ids=frozenset(task_identities[task] for task in pending),
+    )
+
+
+async def close_websocket_connections(
+    connections: Iterable[object],
+    *,
+    task_scope: RuntimeTaskScope,
+    timeout_s: float | None,
+    code: int = 1001,
+    reason: str = "Server shutdown after drain",
+) -> _WebSocketCloseReport:
+    """Close surviving WebSocket connections after their session drain.
+
+    ``websockets.Server.close(close_connections=False)`` stops accepting but
+    intentionally leaves established connections open. Calling ``close()``
+    again cannot switch that mode because the method is idempotent, so servers
+    must retain the accepted connection objects and close survivors explicitly
+    after the graceful session window.
+    """
+    close_tasks, task_identities, failed_ids = _start_websocket_close_tasks(
+        connections,
+        task_scope=task_scope,
+        code=code,
+        reason=reason,
+    )
+    return await _settle_websocket_close_tasks(
+        close_tasks,
+        task_identities,
+        failed_ids,
+        timeout_s=timeout_s,
+    )
 
 
 async def cancel_handler_tasks(
@@ -137,7 +234,75 @@ async def cancel_handler_tasks(
     for task in pending:
         task.cancel()
     if pending:
-        await _safe_await(asyncio.gather(*pending, return_exceptions=True), timeout_s=timeout_s)
+        done, unfinished = await asyncio.wait(
+            pending,
+            timeout=None if timeout_s is None else max(timeout_s, 0.0),
+        )
+        results: list[object | BaseException] = []
+        done_tasks: list[asyncio.Task[object]] = []
+        for task in done:
+            done_tasks.append(task)
+            if task.cancelled():
+                results.append(asyncio.CancelledError())
+            else:
+                error = task.exception()
+                results.append(error if error is not None else task.result())
+        _report_shutdown_task_results(
+            "WebSocket handler",
+            done_tasks,
+            results,
+            explicitly_cancelled=set(pending),
+        )
+        if unfinished:
+            logger.warning(
+                "WebSocket handlers did not stop within shutdown timeout; "
+                "%s handler task(s) remain active",
+                len(unfinished),
+            )
+            report_late = partial(
+                _report_late_shutdown_task_result,
+                "WebSocket handler",
+            )
+            for task in unfinished:
+                task.add_done_callback(report_late)
+
+
+def _report_shutdown_task_results(
+    stage: str,
+    tasks: list[asyncio.Task[object]],
+    results: list[object | BaseException],
+    *,
+    explicitly_cancelled: set[asyncio.Task[object]],
+) -> int:
+    """Log unexpected shutdown failures and return their count."""
+    failures = 0
+    for task, result in zip(tasks, results, strict=True):
+        if not isinstance(result, BaseException):
+            continue
+        if isinstance(result, asyncio.CancelledError) and task in explicitly_cancelled:
+            continue
+        failures += 1
+        logger.error(
+            "%s task %s failed",
+            stage,
+            task.get_name(),
+            exc_info=result,
+        )
+    return failures
+
+
+def _report_late_shutdown_task_result(stage: str, task: asyncio.Task[object]) -> None:
+    """Report a shutdown worker that fails after its hard deadline."""
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error(
+            "%s task %s failed",
+            stage,
+            task.get_name(),
+            exc_info=error,
+        )
 
 
 class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
@@ -178,6 +343,7 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         self._on_session = on_session
         self._sessions: dict[int, SessionT] = {}
         self._connections: dict[int, ConnectionT] = {}
+        self._connection_cleanup_retry: dict[int, ConnectionT] = {}
         self._handler_tasks: set[asyncio.Task[object]] = set()
         self._cleanup_task_scope = RuntimeTaskScope(
             owner_label=f"{runtime_id}-cleanup",
@@ -308,12 +474,25 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
             force_timeout_s=max(force_timeout_s, 0.0),
         )
         assert force_deadline is not None
+        close_report = _WebSocketCloseReport()
+        close_candidates = dict(self._connections)
+        close_candidates.update(self._connection_cleanup_retry)
+        close_candidates_by_identity = {
+            id(connection): (key, connection) for key, connection in close_candidates.items()
+        }
         try:
-            await close_websocket_connections(
-                self._connections.values(),
+            close_report = await close_websocket_connections(
+                close_candidates.values(),
                 task_scope=self._connection_close_task_scope,
                 timeout_s=_remaining_timeout(force_deadline),
             )
+            self._connection_cleanup_retry = {
+                close_candidates_by_identity[identity][0]: close_candidates_by_identity[identity][
+                    1
+                ]
+                for identity in close_report.unsuccessful_ids
+                if identity in close_candidates_by_identity
+            }
         finally:
             await self._connection_close_task_scope.release_standalone_if_empty()
         await cancel_handler_tasks(
@@ -349,10 +528,16 @@ class WebSocketSessionRuntime(Generic[ConnectionT, SessionT]):
         if sweep_completed and sweep_error is None:
             self._sessions.clear()
             self._connections.clear()
+            self._connections.update(self._connection_cleanup_retry)
         if listener_error is not None:
             raise listener_error
         if sweep_error is not None:
             raise sweep_error
+        if close_report.failed_ids:
+            raise RuntimeError(
+                "WebSocket connection shutdown retained "
+                f"{len(close_report.failed_ids)} connection(s)"
+            )
 
     def _active_session_pairs(self) -> list[tuple[int, SessionT]]:
         return [
@@ -821,16 +1006,28 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
         raise TypeError("Timed _safe_await requires an already-owned Future or Task")
     try:
         if timeout_s is not None:
-            await wait_for_owned_future(
+            completed = await wait_for_owned_future(
                 cast("asyncio.Future[object]", awaitable),
                 timeout_s=timeout_s,
             )
+            if not completed:
+                cast("asyncio.Future[object]", awaitable).add_done_callback(_observe_future_result)
         else:
             await awaitable
     except asyncio.CancelledError:
         if current_task is not None and current_task.cancelling() > cancellation_requests:
             raise
     except Exception:  # noqa: BLE001, S110  # pragma: no cover - defensive teardown
+        pass
+
+
+def _observe_future_result(future: asyncio.Future[object]) -> None:
+    """Consume a late teardown wrapper result after its hard timeout."""
+    if future.cancelled():
+        return
+    try:
+        future.exception()
+    except asyncio.CancelledError:
         pass
 
 

@@ -50,7 +50,12 @@ from easycat.runtime.capabilities import (
     transport_reports_audio_delivery,
 )
 from easycat.runtime.context import RunContext
-from easycat.runtime.scope import RuntimeScope
+from easycat.runtime.scope import (
+    RuntimeMemberPolicy,
+    RuntimeScope,
+    RuntimeTaskAction,
+    RuntimeTaskPolicy,
+)
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session.text import _chunk_has_speech_energy
 from easycat.stages.audio import AudioStage
@@ -191,6 +196,19 @@ class AudioRouter:
         self._journal_sink = journal_sink
         self._runtime_scope = runtime_scope
         self._inline_send_scope = runtime_scope.create_child("audio-router-inline-send")
+        self._inline_send_policy = RuntimeTaskPolicy(
+            graceful=RuntimeMemberPolicy(
+                cohort="audio-inline-send",
+                signal_token=False,
+                task_action=RuntimeTaskAction.FINISH,
+            ),
+            force=RuntimeMemberPolicy(
+                cohort="audio-inline-send",
+                signal_token=False,
+                task_action=RuntimeTaskAction.CANCEL,
+                hard_deadline=(self._INLINE_SEND_TIMEOUT_S + 2 * self._INLINE_SEND_CANCEL_GRACE_S),
+            ),
+        )
         self._run_ctx = run_ctx
         self._no_turn = no_turn
         self._echo_canceller = echo_canceller
@@ -341,7 +359,7 @@ class AudioRouter:
             await self._runtime_scope.cancel_and_drain(self._INGRESS_TASK_NAME)
         self._pipeline_task = None
 
-    async def stop_outbound(self) -> None:
+    async def stop_outbound(self, *, force: bool = False) -> None:
         """Cancel the outbound drain task and wait for it to exit."""
         task = self._outbound_task
         current = asyncio.current_task()
@@ -350,10 +368,22 @@ class AudioRouter:
         else:
             await self._runtime_scope.cancel_and_drain(self._OUTBOUND_TASK_NAME)
         await self._runtime_scope.cancel_and_drain(self._AEC_DEGRADED_EMIT_TASK_NAME)
-        # A cancelled first-frame caller can leave its transport write running
-        # briefly while the transport is being terminated. Keep shutdown
-        # joined to that lifecycle-owned write before reporting outbound idle.
-        await self._inline_send_scope.cancel_and_drain()
+        # Graceful shutdown joins the transport write before reporting idle.
+        # Force shutdown uses the owned task's hard deadline and leaves a
+        # cancellation-resistant write parked; never re-await that survivor
+        # through the raw, unbounded drain API after its cohort has parked it.
+        if force:
+            registry = self._inline_send_scope.survivor_registry
+            parked = bool(
+                registry is not None and registry.survivors(self._inline_send_scope.owner_id)
+            )
+            if not parked:
+                await self._inline_send_scope.drain_cohort(
+                    "audio-inline-send",
+                    force=True,
+                )
+        else:
+            await self._inline_send_scope.cancel_and_drain()
         self._outbound_task = None
 
     async def await_drain(self, timeout: float = _AUDIO_DRAIN_TIMEOUT_S) -> None:
@@ -460,6 +490,7 @@ class AudioRouter:
                     turn,
                     ownership_started=ownership_started,
                 ),
+                policy=self._inline_send_policy,
             )
         except SurvivorCapacityError:
             await self._finish_outbound_send(replayed_chunk=False)

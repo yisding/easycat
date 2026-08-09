@@ -799,6 +799,64 @@ async def test_raw_websocket_listener_timeout_retries_same_owned_waiter() -> Non
     assert server._listener_cleanup_task_scope.tasks() == ()
 
 
+async def test_cooperative_listener_cancel_reports_timeout_and_retains_listener() -> None:
+    """A listener wait that accepts cancellation still counts as a timeout.
+
+    Regression test: ``_attempt_bounded_listener_cleanup`` used to treat a
+    cooperatively cancelled cleanup wait as success, so ``stop(force=True)``
+    reported a clean shutdown, dropped ``_ws_server``, and left no retry
+    path even though the listener never confirmed closing in time.
+    """
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+    release_wait = asyncio.Event()
+    cancel_seen = asyncio.Event()
+
+    class _CooperativeHangingListener:
+        def __init__(self) -> None:
+            self.wait_calls = 0
+
+        def close(self, close_connections: bool = True) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            self.wait_calls += 1
+            if release_wait.is_set():
+                return
+            try:
+                await release_wait.wait()
+            except asyncio.CancelledError:
+                cancel_seen.set()
+                raise
+
+    listener = _CooperativeHangingListener()
+    server._ws_server = listener
+    server._started = True
+
+    with pytest.raises(RuntimeError, match="cooperatively cancelled"):
+        await server.stop(force=True)
+
+    # The missed deadline is a reported failure: the listener stays retained
+    # for retry instead of being discarded as successfully closed, and the
+    # settled cleanup task was reaped so a later stop starts a fresh attempt.
+    assert cancel_seen.is_set()
+    assert server._ws_server is listener
+    assert "raw-WebSocket listener" not in server._listener_cleanup_tasks
+    assert server._listener_cleanup_task_scope.tasks() == ()
+    assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
+
+    release_wait.set()
+    await server.stop(force=True)
+
+    assert listener.wait_calls == 2
+    assert server._ws_server is None
+    assert server._lifecycle_cleanup_error is None
+    assert server._listener_cleanup_task_scope.tasks() == ()
+
+
 async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_ownership(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
@@ -856,6 +914,43 @@ async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_owners
     assert server._lifecycle_cleanup_error is None
 
 
+async def test_hard_sweep_result_failure_still_records_incomplete_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    server._started = True
+    recorded: list[dict[str, object]] = []
+    record_incomplete = server._record_incomplete_hard_sweep
+
+    async def fail_stop_all(*, force: bool = False) -> object:
+        assert force is True
+        raise RuntimeError("hard sweep result failed")
+
+    async def report_completed(future: asyncio.Future[object], *, timeout_s: float) -> bool:
+        _ = timeout_s
+        await asyncio.sleep(0)
+        assert future.done()
+        return True
+
+    async def record_call(**kwargs: object) -> None:
+        recorded.append(kwargs)
+        await record_incomplete(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(server._manager, "stop_all", fail_stop_all)
+    monkeypatch.setattr(
+        "easycat.server.voice_server.wait_for_owned_future",
+        report_completed,
+    )
+    monkeypatch.setattr(server, "_record_incomplete_hard_sweep", record_call)
+
+    with pytest.raises(RuntimeError, match="hard sweep result failed"):
+        await server.stop(force=True)
+
+    assert len(recorded) == 1
+    assert recorded[0]["completed"] is True
+    assert recorded[0]["report"] is None
+
+
 async def test_hard_sweep_timeout_keeps_named_task_owned_until_settlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -895,6 +990,105 @@ async def test_hard_sweep_timeout_keeps_named_task_owned_until_settlement(
     await asyncio.wait_for(sweep_task, timeout=0.5)
     await server._session_sweep_task_scope.release_standalone_if_empty()
     assert server._session_sweep_task_scope.tasks() == ()
+
+
+async def test_hard_sweep_cancellation_cleanup_failure_fences_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.01,
+    )
+    server._started = True
+    original_stop_all = server._manager.stop_all
+    attempts = 0
+
+    async def stop_all(*, force: bool = False) -> object:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError as exc:
+                raise RuntimeError("sweep cancellation cleanup failed") from exc
+        return await original_stop_all(force=force)
+
+    monkeypatch.setattr(server._manager, "stop_all", stop_all)
+
+    with pytest.raises(RuntimeError, match="sweep cancellation cleanup failed"):
+        await server.stop(force=True)
+
+    assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
+    assert server._gate.is_draining is True
+    assert server._session_sweep_task_scope.tasks() == ()
+    with pytest.raises(RuntimeError, match="previous teardown cleanup is incomplete"):
+        await server.start()
+
+    await server.stop(force=True)
+
+    assert attempts == 2
+    assert server._lifecycle_cleanup_error is None
+    assert server._gate.is_draining is False
+
+
+async def test_cancelled_real_session_sweep_retains_retry_fence() -> None:
+    from easycat.session import Session
+    from tests.session._session_core_helpers import FakeTransport, _full_config
+
+    class BlockingDisconnectTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.disconnect_started = asyncio.Event()
+            self.release_disconnect = asyncio.Event()
+
+        async def disconnect(self) -> None:
+            self.disconnect_started.set()
+            await self.release_disconnect.wait()
+            await super().disconnect()
+
+    transport = BlockingDisconnectTransport()
+    session = Session(_full_config(transport=transport))
+    await session.start()
+    server = _idle_server(
+        enable_websocket=False,
+        enable_webrtc=False,
+        force_shutdown_timeout_s=0.1,
+    )
+    key = 37
+    server._started = True
+    server._manager._sessions[key] = session
+    server._active_session_objs[key] = session
+    assert server._gate.try_acquire()
+    server._gate.track(key)
+
+    try:
+        with pytest.raises(RuntimeError, match="retained 1 session"):
+            await server.stop(force=True)
+
+        assert transport.disconnect_started.is_set()
+        assert session._closed is False
+        assert session._stopping is True
+        assert isinstance(session._lifecycle_cleanup_error, RuntimeError)
+        assert server._manager.get(key) is session
+        assert server._active_session_objs == {key: session}
+        assert isinstance(server._lifecycle_cleanup_error, RuntimeError)
+        assert server._gate.is_draining is True
+
+        transport.release_disconnect.set()
+        await server.stop(force=True)
+
+        assert session._closed is True
+        assert server._manager.get(key) is None
+        assert server._active_session_objs == {}
+        assert server._lifecycle_cleanup_error is None
+        assert server._gate.is_draining is False
+    finally:
+        transport.release_disconnect.set()
+        if server._manager.get(key) is session:
+            await server.stop(force=True)
+        elif not session._closed:
+            await session.stop(force=True)
 
 
 async def test_cancelled_stop_publishes_retryable_stopped_state_before_reraising() -> None:

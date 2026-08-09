@@ -9,7 +9,7 @@ import importlib.util
 import pytest
 
 import easycat.transports.local as local_mod
-from easycat.audio_format import PCM16_MONO_24K, AudioChunk
+from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import EventBus
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 
@@ -211,6 +211,75 @@ class TestLocalTransport:
         assert not transport.is_connected
 
     @pytest.mark.asyncio
+    async def test_disconnect_retains_only_stream_whose_close_failed_for_retry(self):
+        class FakeStream:
+            def __init__(self, *, close_errors: list[Exception | None]) -> None:
+                self.close_errors = close_errors
+                self.stop_calls = 0
+                self.close_calls = 0
+
+            def stop(self) -> None:
+                self.stop_calls += 1
+
+            def close(self) -> None:
+                self.close_calls += 1
+                error = self.close_errors.pop(0)
+                if error is not None:
+                    raise error
+
+        input_stream = FakeStream(close_errors=[RuntimeError("input close failed"), None])
+        output_stream = FakeStream(close_errors=[None])
+        transport = LocalTransport()
+        transport._input_stream = input_stream
+        transport._output_stream = output_stream
+        transport._connected = True
+
+        with pytest.raises(RuntimeError, match="input close failed"):
+            await transport.disconnect()
+
+        assert transport._input_stream is input_stream
+        assert transport._output_stream is None
+        assert not transport.is_connected
+        with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+            await transport.connect()
+
+        await transport.disconnect()
+
+        assert transport._input_stream is None
+        assert input_stream.close_calls == 2
+        assert output_stream.close_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_failed_connect_keeps_startup_error_primary_when_rollback_fails(self):
+        class FailOnceStream:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def stop(self) -> None:
+                pass
+
+            def close(self) -> None:
+                self.close_calls += 1
+                if self.close_calls == 1:
+                    raise RuntimeError("rollback close failed")
+
+        startup_error = RuntimeError("output start failed")
+        input_stream = FailOnceStream()
+        transport = LocalTransport()
+        transport._input_stream = input_stream
+
+        with pytest.raises(RuntimeError, match="output start failed") as exc_info:
+            await transport._raise_failed_connect_after_cleanup(startup_error)
+
+        assert exc_info.value is startup_error
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert "rollback close failed" in str(exc_info.value.__cause__)
+        assert transport._input_stream is input_stream
+
+        await transport.disconnect()
+        assert transport._input_stream is None
+
+    @pytest.mark.asyncio
     async def test_send_audio_when_not_connected(self):
         """send_audio reports False when the device is not connected."""
         transport = LocalTransport()
@@ -390,6 +459,22 @@ class TestLocalTransport:
     def test_config_rejects_invalid_frame_duration(self, value: object):
         with pytest.raises(ValueError, match="frame_duration_ms"):
             LocalTransportConfig(frame_duration_ms=value)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("value", [-1, 1.5, True])
+    def test_config_rejects_invalid_output_queue_bound(self, value: object):
+        with pytest.raises(ValueError, match="max_pending_out_chunks"):
+            LocalTransportConfig(max_pending_out_chunks=value)  # type: ignore[arg-type]
+
+    def test_config_rejects_non_pcm16_audio_format(self):
+        with pytest.raises(ValueError, match="audio_format must be PCM16"):
+            LocalTransportConfig(
+                audio_format=AudioFormat(
+                    sample_rate=8_000,
+                    channels=1,
+                    sample_width=1,
+                    encoding="mulaw",
+                )
+            )
 
     def test_config_rejects_preroll_larger_than_bounded_output_queue(self):
         with pytest.raises(ValueError, match="cannot exceed max_pending_out_chunks"):

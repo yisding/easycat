@@ -558,17 +558,49 @@ def test_comparison_thresholds_rejects_unknown_percentile() -> None:
     # Today the percentile lookup silently falls back to p50 on a typo; that
     # is a silent footgun. An unknown percentile must raise a clear error
     # naming the offending value.
-    bad_thresholds = LatencyComparisonThresholds(
-        relative_regression=0.2,
-        absolute_regression_ms=200.0,
-        min_samples=3,
-        regression_percentile="p42",
-    )
-    baseline = _comparison_artifact([500.0] * 20)
-    current = _comparison_artifact([500.0] * 20)
+    with pytest.raises(ValueError, match="p42"):
+        LatencyComparisonThresholds(
+            relative_regression=0.2,
+            absolute_regression_ms=200.0,
+            min_samples=3,
+            regression_percentile="p42",
+        )
 
-    with pytest.raises((ValueError, KeyError), match="p42"):
-        compare_latency_baseline(current, baseline, thresholds=bad_thresholds)
+
+@pytest.mark.parametrize("samples", [None, {}, "not-a-list"])
+def test_latency_baseline_comparison_rejects_non_list_samples(samples: object) -> None:
+    current = _comparison_artifact([500.0] * 3)
+    current["samples"] = samples
+    baseline = _comparison_artifact([500.0] * 3)
+
+    with pytest.raises(ValueError, match="samples payload must be a list"):
+        compare_latency_baseline(current, baseline)
+
+
+@pytest.mark.parametrize("invalid_sample", [None, "corrupt", []])
+def test_latency_baseline_comparison_rejects_non_object_sample_entries(
+    invalid_sample: object,
+) -> None:
+    current = _comparison_artifact([500.0] * 3)
+    current_samples = current["samples"]
+    assert isinstance(current_samples, list)
+    current_samples.append(invalid_sample)
+    baseline = _comparison_artifact([500.0] * 3)
+
+    with pytest.raises(ValueError, match="sample at index 3 must be an object"):
+        compare_latency_baseline(current, baseline)
+
+
+def test_latency_baseline_comparison_rejects_malformed_failure_class() -> None:
+    current = _comparison_artifact([500.0] * 3)
+    current_samples = current["samples"]
+    assert isinstance(current_samples, list)
+    assert isinstance(current_samples[0], dict)
+    current_samples[0]["failure_class"] = {}
+    baseline = _comparison_artifact([500.0] * 3)
+
+    with pytest.raises(ValueError, match="failure_class must be a string"):
+        compare_latency_baseline(current, baseline)
 
 
 # ---------------------------------------------------------------------------
@@ -595,6 +627,53 @@ def test_evaluate_budgets_raises_on_non_numeric_observed() -> None:
     budgets = (LatencyBudget(stage="total_ms", max_ms=1500.0, percentile="p95"),)
 
     with pytest.raises((TypeError, ValueError)):
+        evaluate_budgets(percentiles, budgets)
+
+
+@pytest.mark.parametrize("observed", [float("nan"), float("inf"), -1.0, True])
+def test_evaluate_budgets_rejects_invalid_numeric_observed(observed: object) -> None:
+    percentiles = {
+        "overall": {
+            "total_ms": {
+                "p95": observed,
+            },
+        },
+        "by_condition": {},
+    }
+    budgets = (LatencyBudget(stage="total_ms", max_ms=1500.0, percentile="p95"),)
+
+    with pytest.raises(ValueError, match="observed latency percentile"):
+        evaluate_budgets(percentiles, budgets)
+
+
+@pytest.mark.parametrize(
+    ("percentiles", "message"),
+    [
+        ({"overall": "corrupt"}, "overall must be an object"),
+        ({"overall": None}, "overall must be an object"),
+        ({"by_condition": []}, "by_condition must be an object"),
+        ({"by_condition": None}, "by_condition must be an object"),
+        (
+            {"by_condition": {"baseline": "corrupt"}},
+            "condition 'baseline' must be an object",
+        ),
+        (
+            {"overall": {"total_ms": "corrupt"}},
+            "percentile stats must be an object",
+        ),
+        (
+            {"overall": {"total_ms": None}},
+            "percentile stats must be an object",
+        ),
+    ],
+)
+def test_evaluate_budgets_rejects_present_non_object_blocks(
+    percentiles: dict[str, object],
+    message: str,
+) -> None:
+    budgets = (LatencyBudget(stage="total_ms", max_ms=1500.0, percentile="p95"),)
+
+    with pytest.raises(ValueError, match=message):
         evaluate_budgets(percentiles, budgets)
 
 

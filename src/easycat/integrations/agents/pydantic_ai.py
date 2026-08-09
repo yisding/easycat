@@ -29,6 +29,7 @@ from easycat.integrations.agents._helpers import (
     split_replacement_by_original_parts,
 )
 from easycat.integrations.agents._pydantic_ai_events import translate_event
+from easycat.integrations.agents._state_serialization import serialize_framework_state
 from easycat.integrations.agents._text_stream import AgentTextStream, is_text_event
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -414,13 +415,13 @@ class PydanticAIBridge:
             state_ref = None
             if self._state is not None:
                 try:
-                    state_json = json.dumps(_safe_state_dict(self._state), default=str)
+                    state_json = serialize_framework_state(_safe_state_dict(self._state))
                     if len(state_json) > 4096:
                         state_ref = f"state-{uuid4().hex[:16]}"
                         fields["state_summary"] = type(self._state).__name__
                     else:
-                        fields["state"] = json.loads(state_json)
-                except (TypeError, ValueError):
+                        fields["state"] = json.loads(state_json.decode("utf-8"))
+                except (TypeError, ValueError, UnicodeDecodeError):
                     fields["state_summary"] = type(self._state).__name__
             return FrameworkStateSnapshot(
                 fields=fields,
@@ -462,10 +463,7 @@ class PydanticAIBridge:
     def _serialize_framework_state(self, history_key: str | None = None) -> bytes:
         """Serialize message history for artifact storage."""
         history = self._history_for_key(history_key or self._last_history_key)
-        try:
-            return json.dumps(history, default=str).encode()
-        except (TypeError, ValueError):
-            return b"[]"
+        return serialize_framework_state(history, fallback=b"[]")
 
     def _plan_interruption(
         self, delivered_text: str, mode: CancellationMode, history_key: str | None = None
@@ -1344,28 +1342,25 @@ def _pydantic_message_from_context(item: dict[str, str]) -> Any:
 
 
 def _safe_state_dict(state: Any) -> dict[str, Any]:
-    """Extract a JSON-safe dict from a state object."""
+    """Extract public state fields without invoking value repr/string hooks."""
     from dataclasses import fields as dc_fields
 
+    if isinstance(state, Mapping):
+        return dict(state)
     result: dict[str, Any] = {}
     try:
         for f in dc_fields(state):
             if f.name.startswith("_"):
                 continue
-            val = getattr(state, f.name, None)
-            try:
-                json.dumps(val, default=str)
-                result[f.name] = val
-            except (TypeError, ValueError):
-                result[f.name] = repr(val)
+            result[f.name] = getattr(state, f.name, None)
     except TypeError:
         # Not a dataclass — use vars.
-        for k, v in vars(state).items():
+        try:
+            state_vars = vars(state)
+        except TypeError:
+            return {}
+        for k, v in state_vars.items():
             if k.startswith("_"):
                 continue
-            try:
-                json.dumps(v, default=str)
-                result[k] = v
-            except (TypeError, ValueError):
-                result[k] = repr(v)
+            result[k] = v
     return result

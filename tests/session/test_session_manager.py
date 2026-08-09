@@ -6,7 +6,12 @@ import pytest
 
 from easycat import session_manager as session_manager_module
 from easycat.session import Session
-from easycat.session_manager import SessionManager, SessionStopFailure, SessionStopReport
+from easycat.session_manager import (
+    SessionManager,
+    SessionStopAbandonReport,
+    SessionStopFailure,
+    SessionStopReport,
+)
 from tests.session._session_core_helpers import FakeTransport, _full_config
 
 
@@ -337,6 +342,82 @@ async def test_session_manager_stop_all_empty_report_is_successful() -> None:
     assert report.attempted_keys == ()
     assert report.stopped_keys == ()
     assert report.failures == ()
+
+
+@pytest.mark.asyncio
+async def test_abandon_pending_stops_reaps_task_but_retains_session() -> None:
+    manager: SessionManager[str] = SessionManager()
+    force_started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingSession(_DummySession):
+        async def stop(self, *, force: bool = False) -> None:
+            assert force is True
+            force_started.set()
+            await release.wait()
+
+    session = BlockingSession()
+    await manager.add("call", session)  # type: ignore[arg-type]
+    remove_task = asyncio.create_task(manager.remove("call", force=True))
+    await force_started.wait()
+    remove_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await remove_task
+
+    report = await manager.abandon_pending_stops()
+
+    assert isinstance(report, SessionStopAbandonReport)
+    assert not report.ok
+    assert report.attempted_keys == ("call",)
+    assert report.cancelled_keys == ("call",)
+    assert report.retained_keys == ("call",)
+    assert report.failures == ()
+    assert manager.get("call") is session
+    assert manager._stop_task_scope.tasks() == ()
+
+    release.set()
+    retry = await manager.stop_all(force=True)
+    assert retry.ok
+    assert manager.active_keys() == ()
+
+
+@pytest.mark.asyncio
+async def test_abandon_pending_stops_retains_cancellation_resistant_task() -> None:
+    manager: SessionManager[str] = SessionManager()
+    force_started = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    class ResistantSession(_DummySession):
+        async def stop(self, *, force: bool = False) -> None:
+            assert force is True
+            force_started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellation_seen.set()
+                await release.wait()
+
+    session = ResistantSession()
+    await manager.add("call", session)  # type: ignore[arg-type]
+    remove_task = asyncio.create_task(manager.remove("call", force=True))
+    await force_started.wait()
+
+    report = await manager.abandon_pending_stops()
+
+    assert not report.ok
+    assert report.attempted_keys == ("call",)
+    assert report.cancelled_keys == ()
+    assert report.retained_keys == ("call",)
+    assert report.failures == ()
+    assert cancellation_seen.is_set()
+    assert manager.get("call") is session
+    assert len(manager._stop_task_scope.tasks()) == 1
+
+    release.set()
+    await remove_task
+    assert manager.active_keys() == ()
+    assert manager._stop_task_scope.tasks() == ()
 
 
 def test_session_manager_releases_stop_scope_before_cross_loop_reuse() -> None:

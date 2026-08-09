@@ -1,20 +1,20 @@
 {
   "version": 1,
-  "update_rationale": "AgentDelta observation now carries part_index and replacement metadata",
+  "update_rationale": "Reviewed bug-audit lifecycle ownership and indexed AgentDelta replacement metadata",
   "counts": {
     "categories": {
       "activity_commit": 5,
       "identity_commit": 8,
       "phase_latch_commit": 1,
       "provider_commit": 11,
-      "public_observation_commit": 31,
+      "public_observation_commit": 26,
       "session_lifecycle_commit": 1,
       "turn_field_commit": 9
     },
     "guards": {
       "admission": 3,
-      "correlated_observation": 11,
-      "identity": 4,
+      "correlated_observation": 7,
+      "identity": 3,
       "identity_activity": 32,
       "identity_activity_pause": 1,
       "identity_phase": 1,
@@ -27,13 +27,13 @@
       "manager_activity": 5,
       "phase_latch": 1,
       "provider_dispatch": 11,
-      "public_observation": 31,
+      "public_observation": 26,
       "session_lifecycle": 1,
       "turn_bookkeeping": 9,
       "turn_identity": 8
     },
     "suspensions": {
-      "awaited": 45,
+      "awaited": 40,
       "post_await": 16,
       "synchronous": 5
     }
@@ -45,10 +45,10 @@
     "activity_commit\tsession/_turn_runner.py\tTurnRunner._settle_turn_after_tts\tpost_await call self._reset_turn_manager_preserving_token\t6765ffe0e583e6c7\t0\tmanager_activity\tPublishes or closes one manager activity phase.\tidentity_activity",
     "activity_commit\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tpost_await call self._turn_manager.begin_application_turn\t41ddb62f01c680f3\t0\tmanager_activity\tPublishes or closes one manager activity phase.\tadmission",
     "identity_commit\tsession/_tts_scheduler.py\tTTSScheduler.finalize_speaking_turn\tpost_await call self._clear_turn\t6751acb4b1e5f391\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tidentity_activity",
+    "identity_commit\tsession/_turn_runner.py\tTurnRunner._cleanup_rejected_stt_start\tpost_await call self._reset_turn_state\te17604b19c7611fe\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tidentity_activity",
     "identity_commit\tsession/_turn_runner.py\tTurnRunner._execute_application_prompt\tpost_await call self._reset_turn_state\te17604b19c7611fe\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tidentity_activity",
     "identity_commit\tsession/_turn_runner.py\tTurnRunner._settle_turn_after_tts\tpost_await call self._reset_turn_state\te17604b19c7611fe\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tidentity_activity",
     "identity_commit\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\tpost_await call self._reset_turn_state\te17604b19c7611fe\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tidentity_activity",
-    "identity_commit\tsession/_turn_runner.py\tTurnRunner.on_turn_publication\tpost_await call self._reset_turn_state\te17604b19c7611fe\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tidentity_activity",
     "identity_commit\tsession/_turn_runner.py\tTurnRunner.on_turn_publication\tpost_await call self._turn.begin\td314fd1fbae1c7ad\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tadmission",
     "identity_commit\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tpost_await call self._turn.set\ta099c6d4e21b147f\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tadmission",
     "identity_commit\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tpost_await call self._reset_turn_state\te17604b19c7611fe\t0\tturn_identity\tPublishes, resets, or clears Session turn identity.\tidentity_activity",
@@ -64,12 +64,7 @@
     "provider_commit\tsession/_turn_runner.py\tTurnRunner._synthesize_first_payload\tawaited call self._tts.synthesizer.synthesize\tddb9d562a8f1e5d7\t0\tprovider_dispatch\tDispatches work across an agent, STT, or TTS provider boundary.\tidentity_activity",
     "provider_commit\tsession/_turn_runner.py\tTurnRunner._synthesize_queued_payloads\tawaited call self._tts.synthesizer.synthesize\tc0074795db14867f\t0\tprovider_dispatch\tDispatches work across an agent, STT, or TTS provider boundary.\tidentity_activity",
     "provider_commit\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\tawaited call self.run_streaming_agent\t461dd9eda8bdd63f\t0\tprovider_dispatch\tDispatches work across an agent, STT, or TTS provider boundary.\tidentity_activity",
-    "public_observation_commit\tsession/_stt_committer.py\tSTTCommitter._cancel_segment_commit_handoff\tawaited call self._emit<Error>\t978ba416ca5ea250\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
-    "public_observation_commit\tsession/_stt_committer.py\tSTTCommitter.await_pending\tawaited call self._emit<Error>\t978ba416ca5ea250\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
-    "public_observation_commit\tsession/_stt_committer.py\tSTTCommitter.cancel\tawaited call self._emit<Error>\t978ba416ca5ea250\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
-    "public_observation_commit\tsession/_stt_committer.py\tSTTCommitter.end_stream\tawaited call self._emit<Error>\t978ba416ca5ea250\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
-    "public_observation_commit\tsession/_stt_committer.py\tSTTCommitter.end_stream\tawaited call self._emit<Error>\ta1064f580f24ff32\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
-    "public_observation_commit\tsession/_stt_committer.py\tSTTCommitter.start_event_loop._consume\tawaited call self._emit<Error>\ta7a01803284e1ac4\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tidentity",
+    "public_observation_commit\tsession/_stt_committer.py\tSTTCommitter._schedule_provider_operation_error._notify\tawaited call self._emit<event>\t3d1d121c48261157\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
     "public_observation_commit\tsession/_stt_committer.py\tSTTCommitter.start_event_loop._consume\tawaited call self._emit<STTFinal>\td7957424f141ad4d\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tidentity",
     "public_observation_commit\tsession/_stt_committer.py\tSTTCommitter.start_event_loop._consume\tawaited call self._emit<STTPartial>\t09f94e77d8946fb7\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tidentity",
     "public_observation_commit\tsession/_turn_runner.py\tTurnRunner._await_agent_task\tawaited call self._emit<Error>\tdaa59d53b21bbc40\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
