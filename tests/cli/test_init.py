@@ -982,6 +982,7 @@ def test_init_json_next_step_commands_match_template_readme(
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
     assert payload["pyproject_name"] == init_module._pyproject_name(name)
+    audience_docs, audience_docs_json = init_module._next_step_audience_docs_commands(template)
     expected_commands = [
         f"cd {shlex.quote(str(tmp_path / name))}",
         "cp .env.example .env",
@@ -991,8 +992,8 @@ def test_init_json_next_step_commands_match_template_readme(
         _template_readme_check_command(template),
         _template_readme_fix_command(template),
         "uv run easycat docs",
-        "uv run easycat docs --audience app-builders",
-        "uv run easycat docs --audience app-builders --json",
+        audience_docs,
+        audience_docs_json,
         "uv run easycat docs --json",
         "uv run easycat explain json-schema",
         _template_readme_run_command(template),

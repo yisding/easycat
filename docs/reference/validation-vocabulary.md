@@ -12,6 +12,10 @@ The validation workflow itself is documented in
 provider and surface markers, artifact shapes, report fields, and the
 provider-contract matrix.
 
+Use `easycat docs --audience release-maintainers` for the focused route map;
+use `easycat docs --audience release-maintainers --json` when automation needs
+the same routes and command hints.
+
 ## Goal
 
 Make validation cheap enough for daily use, representative enough for live

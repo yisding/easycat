@@ -81,8 +81,8 @@ the primary check again.
   Journals stay in `.easycat/journals/`; inspect one with
   `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
 - Explore maintained routes with `uv run easycat docs`,
-  `uv run easycat docs --audience app-builders`,
-  `uv run easycat docs --audience app-builders --json`, and
+  `uv run easycat docs --audience provider-maintainers`,
+  `uv run easycat docs --audience provider-maintainers --json`, and
   `uv run easycat docs --json`.
 - Compare starters with `uv run easycat init --list-templates` or
   `uv run easycat init --list-templates --json`. Inspect machine envelopes

@@ -104,9 +104,9 @@ re-run the check.
   redact them first.
 - **Explore docs and routes:** run `uv run easycat docs` to find learning,
   maintenance, validation, and operations routes. Use
-  `uv run easycat docs --audience app-builders` to narrow the map to
-  app-building routes; add `--json`
-  (`uv run easycat docs --audience app-builders --json`,
+  `uv run easycat docs --audience provider-maintainers` to narrow the map to
+  provider contracts and extension guides; add `--json`
+  (`uv run easycat docs --audience provider-maintainers --json`,
   `uv run easycat docs --json`) when automation needs the route map with
   command hints and audience labels.
   If this is not the right starter, run `uv run easycat init --list-templates`; use

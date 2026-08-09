@@ -222,6 +222,9 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         "fix_command",
     }
     for entry in payload["catalog"]:
+        audience_docs, audience_docs_json = init_module._next_step_audience_docs_commands(
+            entry["name"]
+        )
         assert required_keys <= set(entry)
         assert entry["create_command"] == f"easycat init my-agent --template {entry['name']}"
         assert entry["repo_create_command"] == (
@@ -236,8 +239,8 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
             entry["check_command"],
             entry["fix_command"],
             "uv run easycat docs",
-            "uv run easycat docs --audience app-builders",
-            "uv run easycat docs --audience app-builders --json",
+            audience_docs,
+            audience_docs_json,
             "uv run easycat docs --json",
             "uv run easycat explain json-schema",
             entry["run_command"],

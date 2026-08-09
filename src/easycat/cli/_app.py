@@ -290,6 +290,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat docs --audience operators --json",
             "easycat docs --audience maintainers",
             "easycat docs --audience maintainers --json",
+            "easycat docs --audience coding-agents",
+            "easycat docs --audience coding-agents --json",
             "easycat docs --json",
             "easycat explain json-schema",
         ),
@@ -1034,6 +1036,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "diataxis": "reference",
         "description": "Read provider and report vocabulary used by validation.",
         "commands": (
+            "easycat docs --audience release-maintainers",
             "easycat docs --audience release-maintainers --json",
             "easycat validate quick --json",
             "easycat validate contracts --json",

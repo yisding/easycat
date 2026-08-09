@@ -208,7 +208,6 @@ nav:
       - Latency: latency.md
       - Validation workflow: validation.md
       - Observability: observability.md
-      - Journal record schema: reference/journal-records.md
       - Browser playground: browser-playground.md
       - Deployment:
           - Docker: deployment/docker.md

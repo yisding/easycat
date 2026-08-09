@@ -68,7 +68,8 @@ easycat docs --audience operators # filter docs to deployment and observability 
 easycat docs --audience operators --json # emit a filtered docs route map for operators
 easycat docs --audience maintainers # filter docs to architecture and maintenance routes
 easycat docs --audience maintainers --json # emit a filtered docs route map for maintainers
-easycat docs --audience coding-agents
+easycat docs --audience coding-agents # filter docs to repository coding-agent routes
+easycat docs --audience coding-agents --json # emit a filtered docs route map for coding agents
 easycat docs --json      # emit docs routes, audiences, and command hints for automation
 easycat explain E102     # look up errors and CLI schema topics
 easycat explain json-schema # document the --json envelope and command metadata
@@ -115,16 +116,26 @@ for lifecycle, retention, privacy, and storage-budget guidance.
 ```bash
 easycat validate quick
 easycat validate quick --json
+easycat validate socket
+easycat validate socket --json
+easycat validate stress
+easycat validate stress --json
 easycat validate contracts
 easycat validate contracts --json
+easycat validate latency --smoke
+easycat validate latency --smoke --json
+easycat validate live
+easycat validate live --json
 easycat validate release
 easycat validate release --json
 easycat validate report .easycat/validation/latest.json
 easycat validate report .easycat/validation/latest.json --json
 ```
 
-`quick` is deterministic and credential-free. Live provider tests are a
-separate, explicit contributor lane; see the [validation workflow](validation.md).
+`quick` is deterministic and credential-free. `socket`, `stress`, and
+`contracts` are explicit local lanes; `latency` and `live` can use provider
+credentials and may incur charges. See the [validation workflow](validation.md)
+for lane selection and release requirements.
 
 ## JSON contract
 

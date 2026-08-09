@@ -19,6 +19,7 @@ Command note: Bare easycat commands use installed CLI form; from this repo, pref
 - Path: README.md#choose-your-path
 - URL: https://github.com/yisding/easycat/blob/main/README.md#choose-your-path
 - Audience: all readers
+- Diataxis: how-to
 - Choose the right first route for quickstart, learning, examples, maintenance, or operations.
 
 Commands:
@@ -47,6 +48,7 @@ uv sync --extra debugger --group dev
 - Path: README.md#install
 - URL: https://github.com/yisding/easycat/blob/main/README.md#install
 - Audience: new users
+- Diataxis: tutorial
 - Install EasyCat and run your first voice agent.
 
 Commands:
@@ -68,6 +70,7 @@ uv run --env-file .env python examples/openai_agents_voice.py
 - Path: docs/install.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/install.md
 - Audience: app builders
+- Diataxis: reference
 - Choose a portable dependency source and the smallest provider, transport, agent-framework, or processing extras for an application.
 
 Commands:
@@ -86,6 +89,7 @@ uv run easycat doctor --env-file .env --json
 - Path: docs/cli.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/cli.md
 - Audience: app builders
+- Diataxis: how-to
 - Scaffold projects, compare templates with base package requirements, extras, env requirements, optional env knobs, generated files, and copyable create/preflight/check/fix/docs/json-schema/run commands, and learn CLI JSON envelopes.
 
 Commands:
@@ -109,6 +113,8 @@ easycat docs --audience operators
 easycat docs --audience operators --json
 easycat docs --audience maintainers
 easycat docs --audience maintainers --json
+easycat docs --audience coding-agents
+easycat docs --audience coding-agents --json
 easycat docs --json
 easycat explain json-schema
 ```
@@ -118,6 +124,7 @@ easycat explain json-schema
 - Path: docs/README.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/README.md
 - Audience: all readers
+- Diataxis: reference
 - Choose the maintained guide for your current task.
 
 Commands:
@@ -137,6 +144,7 @@ easycat docs --json
 - Path: docs/teaching/
 - URL: https://github.com/yisding/easycat/tree/main/docs/teaching
 - Audience: learners
+- Diataxis: tutorial
 - Learn voice pipelines chapter by chapter.
 
 Commands:
@@ -166,6 +174,7 @@ uv run easycat validate report .easycat/validation/latest.json --json
 - Path: docs/teaching/PROGRESS.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/teaching/PROGRESS.md
 - Audience: learners
+- Diataxis: tutorial
 - Track evidence-backed completion across all 16 teaching chapters.
 
 Commands:
@@ -180,6 +189,7 @@ uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence
 - Path: docs/teaching/00-hello-audio/
 - URL: https://github.com/yisding/easycat/tree/main/docs/teaching/00-hello-audio
 - Audience: learners
+- Diataxis: tutorial
 - Start with audio chunks before agents or providers.
 
 Commands:
@@ -194,6 +204,7 @@ uv run python docs/teaching/00-hello-audio/main.py
 - Path: docs/using-easycat/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat
 - Audience: learners
+- Diataxis: tutorial
 - Learn EasyCat's public features one app capability at a time.
 
 Commands:
@@ -215,6 +226,7 @@ uv run --env-file .env python docs/using-easycat/00-first-voice-app/main.py
 - Path: docs/using-easycat/00-first-voice-app/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/00-first-voice-app
 - Audience: learners
+- Diataxis: tutorial
 - Build a local voice app with VoiceApp and automatic pipeline wiring.
 
 Commands:
@@ -234,6 +246,7 @@ uv run --env-file .env python docs/using-easycat/00-first-voice-app/main.py
 - Path: docs/using-easycat/01-runtime-modes/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/01-runtime-modes
 - Audience: learners
+- Diataxis: tutorial
 - Run one VoiceApp locally, in a browser, over WebSocket, or on Twilio.
 
 Commands:
@@ -256,6 +269,7 @@ uv run --env-file .env python docs/using-easycat/01-runtime-modes/main.py browse
 - Path: docs/using-easycat/02-providers-and-voices/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/02-providers-and-voices
 - Audience: learners
+- Diataxis: tutorial
 - Select STT and TTS providers, models, and provider-specific voices.
 
 Commands:
@@ -280,6 +294,7 @@ uv run --env-file .env python docs/using-easycat/02-providers-and-voices/main.py
 - Path: docs/using-easycat/03-conversation-controls/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/03-conversation-controls
 - Audience: learners
+- Diataxis: tutorial
 - Tune turn taking, signal cleanup, interruption, and push-to-talk.
 
 Commands:
@@ -304,6 +319,7 @@ uv run --env-file .env python docs/using-easycat/03-conversation-controls/main.p
 - Path: docs/using-easycat/04-tools-actions/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/04-tools-actions
 - Audience: learners
+- Diataxis: tutorial
 - Separate agent tools, session actions, events, and spoken-output rules.
 
 Commands:
@@ -324,6 +340,7 @@ uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run
 - Path: docs/using-easycat/05-agent-bridges/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/05-agent-bridges
 - Audience: learners
+- Diataxis: tutorial
 - Choose a framework adapter or bring a custom workflow.
 
 Commands:
@@ -344,6 +361,7 @@ uv run --env-file .env python docs/using-easycat/05-agent-bridges/main.py run
 - Path: docs/using-easycat/06-session-control/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/06-session-control
 - Audience: learners
+- Diataxis: tutorial
 - Own session lifecycle, events, text turns, resets, and teardown.
 
 Commands:
@@ -364,6 +382,7 @@ uv run --env-file .env python docs/using-easycat/06-session-control/main.py voic
 - Path: docs/using-easycat/07-observability/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/07-observability
 - Audience: learners
+- Diataxis: tutorial
 - Record, inspect, replay, and compare journals and debug bundles.
 
 Commands:
@@ -382,6 +401,7 @@ uv run easycat diff .easycat/tutorial/ch07/baseline.bundle .easycat/tutorial/ch0
 - Path: docs/using-easycat/08-testing-evals/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/08-testing-evals
 - Audience: learners
+- Diataxis: tutorial
 - Test offline turns, evaluation oracles, and latency budgets.
 
 Commands:
@@ -399,6 +419,7 @@ uv run easycat validate latency --smoke --json
 - Path: docs/using-easycat/09-multi-caller/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/09-multi-caller
 - Audience: learners
+- Diataxis: tutorial
 - Serve isolated callers with auth, capacity limits, and draining.
 
 Commands:
@@ -413,6 +434,7 @@ uv run python docs/using-easycat/09-multi-caller/main.py
 - Path: docs/using-easycat/10-telephony/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/10-telephony
 - Audience: learners
+- Diataxis: tutorial
 - Secure Twilio webhooks, media streams, callbacks, and call control.
 
 Commands:
@@ -430,6 +452,7 @@ uv run --env-file .env uvicorn examples.twilio_app:create_app --factory --host 0
 - Path: docs/using-easycat/11-production-ops/
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/11-production-ops
 - Audience: learners
+- Diataxis: tutorial
 - Validate, deploy, observe, preserve, and drain production services.
 
 Commands:
@@ -449,6 +472,7 @@ uv run easycat validate release --json
 - Path: examples/README.md
 - URL: https://github.com/yisding/easycat/blob/main/examples/README.md
 - Audience: app builders
+- Diataxis: how-to
 - Find runnable local, browser, WebSocket, and telephony apps.
 
 Commands:
@@ -476,6 +500,7 @@ uv run easycat validate report .easycat/validation/latest.json --json
 - Path: docs/architecture.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/architecture.md
 - Audience: maintainers
+- Diataxis: explanation
 - Understand the pipeline, session collaborators, stages, providers, and agent bridges.
 
 Commands:
@@ -490,6 +515,7 @@ uv run easycat docs --audience maintainers --json
 - Path: CLAUDE.md
 - URL: https://github.com/yisding/easycat/blob/main/CLAUDE.md
 - Audience: maintainers
+- Diataxis: how-to
 - Orient to the pipeline, packages, provider registries, lifecycle, and docs/onboarding guards.
 
 Commands:
@@ -526,6 +552,7 @@ uv run easycat validate report .easycat/validation/latest.json --json
 - Path: AGENTS.md
 - URL: https://github.com/yisding/easycat/blob/main/AGENTS.md
 - Audience: coding agents
+- Diataxis: how-to
 - Follow repo structure, development commands, docs/onboarding guards, and PR expectations.
 
 Commands:
@@ -561,6 +588,7 @@ uv run easycat validate report .easycat/validation/latest.json --json
 - Path: docs/development/
 - URL: https://github.com/yisding/easycat/tree/main/docs/development
 - Audience: maintainers
+- Diataxis: explanation
 - Work through the chapter-by-chapter source, test, decision, and change-recipe tour for new maintainers.
 
 Commands:
@@ -577,6 +605,7 @@ just guard-contributing
 - Path: docs/from-easyconfig-to-session.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md
 - Audience: app builders
+- Diataxis: how-to
 - Graduate from the EasyConfig quickstart to the production Session API: lifecycle, events, text turns, session actions, and replayable debug bundles.
 
 Commands:
@@ -594,6 +623,7 @@ uv run easycat inspect .easycat/journals/<session_id>.sqlite
 - Path: docs/testing-and-evals.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/testing-and-evals.md
 - Audience: app builders
+- Diataxis: how-to
 - Climb the eval ladder: bundle fixtures, offline text turns, latency budgets and LLM-as-judge, then live audio validation.
 
 Commands:
@@ -615,6 +645,7 @@ uv run easycat validate report .easycat/validation/latest.json
 - Path: docs/reference/events.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/reference/events.md
 - Audience: app builders
+- Diataxis: reference
 - Look up every public session event type and when it is emitted.
 
 Commands:
@@ -629,6 +660,7 @@ uv run easycat docs --audience app-builders
 - Path: docs/reference/journal-records.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/reference/journal-records.md
 - Audience: app builders
+- Diataxis: reference
 - Look up stable built-in journal record names, kinds, and data-key contracts.
 
 Commands:
@@ -643,6 +675,7 @@ uv run easycat docs --audience app-builders
 - Path: docs/reference/easyconfig.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/reference/easyconfig.md
 - Audience: app builders
+- Diataxis: reference
 - Look up every EasyConfig construction field.
 
 Commands:
@@ -656,6 +689,7 @@ uv run easycat docs --audience app-builders
 - Path: docs/reference/session-lifecycle.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/reference/session-lifecycle.md
 - Audience: app builders
+- Diataxis: reference
 - Start, stop, force-stop, and read the journal after teardown.
 
 Commands:
@@ -669,6 +703,7 @@ uv run easycat explain journal
 - Path: docs/browser-playground.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/browser-playground.md
 - Audience: app builders
+- Diataxis: how-to
 - Talk to a bot in the browser with one command, and read the WebSocket/WebRTC wire protocol behind the playground page.
 
 Commands:
@@ -687,6 +722,7 @@ uv run pytest tests/transports/test_webrtc_auth_browser_playground.py
 - Path: docs/public-api.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/public-api.md
 - Audience: maintainers
+- Diataxis: reference
 - Review the stable import surface before changing exports.
 
 Commands:
@@ -706,6 +742,7 @@ just guard-docs
 - Path: tests/contracts/README.md
 - URL: https://github.com/yisding/easycat/blob/main/tests/contracts/README.md
 - Audience: provider maintainers
+- Diataxis: how-to
 - Maintain offline provider, protocol, cassette, and bridge contract coverage.
 
 Commands:
@@ -724,6 +761,7 @@ uv run pytest tests/contracts/test_provider_session_matrix.py
 - Path: docs/extending/
 - URL: https://github.com/yisding/easycat/tree/main/docs/extending
 - Audience: provider maintainers
+- Diataxis: how-to
 - Build custom STT, TTS, VAD, transport, and agent-bridge providers out of tree and verify conformance.
 
 Commands:
@@ -744,6 +782,7 @@ uv run pytest tests/contracts
 - Path: CONTRIBUTING.md
 - URL: https://github.com/yisding/easycat/blob/main/CONTRIBUTING.md
 - Audience: contributors
+- Diataxis: how-to
 - Follow the development loop, docs/onboarding guards, and validation slices.
 
 Commands:
@@ -779,6 +818,7 @@ uv run easycat validate report .easycat/validation/latest.json --json
 - Path: docs/deployment/docker.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/deployment/docker.md
 - Audience: operators
+- Diataxis: how-to
 - Package the WebSocket example for container deployment.
 
 Commands:
@@ -797,6 +837,7 @@ docker compose -f docker/compose.yaml down
 - Path: docs/deployment/production-servers.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/deployment/production-servers.md
 - Audience: operators
+- Diataxis: how-to
 - Run multi-client WebSocket, WebRTC, WebTransport, and Twilio servers with one isolated EasyCat session per client or call.
 
 Commands:
@@ -819,6 +860,7 @@ uv run pytest tests/transports/test_webtransport_session.py
 - Path: docs/observability.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/observability.md
 - Audience: operators
+- Diataxis: how-to
 - Inspect journals, debug bundles, the debugger UI, metrics, and traces.
 
 Commands:
@@ -853,6 +895,7 @@ uv sync --extra debugger --group dev
 - Path: docs/latency.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/latency.md
 - Audience: operators
+- Diataxis: how-to
 - Answer "why was that turn slow?" with per-turn CLI waterfalls and the table of latency-adding defaults.
 
 Commands:
@@ -871,6 +914,7 @@ uv run easycat validate latency --smoke
 - Path: src/easycat/runtime/DURABILITY.md
 - URL: https://github.com/yisding/easycat/blob/main/src/easycat/runtime/DURABILITY.md
 - Audience: operators and maintainers
+- Diataxis: explanation
 - Understand SQLite journal persistence, recovery, and storage layout.
 
 Commands:
@@ -889,6 +933,7 @@ uv run easycat inspect .easycat/crash-dumps/<session_id>.sqlite --json
 - Path: docs/validation.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/validation.md
 - Audience: contributors
+- Diataxis: how-to
 - Run docs/onboarding guards, the right validation lane, and inspect .easycat/validation/latest.json.
 
 Commands:
@@ -920,11 +965,13 @@ uv run easycat validate report .easycat/validation/latest.json --json
 - Path: docs/reference/validation-vocabulary.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/reference/validation-vocabulary.md
 - Audience: release maintainers
+- Diataxis: reference
 - Read provider and report vocabulary used by validation.
 
 Commands:
 
 ```bash
+easycat docs --audience release-maintainers
 easycat docs --audience release-maintainers --json
 easycat validate quick --json
 easycat validate contracts --json
