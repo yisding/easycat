@@ -5,8 +5,8 @@ Both files are generated from the same source of truth as
 
 * ``llms.txt`` — the llmstxt.org-style index: one link per maintained
   docs route with its audience label and description.
-* ``llms-full.txt`` — the same routes expanded with every copyable
-  command hint plus the shared command note.
+* ``llms-full.txt`` — the same routes expanded with their Diátaxis
+  classification, every copyable command hint, and the shared command note.
 
 Human docs carry a short pointer explaining that coding rules live in
 AGENTS.md/CLAUDE.md while these files are for machine-readable docs route
@@ -78,6 +78,7 @@ def render_llms_full_txt() -> str:
             f"- Path: {entry['path']}",
             f"- URL: {entry['url']}",
             f"- Audience: {entry['audience']}",
+            f"- Diataxis: {entry['diataxis']}",
             f"- {entry['description']}",
         ]
         commands = entry.get("commands", ())

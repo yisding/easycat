@@ -505,6 +505,11 @@ def test_cli_reference_lists_registered_top_level_commands() -> None:
             "easycat docs --audience maintainers --json # emit a filtered docs route map "
             "for maintainers"
         ),
+        ("easycat docs --audience coding-agents # filter docs to repository coding-agent routes"),
+        (
+            "easycat docs --audience coding-agents --json # emit a filtered docs route map "
+            "for coding agents"
+        ),
         "easycat explain E102     # look up errors and CLI schema topics",
         "easycat explain json-schema # document the --json envelope and command metadata",
         "easycat bundles list      # list captured debug bundles and crash dumps",
@@ -541,6 +546,8 @@ def test_cli_reference_lists_registered_top_level_commands() -> None:
     assert "easycat docs --audience operators --json" in cli_section
     assert "easycat docs --audience maintainers" in cli_section
     assert "easycat docs --audience maintainers --json" in cli_section
+    assert "easycat docs --audience coding-agents" in cli_section
+    assert "easycat docs --audience coding-agents --json" in cli_section
 
     missing = sorted(
         command_name

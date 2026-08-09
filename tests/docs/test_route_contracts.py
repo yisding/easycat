@@ -820,6 +820,7 @@ def test_validation_reference_docs_route_matches_json_commands() -> None:
     route_commands = entries["docs/reference/validation-vocabulary.md"].get("commands", ())
 
     for command in (
+        "easycat docs --audience release-maintainers",
         "easycat docs --audience release-maintainers --json",
         "easycat validate quick --json",
         "easycat validate contracts --json",

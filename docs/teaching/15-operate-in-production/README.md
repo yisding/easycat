@@ -647,11 +647,12 @@ Run easycat explain json-schema for CLI JSON.
 
 - **`uv run easycat console`** — tries EasyCat in your terminal with no API
   keys (`src/easycat/cli/console.py`): a keyless interactive text loop with
-  an echo agent that climbs to a live OpenAI session when a key (and
-  microphone) is present, always ending with an exported debug bundle path
-  and a replay hint. Add `--voice-demo`
+  an echo agent that ignores ambient provider credentials, always ending with
+  an exported debug bundle path and a replay hint. Add `--voice-demo`
   (`uv run easycat console --voice-demo`) to run one scripted no-key turn
-  through the full audio pipeline.
+  through the full audio pipeline. Live OpenAI traffic is an explicit opt-in:
+  `--live` uses voice when a microphone works and otherwise falls back to a
+  live text session.
 - **`uv run easycat init my-agent`** — scaffolds a new project from a template
   (`src/easycat/cli/scaffold/`). The fastest path from empty dir
   to a running session. Run `uv run easycat init --list-templates` first when
@@ -726,10 +727,11 @@ Run easycat explain json-schema for CLI JSON.
 - **`uv run easycat diff <path-a> <path-b>`** — diff two bundles turn by turn,
   surfacing milestone and transcript deltas so you can see which segment
   regressed between a baseline ("before") and a comparison ("after") run.
-- **`uv run easycat journal grep <path>`** / **`uv run easycat journal follow
-  <path>`** / **`uv run easycat journal promote <path>`** — full-text search a
-  journal or bundle, live-tail one as it grows, or promote a single turn into a
-  replayable, self-contained regression bundle. Every emitted line is redacted.
+- **`uv run easycat journal grep <path> --query TEXT`** / **`uv run easycat journal
+  follow <path>`** / **`uv run easycat journal promote <path> TURN_ID --out FILE`** —
+  full-text search a journal or bundle, live-tail a SQLite journal as it grows,
+  or promote a single turn from either source into a replayable, self-contained
+  regression bundle. Every emitted line is redacted.
 - **`uv run easycat tail <path>`** — live-tail a SQLite journal as it grows; a
   short alias for `uv run easycat journal follow <path>`.
 - **`uv run easycat validate quick`** — deterministic local validation

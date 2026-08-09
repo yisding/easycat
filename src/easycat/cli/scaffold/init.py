@@ -107,6 +107,7 @@ class _TemplateSpec:
     base_extras: tuple[str, ...]
     run_command: str = "uv run --env-file .env python agent.py"
     check_files: tuple[str, ...] = ("agent.py",)
+    docs_audience: str = "app-builders"
     expected_transport: str | None = None
     supports_audio_config: bool = False
 
@@ -234,6 +235,7 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         description="External VAD provider package skeleton with conformance test and live demo.",
         base_extras=("openai-agents", "local"),
         check_files=("agent.py", "custom_vad.py", "test_custom_vad.py"),
+        docs_audience="provider-maintainers",
     ),
     "provider-stt": _TemplateSpec(
         mode="voice",
@@ -245,6 +247,7 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         description="External STT provider skeleton with registration and offline contracts.",
         base_extras=("openai-agents", "local"),
         check_files=("agent.py", "custom_stt.py", "test_custom_stt.py"),
+        docs_audience="provider-maintainers",
     ),
     "provider-tts": _TemplateSpec(
         mode="voice",
@@ -256,6 +259,7 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         description="External TTS provider skeleton with registration and offline contracts.",
         base_extras=("openai-agents", "local"),
         check_files=("agent.py", "custom_tts.py", "test_custom_tts.py"),
+        docs_audience="provider-maintainers",
     ),
 }
 _UNKNOWN_TEMPLATE_SPEC = _TemplateSpec(
@@ -276,7 +280,7 @@ _INIT_COMMAND_NOTE = (
 _INIT_HUMAN_COMMAND_NOTE = (
     "Command note: Create uses installed CLI form; Repo create runs from this repository root; "
     "JSON catalog next_step_commands previews the my-agent post-create sequence; "
-    "Doctor, Doctor JSON, Check, Fix, Docs, App-builder docs, App-builder docs JSON, "
+    "Doctor, Doctor JSON, Check, Fix, Docs, Audience docs, Audience docs JSON, "
     "Docs JSON, JSON schema, and Run after cd are run inside the scaffolded project."
 )
 _INIT_MACHINE_READABLE_HINT = (
@@ -285,8 +289,6 @@ _INIT_MACHINE_READABLE_HINT = (
 _NEXT_STEP_DOCTOR_COMMAND = "uv run easycat doctor --env-file .env"
 _NEXT_STEP_DOCTOR_JSON_COMMAND = "uv run easycat doctor --env-file .env --json"
 _NEXT_STEP_DOCS_COMMAND = "uv run easycat docs"
-_NEXT_STEP_APP_BUILDER_DOCS_COMMAND = "uv run easycat docs --audience app-builders"
-_NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND = "uv run easycat docs --audience app-builders --json"
 _NEXT_STEP_DOCS_JSON_COMMAND = "uv run easycat docs --json"
 _NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND = "uv run easycat explain json-schema"
 
@@ -596,6 +598,7 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
         )
         base_extras = ", ".join(entry["base_extras"]) or "none"
         generated_files = ", ".join(entry["files"]) or "none"
+        audience_docs, audience_docs_json = _next_step_audience_docs_commands(entry["name"])
         rows.append(
             f"[cyan]{escape(entry['name'])}[/]\n"
             f"  {escape(entry['description'])}\n"
@@ -613,10 +616,8 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
             f"  [dim]Check after cd:[/] {escape(entry['check_command'])}\n"
             f"  [dim]Fix if needed after cd:[/] {escape(entry['fix_command'])}\n"
             f"  [dim]Docs after cd:[/] {escape(_NEXT_STEP_DOCS_COMMAND)}\n"
-            f"  [dim]App-builder docs after cd:[/] "
-            f"{escape(_NEXT_STEP_APP_BUILDER_DOCS_COMMAND)}\n"
-            f"  [dim]App-builder docs JSON after cd:[/] "
-            f"{escape(_NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND)}\n"
+            f"  [dim]Audience docs after cd:[/] {escape(audience_docs)}\n"
+            f"  [dim]Audience docs JSON after cd:[/] {escape(audience_docs_json)}\n"
             f"  [dim]Docs JSON after cd:[/] {escape(_NEXT_STEP_DOCS_JSON_COMMAND)}\n"
             f"  [dim]JSON schema after cd:[/] {escape(_NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND)}\n"
             f"  [dim]Run after cd:[/] {escape(entry['run_command'])}"
@@ -645,8 +646,16 @@ def _next_step_fix_command(template: str) -> str:
     return "uv run ruff check --fix " + " ".join(filenames)
 
 
+def _next_step_audience_docs_commands(template: str) -> tuple[str, str]:
+    """Return the human and JSON docs filters appropriate for a scaffold."""
+    audience = _TEMPLATE_SPECS.get(template, _UNKNOWN_TEMPLATE_SPEC).docs_audience
+    command = f"uv run easycat docs --audience {audience}"
+    return command, f"{command} --json"
+
+
 def _next_step_commands(target: Path, template: str) -> list[str]:
     """Return the ordered post-scaffold command sequence."""
+    audience_docs, audience_docs_json = _next_step_audience_docs_commands(template)
     return [
         f"cd {shlex.quote(str(target))}",
         "cp .env.example .env",
@@ -656,8 +665,8 @@ def _next_step_commands(target: Path, template: str) -> list[str]:
         _next_step_check_command(template),
         _next_step_fix_command(template),
         _NEXT_STEP_DOCS_COMMAND,
-        _NEXT_STEP_APP_BUILDER_DOCS_COMMAND,
-        _NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND,
+        audience_docs,
+        audience_docs_json,
         _NEXT_STEP_DOCS_JSON_COMMAND,
         _NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND,
         _next_step_run_command(template),

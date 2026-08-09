@@ -115,7 +115,7 @@ context. Each `catalog` row includes:
 Successful `easycat init NAME --json` also includes
 `easycat_source`, `easycat_git`, and `easycat_git_rev` so automation can
 verify the rendered dependency source, plus `next_step_commands`, an ordered
-copy/sync/doctor/check/fix/docs/app-builder-docs/docs-json/json-schema/run
+copy/sync/doctor/check/fix/docs/audience-docs/docs-json/json-schema/run
 normal-path sequence from the human success footer, plus `fix_command` for
 Ruff-fixable lint findings.
 Bump `schema_version` when the accepted `--config` input shape changes;

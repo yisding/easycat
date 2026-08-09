@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from easycat.cli._app import _available_docs_audience_filters
 from easycat.cli.diagnose.doctor import _parse_env_file
 from easycat.cli.scaffold._schema import (
     TEMPLATE_ARTIFACT_DIRECTORY_NAMES,
@@ -43,6 +44,7 @@ from easycat.cli.scaffold.init import (
     _available_template_catalog,
     _base_requirement,
     _easycat_version_floor,
+    _next_step_audience_docs_commands,
     _next_step_commands,
     _render_text,
     _substitutions,
@@ -142,6 +144,7 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
     assert not missing, "Template catalog missing metadata for: " + ", ".join(missing)
     assert not stale, "Template catalog references missing templates: " + ", ".join(stale)
 
+    available_docs_audiences = set(_available_docs_audience_filters())
     for name in templates:
         spec = _TEMPLATE_SPECS[name]
         assert spec.mode, f"{name} catalog entry missing mode"
@@ -151,6 +154,9 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
         assert spec.required_env, f"{name} catalog entry missing required_env"
         assert spec.description, f"{name} catalog entry missing description"
         assert spec.base_extras, f"{name} catalog entry missing base_extras"
+        assert spec.docs_audience in available_docs_audiences, (
+            f"{name} catalog docs audience is not a live docs filter: {spec.docs_audience}"
+        )
         env_example = (_template_dir(name) / ".env.example").read_text(encoding="utf-8")
         for env_var in spec.required_env:
             assert env_var.isupper(), f"{name} catalog env var is not uppercase: {env_var}"
@@ -296,12 +302,13 @@ def _catalog_command_problems(entry: dict[str, object]) -> list[str]:
         "uv run easycat doctor --env-file .env",
         "uv run easycat doctor --env-file .env --json",
     ]
+    audience_docs, audience_docs_json = _next_step_audience_docs_commands(name)
     expected_middle = [
         str(entry["check_command"]),
         str(entry["fix_command"]),
         "uv run easycat docs",
-        "uv run easycat docs --audience app-builders",
-        "uv run easycat docs --audience app-builders --json",
+        audience_docs,
+        audience_docs_json,
         "uv run easycat docs --json",
         "uv run easycat explain json-schema",
     ]
@@ -803,10 +810,11 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     next_steps = readme.split("## Next steps", 1)[1]
     normalized_next_steps = " ".join(next_steps.split())
+    audience_docs, audience_docs_json = _next_step_audience_docs_commands(name)
     required_commands = (
         "uv run easycat docs",
-        "uv run easycat docs --audience app-builders",
-        "uv run easycat docs --audience app-builders --json",
+        audience_docs,
+        audience_docs_json,
         "uv run easycat docs --json",
         "uv run easycat init --list-templates",
         "uv run easycat init --list-templates --json",
@@ -815,8 +823,20 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
 
     for command in required_commands:
         assert command in next_steps
-    assert 'uv run easycat docs --audience "app builders"' not in next_steps
+    spaced_audience = _TEMPLATE_SPECS[name].docs_audience.replace("-", " ")
+    assert f'uv run easycat docs --audience "{spaced_audience}"' not in next_steps
     assert "when a script or coding agent" not in normalized_next_steps
+
+
+def test_provider_templates_route_authors_to_provider_docs() -> None:
+    for name in ("provider", "provider-stt", "provider-tts"):
+        assert _TEMPLATE_SPECS[name].docs_audience == "provider-maintainers"
+        next_steps = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+        assert "uv run easycat docs --audience provider-maintainers" in next_steps
+        assert "uv run easycat docs --audience app-builders" not in next_steps
+
+    for name in set(_TEMPLATE_SPECS) - {"provider", "provider-stt", "provider-tts"}:
+        assert _TEMPLATE_SPECS[name].docs_audience == "app-builders"
 
 
 @pytest.mark.parametrize("name", sorted(_VOICE_TEMPLATE_PRESETS))

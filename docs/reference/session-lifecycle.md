@@ -82,8 +82,9 @@ Between start and stop, the session exposes turn-level controls:
   callable consent policy remains authoritative; pass `None` to clear the
   runtime override.
 - `await session.reset_state()` — clear turn state and conversation pointers.
-- `await session.send_text(text)` — inject a user turn without audio (text-first
-  flows and tests).
+- `await session.send_text(text)` — inject a user turn without audio on a
+  session built by `create_text_session(...)`. Voice sessions reject this
+  method and continue to take user input from their transport.
 
 ## Related Pages
 
