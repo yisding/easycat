@@ -157,10 +157,16 @@ async def compare(*, handler_ms: float = 80.0, iterations: int = 5) -> dict[str,
 
     await _measure_once(handler_ms=handler_ms, overlap=False)
     await _measure_once(handler_ms=handler_ms, overlap=True)
-    serial = [await _measure_once(handler_ms=handler_ms, overlap=False) for _ in range(iterations)]
-    overlapped = [
-        await _measure_once(handler_ms=handler_ms, overlap=True) for _ in range(iterations)
-    ]
+    serial: list[float] = []
+    overlapped: list[float] = []
+    # Alternate the order so changing runner contention cannot systematically
+    # bias one mode. This matters in the minimum-dependency CI job, where the
+    # benchmark shares a machine with several xdist workers.
+    for iteration in range(iterations):
+        modes = (False, True) if iteration % 2 == 0 else (True, False)
+        for overlap in modes:
+            sample = await _measure_once(handler_ms=handler_ms, overlap=overlap)
+            (overlapped if overlap else serial).append(sample)
     serial_p50 = statistics.median(serial)
     overlapped_p50 = statistics.median(overlapped)
     saved_ms = serial_p50 - overlapped_p50

@@ -19,11 +19,12 @@ async def test_agent_delta_overlap_benchmark_rejects_invalid_inputs(
         await compare(handler_ms=handler_ms, iterations=iterations)
 
 
+@pytest.mark.latency
 @pytest.mark.asyncio
 async def test_agent_delta_overlap_benchmark_hides_async_handler_delay() -> None:
-    result = await compare(handler_ms=20.0, iterations=2)
+    result = await compare(handler_ms=50.0, iterations=4)
 
     assert result["warmup_runs_per_mode"] == 1
-    assert result["serial"]["p50_ms"] >= 15.0
+    assert result["serial"]["p50_ms"] >= 40.0
     assert result["overlapped"]["p50_ms"] < result["serial"]["p50_ms"]
-    assert result["saved_p50_ms"] >= 10.0
+    assert result["saved_p50_ms"] >= 25.0
