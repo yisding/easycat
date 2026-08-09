@@ -1,4 +1,4 @@
-"""Local voice bot demo using a LangChain LCEL chain.
+"""Local voice bot demo using a LangChain 1.x LCEL chain.
 
 Wraps any LangChain ``Runnable`` (an LCEL chain, a
 ``RunnableWithMessageHistory``, a LangChain ``AgentExecutor``, etc.) in
@@ -8,7 +8,6 @@ calls, and cursor transitions into the EasyCat journal.
 For stateful multi-node agent workflows see ``langgraph_voice.py``.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain --group dev
-       uv pip install langchain-openai
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
        uv run easycat doctor --env-file .env --json  # for parseable checks
@@ -21,9 +20,9 @@ try:
     from langchain_openai import ChatOpenAI
 except ImportError as exc:
     raise SystemExit(
-        "LangChain is required. For an app, run: "
-        "uv add 'easycat[quickstart,langchain]' langchain-openai. In this repo, run: "
-        "uv sync --extra quickstart --extra langchain --group dev; uv pip install langchain-openai"
+        "LangChain 1.x is required. For an app, run: "
+        "uv add 'easycat[quickstart,langchain]'. In this repo, run: "
+        "uv sync --extra quickstart --extra langchain --group dev"
     ) from exc
 
 from easycat import EasyConfig, run

@@ -264,14 +264,14 @@ def test_examples_readme_install_extras_cover_docstring_setup() -> None:
 
 def test_examples_readme_install_package_collector_reads_pip_and_package_snippets() -> None:
     install = (
-        "`uv sync --extra quickstart --group dev`; `langchain<1`, `langchain-openai`, "
+        "`uv sync --extra quickstart --group dev`; `acme-sdk<1`, `acme-plugin<1`, "
         "`--extra ten-vad`, or `uv pip install krisp_audio` for optional backends"
     )
 
     assert _readme_install_packages(install) == {
+        "acme-plugin<1",
+        "acme-sdk<1",
         "krisp_audio",
-        "langchain-openai",
-        "langchain<1",
     }
 
 
@@ -738,6 +738,18 @@ def test_vad_backends_example_uses_easyconfig_provider_config_surface():
     assert "SessionConfig" not in source
     assert "Session(" not in source
     assert "AgentRunner(" not in source
+    assert "uv sync --extra quickstart --extra funasr-vad --group dev" in source
+    assert "uv sync --extra quickstart --extra ten-vad --group dev" in source
+    assert "uv sync --extra silero-vad --group dev" not in source
+
+
+def test_twilio_voice_app_documents_proxy_signature_settings():
+    source = (REPO_ROOT / "examples/voice_app_twilio.py").read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+
+    for setting in ("TRUST_PROXY_HEADERS", "TWILIO_PUBLIC_TWIML_URL"):
+        assert setting in source
+        assert setting in readme
 
 
 def test_journal_demo_uses_easyconfig_provider_instance_surface():

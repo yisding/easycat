@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
   <title>EasyCat WebRTC Voice Chat</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -166,9 +167,26 @@ var statsSequence = 0;
 var firstReceivedAudioStatsSent = false;
 var eventsChannel = null;
 
-// Optional shared secret: easycat serve prints an Open URL with ?token=...
-// when the server requires one; forward it on every signaling request.
-var authToken = new URLSearchParams(location.search).get("token") || "";
+// Optional shared secret: easycat serve puts it in the URL fragment so it is
+// never sent in the initial HTTP request. Query-token bootstraps are ignored
+// because they can leak through request logs; scrub a legacy query if present.
+function readBootstrapToken() {
+  var current = new URL(location.href);
+  var fragment = new URLSearchParams(current.hash.replace(/^#/, ""));
+  var token = fragment.get("token") || "";
+  var ignoredQueryToken = current.searchParams.has("token");
+  if (ignoredQueryToken) {
+    console.warn("Ignoring ?token= bootstrap; use #token= so it is not sent over HTTP.");
+  }
+  if (token || ignoredQueryToken) {
+    fragment.delete("token");
+    current.searchParams.delete("token");
+    current.hash = fragment.toString();
+    history.replaceState(null, "", current.pathname + current.search + current.hash);
+  }
+  return token;
+}
+var authToken = readBootstrapToken();
 
 // Signaling route base. The standalone WebRTC serve helper serves flat routes
 // (/offer, /config, /stats), while VoiceServer mounts them under /webrtc/*. The

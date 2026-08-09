@@ -186,6 +186,26 @@ def test_custom_transport_example_imports():
     assert callable(custom_transport.main)
 
 
+def test_custom_transport_preserves_local_optional_capabilities() -> None:
+    from easycat.transports import LocalTransport
+    from examples.custom_transport import CountingTransport
+
+    inner = LocalTransport()
+    wrapped = CountingTransport(inner)
+
+    for attribute in (
+        "transport_kind",
+        "send_audio_is_nonblocking",
+        "reports_audio_delivery",
+        "drain_aec_reference_frames",
+        "pending_playout_ms",
+        "set_event_bus",
+        "set_session_id",
+        "set_runtime_scope",
+    ):
+        assert getattr(wrapped, attribute) == getattr(inner, attribute)
+
+
 def test_agent_event_subscription_example_imports():
     pytest.importorskip("agents")
     from examples import agent_event_subscription

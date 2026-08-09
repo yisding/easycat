@@ -678,7 +678,9 @@ Run easycat explain json-schema for CLI JSON.
   `Open http://localhost:8080` URL, with live transcript, interruption
   indicator, and per-turn latency readout in the page. Needs an OpenAI
   key; a non-loopback `--host` requires `--token` (or
-  `EASYCAT_SERVE_TOKEN`).
+  `EASYCAT_SERVE_TOKEN`). Put a remote browser serve behind TLS and pass its
+  HTTPS origin with `--public-url` (or `EASYCAT_SERVE_PUBLIC_URL`); EasyCat
+  will not print a token-bearing direct-HTTP link.
 - **`uv run easycat plan`** — resolves an `easycat.toml` profile into its
   provider/capability plan across all seven pipeline roles
   (`src/easycat/cli/plan.py`), reporting the selected provider per role plus

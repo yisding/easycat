@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="referrer" content="no-referrer" />
 <title>EasyCat WebRTC + Debugger</title>
 <style>
   html, body { margin: 0; height: 100%; background: #0c0f14; color: #e1e4eb;
@@ -27,7 +28,7 @@
   <span class="hint">talk to the bot up top — watch the journal below</span>
 </header>
 <div class="panes">
-  <iframe class="controls" src="/webrtc_client.html"
+  <iframe class="controls" id="webrtc-frame"
     allow="microphone; autoplay" title="WebRTC client (mic + Start/Stop)"></iframe>
   <iframe class="debugger" id="debugger-frame" title="Debugger UI"></iframe>
 </div>
@@ -39,8 +40,28 @@
   // webrtc_observability_server.py prints a URL that already includes the
   // debugger_port query param, so the typical flow needs no manual editing.
   const params = new URLSearchParams(location.search);
+  const fragmentParams = new URLSearchParams(location.hash.replace(/^#/, ""));
   const override = params.get("debugger");
   const debuggerPort = params.get("debugger_port") || "8090";
+  const signalingToken = fragmentParams.get("token") || "";
+  const ignoredQueryToken = params.has("token");
+
+  if (ignoredQueryToken) {
+    console.warn("Ignoring ?token= bootstrap; use #token= so it is not sent over HTTP.");
+  }
+  if (signalingToken || ignoredQueryToken) {
+    const current = new URL(location.href);
+    current.searchParams.delete("token");
+    fragmentParams.delete("token");
+    current.hash = fragmentParams.toString();
+    history.replaceState(null, "", current.pathname + current.search + current.hash);
+  }
+
+  const webrtcFragment = new URLSearchParams();
+  if (signalingToken) webrtcFragment.set("token", signalingToken);
+  const webrtcHash = webrtcFragment.toString();
+  document.getElementById("webrtc-frame").src =
+    "/webrtc_client.html" + (webrtcHash ? `#${webrtcHash}` : "");
 
   function isLoopbackHost(hostname) {
     return hostname === "localhost"

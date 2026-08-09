@@ -21,6 +21,9 @@ Open:
                                                           debugger UI below)
        http://localhost:8080/webrtc_client.html          (just the bot)
        http://localhost:8090                             (just the debugger)
+
+When ``WEBRTC_SIGNALING_TOKEN`` is set, use the ``#token=`` URLs printed at
+startup and replace the placeholder with the URL-encoded token value.
 """
 
 from __future__ import annotations
@@ -88,16 +91,16 @@ def main() -> None:
         allow_remote=debugger_host not in ("127.0.0.1", "localhost"),
     )
 
-    token_query = "&token=<WEBRTC_SIGNALING_TOKEN>" if transport.auth_token else ""
+    token_fragment = "#token=<URL_ENCODED_TOKEN>" if transport.auth_token else ""
     combined_url = (
         f"http://localhost:{transport.port}/webrtc_observability.html"
-        f"?debugger_port={debugger_port}{token_query}"
+        f"?debugger_port={debugger_port}{token_fragment}"
     )
-    client_token_query = "?token=<WEBRTC_SIGNALING_TOKEN>" if transport.auth_token else ""
+    client_token_fragment = "#token=<URL_ENCODED_TOKEN>" if transport.auth_token else ""
     print(f"WebRTC + debugger: {combined_url}")
     print(
         f"WebRTC client only: "
-        f"http://localhost:{transport.port}/webrtc_client.html{client_token_query}"
+        f"http://localhost:{transport.port}/webrtc_client.html{client_token_fragment}"
     )
     print(f"Debugger only:     http://{debugger_host}:{debugger_port}")
 

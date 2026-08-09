@@ -90,7 +90,7 @@ already own:
 |---|---|---|---|
 | OpenAI Agents SDK `Agent` | `OpenAIAgentsBridge` | Tools, handoffs, SDK context, previous-response chaining | `--extra quickstart` or `--extra openai-agents` |
 | PydanticAI `Agent` | `PydanticAIBridge` | Typed dependencies, tools, and structured results | `--extra pydantic-ai` or `--extra pydantic-ai-v2` |
-| LangChain `Runnable` | `LangChainBridge` | LCEL chains, runnable events, and message history | `--extra langchain`; install the model package separately |
+| LangChain `Runnable` | `LangChainBridge` | LCEL chains, runnable events, and message history | `--extra langchain` for 1.x or `--extra langchain-v0` for 0.3.x |
 | Compiled LangGraph graph | `LangGraphBridge` | Nodes, checkpoints, resumable state, and native state edits | `--extra langgraph`; install the model package separately |
 | LlamaIndex Workflow | `LlamaAgentsBridge` | Local/remote workflows and human-in-the-loop resumption | `--extra llama-agents` |
 | Remote Responses API base URL | `RemoteResponsesAPIBridge` | An agent running behind an HTTP/SSE service boundary | Core; provide `agent_model` and remote auth as needed |
@@ -99,7 +99,8 @@ already own:
 
 `quickstart` already includes OpenAI Agents SDK. Do not redundantly add its
 bundled extra. PydanticAI v1 and v2 are separate, conflicting install choices;
-select the one your application uses.
+select the one your application uses. LangChain 0.3 and 1.x are likewise
+separate, conflicting install choices, and both run the same bridge contract.
 
 ## Auto-detection is the default path
 

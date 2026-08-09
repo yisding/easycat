@@ -316,8 +316,8 @@ def test_announce_browser_url_omits_token_but_keeps_usable_hint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A token-protected browser serve must NOT print the token value, but MUST
-    tell the operator to append it as ``?token=``. The bundled client reads its
-    bearer token solely from that query, so an origin-only hint would open the
+    tell the operator to append it as ``#token=``. The bundled client reads its
+    bearer token from that fragment, so an origin-only hint would open the
     page unauthenticated (→ 401 from ``/config`` and ``/offer``)."""
     from easycat.cli import _output
     from easycat.transports.webrtc import WebRTCTransportConfig
@@ -336,7 +336,7 @@ def test_announce_browser_url_omits_token_but_keeps_usable_hint(
     assert "a+b&c#d e" not in output
     assert "a%2Bb%26c%23d+e" not in output
     # (ii) The append-token instruction must be present and usable.
-    assert "?token=" in output
+    assert "#token=" in output
     assert "serve token" in output
 
 
@@ -662,7 +662,7 @@ async def test_serve_browser_announces_token_safe_hint(
 ) -> None:
     """Async browser ``serve()`` with a serve token must announce a usable hint:
     the token value never appears, but the operator is told to append it as
-    ``?token=`` so following the hint does not open the page unauthenticated."""
+    ``#token=`` so following the hint does not open the page unauthenticated."""
     from easycat.cli import _output
 
     printed: list[str] = []
@@ -686,7 +686,7 @@ async def test_serve_browser_announces_token_safe_hint(
     assert calls["kwargs"]["announce"] is False
     # (i) the token value is never printed; (ii) the append hint is present.
     assert "s3+cr et&x" not in output
-    assert "?token=" in output
+    assert "#token=" in output
     assert "serve token" in output
 
 

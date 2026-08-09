@@ -51,8 +51,10 @@ class WebRTCTransportConfig:
         Directory to serve static files from the signaling server. Defaults to
         the bundled demo client; set to ``None`` to disable static files.
     expose_ice_credentials:
-        Include ICE usernames and credentials in the public ``/config``
-        response. Prefer short-lived credentials when enabling this.
+        Include TURN entries that have both a username and credential in the
+        public ``/config`` response. Without this opt-in, browser config
+        contains STUN URLs only. Prefer short-lived credentials when enabling
+        it.
     cors_allowed_origins:
         Exact cross-origin browser origins allowed to call the signaling API.
         The bundled browser client is same-origin and needs no CORS opt-in.

@@ -1,4 +1,4 @@
-"""Function-calling tools — LangChain (``@tool`` + ``AgentExecutor``).
+"""Function-calling tools — LangChain 0.3 (``@tool`` + ``AgentExecutor``).
 
 Two tools (``get_weather`` and ``get_time``) wired through a
 ``tool_calling`` LangChain ``AgentExecutor``. The executor is itself a
@@ -6,8 +6,7 @@ Two tools (``get_weather`` and ``get_time``) wired through a
 :class:`LangChainBridge`. For tools that drive the call (end, transfer,
 DTMF) see ``session_actions_langchain.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain --group dev
-       uv pip install "langchain<1" langchain-openai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain-v0 --group dev
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
        uv run easycat doctor --env-file .env --json  # for parseable checks
@@ -17,8 +16,8 @@ Run:   uv run python examples/function_tools_langchain.py
 LangChain 1.x removed ``create_tool_calling_agent`` (the recommended
 replacement, ``langchain.agents.create_agent``, returns a LangGraph
 ``CompiledStateGraph`` — covered by ``function_tools_langgraph.py``).
-This example demonstrates the LangChain-bridge path so the version pin
-keeps it runnable against the still-supported 0.3.x line.
+This example demonstrates the LangChain-bridge path for the separately
+installed and tested 0.3.x compatibility line.
 """
 
 from datetime import datetime
@@ -31,10 +30,9 @@ try:
     from langchain_openai import ChatOpenAI
 except ImportError as exc:
     raise SystemExit(
-        "LangChain (<1.0) is required. For an app, run: "
-        "uv add 'easycat[quickstart,langchain]' 'langchain<1' langchain-openai. "
-        "In this repo, run: uv sync --extra quickstart --extra langchain --group dev; "
-        'uv pip install "langchain<1" langchain-openai'
+        "LangChain 0.3 is required. For an app, run: "
+        "`uv add 'easycat[quickstart,langchain-v0]'`. In this repo, run: "
+        "uv sync --extra quickstart --extra langchain-v0 --group dev"
     ) from exc
 
 from easycat import EasyConfig, run

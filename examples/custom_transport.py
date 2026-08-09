@@ -25,27 +25,31 @@ Setup:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 from easycat import AudioChunk, AudioFormat, EasyConfig, require_env, run
-from easycat.providers import Transport
 from easycat.transports import LocalTransport
 
 
 class CountingTransport:
-    """Wraps any ``Transport`` and counts the audio bytes flowing each way.
+    """Wraps a ``LocalTransport`` and counts the audio bytes flowing each way.
 
     Implements the ``Transport`` Protocol structurally — no base class.
-    The ``audio_format`` / ``clear_audio`` / ``default_echo_cancellation_enabled``
-    members are optional transport capabilities, delegated so the wrapper
-    behaves exactly like the local transport it instruments.
+    Explicit methods instrument the core audio path; ``__getattr__`` delegates
+    every other optional capability so the wrapper preserves local playback,
+    delivery-reporting, event-bus, and AEC behavior.
     """
 
     default_echo_cancellation_enabled = True
 
-    def __init__(self, inner: Transport) -> None:
+    def __init__(self, inner: LocalTransport) -> None:
         self._inner = inner
         self.bytes_in = 0
         self.bytes_out = 0
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate optional transport capabilities to the wrapped transport."""
+        return getattr(self._inner, name)
 
     async def connect(self) -> None:
         await self._inner.connect()

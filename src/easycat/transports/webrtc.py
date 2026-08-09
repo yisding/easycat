@@ -117,10 +117,10 @@ class WebRTCTransport(AudioQueueMixin):
     in-band (full ICE) before the answer is returned.
 
     **GET /config** — Returns browser ICE server configuration as JSON so
-    clients can configure their ``RTCPeerConnection``. Credentials are omitted
-    by default because this endpoint is public; set
-    ``WebRTCTransportConfig.expose_ice_credentials`` only when that is
-    appropriate for the deployment.
+    clients can configure their ``RTCPeerConnection``. The response is
+    STUN-only by default; set ``WebRTCTransportConfig.expose_ice_credentials``
+    to include TURN entries with complete credentials when that is appropriate
+    for the deployment.
 
     **GET /health** — Returns ``{"status": "ok"}``.
     """
@@ -505,6 +505,14 @@ class WebRTCTransport(AudioQueueMixin):
     async def _rollback_failed_connect(self) -> Exception | None:
         """Clean a partially initialized signaling stack in an owned task."""
         cleanup_errors: list[Exception] = []
+        # aiohttp registers a TCPSite as the first step of ``start()``. If a
+        # patched/custom start fails before that step, ``site.stop()`` raises
+        # "not registered" even though there is no site resource to release.
+        runner = self._runner
+        if self._site is not None and runner is not None:
+            registered_sites = getattr(runner, "sites", None)
+            if registered_sites is not None and self._site not in registered_sites:
+                self._site = None
         try:
             await self._close_signaling_for_disconnect(cleanup_errors)
         except BaseException as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup

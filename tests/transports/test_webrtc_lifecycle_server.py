@@ -1338,10 +1338,12 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         await transport.connect()
 
         async with aiohttp.ClientSession() as session:
-            url = f"http://127.0.0.1:{port}/?webrtc=/proxy/&token=sekrit"
+            url = f"http://127.0.0.1:{port}/?webrtc=/proxy/&token=sekrit&view=compact"
             async with session.get(url, allow_redirects=False) as resp:
                 assert resp.status == 302
-                assert resp.headers["Location"] == "/webrtc_client.html?token=sekrit&webrtc=/proxy"
+                assert resp.headers["Location"] == (
+                    "/webrtc_client.html?view=compact&webrtc=/proxy"
+                )
 
         await transport.disconnect()
 
@@ -1370,7 +1372,7 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         transport = WebRTCTransport(config)
         await transport.connect()
 
-        query = urlencode({"webrtc": raw, "token": "sekrit"})
+        query = urlencode({"webrtc": raw, "token": "sekrit", "view": "compact"})
         async with (
             aiohttp.ClientSession() as session,
             session.get(f"http://127.0.0.1:{port}/?{query}", allow_redirects=False) as resp,
@@ -1379,7 +1381,7 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
             location = resp.headers["Location"]
 
         assert "webrtc=" not in location
-        assert location == "/webrtc_client.html?token=sekrit"
+        assert location == "/webrtc_client.html?view=compact"
 
         await transport.disconnect()
 
@@ -1492,14 +1494,13 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
         await transport.disconnect()
 
     @pytest.mark.asyncio
-    async def test_config_endpoint_omits_turn_credentials_by_default(self):
+    async def test_config_endpoint_omits_hidden_turn_urls_by_default(self):
         import aiohttp
 
         port = self._unused_port()
         servers = [
-            ICEServer(urls="stun:stun.example.com:3478"),
             ICEServer(
-                urls=["turn:turn.example.com:3478"],
+                urls=["stun:stun.example.com:3478", "turn:turn.example.com:3478"],
                 username="user",
                 credential="pass",
             ),
@@ -1513,13 +1514,9 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
                 assert resp.status == 200
                 data = await resp.json()
                 assert "iceServers" in data
-                assert len(data["iceServers"]) == 2
-                # Public config should include URLs but should not leak TURN credentials by
-                # default.
-                turn = data["iceServers"][1]
-                assert turn["urls"] == ["turn:turn.example.com:3478"]
-                assert "username" not in turn
-                assert "credential" not in turn
+                # Public config remains valid for browsers: hidden TURN URLs
+                # disappear, while STUN from a mixed entry remains available.
+                assert data["iceServers"] == [{"urls": ["stun:stun.example.com:3478"]}]
 
         await transport.disconnect()
 
@@ -1566,7 +1563,8 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
                 urls=["turn:turn.example.com:3478"],
                 username="user",
                 credential="pass",
-            )
+            ),
+            ICEServer(urls=["turn:anonymous.example.com:3478"]),
         ]
         transport = WebRTCTransport(WebRTCTransportConfig(ice_servers=servers))
         transport._web = _FakeWeb
@@ -1581,6 +1579,7 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
             "username": "user",
             "credential": "pass",
         }
+        assert pc.config.iceServers[1].kwargs == {"urls": ["turn:anonymous.example.com:3478"]}
 
     @pytest.mark.asyncio
     async def test_cors_preflight_allows_same_origin(self):

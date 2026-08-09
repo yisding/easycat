@@ -350,9 +350,10 @@ duration-drift, AEC reference, VAD/pre-roll, and transport accounting tests.
   can faithfully consume the committed lockfile. The `uv_build` requirement is
   an independent bounded build-backend range.
 - A dependency extra never spans behaviorally incompatible SDK majors.
-  PydanticAI v2 is the primary supported line; any v1 compatibility extra is
-  explicitly named, tested separately, and given a documented retirement
-  path.
+  PydanticAI and LangChain major lines are explicitly named and tested in
+  isolated environments. PydanticAI v2 is the primary supported line, and its
+  v1 compatibility extra has a documented retirement path; LangChain 0.3 and
+  1.x remain separate supported lines.
 - Extras describe dependencies, not whether a capability exists. Provider
   discovery comes from the catalog, so empty marker extras are not a capability
   registry.

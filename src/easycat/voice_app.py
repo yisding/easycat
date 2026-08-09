@@ -702,12 +702,12 @@ class VoiceApp:
         # A serve token is configured (and required for non-loopback binds), but
         # it must never be written to logs. Print a ready-to-edit URL with a
         # placeholder so the operator pastes their own token in its place; the
-        # bundled client reads the bearer token solely from the ``?token=``
-        # query, and ``/config`` / ``/offer`` answer 401 without it.
-        stdout_console.print(f"Open {base_url}/webrtc_client.html?token=<your serve token>")
+        # bundled client reads the bearer token from the ``#token=`` fragment,
+        # which is not sent to the server, and forwards it in request headers.
+        stdout_console.print(f"Open {base_url}/webrtc_client.html#token=<your serve token>")
         stdout_console.print(
             "Replace <your serve token> with the serve token you configured "
-            "(the page reads it from the ?token= query; keep it secret)."
+            "(URL-encode it first; the page reads it from the #token= fragment)."
         )
 
     # ── WebSocket mode ───────────────────────────────────────────────

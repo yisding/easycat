@@ -15,6 +15,10 @@ BRIDGE_CONTRACT_NODES = {
         "tests/integrations/agents/test_real_sdk_bridge_contracts.py"
         "::TestRealLangChainBridgeContract"
     ),
+    "langchain-v0": (
+        "tests/integrations/agents/test_real_sdk_bridge_contracts.py"
+        "::TestRealLangChainBridgeContract"
+    ),
     "langgraph": (
         "tests/integrations/agents/test_real_sdk_bridge_contracts.py"
         "::TestRealLangGraphBridgeContract"

@@ -64,11 +64,11 @@ def test_all_extra_includes_funasr_runtime_frontend_dependency() -> None:
 
 
 def test_all_extra_is_union_of_non_conflicting_extras() -> None:
-    """``all`` must be the union of every extra except three deliberate exclusions."""
+    """``all`` must be the union of every extra except four deliberate exclusions."""
     extras = _pyproject()["project"]["optional-dependencies"]
     # ten-vad: non-permissive license. pydantic-ai / pydantic-ai-v2:
-    # mutually exclusive via [tool.uv].conflicts.
-    excluded = {"ten-vad", "pydantic-ai", "pydantic-ai-v2"}
+    # mutually exclusive. langchain-v0: conflicts with the v1 packages in all.
+    excluded = {"ten-vad", "pydantic-ai", "pydantic-ai-v2", "langchain-v0"}
 
     # Stale-exclusion guard (mirrors scripts/extras_matrix.py contract).
     assert excluded <= set(extras), "exclusion set names an extra pyproject no longer declares"
@@ -99,7 +99,10 @@ def test_declared_dependency_floors_are_compatibility_tested() -> None:
     assert _requirement(project["dependencies"], "rich") == "rich>=13.8"
     assert _requirement(project["dependencies"], "typer") == "typer>=0.27.1"
     assert _requirement(project["dependencies"], "websockets") == "websockets>=14.0,<17"
-    assert _requirement(extras["langchain"], "langchain-core") == "langchain-core>=1.5.3"
+    assert _requirement(extras["langchain"], "langchain-core") == ("langchain-core>=1.5.3,<2.0.0")
+    assert _requirement(extras["langchain-v0"], "langchain-core") == (
+        "langchain-core>=0.3.85,<1.0.0"
+    )
     assert _requirement(extras["telephony"], "aiohttp") == "aiohttp>=3.13.3"
 
     workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -121,6 +124,51 @@ def test_declared_dependency_floors_are_compatibility_tested() -> None:
     assert "Assert exact direct dependency floors" in minimum_job
     assert "tests/integrations/agents/test_langchain_bridge_invoke.py" in minimum_job
     assert "tests/server/test_webrtc_routes.py" in minimum_job
+
+
+def test_langchain_versions_have_isolated_ci_smoke() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    smoke = (REPO_ROOT / "scripts/smoke_langchain_versions.py").read_text(encoding="utf-8")
+    job = workflow[workflow.index("  langchain-versions:") :]
+    job = job[: job.index("\n  coverage:")]
+
+    assert "line: v0\n            extra: langchain-v0" in job
+    assert "line: v1\n            extra: langchain" in job
+    assert "uv venv --python 3.12 .venv-langchain" in job
+    assert '-e ".[quickstart,${{ matrix.extra }}]"' in job
+    assert "scripts/smoke_langchain_versions.py --line ${{ matrix.line }}" in job
+    assert '"v0": ("function_tools_langchain.py", "session_actions_langchain.py")' in smoke
+    assert '"v1": ("langchain_voice.py",)' in smoke
+    assert "auto_adapt_agent(config.agent)" in smoke
+    assert "isinstance(adapted, LangChainBridge)" in smoke
+    assert "RunnableLambda" in smoke
+    assert "bridge.invoke(AgentTurnInput.from_text" in smoke
+
+
+def test_langchain_major_lines_are_complete_and_mutually_exclusive() -> None:
+    pyproject = _pyproject()
+    extras = pyproject["project"]["optional-dependencies"]
+
+    assert extras["langchain"] == [
+        "langchain>=1.3.14,<2.0.0",
+        "langchain-core>=1.5.3,<2.0.0",
+        "langchain-openai>=1.4.0,<2.0.0",
+    ]
+    assert extras["langchain-v0"] == [
+        "langchain>=0.3.30,<1.0.0",
+        "langchain-core>=0.3.85,<1.0.0",
+        "langchain-openai>=0.3.35,<1.0.0",
+    ]
+
+    conflict_sets = [
+        {entry["extra"] for entry in conflict} for conflict in pyproject["tool"]["uv"]["conflicts"]
+    ]
+    for expected in (
+        {"langchain", "langchain-v0"},
+        {"langchain-v0", "langgraph"},
+        {"langchain-v0", "all"},
+    ):
+        assert expected in conflict_sets
 
 
 def test_dependabot_uses_uv_for_python_dependencies_and_keeps_pydantic_ai_v1() -> None:
@@ -174,7 +222,9 @@ def test_mypy_gate_covers_whole_package_with_strict_core_override() -> None:
     justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
     match = re.search(r"^typecheck:\n    (?P<command>.+)$", justfile, re.MULTILINE)
     assert match is not None, "justfile `typecheck` recipe not found"
-    assert match.group("command") == "uv run mypy src/easycat"
+    assert match.group("command") == (
+        "uv run mypy src/easycat scripts/smoke_langchain_versions.py"
+    )
 
     overrides = _pyproject()["tool"]["mypy"]["overrides"]
     assert any(o.get("check_untyped_defs") for o in overrides), (

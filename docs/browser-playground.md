@@ -33,8 +33,15 @@ Useful options:
   defaults.
 - `--token` (or `EASYCAT_SERVE_TOKEN`) — shared secret required by the
   signaling endpoints. `easycat serve` refuses a non-loopback `--host`
-  without a token. The printed Open URL embeds it as `?token=...` and the
-  bundled client forwards it as an `Authorization: Bearer` header.
+  without a token. For loopback, the printed Open URL embeds it in a
+  `#token=...` fragment, which is not sent in the HTTP request; the bundled
+  client removes it from the visible URL and forwards it as an
+  `Authorization: Bearer` header.
+- `--public-url` (or `EASYCAT_SERVE_PUBLIC_URL`) — external HTTPS origin used
+  for the printed browser link when a non-loopback server sits behind a
+  TLS-terminating proxy. Without this option, EasyCat does not print a
+  token-bearing direct-HTTP URL; bearer credentials must not cross an
+  unencrypted network.
 - `--agent-model` / `--instructions` — swap the playground agent's OpenAI
   Responses API model or its guidance.
 - `--manifest` / `--profile` — build a manifest-backed `VoiceServer` instead
@@ -93,8 +100,9 @@ Outbound (server → client):
 Audio flows over the Opus peer connection. Signaling is HTTP
 (`POST /offer`, `GET /config`, `POST /stats`, `GET /health`); when
 `WebRTCTransportConfig.auth_token` is set, `/config`, `/offer`, and `/stats`
-require the token as `Authorization: Bearer <token>` or a `?token=` query
-parameter.
+require the token as `Authorization: Bearer <token>`. A `?token=` query
+parameter is accepted only when `allow_query_token=True`; it is disabled by
+default because URLs leak more readily through logs and browser history.
 Session event messages arrive on a client-created data channel named
 `events`.
 

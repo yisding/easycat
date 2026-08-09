@@ -452,8 +452,8 @@ def _skip_unless_langchain_v0() -> None:
     head = "".join(c for c in str(raw).split(".")[0] if c.isdigit())
     if int(head or "0") >= 1:
         pytest.skip(
-            f"AgentExecutor examples require langchain<1 "
-            f"(create_tool_calling_agent removed in 1.x); found {raw}"
+            "AgentExecutor examples require the langchain-v0 extra "
+            f"(create_tool_calling_agent was removed in 1.x); found {raw}"
         )
 
 

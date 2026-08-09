@@ -173,6 +173,38 @@ jobs:
           tests/tts/test_tts_openai.py
           tests/server/test_webrtc_routes.py
 
+  langchain-versions:
+    name: LangChain ${{ matrix.line }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - line: v0
+            extra: langchain-v0
+          - line: v1
+            extra: langchain
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          version: "0.12.1"
+          enable-cache: true
+          python-version: "3.12"
+      - name: Create isolated LangChain environment
+        run: uv venv --python 3.12 .venv-langchain
+      - name: Install documented LangChain line
+        run: >-
+          uv pip install --python .venv-langchain/bin/python
+          -e ".[quickstart,${{ matrix.extra }}]"
+      - name: Smoke examples and bridge runtime
+        run: >-
+          .venv-langchain/bin/python
+          scripts/smoke_langchain_versions.py --line ${{ matrix.line }}
+
   coverage:
     name: Coverage + guard suite (diff-cover report-only)
     runs-on: ubuntu-latest
