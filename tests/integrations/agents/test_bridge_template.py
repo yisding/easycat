@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from collections.abc import Set as AbstractSet
 from typing import Any
 
 import pytest
@@ -348,6 +349,31 @@ class TestTemplateDefaults:
         assert json.loads(payload) == {"state": {}}
         assert _OpaqueKey.str_called is False
         assert "OPAQUE_MAPPING_KEY_SECRET_LEAK" not in payload
+
+    def test_serialized_state_canonicalizes_mapping_and_set_order(self):
+        class _OrderedSet(AbstractSet[str]):
+            def __init__(self, items: list[str]) -> None:
+                self._items = items
+
+            def __contains__(self, item: object) -> bool:
+                return item in self._items
+
+            def __iter__(self):
+                return iter(self._items)
+
+            def __len__(self) -> int:
+                return len(self._items)
+
+        first = {
+            "state": {"z": 2, "a": 1},
+            "members": _OrderedSet(["charlie", "alpha", "bravo"]),
+        }
+        second = {
+            "members": _OrderedSet(["bravo", "charlie", "alpha"]),
+            "state": {"a": 1, "z": 2},
+        }
+
+        assert serialize_framework_state(first) == serialize_framework_state(second)
 
     def test_serialized_state_drops_primitive_subclass_keys_without_stringifying_them(self):
         class _LeakyStringKey(str):

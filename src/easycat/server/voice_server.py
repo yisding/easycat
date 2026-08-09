@@ -638,9 +638,19 @@ class VoiceServer:
             cleanup_errors,
         )
         if sweep_succeeded:
+            report = None
+            if swept:
+                try:
+                    report = sweep_task.result()
+                except Exception as exc:  # noqa: BLE001 intentional lifecycle boundary
+                    self._record_cleanup_error(
+                        "SessionManager hard sweep result retrieval",
+                        exc,
+                        cleanup_errors,
+                    )
             await self._record_incomplete_hard_sweep(
                 completed=swept,
-                report=sweep_task.result() if swept else None,
+                report=report,
                 sweep_task=sweep_task,
                 cleanup_errors=cleanup_errors,
             )

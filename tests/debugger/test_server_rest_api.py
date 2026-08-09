@@ -547,6 +547,43 @@ async def test_api_audio_waveform_rejects_pcm_over_memory_limit(monkeypatch):
     }
 
 
+async def test_api_audio_waveform_rejects_pcm_expanded_over_memory_limit(monkeypatch):
+    monkeypatch.setattr(debugger_server, "_WAVEFORM_MAX_PCM_BYTES", 4)
+
+    def expand_after_coercion(frames, fmt, *, strict):
+        _ = frames, fmt, strict
+        return [b"\x00" * 5], 0
+
+    monkeypatch.setattr(debugger_server, "_coerce_frames_to_format", expand_after_coercion)
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {
+                "stage": "stt",
+                "sample_rate": 16000,
+                "channels": 1,
+                "sample_width": 2,
+            },
+        }
+    ]
+    app = _make_app(_audio_source(records, {"a": b"\x00" * 4}))
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/waveform/t1?track=mic")
+        payload = await resp.json()
+
+    assert resp.status == 413
+    assert payload == {
+        "error_code": "WAVEFORM_AUDIO_TOO_LARGE",
+        "message": "Waveform audio exceeds the in-memory rendering limit",
+        "max_pcm_bytes": 4,
+    }
+
+
 async def test_api_audio_waveform_mic_unsupported_width_returns_415(tmp_path):
     """The waveform route must also 415 on an unsupported 8-bit telephony capture."""
     records = [

@@ -59,12 +59,25 @@ from easycat.session._turn_runner import TurnRunner, _StreamingTtsState
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActions
 from easycat.stt.base import STTBase
+from easycat.teardown_budgets import (
+    SESSION_FORCE_START_LOCK_TIMEOUT_S,
+    SESSION_STT_REJECTION_CLEANUP_CANCEL_GRACE_TIMEOUT_S,
+    SESSION_STT_REJECTION_CLEANUP_JOIN_TIMEOUT_S,
+)
 from easycat.timeouts import AgentTimeoutError, STTTimeoutError, TimeoutConfig
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState, TurnPublication
 from tests._bridge_helpers import _TestBridgeBase
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
+
+
+def test_rejected_stt_cleanup_fits_force_start_lock_budget() -> None:
+    assert (
+        SESSION_STT_REJECTION_CLEANUP_JOIN_TIMEOUT_S
+        + SESSION_STT_REJECTION_CLEANUP_CANCEL_GRACE_TIMEOUT_S
+        <= SESSION_FORCE_START_LOCK_TIMEOUT_S
+    )
 
 
 def _preemptive_runner(agent: object, *, timeout: float | None = 30.0) -> AgentRunner:

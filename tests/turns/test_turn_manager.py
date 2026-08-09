@@ -235,6 +235,7 @@ async def test_shutdown_reaps_replaced_cancellation_resistant_timer() -> None:
     assert not replaced.done()
 
     try:
+        detector.release.set()
         await manager.shutdown()
         assert replaced.done()
         assert manager._silence_timer_tasks == set()

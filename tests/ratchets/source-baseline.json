@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "rationale": "Bound rejected-start STT cleanup joins after caller cancellation",
+  "rationale": "address PR review: centralize the STT commit task name and align rejected-start cleanup budgets",
   "counts": {
     "cancelled_error_handler": 118,
     "epoch_field": 12,
@@ -63,7 +63,7 @@
     "cancelled_error_handler\tsession/_stt_committer.py\tSTTCommitter._handle_provider_operation_timeout\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tsession/_stt_committer.py\tSTTCommitter._schedule_provider_operation_error._bound_notification\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tsession/_stt_committer.py\tSTTCommitter._schedule_provider_operation_error._notify\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
-    "cancelled_error_handler\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit._journal_terminal\texcept asyncio.CancelledError\t48229745e85137ff\t0",
+    "cancelled_error_handler\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit._journal_terminal\texcept asyncio.CancelledError\t5efd63c4d6c15619\t0",
     "cancelled_error_handler\tsession/_stt_committer.py\tSTTCommitter.await_pending\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tsession/_stt_committer.py\tSTTCommitter.commit_now\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "cancelled_error_handler\tsession/_tts_scheduler.py\tTTSScheduler.finish_turn_cancel\texcept asyncio.CancelledError\t6ac28f401e40a6d7\t0",

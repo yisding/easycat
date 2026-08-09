@@ -408,9 +408,10 @@ async def test_wait_closed_is_bounded_by_force_shutdown_timeout() -> None:
     # nothing else binds a port).
     hanging = _HangingWsServer()
     server._ws_server = hanging
-    await asyncio.wait_for(server.stop(), timeout=2)
+    with pytest.raises(RuntimeError, match="cleanup wait cooperatively cancelled"):
+        await asyncio.wait_for(server.stop(), timeout=2)
     assert hanging.closed is True
-    assert server._ws_server is None
+    assert server._ws_server is hanging
     assert "raw-WebSocket listener" not in server._listener_cleanup_tasks
     assert server._listener_cleanup_task_scope.tasks() == ()
 

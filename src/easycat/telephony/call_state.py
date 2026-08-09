@@ -105,6 +105,9 @@ _CLASSIFICATION_TIMEOUT_TASK = "call_classification_timeout"
 _MAX_DURATION_TASK = "call_max_duration"
 _LATE_VOICEMAIL_TASK = "late_voicemail_window"
 _VOICEMAIL_PICKUP_TASK = "voicemail_pickup_window"
+_TRANSITION_CONTEXT: ContextVar[tuple[OutboundCallStateMachine, asyncio.Task[Any]] | None] = (
+    ContextVar("easycat-call-transition", default=None)
+)
 
 
 class ClassificationGate:
@@ -425,10 +428,6 @@ class OutboundCallStateMachine:
         self._state = OutboundCallState.INITIATING
         self._transition_epoch = 0
         self._transition_lock = asyncio.Lock()
-        self._transition_context: ContextVar[asyncio.Task[Any] | None] = ContextVar(
-            f"easycat-call-transition-{id(self):x}",
-            default=None,
-        )
         self._active_transition_owner: asyncio.Task[Any] | None = None
         self._started = False
         self._timers = BackgroundTaskScope()
@@ -585,11 +584,12 @@ class OutboundCallStateMachine:
 
     async def _transition(self, new_state: OutboundCallState) -> None:
         current_task = asyncio.current_task()
-        transition_owner = self._transition_context.get()
-        if transition_owner is not None and current_task is transition_owner:
+        transition_context = _TRANSITION_CONTEXT.get()
+        transition_machine, transition_owner = transition_context or (None, None)
+        if transition_machine is self and current_task is transition_owner:
             await self._transition_owned(new_state)
             return
-        if transition_owner is not None and transition_owner is self._active_transition_owner:
+        if transition_machine is self and transition_owner is self._active_transition_owner:
             # A task spawned by an inline state observer inherits the active
             # ContextVar but is not structurally joined to this transition.
             # Letting it bypass the lock can race the outer invariant
@@ -606,13 +606,13 @@ class OutboundCallStateMachine:
             if current_task is None:  # pragma: no cover - coroutine has an asyncio task
                 await self._transition_owned(new_state)
                 return
-            context_token = self._transition_context.set(current_task)
+            context_token = _TRANSITION_CONTEXT.set((self, current_task))
             self._active_transition_owner = current_task
             try:
                 await self._transition_owned(new_state)
             finally:
                 self._active_transition_owner = None
-                self._transition_context.reset(context_token)
+                _TRANSITION_CONTEXT.reset(context_token)
 
     async def _transition_owned(self, new_state: OutboundCallState) -> None:
         """Commit and settle one transition while its owner is serialized."""

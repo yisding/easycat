@@ -1007,6 +1007,20 @@ async def test_bridge_nonstring_event_text_does_not_commit_shadow_history() -> N
 
 
 @pytest.mark.asyncio
+async def test_bridge_text_event_without_text_is_rejected() -> None:
+    class MissingTextBridge(_FakeBridge):
+        async def invoke(self, turn_input, recorder, cancel_token=None):
+            yield SimpleNamespace(kind="done")
+
+    runner = AgentRunner(MissingTextBridge())
+
+    with pytest.raises(TypeError, match="agent bridge done event text must be str"):
+        await _drain(runner, "hello")
+
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
 async def test_bridge_tool_event_with_none_text_passes_through() -> None:
     """Duck-typed tool events legitimately carry ``text=None``."""
 

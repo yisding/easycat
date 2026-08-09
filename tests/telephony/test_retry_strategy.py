@@ -129,6 +129,11 @@ class TestRetryStrategy:
 
         assert strategy.get_delay("+1555") == 10.0
 
+    def test_zero_base_delay_before_first_attempt_returns_zero(self) -> None:
+        strategy = RetryStrategy(RetryStrategyConfig(base_delay_s=0.0, jitter_fraction=0.0))
+
+        assert strategy.get_delay("+1555") == 0.0
+
 
 @pytest.mark.parametrize(
     ("field_name", "value", "message"),

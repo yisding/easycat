@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 _PROVIDER_CLOSE_RETRY_INITIAL_S = 0.05
 _PROVIDER_CLOSE_RETRY_MAX_S = 1.0
+_PROVIDER_CLOSE_RETRY_ATTEMPTS = 3
 
 
 def _pending_commit_bytes(provider: STTProvider) -> int | None:
@@ -80,6 +81,7 @@ class STTCommitter:
     """Schedules and commits STT segments for a Session."""
 
     FINAL_CLOSE_TASK_NAME = "stt_end_stream_after_final"
+    SEGMENT_COMMIT_TASK_NAME = "stt_segment_commit"
     PROVIDER_END_TASK_NAME = "stt_provider_end_stream"
     PROVIDER_END_COHORT = "stt-provider-end-stream"
     PROVIDER_CLOSE_TASK_NAME = "stt_provider_close"
@@ -241,7 +243,7 @@ class STTCommitter:
             # its ledger entry and closes the provider stream. This matters
             # after a prior bounded handoff timed out and returned without
             # calling end_stream().
-            or bool(self._runtime_scope.tasks("stt_segment_commit"))
+            or bool(self._runtime_scope.tasks(self.SEGMENT_COMMIT_TASK_NAME))
         )
 
     def mark_active(self) -> None:
@@ -378,7 +380,7 @@ class STTCommitter:
                 await self._finish_transferred_provider_close()
 
         task = await self._runtime_scope.start_owned_task(
-            "stt_segment_commit",
+            self.SEGMENT_COMMIT_TASK_NAME,
             _commit,
             policy=self._segment_commit_policy,
         )
@@ -388,7 +390,7 @@ class STTCommitter:
             self._journal_sink.append_record(
                 name="task_scheduled",
                 turn_id=resolved_turn,
-                data={"task_name": "stt_segment_commit"},
+                data={"task_name": self.SEGMENT_COMMIT_TASK_NAME},
             )
         except BaseException:
             task.cancel()
@@ -399,16 +401,16 @@ class STTCommitter:
         def _journal_terminal(completed: asyncio.Task[None]) -> None:
             if completed.cancelled():
                 record_name = "task_cancelled"
-                data = {"task_name": "stt_segment_commit"}
+                data = {"task_name": self.SEGMENT_COMMIT_TASK_NAME}
             else:
                 try:
                     exc = completed.exception()
                 except asyncio.CancelledError:
                     record_name = "task_cancelled"
-                    data = {"task_name": "stt_segment_commit"}
+                    data = {"task_name": self.SEGMENT_COMMIT_TASK_NAME}
                 else:
                     record_name = "task_completed" if exc is None else "task_raised"
-                    data = {"task_name": "stt_segment_commit"}
+                    data = {"task_name": self.SEGMENT_COMMIT_TASK_NAME}
                     if exc is not None:
                         data["exc_type"] = type(exc).__name__
             self._journal_sink.append_record(
@@ -955,7 +957,7 @@ class STTCommitter:
     def transfer_provider_close_to_owned_work(self) -> bool:
         """Move force-stop provider close behind a still-running owned operation."""
         owned = (
-            *self._runtime_scope.tasks("stt_segment_commit"),
+            *self._runtime_scope.tasks(self.SEGMENT_COMMIT_TASK_NAME),
             *self._runtime_scope.tasks(self.PROVIDER_END_TASK_NAME),
             *self._runtime_scope.tasks(self.PROVIDER_CLOSE_TASK_NAME),
         )
@@ -1030,9 +1032,17 @@ class STTCommitter:
                     # fresh cancellation during close is reserved for loop /
                     # process shutdown and must still be allowed to unwind.
                     raise
-                except Exception as exc:  # noqa: BLE001 - retry owns provider boundary
+                except Exception as exc:
                     attempt += 1
                     self._provider_close_error = exc
+                    if attempt >= _PROVIDER_CLOSE_RETRY_ATTEMPTS:
+                        logger.warning(
+                            "Deferred STT provider close failed after %d attempts; "
+                            "retaining it for a later stop retry",
+                            attempt,
+                            exc_info=True,
+                        )
+                        return
                     should_warn = attempt == 1 or (attempt & (attempt - 1)) == 0
                     log = logger.warning if should_warn else logger.debug
                     log(
@@ -1055,7 +1065,7 @@ class STTCommitter:
         if any(
             not task.done()
             for task in (
-                *self._runtime_scope.tasks("stt_segment_commit"),
+                *self._runtime_scope.tasks(self.SEGMENT_COMMIT_TASK_NAME),
                 *self._runtime_scope.tasks(self.PROVIDER_END_TASK_NAME),
                 *self._runtime_scope.tasks(self.PROVIDER_CLOSE_TASK_NAME),
             )
@@ -1090,11 +1100,11 @@ class STTCommitter:
         try:
             if timeout:
                 await asyncio.wait_for(
-                    self._runtime_scope.cancel_and_drain("stt_segment_commit"),
+                    self._runtime_scope.cancel_and_drain(self.SEGMENT_COMMIT_TASK_NAME),
                     timeout=timeout,
                 )
             else:
-                await self._runtime_scope.cancel_and_drain("stt_segment_commit")
+                await self._runtime_scope.cancel_and_drain(self.SEGMENT_COMMIT_TASK_NAME)
         except TimeoutError:
             assert timeout is not None
             self.resolve_pending(turn, "")

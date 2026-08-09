@@ -72,7 +72,8 @@ def _remove_secret_shaped_keys(value: Any) -> Any:
     if _has_opaque_primitive_association_key(value):
         return "[UNSERIALIZABLE]"
     if isinstance(value, AbstractSet):
-        return [_remove_secret_shaped_keys(item) for item in value]
+        scrubbed_items = [_remove_secret_shaped_keys(item) for item in value]
+        return sorted(scrubbed_items, key=_canonical_json_key)
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         return [_remove_secret_shaped_keys(item) for item in value]
     return value
@@ -110,6 +111,7 @@ def serialize_framework_state(value: Any, *, fallback: bytes = b"{}") -> bytes:
             default=_redacted_string,
             ensure_ascii=False,
             allow_nan=False,
+            sort_keys=True,
         ).encode("utf-8")
     except Exception:  # noqa: BLE001 intentional best-effort artifact boundary
         return fallback
@@ -119,3 +121,15 @@ def _redacted_string(value: Any) -> str:
     """Represent opaque objects without serializing their potentially secret repr."""
     _ = value
     return "[UNSERIALIZABLE]"
+
+
+def _canonical_json_key(value: Any) -> str:
+    """Return a stable ordering key for already-scrubbed unordered items."""
+    return json.dumps(
+        value,
+        default=_redacted_string,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )

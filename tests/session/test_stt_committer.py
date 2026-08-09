@@ -27,6 +27,7 @@ from easycat.events import (
 )
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.scope import RuntimeScope
+from easycat.session import _stt_committer as stt_committer_module
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._stt_committer import STTCommitter
 from easycat.timeouts import STTTimeoutError, TimeoutConfig
@@ -741,13 +742,52 @@ async def test_end_stream_times_out_and_resolves_pending_future() -> None:
     )
     turn = _new_turn()
 
-    await committer.end_stream(turn)
+    try:
+        await committer.end_stream(turn)
 
-    assert stt.end_stream_calls == 1
-    assert turn.pending_stt_segment_futures == []
-    stt_errors = [e for e in emitted if isinstance(e, Error) and e.stage == ErrorStage.STT]
-    assert stt_errors
-    assert stt_errors[0].provider == "openai"
+        assert stt.end_stream_calls == 1
+        assert turn.pending_stt_segment_futures == []
+        stt_errors = [e for e in emitted if isinstance(e, Error) and e.stage == ErrorStage.STT]
+        assert stt_errors
+        assert stt_errors[0].provider == "openai"
+    finally:
+        await committer._runtime_scope.cancel_and_drain()
+
+
+@pytest.mark.asyncio
+async def test_transferred_provider_close_attempts_are_bounded_and_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FailingCloseSTT(_RecordingSTT):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+            self.fail_close = True
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            if self.fail_close:
+                raise RuntimeError("provider close failed")
+
+    monkeypatch.setattr(stt_committer_module, "_PROVIDER_CLOSE_RETRY_INITIAL_S", 0.0)
+    monkeypatch.setattr(stt_committer_module, "_PROVIDER_CLOSE_RETRY_MAX_S", 0.0)
+    stt = _FailingCloseSTT()
+    committer, _stt, _emitted, _no_turn, _tm = _make_committer(stt=stt)
+    committer._provider_close_pending = True
+
+    try:
+        await committer._finish_transferred_provider_close()
+
+        assert stt.close_calls == stt_committer_module._PROVIDER_CLOSE_RETRY_ATTEMPTS
+        assert committer._provider_close_pending is True
+        assert isinstance(committer._provider_close_error, RuntimeError)
+
+        stt.fail_close = False
+        assert await committer.retry_transferred_provider_close() is True
+        assert committer._provider_close_pending is False
+        assert committer._provider_close_error is None
+    finally:
+        await committer._runtime_scope.cancel_and_drain()
 
 
 @pytest.mark.asyncio

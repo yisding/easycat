@@ -292,11 +292,13 @@ async def test_runtime_surfaces_failed_connection_close_and_retains_ledger_for_r
     assert "WebSocket connection close task" in caplog.text
     assert "retryable connection failure" in caplog.text
     assert runtime._connections == {key: connection}
+    assert runtime._connection_cleanup_retry == {key: connection}
 
     connection.fail_close = False
     await runtime.drain(server, drain_timeout_s=0.0, force_timeout_s=1.0)
 
     assert runtime._connections == {}
+    assert runtime._connection_cleanup_retry == {}
 
 
 async def test_cancel_handler_tasks_reports_cleanup_failure(

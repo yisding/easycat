@@ -1416,14 +1416,19 @@ class TestReplayDecision:
         def audio_window():
             yield chunk
 
+        journal = InMemoryRingBuffer(capacity=100)
+        artifacts = InMemoryArtifactStore()
         result = await TurnStage(_CapturingSmartTurn()).execute(
             audio_window(),
-            _make_ctx(),
+            _make_ctx(journal=journal, artifact_store=artifacts),
             _make_turn(),
         )
 
         assert result["prediction"] == 1
         assert seen == [chunk]
+        start = next(record for record in journal.read() if record.name == "stage_start")
+        assert start.input_ref is not None
+        assert artifacts.get(start.input_ref) == chunk.data
 
     async def test_turn_stage_journals_current_prediction_in_state_after(self):
         journal = InMemoryRingBuffer(capacity=100)

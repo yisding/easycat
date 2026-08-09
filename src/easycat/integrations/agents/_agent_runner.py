@@ -62,7 +62,7 @@ def _bridge_event_text(event: Any, kind: Any) -> str:
     if kind not in ("text_delta", "done"):
         return ""
     return _require_agent_text(
-        getattr(event, "text", ""),
+        getattr(event, "text", None),
         source=f"agent bridge {kind} event text",
     )
 
@@ -206,11 +206,15 @@ class AgentRunnerConfig:
         if self.timeout is not None:
             self.timeout = float(self.timeout)
         if not isinstance(self.preemptive_generation, bool):
-            raise ValueError("AgentRunnerConfig.preemptive_generation must be a boolean")  # noqa: TRY004 domain-specific validation error
+            raise ValueError(  # noqa: TRY004 domain-specific validation error
+                "AgentRunnerConfig.preemptive_generation must be a boolean"
+            )
         if isinstance(self.preemptive_max_retries, bool) or not isinstance(
             self.preemptive_max_retries, int
         ):
-            raise ValueError("AgentRunnerConfig.preemptive_max_retries must be an integer")  # noqa: TRY004 domain-specific validation error
+            raise ValueError(  # noqa: TRY004 domain-specific validation error
+                "AgentRunnerConfig.preemptive_max_retries must be an integer"
+            )
         if self.preemptive_max_retries < 1:
             raise ValueError("AgentRunnerConfig.preemptive_max_retries must be >= 1")
 

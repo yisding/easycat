@@ -705,7 +705,7 @@ class _DebuggerRoutes:
             # On state-changing requests, a missing Origin from a
             # browser is suspicious — refuse rather than trust the
             # caller blindly.  Server-to-server clients can pass an
-            # an explicit same-origin value or use ``allow_remote``.
+            # explicit same-origin value or use ``allow_remote``.
             if not origin:
                 return web.Response(
                     status=403, text="state-changing requests require an Origin header"

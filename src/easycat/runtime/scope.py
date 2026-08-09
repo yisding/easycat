@@ -578,7 +578,13 @@ class RuntimeScope:
         return child
 
     def prune_empty_child(self, child: RuntimeScope) -> bool:
-        """Retire and unlink one settled direct child without reopening its owner."""
+        """Close admission and unlink one settled direct child when empty.
+
+        A ``False`` result can still leave the child subtree in ``CLOSING``:
+        admission is closed before emptiness is checked so no new member can
+        race the prune. Callers must not use this method as a side-effect-free
+        emptiness probe.
+        """
         if child.parent is not self:
             raise ValueError("RuntimeScope child does not belong to this parent")
         child._close_admission_recursive()

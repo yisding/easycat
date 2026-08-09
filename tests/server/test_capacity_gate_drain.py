@@ -244,18 +244,33 @@ async def test_timed_safe_await_rejects_and_closes_unowned_coroutine() -> None:
     assert awaitable.cr_frame is None
 
 
-async def test_timed_safe_await_observes_cancelled_gather_result() -> None:
+async def test_timed_safe_await_observes_cancelled_gather_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     loop = asyncio.get_running_loop()
     contexts: list[dict[str, object]] = []
+    observed: list[asyncio.Future[object]] = []
+    observation_ran = asyncio.Event()
     previous_handler = loop.get_exception_handler()
     loop.set_exception_handler(lambda _loop, context: contexts.append(context))
+
+    def observe(future: asyncio.Future[object]) -> None:
+        observed.append(future)
+        observation_ran.set()
+
+    monkeypatch.setattr(
+        server_transports,
+        "_observe_future_result",
+        observe,
+    )
     try:
         owned = asyncio.create_task(asyncio.Event().wait())
         gathered = asyncio.gather(owned, return_exceptions=True)
 
         await server_transports._safe_await(gathered, timeout_s=0.0)
-        await asyncio.sleep(0)
+        await asyncio.wait_for(observation_ran.wait(), timeout=1)
         assert gathered.done()
+        assert observed == [gathered]
 
         del gathered
         gc.collect()

@@ -190,11 +190,7 @@ async def test_export_rejected_for_bundle_source(tmp_path):
     async with TestClient(TestServer(app)) as client:
         resp = await client.post(
             "/api/export",
-            headers={
-                "Host": "localhost:8765",
-                "Origin": "http://localhost:8765",
-                "Content-Type": "application/json",
-            },
+            headers=_SAFE_HEADERS,
         )
         assert resp.status == 405
 
@@ -208,18 +204,13 @@ async def test_replay_destructive_combos_require_confirm(tmp_path):
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    safe_headers = {
-        "Host": "localhost:8765",
-        "Origin": "http://localhost:8765",
-        "Content-Type": "application/json",
-    }
     async with TestClient(TestServer(app)) as client:
         for body in (
             {"fidelity": "live"},
             {"tool_policy": "allow"},
             {"fidelity": "artifact", "force": True},
         ):
-            resp = await client.post("/api/replay", json=body, headers=safe_headers)
+            resp = await client.post("/api/replay", json=body, headers=_SAFE_HEADERS)
             assert resp.status == 409, f"expected 409 for body {body}, got {resp.status}"
             data = await resp.json()
             assert data["destructive"] is True
@@ -229,7 +220,7 @@ async def test_replay_destructive_combos_require_confirm(tmp_path):
         resp = await client.post(
             "/api/replay",
             json={"fidelity": "artifact", "force": True, "confirm": True},
-            headers=safe_headers,
+            headers=_SAFE_HEADERS,
         )
         assert resp.status == 200
         body = await resp.json()
@@ -243,17 +234,12 @@ async def test_replay_destructive_confirm_must_be_literal_true(tmp_path):
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    headers = {
-        "Host": "localhost:8765",
-        "Origin": "http://localhost:8765",
-        "Content-Type": "application/json",
-    }
     async with TestClient(TestServer(app)) as client:
         for confirm in ("true", "false", 1):
             resp = await client.post(
                 "/api/replay",
                 json={"fidelity": "artifact", "force": True, "confirm": confirm},
-                headers=headers,
+                headers=_SAFE_HEADERS,
             )
             assert resp.status == 409
 
@@ -265,17 +251,12 @@ async def test_replay_force_must_be_literal_boolean(tmp_path):
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    headers = {
-        "Host": "localhost:8765",
-        "Origin": "http://localhost:8765",
-        "Content-Type": "application/json",
-    }
     async with TestClient(TestServer(app)) as client:
         for force in ("true", "false", 1):
             resp = await client.post(
                 "/api/replay",
                 json={"fidelity": "artifact", "force": force},
-                headers=headers,
+                headers=_SAFE_HEADERS,
             )
             assert resp.status == 400
             body = await resp.json()
@@ -285,7 +266,7 @@ async def test_replay_force_must_be_literal_boolean(tmp_path):
         resp = await client.post(
             "/api/replay",
             json={"fidelity": "artifact", "force": False},
-            headers=headers,
+            headers=_SAFE_HEADERS,
         )
         assert resp.status == 200
         body = await resp.json()
@@ -298,16 +279,11 @@ async def test_replay_rejects_unknown_keys(tmp_path):
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    headers = {
-        "Host": "localhost:8765",
-        "Origin": "http://localhost:8765",
-        "Content-Type": "application/json",
-    }
     async with TestClient(TestServer(app)) as client:
         resp = await client.post(
             "/api/replay",
             json={"fidelity": "artifact", "rm_rf": "/"},
-            headers=headers,
+            headers=_SAFE_HEADERS,
         )
         assert resp.status == 400
 
@@ -318,13 +294,8 @@ async def test_replay_rejects_malformed_json(tmp_path):
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    headers = {
-        "Host": "localhost:8765",
-        "Origin": "http://localhost:8765",
-        "Content-Type": "application/json",
-    }
     async with TestClient(TestServer(app)) as client:
-        resp = await client.post("/api/replay", data=b"{not json", headers=headers)
+        resp = await client.post("/api/replay", data=b"{not json", headers=_SAFE_HEADERS)
         assert resp.status == 400
 
 
@@ -349,13 +320,8 @@ async def test_replay_rejects_non_object_json(tmp_path):
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    headers = {
-        "Host": "localhost:8765",
-        "Origin": "http://localhost:8765",
-        "Content-Type": "application/json",
-    }
     async with TestClient(TestServer(app)) as client:
-        resp = await client.post("/api/replay", data=b"null", headers=headers)
+        resp = await client.post("/api/replay", data=b"null", headers=_SAFE_HEADERS)
         assert resp.status == 400
 
 
@@ -383,11 +349,7 @@ async def test_export_without_journal_returns_409(tmp_path):
     async with TestClient(TestServer(app)) as client:
         resp = await client.post(
             "/api/export",
-            headers={
-                "Host": "localhost:8765",
-                "Origin": "http://localhost:8765",
-                "Content-Type": "application/json",
-            },
+            headers=_SAFE_HEADERS,
         )
         assert resp.status == 409
 
@@ -401,16 +363,11 @@ async def test_replay_force_artifact_with_confirm_succeeds(tmp_path):
     app = _make_app(source)
     from aiohttp.test_utils import TestClient, TestServer
 
-    headers = {
-        "Host": "localhost:8765",
-        "Origin": "http://localhost:8765",
-        "Content-Type": "application/json",
-    }
     async with TestClient(TestServer(app)) as client:
         resp = await client.post(
             "/api/replay",
             json={"fidelity": "artifact", "force": True, "confirm": True},
-            headers=headers,
+            headers=_SAFE_HEADERS,
         )
         assert resp.status == 200
         body = await resp.json()

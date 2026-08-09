@@ -18,6 +18,8 @@ from easycat.debugger._aec import (
 )
 from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
 
+from ._server_helpers import _SAFE_HEADERS
+
 
 def _tone_pcm(amplitude: int, n_samples: int) -> bytes:
     """Flat int16 PCM at a constant magnitude (square-ish, easy to reason about)."""
@@ -271,13 +273,6 @@ def test_aec_diagnostics_unsupported_for_mulaw_width():
 
 
 # ── Server endpoints ─────────────────────────────────────────────
-
-
-_SAFE_HEADERS = {
-    "Host": "localhost:8765",
-    "Origin": "http://localhost:8765",
-    "Content-Type": "application/json",
-}
 
 
 class _PassthroughAEC:

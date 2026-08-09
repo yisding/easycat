@@ -914,6 +914,43 @@ async def test_failed_session_hard_sweep_blocks_restart_and_retains_retry_owners
     assert server._lifecycle_cleanup_error is None
 
 
+async def test_hard_sweep_result_failure_still_records_incomplete_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _idle_server(enable_websocket=False, enable_webrtc=False)
+    server._started = True
+    recorded: list[dict[str, object]] = []
+    record_incomplete = server._record_incomplete_hard_sweep
+
+    async def fail_stop_all(*, force: bool = False) -> object:
+        assert force is True
+        raise RuntimeError("hard sweep result failed")
+
+    async def report_completed(future: asyncio.Future[object], *, timeout_s: float) -> bool:
+        _ = timeout_s
+        await asyncio.sleep(0)
+        assert future.done()
+        return True
+
+    async def record_call(**kwargs: object) -> None:
+        recorded.append(kwargs)
+        await record_incomplete(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(server._manager, "stop_all", fail_stop_all)
+    monkeypatch.setattr(
+        "easycat.server.voice_server.wait_for_owned_future",
+        report_completed,
+    )
+    monkeypatch.setattr(server, "_record_incomplete_hard_sweep", record_call)
+
+    with pytest.raises(RuntimeError, match="hard sweep result failed"):
+        await server.stop(force=True)
+
+    assert len(recorded) == 1
+    assert recorded[0]["completed"] is True
+    assert recorded[0]["report"] is None
+
+
 async def test_hard_sweep_timeout_keeps_named_task_owned_until_settlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
