@@ -245,6 +245,18 @@ async def test_shutdown_reaps_replaced_cancellation_resistant_timer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_shutdown_reaps_completed_timer_before_its_discard_callback() -> None:
+    manager = TurnManager(EventBus())
+    completed = asyncio.create_task(asyncio.sleep(0))
+    await completed
+    manager._silence_timer_tasks.add(completed)
+
+    await manager.shutdown()
+
+    assert manager._silence_timer_tasks == set()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_closes_silence_timer_admission_while_reaping() -> None:
     class CancellationResistantDetector:
         def __init__(self) -> None:

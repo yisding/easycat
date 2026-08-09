@@ -51,18 +51,18 @@ class _SliceSpec:
     captures_webrtc_stats: bool = False
 
 
-# The quick slice is xdist-safe; loadscope keeps module-local event-loop and
-# port state on one worker. Socket, stress, contract, and guard lanes stay
-# serial because they bind ports, measure timing-sensitive saturation signals,
-# or scan shared docs/route state.
+# The quick slice excludes socket and timing-sensitive tests, so xdist can
+# schedule individual tests instead of turning very large modules into a
+# single-worker tail. Socket, stress, contract, and guard lanes stay serial.
 _SLICE_SPECS = {
     "quick": _SliceSpec(
         name="quick",
         selector=(
             "not integration_socket and not integration_live and not integration_external "
-            "and not contract and not slow and not stress and not flaky and not guard"
+            "and not contract and not latency and not slow and not stress and not serial "
+            "and not flaky and not guard"
         ),
-        pytest_args=("-n", "auto", "--dist", "loadscope"),
+        pytest_args=("-n", "auto", "--dist", "load"),
     ),
     "guard": _SliceSpec(
         name="guard",

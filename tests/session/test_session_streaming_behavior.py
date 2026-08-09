@@ -111,6 +111,35 @@ async def test_prompt_agent_runs_journaled_spoken_turn():
 
 
 @pytest.mark.asyncio
+async def test_spoken_prompt_agent_recovers_playback_after_replacement_cutoff():
+    bridge = ContextCapturingBridge(response_prefix="app")
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript=""),
+            agent=bridge,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+        )
+    )
+
+    await session.start()
+    try:
+        # A replacement conflict suppresses playback for the rest of its turn;
+        # the next spoken application turn must speak again.
+        await session._cut_off_tts_for_text_replacement()
+        assert session._tts_scheduler.is_playback_suppressed
+        response = await session.prompt_agent("Switch to message capture.")
+    finally:
+        await session.stop(force=True)
+
+    assert response == "app:Follow the application instruction above."
+    assert tts.synthesized_texts == ["app:Follow the application instruction above."]
+
+
+@pytest.mark.asyncio
 async def test_system_prompt_stays_out_of_user_history_on_follow_up():
     bridge = ContextCapturingBridge()
     session = Session(

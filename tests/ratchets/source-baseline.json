@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "rationale": "address PR review: centralize the STT commit task name and align rejected-start cleanup budgets",
+  "rationale": "TurnManager shutdown now reaps completed timers without callback-scheduling starvation",
   "counts": {
     "cancelled_error_handler": 118,
     "epoch_field": 12,
-    "gather_return_exceptions": 22,
+    "gather_return_exceptions": 21,
     "raw_task_spawn": 17,
     "shield_loop": 5,
     "task_cancelling": 52
@@ -161,7 +161,6 @@
     "gather_return_exceptions\ttransports/webrtc.py\tWebRTCTransport._stop_active_offer_for_disconnect\tasyncio.gather(return_exceptions=True)\tfa27c3bc1c7b1755\t0",
     "gather_return_exceptions\ttransports/websocket.py\tWebSocketConnectionTransport._disconnect_transaction\tasyncio.gather(return_exceptions=True)\t81cfab756e8a9019\t0",
     "gather_return_exceptions\ttransports/webtransport.py\tWebTransportServer._cancel_and_reap_handler_tasks\tasyncio.gather(return_exceptions=True)\t5e7683f93dbce0ae\t0",
-    "gather_return_exceptions\tturn_manager.py\tTurnManager.shutdown\tasyncio.gather(return_exceptions=True)\t91bb2a792c2a0f06\t0",
     "raw_task_spawn\truntime/journal.py\tappend_journal_record_async\tasyncio.create_task\tb4a0a6b20b70d669\t0",
     "raw_task_spawn\tsession/_journal_sink.py\tSessionJournalSink.append_record_async\tasyncio.create_task\t933bcec6345d252c\t0",
     "raw_task_spawn\tsession/_session.py\tSession._cut_off_turn_playback\tasyncio.create_task\t002fb7c8f4960eaf\t0",

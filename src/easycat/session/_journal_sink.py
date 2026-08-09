@@ -92,6 +92,8 @@ _JOURNAL_ATTRS = (
     "mark_name",
     "reason",
     "error",
+    "part_index",
+    "replacement",
     "structured_output",
 )
 
@@ -102,7 +104,7 @@ _JOURNAL_ATTRS = (
 # — the same record would round-trip to a different shape per backend.  We
 # normalize them once here so all backends store identical JSON-native shapes.
 _JSONABLE_ATTRS = frozenset({"structured_output", "result", "action"})
-_NONEMPTY_ATTRS = frozenset({"provider"})
+_NONEMPTY_ATTRS = frozenset({"provider", "replacement"})
 _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS = 512
 _REDACTED_SESSION_ACTION_VALUE = "[REDACTED_SESSION_ACTION_VALUE]"
 _REDACTED_SESSION_ACTION_PAYLOAD = "[REDACTED_SESSION_ACTION_PAYLOAD]"

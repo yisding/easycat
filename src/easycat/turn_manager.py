@@ -986,10 +986,24 @@ class TurnManager:
             timers = tuple(task for task in self._silence_timer_tasks if task is not current)
             if not timers:
                 break
-            for task in timers:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*timers, return_exceptions=True)
+            completed = tuple(task for task in timers if task.done())
+            if completed:
+                # Do not rely on done callbacks running before this coroutine
+                # resumes. On Python 3.14 an already-complete gather can resume
+                # synchronously and repeatedly observe the same retained task,
+                # starving its scheduled discard callback.
+                self._silence_timer_tasks.difference_update(completed)
+            pending = tuple(task for task in timers if not task.done())
+            if not pending:
+                continue
+            for task in pending:
+                task.cancel()
+            # ``wait`` does not couple cancellation of shutdown() back into a
+            # detector task that already received its explicit cancellation.
+            # A cancellation-resistant detector therefore remains owned by
+            # the task set for a later shutdown retry.
+            await asyncio.wait(pending)
+            self._silence_timer_tasks.difference_update(pending)
         if current is not None:
             self._silence_timer_tasks.discard(current)
         self._silence_timer_task = None

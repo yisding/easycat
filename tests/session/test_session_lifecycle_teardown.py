@@ -1384,6 +1384,22 @@ async def test_cancel_tts_playback_resets_state():
 
 
 @pytest.mark.asyncio
+async def test_text_replacement_cutoff_preserves_agent_turn_state():
+    session = Session(_full_config())
+    session._turn_manager._state = TurnManagerState.BOT_SPEAKING
+    turn = TurnContext("replacement-turn", CancelToken())
+    session._turn = turn
+    await session._outbound_queue.put(_make_chunk())
+
+    await session._cut_off_tts_for_text_replacement()
+
+    assert session.turn_state == TurnState.BOT_SPEAKING
+    assert not turn.cancel_token.is_cancelled
+    assert session._tts_scheduler.is_playback_suppressed is True
+    assert session._outbound_queue.empty()
+
+
+@pytest.mark.asyncio
 async def test_reset_state():
     session = Session(_full_config())
     session._turn_state = TurnState.PROCESSING

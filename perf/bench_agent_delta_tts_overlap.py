@@ -94,13 +94,24 @@ class _TimedTTS:
     async def stop(self) -> None: ...
 
 
-async def _serial_consume_text_delta(self: _AgentStreamConsumer, event: Any) -> None:
+async def _serial_consume_text_update(self: _AgentStreamConsumer, event: Any) -> None:
     """Reinstate the pre-optimization ordering for the benchmark baseline."""
-    self.result.text += event.text
-    await self._emit(AgentDelta(text=event.text))
+    update = self._text_stream.apply(event)
+    if update is None:
+        return
+    self.result.text = update.text
+    if update.text == update.previous_text:
+        return
+    await self._emit(
+        AgentDelta(
+            text=event.text,
+            part_index=update.part_index,
+            replacement=update.operation == "replace",
+        )
+    )
     if self._turn.first_agent_time is None:
         self._turn.first_agent_time = time.monotonic()
-    queued = await self._buffer.add_delta(event.text)
+    queued = await self._queue_text_update(update)
     self._resolve_first_tts_payload_gate(queued)
 
 
@@ -124,14 +135,14 @@ async def _measure_once(*, handler_ms: float, overlap: bool) -> float:
     session.event_bus.subscribe(AgentDelta, _slow_delta_handler)
     session._turn = TurnContext("agent-delta-benchmark", CancelToken())
 
-    original = _AgentStreamConsumer._consume_text_delta
+    original = _AgentStreamConsumer._consume_text_update
     if not overlap:
-        _AgentStreamConsumer._consume_text_delta = _serial_consume_text_delta
+        _AgentStreamConsumer._consume_text_update = _serial_consume_text_update
     started = time.perf_counter()
     try:
         await session._turn_runner.run_streaming_agent("hello", token=None)
     finally:
-        _AgentStreamConsumer._consume_text_delta = original
+        _AgentStreamConsumer._consume_text_update = original
 
     assert tts.started_at is not None
     return (tts.started_at - started) * 1000.0

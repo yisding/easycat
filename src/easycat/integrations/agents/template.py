@@ -81,6 +81,7 @@ from uuid import uuid4
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._helpers import aclose_quietly
 from easycat.integrations.agents._state_serialization import serialize_framework_state
+from easycat.integrations.agents._text_stream import AgentTextStream
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -210,7 +211,7 @@ class BridgeTemplate:
             entered_at=time.monotonic_ns(),
             committable=False,
         )
-        accumulated = ""
+        accumulated = AgentTextStream()
         # ``turn_cursor`` centralizes the enter → error → BaseException →
         # clean-exit ordering.  The ``BaseException`` arm matters because the
         # default ``AgentRunner`` enforces its timeout by cancelling the pending
@@ -223,8 +224,7 @@ class BridgeTemplate:
             stream = self.stream_events(turn_input, recorder, cancel_token)
             try:
                 async for ev in stream:
-                    if ev.kind == "text_delta":
-                        accumulated += ev.text
+                    accumulated.apply(ev)
                     yield ev
             finally:
                 # ``async for`` does not forward an early consumer
@@ -235,7 +235,7 @@ class BridgeTemplate:
 
         yield AgentBridgeEvent(
             kind="done",
-            text=accumulated,
+            text=accumulated.text,
             structured_output=self._last_output,
         )
 

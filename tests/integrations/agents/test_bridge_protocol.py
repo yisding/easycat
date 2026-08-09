@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from easycat.integrations.agents._text_stream import AgentTextStream
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentTurnInput,
@@ -62,6 +63,34 @@ class TestProtocolTypes:
         e = AgentBridgeEvent(kind="text_delta", text="hi")
         assert e.kind == "text_delta"
         assert e.text == "hi"
+
+    def test_agent_bridge_text_replacement(self):
+        event = AgentBridgeEvent(kind="text_replace", text="correct", part_index=1)
+
+        assert event.part_index == 1
+
+    def test_agent_bridge_text_replacement_requires_an_index(self):
+        with pytest.raises(ValueError, match="non-negative part_index"):
+            AgentBridgeEvent(kind="text_replace", text="correct")
+
+    def test_agent_text_stream_replaces_indexed_parts_in_response_order(self):
+        stream = AgentTextStream()
+        stream.apply(AgentBridgeEvent(kind="text_replace", text="later", part_index=4))
+        stream.apply(AgentBridgeEvent(kind="text_replace", text="first ", part_index=1))
+        stream.apply(AgentBridgeEvent(kind="text_delta", text="done", part_index=4))
+        update = stream.apply(
+            AgentBridgeEvent(kind="text_replace", text="corrected", part_index=4)
+        )
+
+        assert update is not None
+        assert update.text == "first corrected"
+
+    def test_agent_text_stream_rejects_mixed_flat_and_indexed_events(self):
+        stream = AgentTextStream()
+        stream.apply(AgentBridgeEvent(kind="text_delta", text="flat"))
+
+        with pytest.raises(ValueError, match="cannot mix"):
+            stream.apply(AgentBridgeEvent(kind="text_replace", text="indexed", part_index=0))
 
     def test_framework_state_snapshot(self):
         s = FrameworkStateSnapshot(

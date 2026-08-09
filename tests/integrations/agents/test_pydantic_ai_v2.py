@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, Self
@@ -8,7 +9,13 @@ import pytest
 
 from easycat.integrations.agents._pydantic_ai_events import translate_event
 from easycat.integrations.agents._recorder import JournalAgentRecorder
-from easycat.integrations.agents.base import AgentTurnInput, BridgeInputError, RecorderContext
+from easycat.integrations.agents._text_stream import AgentTextStream
+from easycat.integrations.agents.base import (
+    AgentBridgeEvent,
+    AgentTurnInput,
+    BridgeInputError,
+    RecorderContext,
+)
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge, _GraphEventHandler
 from easycat.runtime import InMemoryRingBuffer
 
@@ -61,8 +68,9 @@ class TextPart:
 
 
 class PartStartEvent:
-    def __init__(self, part: Any) -> None:
+    def __init__(self, part: Any, *, index: int = 0) -> None:
         self.part = part
+        self.index = index
 
 
 class ToolCallPartDelta:
@@ -370,12 +378,31 @@ def test_text_part_start_preserves_the_initial_stream_content() -> None:
     event = translate_event(PartStartEvent(TextPart("Loverboy")))
 
     assert event is not None
-    assert event.kind == "text_delta"
+    assert event.kind == "text_replace"
     assert event.text == "Loverboy"
+    assert event.part_index == 0
 
 
-def test_empty_text_part_start_is_not_emitted() -> None:
-    assert translate_event(PartStartEvent(TextPart(""))) is None
+def test_empty_text_part_start_can_clear_an_existing_part() -> None:
+    event = translate_event(PartStartEvent(TextPart(""), index=3))
+
+    assert event == AgentBridgeEvent(kind="text_replace", text="", part_index=3)
+
+
+def test_same_index_text_part_start_replaces_instead_of_appending() -> None:
+    stream = AgentTextStream()
+    first = translate_event(PartStartEvent(TextPart("stale"), index=2))
+    replacement = translate_event(PartStartEvent(TextPart("correct"), index=2))
+
+    assert first is not None
+    assert replacement is not None
+    stream.apply(first)
+    update = stream.apply(replacement)
+
+    assert update is not None
+    assert update.operation == "replace"
+    assert update.text == "correct"
+    assert update.appended_text is None
 
 
 def test_real_v2_text_part_start_preserves_the_initial_stream_content() -> None:
@@ -386,8 +413,9 @@ def test_real_v2_text_part_start_preserves_the_initial_stream_content() -> None:
     event = translate_event(RealPartStartEvent(index=0, part=RealTextPart(content="Loverboy")))
 
     assert event is not None
-    assert event.kind == "text_delta"
+    assert event.kind == "text_replace"
     assert event.text == "Loverboy"
+    assert event.part_index == 0
 
 
 def test_tool_call_delta_dict_is_serialized_as_text() -> None:
@@ -457,6 +485,203 @@ async def test_graph_event_handler_accepts_v2_stream_signature() -> None:
     assert handler.was_called
     assert [event.kind for event in drained] == ["text_delta"]
     assert handler.accumulated_text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_graph_event_handler_accumulates_same_index_replacement() -> None:
+    handler = _GraphEventHandler(_recorder())
+
+    async def events():
+        yield PartStartEvent(TextPart("stale"), index=1)
+        yield PartStartEvent(TextPart("correct"), index=1)
+        yield PartDeltaEvent(TextPartDelta(" result"), index=1)
+
+    await handler(object(), events())
+
+    assert [event.kind for event in handler.drain()] == [
+        "text_replace",
+        "text_replace",
+        "text_delta",
+    ]
+    assert handler.accumulated_text == "correct result"
+
+
+@pytest.mark.asyncio
+async def test_graph_event_handler_namespaces_part_indexes_per_agent_stream() -> None:
+    handler = _GraphEventHandler(_recorder())
+
+    async def first_stream():
+        yield PartStartEvent(TextPart("first "), index=0)
+
+    async def second_stream():
+        yield PartStartEvent(TextPart("second"), index=0)
+
+    await handler(object(), first_stream())
+    await handler(object(), second_stream())
+
+    events = handler.drain()
+    assert [event.part_index for event in events] == [0, 1]
+    assert handler.accumulated_text == "first second"
+
+
+@pytest.mark.asyncio
+async def test_graph_event_handler_reserves_unique_indexes_for_concurrent_streams() -> None:
+    handler = _GraphEventHandler(_recorder())
+    second_started = asyncio.Event()
+
+    async def first_stream():
+        yield PartStartEvent(TextPart("first"), index=0)
+        # Keep this stream open until the second stream has claimed its own
+        # namespace, so both streams observe the pre-update allocator state.
+        await second_started.wait()
+        yield PartDeltaEvent(TextPartDelta(" one"), index=0)
+
+    async def second_stream():
+        yield PartStartEvent(TextPart("second"), index=0)
+        second_started.set()
+        yield PartDeltaEvent(TextPartDelta(" two"), index=0)
+
+    await asyncio.gather(
+        handler(object(), first_stream()),
+        handler(object(), second_stream()),
+    )
+
+    events = handler.drain()
+    indexes_by_stream_text = {event.text: event.part_index for event in events}
+    assert indexes_by_stream_text["first"] != indexes_by_stream_text["second"]
+    assert indexes_by_stream_text[" one"] == indexes_by_stream_text["first"]
+    assert indexes_by_stream_text[" two"] == indexes_by_stream_text["second"]
+    assert handler.accumulated_text == "first onesecond two"
+
+
+@pytest.mark.asyncio
+async def test_graph_event_handler_v1_events_append_new_parts_per_start() -> None:
+    handler = _GraphEventHandler(_recorder())
+
+    # v1 single events carry no stream identity, so a repeated local index 0
+    # from a second agent must claim a fresh part instead of replacing the
+    # first agent's text; deltas follow their local index's latest part.
+    await handler(PartStartEvent(TextPart("first"), index=0))
+    await handler(PartDeltaEvent(TextPartDelta(" one"), index=0))
+    await handler(PartStartEvent(TextPart("second"), index=0))
+    await handler(PartDeltaEvent(TextPartDelta(" two"), index=0))
+
+    events = handler.drain()
+    assert [(event.kind, event.text, event.part_index) for event in events] == [
+        ("text_replace", "first", 0),
+        ("text_delta", " one", 0),
+        ("text_replace", "second", 1),
+        ("text_delta", " two", 1),
+    ]
+    assert handler.accumulated_text == "first onesecond two"
+
+
+@pytest.mark.asyncio
+async def test_graph_event_handler_v1_and_v2_events_share_one_part_allocator() -> None:
+    handler = _GraphEventHandler(_recorder())
+
+    async def v2_stream():
+        yield PartStartEvent(TextPart("v2"), index=0)
+
+    await handler(object(), v2_stream())
+    await handler(PartStartEvent(TextPart("v1"), index=0))
+
+    events = handler.drain()
+    assert [(event.text, event.part_index) for event in events] == [("v2", 0), ("v1", 1)]
+    assert handler.accumulated_text == "v2v1"
+
+
+class _NodeEventStream:
+    def __init__(self, events: list[Any]) -> None:
+        self._events = list(events)
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> Any:
+        if not self._events:
+            raise StopAsyncIteration
+        return self._events.pop(0)
+
+
+class _StreamingNode:
+    def __init__(self, events: list[Any]) -> None:
+        self._events = events
+
+    def stream(self, _ctx: object) -> _NodeEventStream:
+        return _NodeEventStream(self._events)
+
+
+class _FakeIterRun:
+    def __init__(self, nodes: list[Any]) -> None:
+        self._nodes = list(nodes)
+        self.ctx = object()
+        self.output = None
+        self.result = None
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> Any:
+        if not self._nodes:
+            raise StopAsyncIteration
+        return self._nodes.pop(0)
+
+    def new_messages(self) -> list[Any]:
+        return []
+
+
+class _FakeIterAgent:
+    name = "fake-iter-agent"
+
+    def __init__(self, nodes: list[Any]) -> None:
+        self._nodes = nodes
+
+    def iter(self, _text: str, **_kwargs: Any) -> _FakeIterRun:
+        return _FakeIterRun(self._nodes)
+
+
+@pytest.mark.asyncio
+async def test_iter_mode_namespaces_part_indexes_across_model_request_nodes() -> None:
+    # Each model-request node streams one response whose part indexes restart
+    # at 0: a same-index restart inside one node stays a replacement, while
+    # the next node's text must land in a fresh part instead of clobbering
+    # already-streamed (possibly spoken) text.
+    first_node = _StreamingNode(
+        [
+            PartStartEvent(TextPart("stale"), index=0),
+            PartStartEvent(TextPart("Let me check."), index=0),
+        ]
+    )
+    second_node = _StreamingNode(
+        [
+            PartStartEvent(TextPart("It is sunny."), index=0),
+            PartDeltaEvent(TextPartDelta(" Enjoy."), index=0),
+        ]
+    )
+    bridge = PydanticAIBridge(agent=_FakeIterAgent([first_node, second_node]))
+
+    events = [event async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())]
+
+    assert [(event.kind, event.text, event.part_index) for event in events] == [
+        ("text_replace", "stale", 0),
+        ("text_replace", "Let me check.", 0),
+        ("text_replace", "It is sunny.", 1),
+        ("text_delta", " Enjoy.", 1),
+        ("done", "Let me check.It is sunny. Enjoy.", None),
+    ]
 
 
 @pytest.mark.asyncio
@@ -656,11 +881,12 @@ async def test_bridge_invokes_real_v2_test_model_when_extra_installed() -> None:
 
     events = [event async for event in bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())]
 
-    assert [(event.kind, event.text) for event in events] == [
-        ("text_delta", "hello "),
-        ("text_delta", "from "),
-        ("text_delta", "v2"),
-        ("done", "hello from v2"),
+    assert [(event.kind, event.text, event.part_index) for event in events] == [
+        ("text_replace", "", 0),
+        ("text_delta", "hello ", 0),
+        ("text_delta", "from ", 0),
+        ("text_delta", "v2", 0),
+        ("done", "hello from v2", None),
     ]
     assert events[-1].structured_output == "hello from v2"
 

@@ -73,8 +73,10 @@ unrelated event type. Keep the returned subscription and call its idempotent
   output. This is the confirmation/take timestamp, not always the start of
   model work: with preemptive generation, the model request may already be in
   flight.
-- `AgentDelta` — a streaming text delta from the agent while it generates a
-  reply.
+- `AgentDelta` — a streaming text update from the agent while it generates a
+  reply. Ordinary events append `text`. Indexed bridge streams set
+  `part_index`; when `replacement` is true, consumers replace that complete
+  part instead of appending it.
 - `AgentFinal` — the agent's final complete response for the turn; carries
   `structured_output` when the agent uses a typed `output_type`.
 

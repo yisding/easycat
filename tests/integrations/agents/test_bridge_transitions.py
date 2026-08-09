@@ -124,8 +124,9 @@ class ToolCallPartDelta:
 class PartDeltaEvent:
     """Duck-types as ``pydantic_ai.agent.PartDeltaEvent``."""
 
-    def __init__(self, delta: Any) -> None:
+    def __init__(self, delta: Any, *, index: int = 0) -> None:
         self.delta = delta
+        self.index = index
 
 
 class _ToolPart:

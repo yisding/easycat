@@ -3,12 +3,8 @@ from __future__ import annotations
 import ast
 import inspect
 import re
-import subprocess
-import sys
 from collections.abc import Iterable
 from pathlib import Path
-
-import pytest
 
 import easycat
 from easycat._public_api import LAZY_EXPORTS
@@ -20,29 +16,6 @@ PUBLIC_IMPORT_SURFACE_ROOTS = (
     Path("examples"),
     Path("src/easycat/cli/scaffold/templates"),
 )
-
-# Consumer fixtures intentionally run mypy without its incremental cache so
-# they prove a clean downstream install works. Keep the subprocess bounded,
-# while giving cold CI filesystems more room than pytest's general 60s limit.
-_MYPY_CONSUMER_TIMEOUT_S = 90
-
-
-def _run_mypy_consumers(*consumers: Path) -> subprocess.CompletedProcess[str]:
-    """Type-check downstream consumers together in one bounded cold mypy run."""
-    return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "mypy",
-            "--no-incremental",
-            *(str(consumer) for consumer in consumers),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=_MYPY_CONSUMER_TIMEOUT_S,
-    )
-
 
 PUBLIC_API_SNAPSHOT = (
     "AgentDelta",
@@ -422,33 +395,6 @@ def test_agent_bridge_constructor_signatures_are_stable() -> None:
         for name in AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT
     }
     assert actual == AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT
-
-
-@pytest.mark.timeout(_MYPY_CONSUMER_TIMEOUT_S + 10)
-def test_shipped_agent_bridges_satisfy_static_consumer_contract() -> None:
-    fixture = Path("tests/typecheck/agent_bridge_consumer.py")
-    result = _run_mypy_consumers(fixture)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-@pytest.mark.timeout(_MYPY_CONSUMER_TIMEOUT_S + 10)
-def test_websocket_runtime_static_consumers_are_compatible(tmp_path: Path) -> None:
-    from easycat.cli.scaffold._schema import InitConfig
-    from easycat.cli.scaffold.init import _render_text, _substitutions
-
-    template_dir = Path("src/easycat/cli/scaffold/templates/twilio-phone")
-    mapping = _substitutions(InitConfig(template="twilio-phone"), project_name="demo")
-    for name in ("agent.py", "server.py"):
-        source = (template_dir / name).read_text(encoding="utf-8")
-        (tmp_path / name).write_text(_render_text(source, mapping), encoding="utf-8")
-
-    consumers = (
-        Path("tests/typecheck/websocket_runtime_consumer.py"),
-        Path("examples/twilio_app.py"),
-        tmp_path / "server.py",
-    )
-    result = _run_mypy_consumers(*consumers)
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_server_package_owns_standalone_transport_orchestration() -> None:

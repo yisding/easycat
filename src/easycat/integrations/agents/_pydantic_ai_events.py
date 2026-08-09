@@ -24,7 +24,10 @@ def _translate_part_start(
     if type(event).__name__ != "PartStartEvent" or type(part).__name__ != "TextPart":
         return None
     content = getattr(part, "content", "") or ""
-    return AgentBridgeEvent(kind="text_delta", text=content) if content else None
+    part_index = getattr(event, "index", None)
+    if not isinstance(part_index, int) or isinstance(part_index, bool) or part_index < 0:
+        return None
+    return AgentBridgeEvent(kind="text_replace", text=content, part_index=part_index)
 
 
 def _translate_delta(
@@ -36,7 +39,15 @@ def _translate_delta(
     delta_cls = type(delta).__name__
     if delta_cls == "TextPartDelta":
         content = getattr(delta, "content_delta", "") or ""
-        return AgentBridgeEvent(kind="text_delta", text=content) if content else None
+        part_index = getattr(event, "index", None)
+        return (
+            AgentBridgeEvent(kind="text_delta", text=content, part_index=part_index)
+            if content
+            and isinstance(part_index, int)
+            and not isinstance(part_index, bool)
+            and part_index >= 0
+            else None
+        )
     if delta_cls != "ToolCallPartDelta":
         return None
 

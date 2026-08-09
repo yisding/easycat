@@ -407,10 +407,10 @@ asyncio_mode = "auto"
 # intervals before it stops. Allow one replacement so a single crashed
 # worker does not abort the rest of the suite, while a second crash ends the
 # run instead of starting a long replacement cycle.
-# Tests that call live provider APIs or provision external SDKs, binaries, or
-# services run only when explicitly selected. Keeping both out of bare pytest
-# prevents credentials in a developer shell from turning a local run billable.
-addopts = '--durations=15 --durations-min=1.0 --max-worker-restart=1 -m "not integration_live and not integration_external"'
+# Tests that call live provider APIs, provision external services, or fork the
+# current pytest process run only when explicitly selected. This keeps bare
+# pytest non-billable and avoids forking pytest's own helper threads.
+addopts = '--durations=15 --durations-min=1.0 --max-worker-restart=1 -m "not integration_live and not integration_external and not serial"'
 testpaths = ["tests"]
 strict_markers = true
 strict_config = true
@@ -426,6 +426,7 @@ markers = [
     "integration_socket: tests requiring localhost socket bind/connect permissions",
     "integration_live: tests requiring live provider/API endpoints, API keys, and optional provider extras",
     "integration_external: tests requiring external local binaries, SDKs, or services without live provider API credentials",
+    "serial: tests that must not run inside an xdist worker, such as direct os.fork coverage",
     "slow: long-running end-to-end tests; opt in with '-m slow'",
     "contract: provider, protocol, or bridge contract tests",
     "latency: latency measurement or latency SLO tests",

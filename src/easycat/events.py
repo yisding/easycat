@@ -130,9 +130,15 @@ class STTFinal(Event):
 # Agent
 @dataclass(frozen=True)
 class AgentDelta(Event):
-    """Streaming text delta from the agent."""
+    """Streaming text update from the agent.
+
+    Most events append ``text``. When ``replacement`` is true, consumers
+    replace the complete text part at ``part_index`` instead.
+    """
 
     text: str
+    part_index: int | None = field(default=None, kw_only=True)
+    replacement: bool = field(default=False, kw_only=True)
 
 
 @dataclass(frozen=True)

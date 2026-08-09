@@ -25,6 +25,7 @@ from uuid import uuid4
 from easycat._numeric import is_finite_number
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._helpers import INTERRUPTION_NOTE, aclose_quietly
+from easycat.integrations.agents._text_stream import AgentTextStream
 from easycat.integrations.agents.base import (
     NULL_RECORDER,
     AgentBridgeEvent,
@@ -59,7 +60,7 @@ def _require_agent_text(value: Any, *, source: str) -> str:
 def _bridge_event_text(event: Any, kind: Any) -> str:
     """Validate text only for text-bearing kinds; tool/handoff events from
     duck-typed bridges may legitimately carry ``text=None``."""
-    if kind not in ("text_delta", "done"):
+    if kind not in ("text_delta", "text_replace", "done"):
         return ""
     return _require_agent_text(
         getattr(event, "text", None),
@@ -441,7 +442,7 @@ class AgentRunner:
                 turn_id=turn_input.turn_id,
                 role=turn_input.role,
             )
-        accumulated = ""
+        accumulated = AgentTextStream()
         timeout = self._config.timeout
         deadline = time.monotonic() + timeout if timeout is not None else None
         inner_iter = self._agent.invoke(bridge_input, recorder, cancel_token)
@@ -469,12 +470,12 @@ class AgentRunner:
                     return
                 kind = getattr(event, "kind", None)
                 text = _bridge_event_text(event, kind)
-                if kind == "text_delta":
-                    accumulated += text
+                if kind in {"text_delta", "text_replace"}:
+                    accumulated.apply(event)
                 elif kind == "done":
                     await close_stream_after_done(inner_iter)
                     if commit_guard is None or commit_guard():
-                        self._append_completed_turn(turn_input, text or accumulated)
+                        self._append_completed_turn(turn_input, text or accumulated.text)
                     yield event
                     return
                 yield event
@@ -648,13 +649,13 @@ class AgentRunner:
 
     async def run(self, text: str) -> str:
         """Convenience: drive :meth:`invoke` and return the final text."""
-        accumulated = ""
+        accumulated = AgentTextStream()
         async for event in self.invoke(AgentTurnInput.from_text(text), NULL_RECORDER):
-            if event.kind == "text_delta":
-                accumulated += event.text
+            if event.kind in {"text_delta", "text_replace"}:
+                accumulated.apply(event)
             elif event.kind == "done" and event.text:
-                accumulated = event.text
-        return accumulated
+                accumulated.replace_final(event.text)
+        return accumulated.text
 
     # ── Lifecycle ──────────────────────────────────────────────
 
