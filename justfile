@@ -70,7 +70,7 @@ fmt-check:
 # the stricter overrides documented in pyproject.toml.
 # Run the authoritative whole-package mypy gate.
 typecheck:
-    uv run mypy src/easycat scripts/smoke_legacy_langchain_examples.py
+    uv run mypy src/easycat scripts/smoke_langchain_versions.py
 
 # Fast local-only type feedback via Astral ty (beta; not a CI gate).
 # Runs on demand through uvx, so no dev-dependency install is needed.

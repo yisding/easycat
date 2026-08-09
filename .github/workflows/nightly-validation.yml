@@ -158,6 +158,8 @@ jobs:
   # - pydantic-ai and pydantic-ai-v2 are mutually exclusive pins; they
   #   never co-install because each cell syncs exactly one extra into a fresh
   #   environment (uv sync is exact and removes anything not requested).
+  # - langchain and langchain-v0 are separate 1.x / 0.3.x lines. Each cell
+  #   installs one complete line and runs the same exact bridge contract.
   # - ten-vad is deliberately excluded: its non-permissive license is an
   #   end-user opt-in, and installing it here would have project CI accept
   #   those terms nightly. See EXCLUDED_EXTRAS in scripts/extras_matrix.py.

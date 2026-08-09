@@ -1,4 +1,4 @@
-"""Agent-initiated session actions — LangChain.
+"""Agent-initiated session actions — LangChain 0.3.
 
 Shows the simplest session action that works on every transport: ending
 the session after the current reply finishes. The ``end_call`` tool
@@ -10,8 +10,7 @@ closure rather than a deps/context parameter.
 For telephony-specific actions (transfer, DTMF, SMS) see
 ``examples/twilio_app.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --group dev
-       uv pip install "langchain<1" "langchain-openai<1"
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain-v0 --group dev
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
        uv run easycat doctor --env-file .env --json  # for parseable checks
@@ -20,8 +19,8 @@ Run:   uv run python examples/session_actions_langchain.py
 
 LangChain 1.x removed ``create_tool_calling_agent`` (the recommended
 replacement, ``langchain.agents.create_agent``, returns a LangGraph
-``CompiledStateGraph``).  This example pins the still-supported 0.3.x
-line so the LangChain bridge keeps a runnable demo.
+``CompiledStateGraph``). This example exercises the separately installed and
+tested 0.3.x compatibility line.
 """
 
 try:
@@ -31,10 +30,9 @@ try:
     from langchain_openai import ChatOpenAI
 except ImportError as exc:
     raise SystemExit(
-        "LangChain (<1.0) is required. For an app, run: "
-        "`uv add 'easycat[quickstart]' 'langchain<1' 'langchain-openai<1'`. "
-        "In this repo, run: uv sync --extra quickstart --group dev; "
-        'uv pip install "langchain<1" "langchain-openai<1"'
+        "LangChain 0.3 is required. For an app, run: "
+        "`uv add 'easycat[quickstart,langchain-v0]'`. In this repo, run: "
+        "uv sync --extra quickstart --extra langchain-v0 --group dev"
     ) from exc
 
 from easycat import EasyConfig, SessionActions, run

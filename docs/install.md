@@ -99,7 +99,8 @@ Commands below are for this repository. In an application, use the equivalent
 | OpenAI Agents SDK | `uv sync --extra openai-agents --group dev` |
 | PydanticAI stable v1 | `uv sync --extra pydantic-ai --group dev` |
 | PydanticAI stable v2 | `uv sync --extra pydantic-ai-v2 --group dev` |
-| LangChain core | `uv sync --extra langchain --group dev` |
+| LangChain 1.x | `uv sync --extra langchain --group dev` |
+| LangChain 0.3 | `uv sync --extra langchain-v0 --group dev` |
 | LangGraph | `uv sync --extra langgraph --group dev` |
 | LlamaAgents/LlamaIndex workflows | `uv sync --extra llama-agents --group dev` |
 | OpenAI providers | `uv sync --extra openai --group dev` |
@@ -121,11 +122,18 @@ uv pip install krisp_audio
 ```
 
 Deepgram, ElevenLabs, and Cartesia use EasyCat's core WebSocket/HTTP stack, so
-their extras are install markers and do not add vendor SDKs. LangChain model
-packages such as `langchain-openai` remain application choices.
+their extras are install markers and do not add vendor SDKs. The `langchain`
+and `langchain-v0` extras each install a complete, compatible LangChain and
+`langchain-openai` line for the maintained examples. Other LangChain model
+integrations remain application choices.
 
 The `pydantic-ai` extra targets stable v1. The `pydantic-ai-v2` extra installs
 `pydantic-ai>=2.24.0,<3.0.0`; the two extras are mutually exclusive.
+
+The `langchain` extra targets 1.x and `langchain-v0` targets 0.3.x. Both lines
+run the same EasyCat bridge contract in isolated CI environments. They are
+mutually exclusive, and `langchain-v0` also cannot be combined with `langgraph`
+or `all` because those selections require `langchain-core` 1.x.
 
 ## Broad evaluation install
 
@@ -146,8 +154,9 @@ uv sync --extra all --extra pydantic-ai-v2 --group dev
 ```
 
 The `all` extra deliberately omits `ten-vad` because of its non-permissive
-license and omits the mutually exclusive `pydantic-ai` and `pydantic-ai-v2`
-extras.
+license, omits the mutually exclusive `pydantic-ai` and `pydantic-ai-v2`
+extras, and omits `langchain-v0` because the broad install includes LangChain
+1.x and LangGraph. Install `langchain-v0` separately when targeting 0.3.x.
 
 ## Credentials without accidental overwrites
 

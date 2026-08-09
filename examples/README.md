@@ -46,9 +46,8 @@ emit the run or saved report inside the standard CLI envelope.
 NumPy, ONNX Runtime, and LiveKit AEC3 echo cancellation. RNNoise is opt-in
 through the `rnnoise` extra. It does not install every framework/provider
 variant. Install cells start with a complete repo-local `uv sync` command.
-After a semicolon, `--extra <name>` snippets extend that sync command; package
-specifiers such as `langchain<1` or `krisp_audio` are installed in the same
-environment with `uv pip install`.
+After a semicolon, `--extra <name>` snippets extend that sync command; packages
+such as `krisp_audio` are installed in the same environment with `uv pip install`.
 
 ## Choose An Example
 
@@ -70,7 +69,7 @@ environment with `uv pip install`.
 | [openai_agents_voice.py](openai_agents_voice.py) | First local mic/speaker bot with OpenAI Agents SDK. | `uv run python examples/openai_agents_voice.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [pydantic_ai_voice.py](pydantic_ai_voice.py) | Single-agent PydanticAI voice bot. | `uv run python examples/pydantic_ai_voice.py` | `uv sync --extra quickstart --extra pydantic-ai --group dev` | `OPENAI_API_KEY` |
 | [pydantic_ai_workflow_voice.py](pydantic_ai_workflow_voice.py) | Workflow-level PydanticAI hand-off across turns. | `uv run python examples/pydantic_ai_workflow_voice.py` | `uv sync --extra quickstart --extra pydantic-ai --group dev` | `OPENAI_API_KEY` |
-| [langchain_voice.py](langchain_voice.py) | LangChain LCEL runnable bridged into voice. | `uv run python examples/langchain_voice.py` | `uv sync --extra quickstart --extra langchain --group dev`; `langchain-openai` | `OPENAI_API_KEY` |
+| [langchain_voice.py](langchain_voice.py) | LangChain 1.x LCEL runnable bridged into voice. | `uv run python examples/langchain_voice.py` | `uv sync --extra quickstart --extra langchain --group dev` | `OPENAI_API_KEY` |
 | [langgraph_voice.py](langgraph_voice.py) | LangGraph state graph bridged into voice. | `uv run python examples/langgraph_voice.py` | `uv sync --extra quickstart --extra langgraph --group dev`; `langchain-openai` | `OPENAI_API_KEY` |
 
 ## Agent Tools And Session Actions
@@ -79,11 +78,11 @@ environment with `uv pip install`.
 | --- | --- | --- | --- | --- |
 | [function_tools_openai.py](function_tools_openai.py) | OpenAI Agents SDK function tools. | `uv run python examples/function_tools_openai.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [function_tools_pydantic.py](function_tools_pydantic.py) | PydanticAI function tools. | `uv run python examples/function_tools_pydantic.py` | `uv sync --extra quickstart --extra pydantic-ai --group dev` | `OPENAI_API_KEY` |
-| [function_tools_langchain.py](function_tools_langchain.py) | Legacy LangChain `AgentExecutor` tools. | `uv run python examples/function_tools_langchain.py` | `uv sync --extra quickstart --group dev`; `langchain<1`, `langchain-openai<1` | `OPENAI_API_KEY` |
+| [function_tools_langchain.py](function_tools_langchain.py) | LangChain 0.3 `AgentExecutor` tools. | `uv run python examples/function_tools_langchain.py` | `uv sync --extra quickstart --extra langchain-v0 --group dev` | `OPENAI_API_KEY` |
 | [function_tools_langgraph.py](function_tools_langgraph.py) | LangGraph ReAct tools. | `uv run python examples/function_tools_langgraph.py` | `uv sync --extra quickstart --extra langgraph --group dev`; `langchain-openai` | `OPENAI_API_KEY` |
 | [session_actions_openai.py](session_actions_openai.py) | OpenAI tool that queues EasyCat session actions. | `uv run python examples/session_actions_openai.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [session_actions_pydantic.py](session_actions_pydantic.py) | PydanticAI tool that queues session actions through deps. | `uv run python examples/session_actions_pydantic.py` | `uv sync --extra quickstart --extra pydantic-ai --group dev` | `OPENAI_API_KEY`, optional `PYDANTIC_AI_MODEL` |
-| [session_actions_langchain.py](session_actions_langchain.py) | Legacy LangChain tool that can end the current session. | `uv run python examples/session_actions_langchain.py` | `uv sync --extra quickstart --group dev`; `langchain<1`, `langchain-openai<1` | `OPENAI_API_KEY` |
+| [session_actions_langchain.py](session_actions_langchain.py) | LangChain 0.3 tool that can end the current session. | `uv run python examples/session_actions_langchain.py` | `uv sync --extra quickstart --extra langchain-v0 --group dev` | `OPENAI_API_KEY` |
 | [session_actions_langgraph.py](session_actions_langgraph.py) | LangGraph tool that can end the current session. | `uv run python examples/session_actions_langgraph.py` | `uv sync --extra quickstart --extra langgraph --group dev`; `langchain-openai` | `OPENAI_API_KEY` |
 | [agent_event_subscription.py](agent_event_subscription.py) | Subscribe to agent deltas and tool-call events from the session. | `uv run python examples/agent_event_subscription.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 

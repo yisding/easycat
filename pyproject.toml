@@ -60,11 +60,22 @@ openai-agents = ["openai-agents>=0.19.4"]
 # can be removed, and the [tool.uv].conflicts entry below can be collapsed.
 pydantic-ai = ["pydantic-ai>=1.99.0,<2.0.0"]
 pydantic-ai-v2 = ["pydantic-ai>=2.24.0,<3.0.0"]
-# Advisory floor: 1.2.28 includes the LangChain prompt-validation fixes from
-# GHSA-c67j-w6g6-q2cm, GHSA-qh6h-p6c9-ff54, and GHSA-926x-3r5x-gfhw. The
-# higher 1.5.3 requirement below is the enforced compatibility floor.
-langchain = ["langchain-core>=1.5.3"]
-langgraph = ["langchain-core>=1.5.3", "langgraph>=1.2.10"]
+# LangChain 0.3 and 1.x are separate, equally supported compatibility lines.
+# Keep each extra self-contained so examples and downstream apps cannot combine
+# a full LangChain package from one major with langchain-core from the other.
+# The 1.5.3 core floor also includes the prompt-validation fixes covered by
+# GHSA-c67j-w6g6-q2cm, GHSA-qh6h-p6c9-ff54, and GHSA-926x-3r5x-gfhw.
+langchain = [
+    "langchain>=1.3.14,<2.0.0",
+    "langchain-core>=1.5.3,<2.0.0",
+    "langchain-openai>=1.4.0,<2.0.0",
+]
+langchain-v0 = [
+    "langchain>=0.3.30,<1.0.0",
+    "langchain-core>=0.3.85,<1.0.0",
+    "langchain-openai>=0.3.35,<1.0.0",
+]
+langgraph = ["langchain-core>=1.5.3,<2.0.0", "langgraph>=1.2.10"]
 llama-agents = ["llama-index-workflows>=2.23.0,<3.0.0", "llama-agents-client>=0.3.11,<1.0.0"]
 openai = ["openai>=2.53.0"]
 # Deepgram, ElevenLabs, and Cartesia STT/TTS talk directly to their
@@ -118,10 +129,12 @@ quickstart = [
     "onnxruntime>=1.28.0",
     "livekit>=1.1.14",
 ]
-# ``all`` is the union of every extra EXCEPT three deliberate exclusions:
+# ``all`` is the union of every extra EXCEPT four deliberate exclusions:
 #   - ten-vad: non-permissive license (binaries not vendored)
 #   - pydantic-ai / pydantic-ai-v2: mutually exclusive; see
 #     [tool.uv].conflicts below
+#   - langchain-v0: conflicts with the LangChain 1.x / LangGraph packages in
+#     this broad install; select it separately instead
 # tests/test_dependency_policy.py enforces this union invariant.
 all = [
     "aioquic>=1.3.0,<2",
@@ -131,7 +144,9 @@ all = [
     "fastapi>=0.141.1",
     "openai>=2.53.0",
     "openai-agents>=0.19.4",
-    "langchain-core>=1.5.3",
+    "langchain>=1.3.14,<2.0.0",
+    "langchain-core>=1.5.3,<2.0.0",
+    "langchain-openai>=1.4.0,<2.0.0",
     "langgraph>=1.2.10",
     "llama-index-workflows>=2.23.0,<3.0.0",
     "llama-agents-client>=0.3.11,<1.0.0",
@@ -224,6 +239,18 @@ conflicts = [
     [
         { extra = "pydantic-ai" },
         { extra = "pydantic-ai-v2" },
+    ],
+    [
+        { extra = "langchain" },
+        { extra = "langchain-v0" },
+    ],
+    [
+        { extra = "langchain-v0" },
+        { extra = "langgraph" },
+    ],
+    [
+        { extra = "langchain-v0" },
+        { extra = "all" },
     ],
 ]
 

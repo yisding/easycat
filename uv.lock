@@ -13,6 +13,15 @@ resolution-markers = [
 conflicts = [[
     { package = "easycat", extra = "pydantic-ai" },
     { package = "easycat", extra = "pydantic-ai-v2" },
+], [
+    { package = "easycat", extra = "langchain" },
+    { package = "easycat", extra = "langchain-v0" },
+], [
+    { package = "easycat", extra = "langchain-v0" },
+    { package = "easycat", extra = "langgraph" },
+], [
+    { package = "easycat", extra = "all" },
+    { package = "easycat", extra = "langchain-v0" },
 ]]
 
 [options]
@@ -72,7 +81,7 @@ dependencies = [
     { name = "frozenlist" },
     { name = "multidict" },
     { name = "propcache" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "yarl" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/58/d9/22ce5786ac0c1653ae8b6c23bded02c1686d11f0dbb45b31ce128e0df985/aiohttp-3.14.3.tar.gz", hash = "sha256:9491196535a88924a60afd5b5f434b5b203b6cc616250878dbdb223a8f7844bc", size = 7971213, upload-time = "2026-07-23T01:57:27.037Z" }
@@ -254,7 +263,7 @@ version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frozenlist" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
@@ -304,7 +313,7 @@ version = "4.14.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "idna" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/cc/a381afa6efea9f496eff839d4a6a1aed3bfafc7b3ab4b0d1b243a12573dd/anyio-4.14.2.tar.gz", hash = "sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f", size = 260176, upload-time = "2026-07-12T20:29:07.082Z" }
 wheels = [
@@ -555,7 +564,7 @@ name = "cffi"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz", hash = "sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be", size = 530807, upload-time = "2026-08-03T21:21:18.939Z" }
 wheels = [
@@ -773,7 +782,7 @@ name = "click"
 version = "8.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/76/d4/81420972a676e8ffea40450d8c8c92943e7218a78fe9b64359836cc9876b/click-8.4.2.tar.gz", hash = "sha256:9a6cea6e60b17ebe0a44c5cc636d94f09bd66142c1cd7d8b4cd731c4917a15f6", size = 338000, upload-time = "2026-06-24T17:45:15.148Z" }
 wheels = [
@@ -976,7 +985,7 @@ wheels = [
 
 [package.optional-dependencies]
 toml = [
-    { name = "tomli", marker = "python_full_version <= '3.11' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "tomli", marker = "python_full_version <= '3.11' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 
 [[package]]
@@ -984,7 +993,7 @@ name = "cryptography"
 version = "50.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/de/41/6cbdcf9142d00fe82836fbb51e503e58088575cf7a0fe1dbff6695bf0840/cryptography-50.0.0.tar.gz", hash = "sha256:eeac2acb5a20ed25e0ad6d1df9891a520b78b404266b6d11778f25d5d691a6c9", size = 880201, upload-time = "2026-07-31T14:25:10.11Z" }
 wheels = [
@@ -1064,8 +1073,8 @@ name = "deprecated"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "wrapt", version = "1.17.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "wrapt", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "wrapt", version = "1.17.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "wrapt", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/49/85/12f0a49a7c4ffb70572b6c2ef13c90c88fd190debda93b23f026b25f9634/deprecated-1.3.1.tar.gz", hash = "sha256:b1b50e0ff0c1fddaa5708a2c6b0a6588bb09b892825ab2b214ac9ea9d92a5223", size = 2932523, upload-time = "2025-10-30T08:19:02.757Z" }
 wheels = [
@@ -1147,7 +1156,9 @@ all = [
     { name = "aiortc" },
     { name = "fastapi" },
     { name = "kaldi-native-fbank" },
-    { name = "langchain-core" },
+    { name = "langchain", version = "1.3.14", source = { registry = "https://pypi.org/simple" } },
+    { name = "langchain-core", version = "1.5.3", source = { registry = "https://pypi.org/simple" } },
+    { name = "langchain-openai", version = "1.4.1", source = { registry = "https://pypi.org/simple" } },
     { name = "langgraph" },
     { name = "livekit" },
     { name = "llama-agents-client" },
@@ -1173,10 +1184,17 @@ funasr-vad = [
     { name = "onnxruntime" },
 ]
 langchain = [
-    { name = "langchain-core" },
+    { name = "langchain", version = "1.3.14", source = { registry = "https://pypi.org/simple" } },
+    { name = "langchain-core", version = "1.5.3", source = { registry = "https://pypi.org/simple" } },
+    { name = "langchain-openai", version = "1.4.1", source = { registry = "https://pypi.org/simple" } },
+]
+langchain-v0 = [
+    { name = "langchain", version = "0.3.30", source = { registry = "https://pypi.org/simple" } },
+    { name = "langchain-core", version = "0.3.86", source = { registry = "https://pypi.org/simple" } },
+    { name = "langchain-openai", version = "0.3.35", source = { registry = "https://pypi.org/simple" } },
 ]
 langgraph = [
-    { name = "langchain-core" },
+    { name = "langchain-core", version = "1.5.3", source = { registry = "https://pypi.org/simple" } },
     { name = "langgraph" },
 ]
 llama-agents = [
@@ -1280,9 +1298,16 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "kaldi-native-fbank", marker = "extra == 'all'", specifier = ">=1.22.3" },
     { name = "kaldi-native-fbank", marker = "extra == 'funasr-vad'", specifier = ">=1.22.3" },
-    { name = "langchain-core", marker = "extra == 'all'", specifier = ">=1.5.3" },
-    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.5.3" },
-    { name = "langchain-core", marker = "extra == 'langgraph'", specifier = ">=1.5.3" },
+    { name = "langchain", marker = "extra == 'all'", specifier = ">=1.3.14,<2.0.0" },
+    { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.3.14,<2.0.0" },
+    { name = "langchain", marker = "extra == 'langchain-v0'", specifier = ">=0.3.30,<1.0.0" },
+    { name = "langchain-core", marker = "extra == 'all'", specifier = ">=1.5.3,<2.0.0" },
+    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.5.3,<2.0.0" },
+    { name = "langchain-core", marker = "extra == 'langchain-v0'", specifier = ">=0.3.85,<1.0.0" },
+    { name = "langchain-core", marker = "extra == 'langgraph'", specifier = ">=1.5.3,<2.0.0" },
+    { name = "langchain-openai", marker = "extra == 'all'", specifier = ">=1.4.0,<2.0.0" },
+    { name = "langchain-openai", marker = "extra == 'langchain'", specifier = ">=1.4.0,<2.0.0" },
+    { name = "langchain-openai", marker = "extra == 'langchain-v0'", specifier = ">=0.3.35,<1.0.0" },
     { name = "langgraph", marker = "extra == 'all'", specifier = ">=1.2.10" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.2.10" },
     { name = "livekit", marker = "extra == 'aec'", specifier = ">=1.1.14" },
@@ -1336,7 +1361,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'telephony-fastapi'", specifier = ">=0.52.1" },
     { name = "websockets", specifier = ">=14.0,<17" },
 ]
-provides-extras = ["openai-agents", "pydantic-ai", "pydantic-ai-v2", "langchain", "langgraph", "llama-agents", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "telephony-fastapi", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "funasr-vad", "smart-turn", "debugger", "webrtc", "webtransport", "quickstart", "all"]
+provides-extras = ["openai-agents", "pydantic-ai", "pydantic-ai-v2", "langchain", "langchain-v0", "langgraph", "llama-agents", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "telephony-fastapi", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "funasr-vad", "smart-turn", "debugger", "webrtc", "webtransport", "quickstart", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1388,7 +1413,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1480,7 +1505,7 @@ name = "fastmcp"
 version = "3.4.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "fastmcp-slim", extra = ["client", "server"], marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "fastmcp-slim", extra = ["client", "server"], marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/5a/e2c78e26233cd8a416b21513e1925435d54c008a0ec467dbdaa80369daf7/fastmcp-3.4.6.tar.gz", hash = "sha256:2287938da8364ad7071bec2d2393af6ae10fd4e836f06f506569f1456cc87eb4", size = 28808130, upload-time = "2026-08-05T14:54:42.177Z" }
 wheels = [
@@ -1493,7 +1518,7 @@ version = "3.4.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "platformdirs" },
-    { name = "pydantic", extra = ["email"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "pydantic", extra = ["email"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "rich" },
@@ -1510,9 +1535,9 @@ client = [
     { name = "exceptiongroup" },
     { name = "httpx" },
     { name = "mcp" },
-    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
     { name = "starlette" },
 ]
 server = [
@@ -1528,7 +1553,7 @@ server = [
     { name = "openapi-pydantic" },
     { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" } },
     { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"], marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"], marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
     { name = "pyperclip" },
     { name = "python-multipart" },
     { name = "pyyaml" },
@@ -1799,7 +1824,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "distro" },
-    { name = "google-auth", extra = ["requests"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "google-auth", extra = ["requests"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "requests" },
@@ -1818,12 +1843,89 @@ name = "googleapis-common-protos"
 version = "1.75.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b5/c8/f439cffde755cffa462bfbb156278fa6f9d09119719af9814b858fd4f81f/googleapis_common_protos-1.75.0.tar.gz", hash = "sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd", size = 151035, upload-time = "2026-05-07T08:04:49.423Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e7/c8/e2645aa8ed02fd4c7a2f59d68783b65b1f3cbdfe39a6308e156509d1fee8/googleapis_common_protos-1.75.0-py3-none-any.whl", hash = "sha256:961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed", size = 300631, upload-time = "2026-05-07T08:03:30.345Z" },
+]
+
+[[package]]
+name = "greenlet"
+version = "3.5.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a3/74/b13368064b09053253555d3f2839cc2684d22d5aed0d2ccffbf7a6736558/greenlet-3.5.4.tar.gz", hash = "sha256:0232ae1de90a8e07867bb127d7a6ba2301e859145489f25cda8a6096dabe1d20", size = 206538, upload-time = "2026-07-22T12:47:14.468Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/61/16/71eefcf68267bbf06a9b6bff57d0b222e49432326e85d74348b67694b8d4/greenlet-3.5.4-cp311-cp311-macosx_11_0_universal2.whl", hash = "sha256:e883de250e299654b1f1680f72a1a9f9ba62c9bd1bce84099c90657349a8dfbb", size = 294266, upload-time = "2026-07-22T11:37:56.142Z" },
+    { url = "https://files.pythonhosted.org/packages/36/ea/a0b19adfc35d07e10acb626e9d22a3893b95f1309c42c4a20161dec16800/greenlet-3.5.4-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:32802705c2c1ff25e8237b3bdacf2594fa02be80af8a66703eb7853ea7e68686", size = 613712, upload-time = "2026-07-22T12:26:39.375Z" },
+    { url = "https://files.pythonhosted.org/packages/54/76/a121978b3337407d05a1ce5f79b4aa5998a43a9d8422f9726029b90b4471/greenlet-3.5.4-cp311-cp311-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:57aa201b351f7c7c75627c60d29e4d5b97a07d37efeb62b903466fca42c097d7", size = 625582, upload-time = "2026-07-22T12:29:00.814Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/4a/f301f1d85c69a86b90b5d581a73e8927bba4e79450037e6e2cbca05eb4fd/greenlet-3.5.4-cp311-cp311-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:9667862a2e38ad379f11b845daeda22c8989186def44f06962c9c4c05e556da7", size = 633429, upload-time = "2026-07-22T12:43:42.073Z" },
+    { url = "https://files.pythonhosted.org/packages/34/c2/080f16cf870e929e592f55767f01d6c98d2ee83bfdc36c3b892f2d0459ab/greenlet-3.5.4-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c3fe76c2cac86b4f7a1e92865ac0a54384deb05c92986287c1a7110d9bd53071", size = 624663, upload-time = "2026-07-22T11:51:08.016Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/2e/26884072b0eb343a4d5fee903341bfe5171b32b7f14553886e2b6349135a/greenlet-3.5.4-cp311-cp311-manylinux_2_39_riscv64.whl", hash = "sha256:ae53534b5dec0f4c2ec26f898f538dc8ea1ca3ef2927d597a9439e40a09da937", size = 428238, upload-time = "2026-07-22T12:39:49.973Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/bb/8f3ca88370b817369008faeceeee85970adc16c92a70a3e5fe5fea495a57/greenlet-3.5.4-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:1e1a4a684b16c45ba324e60b32a4386a87722bcb815d2a149d2182f9b401ca72", size = 1585010, upload-time = "2026-07-22T12:25:02.539Z" },
+    { url = "https://files.pythonhosted.org/packages/51/c2/45877154689709ebce9a0b83c2235e6ca0f31577889b02af308c8cc5f8fb/greenlet-3.5.4-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:e849e6e139b9671adeac505f72fc05f4af7fd1921faef40295e214fc3b361b59", size = 1651283, upload-time = "2026-07-22T11:51:10.408Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/7d/8711a75cb61d85246277c07ff6e1a6504621ba473d808c11ad225ffca43f/greenlet-3.5.4-cp311-cp311-win_amd64.whl", hash = "sha256:dc418cf4c873357964d6624445ed09472e50def990c65dd4e76fc3ba8cd9cef6", size = 246434, upload-time = "2026-07-22T11:43:15.557Z" },
+    { url = "https://files.pythonhosted.org/packages/00/62/e290b3bce433da8f0324ac02da0b128d683482229f1a8b789fa47818a4cd/greenlet-3.5.4-cp311-cp311-win_arm64.whl", hash = "sha256:c38c902a0986eba1f6e7ba1ab39ad5195926abde90f3fe080e08212db62176da", size = 244990, upload-time = "2026-07-22T11:39:22.626Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/04/81bd731d6d1e3a469d9a4c36f5eb069bcf0cbb2d5d342c9fec22245b91fc/greenlet-3.5.4-cp312-cp312-macosx_11_0_universal2.whl", hash = "sha256:3d66250e8b09f182ede05490998c818b5961f7a3640332d44c4927caec7bbfe4", size = 295909, upload-time = "2026-07-22T11:38:09.261Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/dd/f5f22903a6ae70f5ea328ed0beaec92ad903f0e3b7d2845133b354abc4b8/greenlet-3.5.4-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c90e930c9c192e5b3ee9fb8bcd920ea3926155e2e3ded39fc697323addecee17", size = 612011, upload-time = "2026-07-22T12:26:40.69Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/10/92a4a88d12b915d74ea5b6d288e4afefda4771647caa34442c156f7a454f/greenlet-3.5.4-cp312-cp312-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:791fdfeeb9c6e0c7b10fa151bf110d2a6974866f13dcb5b1c7efae698245893a", size = 624299, upload-time = "2026-07-22T12:29:02.089Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/f9/03e26be3487c5238e81f2b84714959a86ea8515a869828cf41f4fc54b34e/greenlet-3.5.4-cp312-cp312-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:b7c895310363f310361e0fe2072af85269d2a2a285cd04c0c59e79a5e3670dcf", size = 629603, upload-time = "2026-07-22T12:43:43.456Z" },
+    { url = "https://files.pythonhosted.org/packages/50/6d/0b14bb9db2989f32cd9fe7f76afedea01ee8bee3f87c07e69f24adfe7e63/greenlet-3.5.4-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f88193799d43dbf8c8a806d6405c9c52fe2af40bf75072a606357b33cc336c7f", size = 621541, upload-time = "2026-07-22T11:51:09.464Z" },
+    { url = "https://files.pythonhosted.org/packages/57/6b/7c55ca72ef80d57c16c4a55210f82582622462dc4485799a30f4ec6f3372/greenlet-3.5.4-cp312-cp312-manylinux_2_39_riscv64.whl", hash = "sha256:13b980043cb1b3134e81ea469da1250ddcc6bfe6d245bbaa59168d9cdc8f228f", size = 432554, upload-time = "2026-07-22T12:39:51.379Z" },
+    { url = "https://files.pythonhosted.org/packages/48/3d/25e9a2d9eb6b2e8b7ca4e80a3a26cb887cce6c8e0a87c921164f11bc5574/greenlet-3.5.4-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:b7a5f095767c4493afcd06067f2bb3b8716e3f3f9e92b99c88e7e99f885b3d4d", size = 1581444, upload-time = "2026-07-22T12:25:03.818Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/96/4c9bf2e2c408dcc0556edce69efa9f802e82223573c53240136a086821f1/greenlet-3.5.4-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:42afdc1ab5f66da8c586c32af9224a74a706b4f0ea0dc3a4188a0860a09c65c9", size = 1645842, upload-time = "2026-07-22T11:51:12.295Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/41/303ecb26a3a56122c0f4d4073ee078881847bd6b6f463ae0ec57ec20223b/greenlet-3.5.4-cp312-cp312-win_amd64.whl", hash = "sha256:60149df8f462d1b230038e6590c23c3b4768bb5d6c022b3b6e82532b34b0b8a3", size = 247169, upload-time = "2026-07-22T11:38:19.893Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/e3/ef56864b4c35fcb3eb3b41b869f6cc46f4cd3f5e2c68e74acde8ac433951/greenlet-3.5.4-cp312-cp312-win_arm64.whl", hash = "sha256:77d6ce04fed0d9aeed42e0f37923cc43eba9b027bdd9c34546bb4ccd143d0fe0", size = 245565, upload-time = "2026-07-22T11:38:27.061Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/9a/e51225dcd58713f16ccbdcc501a8da21098ea14515b7870f1f94459e5ff5/greenlet-3.5.4-cp313-cp313-macosx_11_0_universal2.whl", hash = "sha256:24e61b88cb7e1b1d794b32a10cc346ac779681d6d74ff137a3e0a444d2bf1f02", size = 294831, upload-time = "2026-07-22T11:38:53.389Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/ea/de50a50fadf979713ab18b46f22ad5ff5f2dcfc637a3ebdecf669801e1a5/greenlet-3.5.4-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:870d730fec833f5a06906a32596cc099b9161594642a92a520b7a88911c95356", size = 614619, upload-time = "2026-07-22T12:26:42.282Z" },
+    { url = "https://files.pythonhosted.org/packages/db/c7/2aae27fea41205b8650294c301f042a2a4bb6155eea48c995b890a92f2c1/greenlet-3.5.4-cp313-cp313-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:ec5ff0d1878df6af3bf9b638a5a92a7d5693291de77c91bff10fa48519c604ef", size = 627021, upload-time = "2026-07-22T12:29:03.445Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/80/fb4d4788bbc8e54761f1fc88533af9523a6e86299fa113d6e8a8503ed9fc/greenlet-3.5.4-cp313-cp313-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:07bd44616608d873d06735b63ef1a88191d6ca57c8d291d6559c71bc14c0893c", size = 632845, upload-time = "2026-07-22T12:43:45.19Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/56/79fd826f9ccaae0b84e1b4ef68dabba5e105bb044ffcd448a0b782fcba9a/greenlet-3.5.4-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d84d993f6e575c950d91a23c1345d18fe1a4310d447bf630849d7809196b52f0", size = 624002, upload-time = "2026-07-22T11:51:11.391Z" },
+    { url = "https://files.pythonhosted.org/packages/42/e3/6086fa578ebb72772722cdc4bcd628459814b42e0c2db1e3cbd6552b3271/greenlet-3.5.4-cp313-cp313-manylinux_2_39_riscv64.whl", hash = "sha256:3529a8a933582ad19e224792cac7372489526576b75b4c124e8e4f29948f4861", size = 435053, upload-time = "2026-07-22T12:39:52.715Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/1a/27319f97e731298513dcba1a2e91b63e9d8811d9de22130f960b129b1bf1/greenlet-3.5.4-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:58023945f421093de5e6fa108c0985a8659d43f49e0216da25099369a121bcbd", size = 1581533, upload-time = "2026-07-22T12:25:05.322Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/6d/24240bf562e9786dd2799ee0a4a4dadb4ded22510f41b20245099159ac8c/greenlet-3.5.4-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:bae2728e1897aa8df8cb1af38cd48b3a743aefe29372de7b8b7a9f532501e69f", size = 1645781, upload-time = "2026-07-22T11:51:14.805Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/5a/442ab1a9ef7ca6bf7210e5397a95972206a91a31033a03c8900866a10039/greenlet-3.5.4-cp313-cp313-win_amd64.whl", hash = "sha256:ca5726c0b08ca35ae873557266a78b2c3f3b2b7d7401aa5ff886c2045dd0111c", size = 247133, upload-time = "2026-07-22T11:39:20.661Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/e6/9160210222386b1a378ff94db846b9508ca24a121cf684991561fdb69280/greenlet-3.5.4-cp313-cp313-win_arm64.whl", hash = "sha256:7c1303791d603080cac6fc3b34df51c3b75b723739c282c8029e48a0d241672f", size = 245500, upload-time = "2026-07-22T11:40:22.185Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/a7/6ab1d4f9cd548d15ab90da29947f2076100130bb179b0bde59f795a459e3/greenlet-3.5.4-cp314-cp314-macosx_11_0_universal2.whl", hash = "sha256:7e8afa5eac028f8140ceafe5ceec66e6aa127ddcb21452d2a564dcd2900b5f22", size = 295410, upload-time = "2026-07-22T11:40:35.747Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/7a/422f63b4715cbc0b24385305407adf38b48f6bb68b3e6b04090e994d0f5a/greenlet-3.5.4-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:73b37afe369021423ea53dd3123e04bffa7e93ac64429b9f50835b2e4fcae7cf", size = 661286, upload-time = "2026-07-22T12:26:43.8Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/31/5a1cac663bf5582190c5a714ef81364f03cde232227f39748f8ae4c11da5/greenlet-3.5.4-cp314-cp314-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:3ef964f56dfcb6f9bbef2a190d9126795eac408716aeae47b5e7c73c32aafca9", size = 673517, upload-time = "2026-07-22T12:29:04.815Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/bf/250c2921c7b585dde12f5239e313ca2dcbc464d161ecca36e4e6ef21762d/greenlet-3.5.4-cp314-cp314-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:cef589bc65fae02d10bca2ac341191c5b33acc2967892ebf4fcbd10eabb7a74c", size = 677968, upload-time = "2026-07-22T12:43:46.788Z" },
+    { url = "https://files.pythonhosted.org/packages/15/4a/2a82a1e3f8aaca020853ac8d12211280ca2b231aa08ea39f636f1060c319/greenlet-3.5.4-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9c53ff01a5c53a40f2c16820ebc56d7c61a77f5fbe009dadd96292d5682f80f8", size = 670917, upload-time = "2026-07-22T11:51:13.589Z" },
+    { url = "https://files.pythonhosted.org/packages/18/40/10bfcf6513558d82f7b95dd728001c63bd388259fe27d3e30ae01f103430/greenlet-3.5.4-cp314-cp314-manylinux_2_39_riscv64.whl", hash = "sha256:dfc41ae893d9ceaf22c824f2153a88b30651b20e8758c2cd9ac143f23640563c", size = 480643, upload-time = "2026-07-22T12:39:54.149Z" },
+    { url = "https://files.pythonhosted.org/packages/68/b0/e379a152b17bfdfa95795af4049e37c0fd1b4d81f020d426db104ed07c77/greenlet-3.5.4-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:ecca4d80d55a01ad6b23b33262662956149fbb7b2c6be2910f1705921958cbf3", size = 1628478, upload-time = "2026-07-22T12:25:06.678Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/43/bffdfa64f7317f954c5c1230b5dd5922676ce198689a68c1ac1ed4b1b1a5/greenlet-3.5.4-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:2ffbc533e0eaf8e80d8471411646ab88fe58f641d508c0b02b24494479f4d9ec", size = 1692021, upload-time = "2026-07-22T11:51:17.008Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/11/f799f9637e2c6e9b0b716015e339040598b058cf7654dfc0d67468b177ed/greenlet-3.5.4-cp314-cp314-win_amd64.whl", hash = "sha256:305f69e6c4523d7f6979ed001cff4e5853c063e5da04880296603aa0227e544c", size = 248031, upload-time = "2026-07-22T11:40:11.007Z" },
+    { url = "https://files.pythonhosted.org/packages/05/75/625bcdd74d5e6b2dca1ecba3c3ac77bcf8a026c21a649a46cef23e421f97/greenlet-3.5.4-cp314-cp314-win_arm64.whl", hash = "sha256:f260930bbbbcf9caee661211235a5111c86dfe5832fdf6ae4570da1e0995320f", size = 246892, upload-time = "2026-07-22T11:40:27.357Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/69/35c62ed49c320cb4d98e14698ccca5467d3bfe683984172be9cb564d9ce3/greenlet-3.5.4-cp314-cp314t-macosx_11_0_universal2.whl", hash = "sha256:41ddab54e4b238f4a6c323f39b4e59e176affd5a94d461a9fb7583dac74240a3", size = 305571, upload-time = "2026-07-22T11:40:31.659Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/6c/64d60216b3640dcb0b62d913dd9e0d80030c09115bb2e4ba70c95d10ca45/greenlet-3.5.4-cp314-cp314t-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b3dabe3e2809013052c68bdf0b7fa5f5f2859c43a80803131ad61af9cabd7867", size = 672568, upload-time = "2026-07-22T12:26:45.298Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/de/ba3ab0a96292e53039530333b0d2ae18d9e508f3a325cd7bf15f8172944c/greenlet-3.5.4-cp314-cp314t-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:27d3f00718634d4520a3a150154ac5da36f257869d41321953375b90bfbbc72c", size = 680076, upload-time = "2026-07-22T12:29:06.125Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/db/24a10af12bf8e639cec46c38b9ce1a282543ba42ff4fb0b31a970f1ab603/greenlet-3.5.4-cp314-cp314t-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:39169a11d87a6a263afda3e9a27d1df16d0f919d40a4837cc73986c9884c0dd8", size = 681690, upload-time = "2026-07-22T12:43:48.109Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/be/aeada79083c6f1c15f45d77a332f9c441af263ee298e3eb17522cd337d22/greenlet-3.5.4-cp314-cp314t-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:cbd60b5763c6543c1827e48faaf14ea9bfbad245f52b1a4d76a2a2d8884c6c66", size = 676733, upload-time = "2026-07-22T11:51:16.027Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/60/44a2eca7b9fd71ae0fae7ff184da1cd3169d176652b97aa1cffcbb0ef961/greenlet-3.5.4-cp314-cp314t-manylinux_2_39_riscv64.whl", hash = "sha256:bd3d1145f603b2db19feb9078c2e6855eb7c67e15580c010ed815cee519b86fd", size = 510263, upload-time = "2026-07-22T12:39:55.678Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/10/2392fc3a98948652ef5fd1e7275c04f861dd13f74b78a2b4309f4ee4d090/greenlet-3.5.4-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:f00f910f0e7b35416c63b23ad78b769aeccfc1775f712b43c4ee525624a2eef7", size = 1637327, upload-time = "2026-07-22T12:25:07.879Z" },
+    { url = "https://files.pythonhosted.org/packages/55/c6/e7237a3dfa1f205ed0d9ea1e46d70bd2811b32d516266399fb59d28ab90a/greenlet-3.5.4-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:91c26423753b92caf41ab3f98fd547d7374d4d9fc2d85be041886c1579d9255e", size = 1697493, upload-time = "2026-07-22T11:51:19.214Z" },
+    { url = "https://files.pythonhosted.org/packages/55/e3/4ba8154ba2a3d43729e499f72471b4b5c993f3826d3e24da81d5f06d6572/greenlet-3.5.4-cp314-cp314t-win_amd64.whl", hash = "sha256:ee032b91fd8ec29ec6c4cea2b8c561b178435134bd0752c7334b94e9c736c132", size = 251637, upload-time = "2026-07-22T11:40:37.44Z" },
+    { url = "https://files.pythonhosted.org/packages/90/03/e3f96dfc100261a29545ddc8270cafe58f9195b6651466910e820910de77/greenlet-3.5.4-cp315-cp315-macosx_11_0_universal2.whl", hash = "sha256:178111881dd7a6c946471fda85485ec796e1043c2b939f694b096e2ecf986809", size = 296076, upload-time = "2026-07-22T11:39:38.364Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/3d/da52d208e5c977bce8667e784729e584e38b5785f4c1ec0f4c836e9a1c42/greenlet-3.5.4-cp315-cp315-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d92df08dd65fede97fc37aad36c2e9dcda3b31c467f8e0c2c096456cb818e927", size = 666870, upload-time = "2026-07-22T12:26:46.691Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/8a/7e6dee25cb8a8cf9b362c8e597cc269593378bd916f16c736c059a52e85a/greenlet-3.5.4-cp315-cp315-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:99e8f8c4ebc4fd80aa26c1280ae9ad43a0976e786349703a181cf0bae60413e5", size = 677678, upload-time = "2026-07-22T12:29:07.508Z" },
+    { url = "https://files.pythonhosted.org/packages/51/a7/dafc7415d430b0a43a16396eb49ecb3b62fd720877fb259cc4dcfaf5f31e/greenlet-3.5.4-cp315-cp315-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:1f17e362d78e37559e0506c5a7d066bdd45073c36a0127a543e8a0df27242ff3", size = 681428, upload-time = "2026-07-22T12:43:49.623Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/21/5a38699fa45de749e3857d93b8f07e4c20489e77c2d35d915a2e1c456606/greenlet-3.5.4-cp315-cp315-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:394de08dad5ffcb1f50c2159d93e398d9d2da3ed437645eaa54771fa720db9f0", size = 676067, upload-time = "2026-07-22T11:51:18.163Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/d9/6298f3432de301d4718766cf934bd73c418c73f81fbb77247319364b0d96/greenlet-3.5.4-cp315-cp315-manylinux_2_39_riscv64.whl", hash = "sha256:cd320d998cbaa032932830448e39abf3c6a12901295e386e8114db926e10cffb", size = 487446, upload-time = "2026-07-22T12:39:57.044Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/ba/863116ab8ff1ca7a729e327800268939d182db47aa433db70e216e7d9194/greenlet-3.5.4-cp315-cp315-musllinux_1_2_aarch64.whl", hash = "sha256:c883d61f2282d72c767a14936641b3efcbde9d82f1080712aaea0b1d3126cb88", size = 1633489, upload-time = "2026-07-22T12:25:09.605Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/06/7466ced82818d6132462d7f26b3f83c66ea15d2b193a6c0088d558ed7d95/greenlet-3.5.4-cp315-cp315-musllinux_1_2_x86_64.whl", hash = "sha256:2a924f15d17957e252a810acefcb5942f5ca712298e8b6fcaed9a307d357522c", size = 1696584, upload-time = "2026-07-22T11:51:21.304Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/4d/55b638489260065de9ffce606c8b5d04507bef705de4b212a0c3d6a1a0df/greenlet-3.5.4-cp315-cp315-win_amd64.whl", hash = "sha256:ed17e5f3420360d5b459de8462efb52060399a5326a613d4cde31cef63ef95da", size = 248297, upload-time = "2026-07-22T11:42:04.055Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/08/9dd4ae635da93d41dc268bc34bd62a9d711ed8b8825c5d22ac910c7d6e6d/greenlet-3.5.4-cp315-cp315-win_arm64.whl", hash = "sha256:f908898d6fa484ce4b6f447ce70ea99b52c503fee419e53cf74d60a16bc9e667", size = 247423, upload-time = "2026-07-22T11:44:00.764Z" },
+    { url = "https://files.pythonhosted.org/packages/19/66/7c87ed9cdbf1d49c2c6cd1c7b9dd4d16c33b24235ca03972293a1876b30c/greenlet-3.5.4-cp315-cp315t-macosx_11_0_universal2.whl", hash = "sha256:1833637f17d5e7472548a48575c394fe39f1b1890d676d162d86593610f44d8c", size = 306487, upload-time = "2026-07-22T11:41:25.118Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/05/0a4201e7c0054866eefc05da234f236dd4c950d0fbf9ca0517141f01b269/greenlet-3.5.4-cp315-cp315t-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:12cda9122e03341f1cb6b8207a19d7a9d375e52f1b4e9243918375f40fd7b4b9", size = 676479, upload-time = "2026-07-22T12:26:48.129Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/c0/4b6b8c5a3aec70f0649cd89662d120fdd6421e2bdc8e3b15c3ab5ec568d8/greenlet-3.5.4-cp315-cp315t-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:d83ae0e32d14957ab7170785a20f582635c8474deab1bfbb552b17e769a6ce25", size = 684321, upload-time = "2026-07-22T12:29:08.925Z" },
+    { url = "https://files.pythonhosted.org/packages/88/15/0b167aeea95285b0e654ddce651922f666c089363c2ec528ca8b9a9ba74f/greenlet-3.5.4-cp315-cp315t-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:123aa379c962ed5fe90a880327e0c3066124ac64ec99e12a238be9fd8eb3db3d", size = 685995, upload-time = "2026-07-22T12:43:50.993Z" },
+    { url = "https://files.pythonhosted.org/packages/24/c9/b49c31c9a972eee91e260445770e922244a7efc542697f51a012ec046d0f/greenlet-3.5.4-cp315-cp315t-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9f1467de1bb767f75db0aa34c195e3a496d8d1278c796e70c24ce205d3e99cde", size = 681293, upload-time = "2026-07-22T11:51:20.43Z" },
+    { url = "https://files.pythonhosted.org/packages/de/90/c023ec337f32ff505be7db759c80d98f0532bb94d0c6fa13645efe9bee2e/greenlet-3.5.4-cp315-cp315t-manylinux_2_39_riscv64.whl", hash = "sha256:adf2244d7f69409925a8f22ed22cc5f93cdfe5c9dc87ff3476be2c2aaae61a05", size = 516928, upload-time = "2026-07-22T12:39:58.359Z" },
+    { url = "https://files.pythonhosted.org/packages/95/6f/7f2d4653770500eee667866016d42d7a68e3d3462f80df6b8e3fcd48a0eb/greenlet-3.5.4-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:0fa53040b78b578120eecdc0265e3f1051487cc425d11a2b7c761daadf4feaa8", size = 1642474, upload-time = "2026-07-22T12:25:10.819Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/d8/8cba31036a4caae448087ba5d150660ab03b4a0f54d9150f6495a3be7262/greenlet-3.5.4-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:60e0bc961d367df506660e9ac0177a76bc6d81305300704b0977d1634f76efe2", size = 1701012, upload-time = "2026-07-22T11:51:23.17Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/cd/3f77a4cce3bae631b08eb52f53a82a976669600337e21dfdba811cb50267/greenlet-3.5.4-cp315-cp315t-win_amd64.whl", hash = "sha256:f680e549edb3eaf21eea4e7fe101e15ec180c74b7879ab46adc080f22d4015d2", size = 251977, upload-time = "2026-07-22T11:41:38.125Z" },
+    { url = "https://files.pythonhosted.org/packages/93/e8/65e8707d00fe2a49bf12f609a9b2b39ba6dd23c2810eacad877c4fc94bfe/greenlet-3.5.4-cp315-cp315t-win_arm64.whl", hash = "sha256:08fc36de8442d5c3e95b044550dbea9bf144d31ec0cc58e36fb241cb6ef6a994", size = 250538, upload-time = "2026-07-22T11:40:17.985Z" },
 ]
 
 [[package]]
@@ -2091,7 +2193,7 @@ dependencies = [
     { name = "httpcore2" },
     { name = "idna" },
     { name = "truststore" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/21/14/38128fbafd7e0ed41d874df6c9a653d47c2d111cfe59e2b4ac95161b4abd/httpx2-2.9.1.tar.gz", hash = "sha256:1932a768737e3666291582833da748cc4e563c337cf96706fccc04fa6e58764a", size = 95458, upload-time = "2026-07-24T09:21:04.972Z" }
 wheels = [
@@ -2105,7 +2207,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
+    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
     { name = "httpx" },
     { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" } },
     { name = "pyyaml" },
@@ -2248,7 +2350,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "zipp", marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "zipp", marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f3/49/3b30cad09e7771a4982d9975a8cbf64f00d4a1ececb53297f1d9a7be1b10/importlib_metadata-8.7.1.tar.gz", hash = "sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb", size = 57107, upload-time = "2025-12-21T10:00:19.278Z" }
 wheels = [
@@ -2264,7 +2366,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "zipp", marker = "(python_full_version < '3.13' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "zipp", marker = "(python_full_version < '3.13' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/01/15bb152d77b21318514a96f43af312635eb2500c96b55398d020c93d86ea/importlib_metadata-9.0.0.tar.gz", hash = "sha256:a4f57ab599e6a2e3016d7595cfd72eb4661a5106e787a95bcc90c7105b831efc", size = 56405, upload-time = "2026-03-20T06:42:56.999Z" }
 wheels = [
@@ -2297,7 +2399,7 @@ name = "jaraco-context"
 version = "6.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "backports-tarfile", marker = "python_full_version < '3.12'" },
+    { name = "backports-tarfile", marker = "python_full_version < '3.12' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/af/50/4763cd07e722bb6285316d390a164bc7e479db9d90daa769f22578f698b4/jaraco_context-6.1.2.tar.gz", hash = "sha256:f1a6c9d391e661cc5b8d39861ff077a7dc24dc23833ccee564b234b81c82dfe3", size = 16801, upload-time = "2026-03-20T22:13:33.922Z" }
 wheels = [
@@ -2561,14 +2663,14 @@ name = "keyring"
 version = "25.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "importlib-metadata", version = "8.7.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.12' and extra == 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
-    { name = "importlib-metadata", version = "9.0.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.12' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "importlib-metadata", version = "8.7.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.12' and extra == 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "importlib-metadata", version = "9.0.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.12' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "jaraco-classes" },
     { name = "jaraco-context" },
     { name = "jaraco-functools" },
-    { name = "jeepney", marker = "sys_platform == 'linux'" },
-    { name = "pywin32-ctypes", marker = "sys_platform == 'win32'" },
-    { name = "secretstorage", marker = "sys_platform == 'linux'" },
+    { name = "jeepney", marker = "sys_platform == 'linux' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "pywin32-ctypes", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "secretstorage", marker = "sys_platform == 'linux' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/4b/674af6ef2f97d56f0ab5153bf0bfa28ccb6c3ed4d1babf4305449668807b/keyring-25.7.0.tar.gz", hash = "sha256:fe01bd85eb3f8fb3dd0405defdeac9a5b4f6f0439edbb3149577f244a2e8245b", size = 63516, upload-time = "2025-11-16T16:26:09.482Z" }
 wheels = [
@@ -2682,15 +2784,102 @@ wheels = [
 ]
 
 [[package]]
+name = "langchain"
+version = "0.3.30"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform != 'win32'",
+]
+dependencies = [
+    { name = "langchain-core", version = "0.3.86", source = { registry = "https://pypi.org/simple" } },
+    { name = "langchain-text-splitters" },
+    { name = "langsmith" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "sqlalchemy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/14/f8/9d262e12d95ac940948847e0ed844eff430fc0660f73a704367c7c47a3ce/langchain-0.3.30.tar.gz", hash = "sha256:06599ec90fb550e0118b0ceab737667d2c0891fcc62ffce2058d21c945844448", size = 10243710, upload-time = "2026-05-07T15:48:12.796Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/da/54/c0775c29bf9ae27c8cbf8484ad600edd2e787a0eacf3a374cb6561613de9/langchain-0.3.30-py3-none-any.whl", hash = "sha256:37e6fcce92faf70cc7bac23739d13d6c3b9a3282da4dbcc06cb7e78330ed406a", size = 1025603, upload-time = "2026-05-07T15:48:10.607Z" },
+]
+
+[[package]]
+name = "langchain"
+version = "1.3.14"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform != 'win32'",
+]
+dependencies = [
+    { name = "langchain-core", version = "1.5.3", source = { registry = "https://pypi.org/simple" } },
+    { name = "langgraph" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/29/68/a6dbad9c22df4087a0f9e79ddd46226c442b30128bfeee538d5889492a73/langchain-1.3.14.tar.gz", hash = "sha256:1b6696c72ba3bbbce54d745e0180742c9f6ece8bbc59ed5a46c3e20b9a435929", size = 645181, upload-time = "2026-07-16T13:28:18.29Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/ec/0f942e78a621f8e3162ff1ed24284f469aaf51fb4607ee5831c626f2b2bc/langchain-1.3.14-py3-none-any.whl", hash = "sha256:4d10dbe91005952cddd56d0dc77aa108964da6bae90ab20063653957e901f782", size = 139560, upload-time = "2026-07-16T13:28:16.498Z" },
+]
+
+[[package]]
+name = "langchain-core"
+version = "0.3.86"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform != 'win32'",
+]
+dependencies = [
+    { name = "jsonpatch" },
+    { name = "langsmith" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "tenacity" },
+    { name = "typing-extensions" },
+    { name = "uuid-utils" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fe/8d/d54586b8f65c6fc209db93916ff9e919e1cc14bad8fe66880ea4d7ea9d6c/langchain_core-0.3.86.tar.gz", hash = "sha256:671cbc96a325fe47f7dbab421236ada2d437bc4bfad0038102264885d0b462e2", size = 603154, upload-time = "2026-05-07T16:48:08.14Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/93/ba19ca54701c6118e68f8785949b6c0eab1df3a5cfa5310508cc86877994/langchain_core-0.3.86-py3-none-any.whl", hash = "sha256:7d2a1c50d2d2a139dbc6465cd339f32d14aa43db5ac9bd232e5b567a238709e8", size = 461306, upload-time = "2026-05-07T16:48:06.283Z" },
+]
+
+[[package]]
 name = "langchain-core"
 version = "1.5.3"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform != 'win32'",
+]
 dependencies = [
     { name = "jsonpatch" },
     { name = "langchain-protocol" },
     { name = "langsmith" },
-    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra != 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-all' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra != 'extra-7-easycat-langchain-v0' and extra != 'extra-7-easycat-pydantic-ai')" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "tenacity" },
@@ -2700,6 +2889,52 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/65/3e/63af6b9d76d9be907c7c524d6ec18a2efed7e0e2d123fea0230d78dbd73f/langchain_core-1.5.3.tar.gz", hash = "sha256:a56457ac444fef41e9404443c187f0ecea708d36e816ea4ba9573c027f7d1a2d", size = 972461, upload-time = "2026-07-30T14:55:55.833Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/36/e6/c7c39efe0bc7e1b7c3d8f54f85846e04c901913c3d3e99068b218558c6f1/langchain_core-1.5.3-py3-none-any.whl", hash = "sha256:48b56fa580277209594dd7baf837f5b9a2a3651613f34ff9fb1728b429df015f", size = 561687, upload-time = "2026-07-30T14:55:54.419Z" },
+]
+
+[[package]]
+name = "langchain-openai"
+version = "0.3.35"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform != 'win32'",
+]
+dependencies = [
+    { name = "langchain-core", version = "0.3.86", source = { registry = "https://pypi.org/simple" } },
+    { name = "openai" },
+    { name = "tiktoken" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fb/96/06d0d25a37e05a0ff2d918f0a4b0bf0732aed6a43b472b0b68426ce04ef8/langchain_openai-0.3.35.tar.gz", hash = "sha256:fa985fd041c3809da256a040c98e8a43e91c6d165b96dcfeb770d8bd457bf76f", size = 786635, upload-time = "2025-10-06T15:09:28.463Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d8/d5/c90c5478215c20ee71d8feaf676f7ffd78d0568f8c98bd83f81ce7562ed7/langchain_openai-0.3.35-py3-none-any.whl", hash = "sha256:76d5707e6e81fd461d33964ad618bd326cb661a1975cef7c1cb0703576bdada5", size = 75952, upload-time = "2025-10-06T15:09:27.137Z" },
+]
+
+[[package]]
+name = "langchain-openai"
+version = "1.4.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.15'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform != 'win32'",
+]
+dependencies = [
+    { name = "langchain-core", version = "1.5.3", source = { registry = "https://pypi.org/simple" } },
+    { name = "openai" },
+    { name = "tiktoken" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bf/1b/a83bf6cae4632363cef0b6f2ee1b4f62c8a5ebcf22cd8ef24430a736c2a8/langchain_openai-1.4.1.tar.gz", hash = "sha256:6d16be615d997db80294731b8e768783f1fb8e0313668e64acd50cd68acbad20", size = 3262416, upload-time = "2026-07-23T20:31:13.053Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/1c/8b604dc8be2735c8ae5c655e520066231057d1301958c20c776e62bd00fb/langchain_openai-1.4.1-py3-none-any.whl", hash = "sha256:8528bb34cc78fdfd2d895573c7917f9441cbb82db5f18ae0e6b3b75d95bdefb3", size = 122067, upload-time = "2026-07-23T20:31:11.809Z" },
 ]
 
 [[package]]
@@ -2715,11 +2950,23 @@ wheels = [
 ]
 
 [[package]]
+name = "langchain-text-splitters"
+version = "0.3.11"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain-core", version = "0.3.86", source = { registry = "https://pypi.org/simple" } },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/11/43/dcda8fd25f0b19cb2835f2f6bb67f26ad58634f04ac2d8eae00526b0fa55/langchain_text_splitters-0.3.11.tar.gz", hash = "sha256:7a50a04ada9a133bbabb80731df7f6ddac51bc9f1b9cab7fa09304d71d38a6cc", size = 46458, upload-time = "2025-08-31T23:02:58.316Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/58/0d/41a51b40d24ff0384ec4f7ab8dd3dcea8353c05c973836b5e289f1465d4f/langchain_text_splitters-0.3.11-py3-none-any.whl", hash = "sha256:cf079131166a487f1372c8ab5d0bfaa6c0a4291733d9c43a34a16ac9bcd6a393", size = 33845, upload-time = "2025-08-31T23:02:57.195Z" },
+]
+
+[[package]]
 name = "langgraph"
 version = "1.2.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "langchain-core" },
+    { name = "langchain-core", version = "1.5.3", source = { registry = "https://pypi.org/simple" } },
     { name = "langgraph-checkpoint" },
     { name = "langgraph-prebuilt" },
     { name = "langgraph-sdk" },
@@ -2736,7 +2983,7 @@ name = "langgraph-checkpoint"
 version = "4.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "langchain-core" },
+    { name = "langchain-core", version = "1.5.3", source = { registry = "https://pypi.org/simple" } },
     { name = "ormsgpack" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/83/47/886af6f886f0bff2273164a45f008694e48a96ff3cd25ff0228f2aa9480e/langgraph_checkpoint-4.1.1.tar.gz", hash = "sha256:6c2bdb530c91f91d7d9c1bd100925d0fc4f498d418c17f3587d1526279482a25", size = 184020, upload-time = "2026-05-22T16:57:38.503Z" }
@@ -2749,7 +2996,7 @@ name = "langgraph-prebuilt"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "langchain-core" },
+    { name = "langchain-core", version = "1.5.3", source = { registry = "https://pypi.org/simple" } },
     { name = "langgraph-checkpoint" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/29/66/ed9b93f56bc17ef22d551892f0ac2b225a97fe0fcf23a511b857f70d590b/langgraph_prebuilt-1.1.0.tar.gz", hash = "sha256:3c579cf6eed2d17f9c157c2d0fcaddcd8688524e7022d3b22b37a3bf4589d528", size = 178833, upload-time = "2026-05-12T03:37:49.332Z" }
@@ -2763,7 +3010,7 @@ version = "0.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
-    { name = "langchain-core" },
+    { name = "langchain-core", version = "1.5.3", source = { registry = "https://pypi.org/simple" } },
     { name = "langchain-protocol" },
     { name = "orjson" },
     { name = "websockets" },
@@ -2782,8 +3029,8 @@ dependencies = [
     { name = "distro" },
     { name = "httpx" },
     { name = "orjson", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
-    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-langchain-v0' or extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-all' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra != 'extra-7-easycat-langchain-v0' and extra != 'extra-7-easycat-pydantic-ai')" },
     { name = "pydantic" },
     { name = "requests" },
     { name = "requests-toolbelt" },
@@ -2804,8 +3051,8 @@ name = "libcst"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyyaml", marker = "python_full_version != '3.13.*' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
-    { name = "pyyaml-ft", marker = "python_full_version == '3.13.*' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "pyyaml", marker = "python_full_version != '3.13.*' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "pyyaml-ft", marker = "python_full_version == '3.13.*' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/02/c0/098e5c91ff1537f00c85a6438b6cb1863d17144680cc91f47c87f104a200/libcst-1.9.0.tar.gz", hash = "sha256:087b58a9afe076bb08e2d726478e1f16cb928d67ffa9092817e033c335de522a", size = 914739, upload-time = "2026-07-29T21:28:43.153Z" }
 wheels = [
@@ -2940,8 +3187,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
     { name = "numpy" },
-    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "types-protobuf" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ab/5d/bfaf1cc73f960b40294f604d334f05e628b0a07de3c47e475d760996a8d0/livekit-1.1.14.tar.gz", hash = "sha256:47428e10ecf20d7db4ee9fde4009bf96578c003b1ae6e1c5e7e4837a55902393", size = 375000, upload-time = "2026-07-31T14:05:14.425Z" }
@@ -2999,14 +3246,14 @@ version = "4.40.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "executing" },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-instrumentation", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-instrumentation", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-sdk", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-sdk", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-instrumentation", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-instrumentation", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-sdk", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-sdk", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
     { name = "rich" },
     { name = "typing-extensions" },
 ]
@@ -3017,8 +3264,8 @@ wheels = [
 
 [package.optional-dependencies]
 httpx = [
-    { name = "opentelemetry-instrumentation-httpx", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-instrumentation-httpx", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-instrumentation-httpx", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-instrumentation-httpx", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 
 [[package]]
@@ -3140,8 +3387,8 @@ dependencies = [
     { name = "fonttools" },
     { name = "kiwisolver" },
     { name = "numpy" },
-    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-langchain-v0' or extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-all' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra != 'extra-7-easycat-langchain-v0' and extra != 'extra-7-easycat-pydantic-ai')" },
     { name = "pillow" },
     { name = "pyparsing" },
     { name = "python-dateutil" },
@@ -3208,12 +3455,12 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
-    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "sse-starlette" },
     { name = "starlette" },
     { name = "typing-extensions" },
     { name = "typing-inspection" },
-    { name = "uvicorn", marker = "sys_platform != 'emscripten' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "uvicorn", marker = "sys_platform != 'emscripten' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/30/d3/f9acc21dfc886e4f78e2add1a47db46ce16884346afde53f8a064c02c891/mcp-1.29.0.tar.gz", hash = "sha256:52d01f334de1868cc3bb2d6604931126a67631f99a6c5d3b82ba47290315ec36", size = 643148, upload-time = "2026-07-28T13:41:41.939Z" }
 wheels = [
@@ -3275,15 +3522,15 @@ version = "1.6.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "ghp-import" },
     { name = "jinja2" },
     { name = "markdown" },
     { name = "markupsafe" },
     { name = "mergedeep" },
     { name = "mkdocs-get-deps" },
-    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-langchain-v0' or extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-all' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra != 'extra-7-easycat-langchain-v0' and extra != 'extra-7-easycat-pydantic-ai')" },
     { name = "pathspec" },
     { name = "pyyaml" },
     { name = "pyyaml-env-tag" },
@@ -3488,7 +3735,7 @@ version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ast-serialize" },
-    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "mypy-extensions" },
     { name = "pathspec" },
     { name = "typing-extensions" },
@@ -3650,10 +3897,10 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "flatbuffers" },
     { name = "numpy" },
-    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
-    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-langchain-v0' or extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-all' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra != 'extra-7-easycat-langchain-v0' and extra != 'extra-7-easycat-pydantic-ai')" },
+    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/17/4d/5014667e2a3a77d6e1b74cc3d88948d06163b8e0a33a84c85073322b5dec/onnxruntime-1.28.0-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:f5c5daabd28aad610f83fdcf32acec8fb57e6adc6c6a39fe2a3c755db957b410", size = 19130506, upload-time = "2026-07-25T01:22:34.489Z" },
@@ -3745,8 +3992,8 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "importlib-metadata", version = "8.7.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "importlib-metadata", version = "8.7.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/97/b9/3161be15bb8e3ad01be8be5a968a9237c3027c5be504362ff800fca3e442/opentelemetry_api-1.39.1.tar.gz", hash = "sha256:fbde8c80e1b937a2c61f20347e91c0c18a1940cecf012d62e65a7caf08967c9c", size = 65767, upload-time = "2025-12-11T13:32:39.182Z" }
 wheels = [
@@ -3767,7 +4014,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ee/8b/aa9e2d8b8dfa7c946f7dec5d1f8f6ba8eca062f43509a06bdb5ce93d26c0/opentelemetry_api-1.44.0.tar.gz", hash = "sha256:67647e5e9566edcf421166fdf022b3537f818635daa852b289e34604dc6fb33a", size = 72406, upload-time = "2026-07-16T15:25:32.678Z" }
 wheels = [
@@ -3788,7 +4035,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "opentelemetry-proto", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "opentelemetry-proto", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e9/9d/22d241b66f7bbde88a3bfa6847a351d2c46b84de23e71222c6aae25c7050/opentelemetry_exporter_otlp_proto_common-1.39.1.tar.gz", hash = "sha256:763370d4737a59741c89a67b50f9e39271639ee4afc999dadfe768541c027464", size = 20409, upload-time = "2025-12-11T13:32:40.885Z" }
 wheels = [
@@ -3809,7 +4056,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "opentelemetry-proto", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-proto", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/09/4d717852c1cf3f854b76c7110a5d00883bc3c99288b9b0dbcbeb9e306eb6/opentelemetry_exporter_otlp_proto_common-1.44.0.tar.gz", hash = "sha256:dc87a5a5bc58f149a56d1547e4691588fa12994cdc3bc039a694ccb3375862ac", size = 20202, upload-time = "2026-07-16T15:25:37.658Z" }
 wheels = [
@@ -3830,13 +4077,13 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "googleapis-common-protos", marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-exporter-otlp-proto-common", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-proto", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-sdk", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "requests", marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "googleapis-common-protos", marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-exporter-otlp-proto-common", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-proto", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-sdk", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "requests", marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/80/04/2a08fa9c0214ae38880df01e8bfae12b067ec0793446578575e5080d6545/opentelemetry_exporter_otlp_proto_http-1.39.1.tar.gz", hash = "sha256:31bdab9745c709ce90a49a0624c2bd445d31a28ba34275951a6a362d16a0b9cb", size = 17288, upload-time = "2025-12-11T13:32:42.029Z" }
 wheels = [
@@ -3857,13 +4104,13 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "googleapis-common-protos", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-exporter-otlp-proto-common", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-proto", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-sdk", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "requests", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "googleapis-common-protos", marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-exporter-otlp-proto-common", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-proto", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-sdk", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "requests", marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1a/87/95e2a5aaa795b4e2260d74e16df2d5541deb2ea9de010bcd615f4dee2654/opentelemetry_exporter_otlp_proto_http-1.44.0.tar.gz", hash = "sha256:c633d7270ad6b57cd4cfbe8b0007a9e2e7c0cb50bd6c50fe2a7b245f721a09d8", size = 25806, upload-time = "2026-07-16T15:25:39.162Z" }
 wheels = [
@@ -3884,10 +4131,10 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "wrapt", version = "1.17.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-semantic-conventions", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "wrapt", version = "1.17.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/41/0f/7e6b713ac117c1f5e4e3300748af699b9902a2e5e34c9cf443dde25a01fa/opentelemetry_instrumentation-0.60b1.tar.gz", hash = "sha256:57ddc7974c6eb35865af0426d1a17132b88b2ed8586897fee187fd5b8944bd6a", size = 31706, upload-time = "2025-12-11T13:36:42.515Z" }
 wheels = [
@@ -3908,10 +4155,11 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "wrapt", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-semantic-conventions", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra != 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "wrapt", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/13/91/3c58961cb0360cd60509064734f0be4275383c8681d73c580a40ca83ddce/opentelemetry_instrumentation-0.65b0.tar.gz", hash = "sha256:071d9d9eced9bd6460444ec3b0c77229870ed05a881c22c84fdede58e4eed09b", size = 42689, upload-time = "2026-07-16T15:25:50.275Z" }
 wheels = [
@@ -3932,11 +4180,11 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-instrumentation", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-util-http", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "wrapt", version = "1.17.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-instrumentation", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-semantic-conventions", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-util-http", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "wrapt", version = "1.17.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/86/08/11208bcfcab4fc2023252c3f322aa397fd9ad948355fea60f5fc98648603/opentelemetry_instrumentation_httpx-0.60b1.tar.gz", hash = "sha256:a506ebaf28c60112cbe70ad4f0338f8603f148938cb7b6794ce1051cd2b270ae", size = 20611, upload-time = "2025-12-11T13:37:01.661Z" }
 wheels = [
@@ -3957,11 +4205,11 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-instrumentation", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-util-http", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "wrapt", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-instrumentation", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-semantic-conventions", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-util-http", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "wrapt", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/03/a529140241addd4d0acc73bafbd6f74691651b92fc0ae9b4513cf80f07fa/opentelemetry_instrumentation_httpx-0.65b0.tar.gz", hash = "sha256:4627aa9c6bb99bf4462c8b565b0ef6aeb9ffad95c6c92868be1ef7895de112ee", size = 26309, upload-time = "2026-07-16T15:26:07.973Z" }
 wheels = [
@@ -3982,7 +4230,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/49/1d/f25d76d8260c156c40c97c9ed4511ec0f9ce353f8108ca6e7561f82a06b2/opentelemetry_proto-1.39.1.tar.gz", hash = "sha256:6c8e05144fc0d3ed4d22c2289c6b126e03bcd0e6a7da0f16cedd2e1c2772e2c8", size = 46152, upload-time = "2025-12-11T13:32:48.681Z" }
 wheels = [
@@ -4003,7 +4251,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/64/01/40ac4ae9a149263cc52c2cee200ddd80cb6d8db1a4610abf8eabce0fe771/opentelemetry_proto-1.44.0.tar.gz", hash = "sha256:c547a79c2f8c0c515d31509154682e5921c7cfd5ca67b70e1f9266e2c3e103f3", size = 46488, upload-time = "2026-07-16T15:25:45.34Z" }
 wheels = [
@@ -4024,9 +4272,9 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-semantic-conventions", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/eb/fb/c76080c9ba07e1e8235d24cdcc4d125ef7aa3edf23eb4e497c2e50889adc/opentelemetry_sdk-1.39.1.tar.gz", hash = "sha256:cf4d4563caf7bff906c9f7967e2be22d0d6b349b908be0d90fb21c8e9c995cc6", size = 171460, upload-time = "2025-12-11T13:32:49.369Z" }
 wheels = [
@@ -4047,9 +4295,9 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "opentelemetry-semantic-conventions", version = "0.65b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5d/77/a6592cbc7c8d9bcc9d6757a9df45e04a7c585e3e6e7a13456da522b21109/opentelemetry_sdk-1.44.0.tar.gz", hash = "sha256:cebe7f65dc12f26ead75c6064de12fd2a9052e5060c0272d402cfa203aae123b", size = 208624, upload-time = "2026-07-16T15:25:46.078Z" }
 wheels = [
@@ -4070,8 +4318,8 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/91/df/553f93ed38bf22f4b999d9be9c185adb558982214f33eae539d3b5cd0858/opentelemetry_semantic_conventions-0.60b1.tar.gz", hash = "sha256:87c228b5a0669b748c76d76df6c364c369c28f1c465e50f661e39737e84bc953", size = 137935, upload-time = "2025-12-11T13:32:50.487Z" }
 wheels = [
@@ -4092,8 +4340,8 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-api", version = "1.44.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8f/73/0cbdebcb4cf545fdd328da14f5137e37d0770c3f26185e478b0d15d94f50/opentelemetry_semantic_conventions-0.65b0.tar.gz", hash = "sha256:f9b2b81e9d5b64f11bc952075e7e9c7fb0aab075c7fd1c46d597f1b919852d60", size = 148774, upload-time = "2026-07-16T15:25:46.902Z" }
 wheels = [
@@ -4703,7 +4951,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "pydantic-ai-slim", version = "1.107.1", source = { registry = "https://pypi.org/simple" }, extra = ["ag-ui", "anthropic", "bedrock", "cli", "cohere", "evals", "fastmcp", "google", "groq", "huggingface", "logfire", "mcp", "mistral", "openai", "retries", "spec", "temporal", "ui", "vertexai", "xai"], marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "pydantic-ai-slim", version = "1.107.1", source = { registry = "https://pypi.org/simple" }, extra = ["ag-ui", "anthropic", "bedrock", "cli", "cohere", "evals", "fastmcp", "google", "groq", "huggingface", "logfire", "mcp", "mistral", "openai", "retries", "spec", "temporal", "ui", "vertexai", "xai"], marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/87/2f/c8decf5529eb624edd6ee17a6106e91556049e9433328c4fd46388fd56be/pydantic_ai-1.107.1.tar.gz", hash = "sha256:af2604c6cb6659a6f2c69312839542c2d7194349896d2f375828ca440f701078", size = 18415, upload-time = "2026-07-11T03:22:14.142Z" }
 wheels = [
@@ -4724,7 +4972,7 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "pydantic-ai-slim", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, extra = ["anthropic", "cli", "evals", "google", "logfire", "mcp", "openai", "retries", "web"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "pydantic-ai-slim", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, extra = ["anthropic", "cli", "evals", "google", "logfire", "mcp", "openai", "retries", "web"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8f/43/d36321d72c526471cd1c02987d1f520c366ea209fbba47f8b4d6b07038af/pydantic_ai-2.24.0.tar.gz", hash = "sha256:3a869db582b216d1b7549e20f9af1bee1c89671d702e8a8a7480894eb2cc516c", size = 19368, upload-time = "2026-08-05T02:30:06.052Z" }
 wheels = [
@@ -4777,7 +5025,7 @@ cli = [
     { name = "rich" },
 ]
 cohere = [
-    { name = "cohere", marker = "sys_platform != 'emscripten'" },
+    { name = "cohere", marker = "sys_platform != 'emscripten' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 evals = [
     { name = "pydantic-evals", version = "1.107.1", source = { registry = "https://pypi.org/simple" } },
@@ -4792,14 +5040,14 @@ groq = [
     { name = "groq" },
 ]
 huggingface = [
-    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
+    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
     { name = "huggingface-hub" },
 ]
 logfire = [
-    { name = "logfire", extra = ["httpx"], marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "logfire", extra = ["httpx"], marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 mcp = [
-    { name = "fastmcp-slim", extra = ["client"], marker = "extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "fastmcp-slim", extra = ["client"], marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 mistral = [
     { name = "mistralai" },
@@ -4875,10 +5123,10 @@ google = [
     { name = "google-genai" },
 ]
 logfire = [
-    { name = "logfire", extra = ["httpx"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "logfire", extra = ["httpx"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 mcp = [
-    { name = "fastmcp-slim", extra = ["client"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "fastmcp-slim", extra = ["client"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
 ]
 openai = [
     { name = "openai" },
@@ -5217,7 +5465,7 @@ version = "26.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3f/e8/7325d258199b159eb2c03fe32107533e2832e70e63f4fb88a6aa00023201/pyopenssl-26.4.0.tar.gz", hash = "sha256:28dfcce0162b9211413e26dfbfdf1d24317fbeba18fc93c12400a1856b2a0bc7", size = 182046, upload-time = "2026-08-01T19:50:50.512Z" }
 wheels = [
@@ -5265,10 +5513,10 @@ name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "iniconfig" },
-    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-langchain-v0' or extra == 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-all' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra != 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra != 'extra-7-easycat-langchain-v0' and extra != 'extra-7-easycat-pydantic-ai')" },
     { name = "pluggy" },
     { name = "pygments" },
 ]
@@ -5283,7 +5531,7 @@ version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pytest" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/7c/d36d04db312ecf4298932ef77e6e4a9e8ad017906e24e34f0b0c361a2473/pytest_asyncio-1.4.0.tar.gz", hash = "sha256:c6c0d2259945122819f171a32ecea2c349ead889ee28176caaf492143424be42", size = 58514, upload-time = "2026-05-26T09:56:04.083Z" }
 wheels = [
@@ -5500,7 +5748,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "rpds-py" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/22/f5/df4e9027acead3ecc63e50fe1e36aca1523e1719559c499951bb4b53188f/referencing-0.37.0.tar.gz", hash = "sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8", size = 78036, upload-time = "2025-10-13T15:30:48.871Z" }
 wheels = [
@@ -5829,8 +6077,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "python_full_version >= '3.15' or sys_platform != 'win32'" },
-    { name = "jeepney", marker = "python_full_version >= '3.15' or sys_platform != 'win32'" },
+    { name = "cryptography", marker = "python_full_version >= '3.15' or (python_full_version < '3.15' and extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (python_full_version < '3.15' and extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (python_full_version < '3.15' and extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or sys_platform != 'win32'" },
+    { name = "jeepney", marker = "python_full_version >= '3.15' or (python_full_version < '3.15' and extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (python_full_version < '3.15' and extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (python_full_version < '3.15' and extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
@@ -5953,8 +6201,8 @@ name = "smart-open"
 version = "8.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "wrapt", version = "1.17.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "wrapt", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "wrapt", version = "1.17.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph')" },
+    { name = "wrapt", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-7-easycat-pydantic-ai' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/76/53/9c513747547fd595d5c143259129ea8b9c3ea2f6b7bb9dcea2b1966ded3c/smart_open-8.0.1.tar.gz", hash = "sha256:18b1c4496003c6902be17c15f032b5c319f307c89c6ae9e6b028b508bed8b2cf", size = 61882, upload-time = "2026-07-15T13:56:10.492Z" }
 wheels = [
@@ -6043,6 +6291,54 @@ wheels = [
 ]
 
 [[package]]
+name = "sqlalchemy"
+version = "2.0.51"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "greenlet", marker = "platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/02/f1/a7a892f18d4d224e6b26f706531eafccc41e37594d37d304786969ee13cb/sqlalchemy-2.0.51.tar.gz", hash = "sha256:804dccd8a4a6242c4e30ad961e540e18a588f6527202f2d6791b01845d59fdc9", size = 9912201, upload-time = "2026-06-15T15:41:20.012Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3a/69/a67c69e5f28fc9c99d6f7bd60bd50e91f2fed2423e3b30fb228fa00e51f3/sqlalchemy-2.0.51-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:1aa10c0daee6705294d181daadaa793221e1a59ed55000a3fab1d42b088ce4ba", size = 2161838, upload-time = "2026-06-15T16:05:17.144Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/a4/c8c22b8438bddc0a030157c6ec0f6ef97b3c38effa444bdab2a27af04090/sqlalchemy-2.0.51-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a5b2ed6d828f1f09bd812861f4f59ca3bc3803f9df871f4555187f0faf018604", size = 3319402, upload-time = "2026-06-15T16:10:40.002Z" },
+    { url = "https://files.pythonhosted.org/packages/90/54/44012d32fd77d991256d2ff793ba3807c51d40cb27a85b4796224f6744df/sqlalchemy-2.0.51-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:436728ce18a80f6951a1e11cc6112c2ede9faf20766f1a26195a7c441ca12dbd", size = 3319675, upload-time = "2026-06-15T16:12:25.658Z" },
+    { url = "https://files.pythonhosted.org/packages/29/a5/de0592acaf5906cd7430874392d6f7e8b4a7c8437610953ee2d1501c0b44/sqlalchemy-2.0.51-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:dc261707bf5739aea8a541593f3cc1d463c2701fb05fbcbba0ce031b69a21260", size = 3270777, upload-time = "2026-06-15T16:10:42.125Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/14/a44c90739c780b362238e4ac3cb19dd0ca40d13e6ddc5daa112166ddab4f/sqlalchemy-2.0.51-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:a6d26094615306d116dd5e4a51b0304c99dd2356fc569eed6922a80a6bd3b265", size = 3293940, upload-time = "2026-06-15T16:12:27.156Z" },
+    { url = "https://files.pythonhosted.org/packages/65/eb/fbd0f206a330e66f8c602a99c37c4e731f107faed62954b41b01f16dd9d9/sqlalchemy-2.0.51-cp311-cp311-win32.whl", hash = "sha256:ca8435d13829b92f4a97362d91975154a4015db3a2634154e1754e9a915e6b86", size = 2121183, upload-time = "2026-06-15T16:13:29.905Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/fd/005bf80f3cf6e5c62b5dd68616280f51cd012c60840fa74781b3ed7b1623/sqlalchemy-2.0.51-cp311-cp311-win_amd64.whl", hash = "sha256:4a011ea4510683319ce4ed274b56ee05194b39b6da9d09ca7a39388f0fa84dcc", size = 2145796, upload-time = "2026-06-15T16:13:31.283Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/70/e868bc5412acd101a8280f25c95f10eeae0771c4eb806b02491142810ee8/sqlalchemy-2.0.51-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:7d78702b26ba1c18b2d0fb2ea940ba7f17a9581b42e8361ff93920ebbee1235a", size = 2160291, upload-time = "2026-06-15T16:08:48.918Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/1c/71ee0f8a6b9d7316a1ccd30430b4c62b6c2e36adc96017a4e3a72dce49d6/sqlalchemy-2.0.51-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:581921d849d6e6f994d560389192955e80e2950e18fcdfe2ccea863e01158e6e", size = 3343835, upload-time = "2026-06-15T16:19:42.613Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/7c/7ab9f9aadc5944fdd06612484ed7918fe376ad871a5f50404dc1536e0194/sqlalchemy-2.0.51-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1d21ce524ab86c23046e992a5b81cb54c21079c6df6e78b8fc77d77cac70a6b9", size = 3358470, upload-time = "2026-06-15T16:26:38.011Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/7d/ff77169fee6186de145a7f2b87006c39638391130abbab2b1f63ac6ea583/sqlalchemy-2.0.51-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:c5d98a2709840027f5a347c3af0a7c3d5f6c1ff93af2ca1c54494e23cba8f389", size = 3289874, upload-time = "2026-06-15T16:19:45.212Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/3b/6c505903710d781b55bc3141ee34a062bf9745a6b5bc7333305b9ed63b33/sqlalchemy-2.0.51-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:1181256e0f16479691b5616d36375dc2620ad8332b25978763c3d206ad3f3f1d", size = 3321692, upload-time = "2026-06-15T16:26:39.747Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/b7/c5ffe50aa2f4d947c9250e1519d939260329a07fe6272edfccd784b3d007/sqlalchemy-2.0.51-cp312-cp312-win32.whl", hash = "sha256:9f380393be5abeb6815f68fd39271b95127173511b6706b0a630a9995d53f8f5", size = 2119674, upload-time = "2026-06-15T16:23:09.543Z" },
+    { url = "https://files.pythonhosted.org/packages/25/dc/46a65916af68a06ef6b972c6050ba4c8f97070fe3fb33097d34229d9bef6/sqlalchemy-2.0.51-cp312-cp312-win_amd64.whl", hash = "sha256:2cf39aabdf48e87c1c2c2ed6d20d33ffa0733b3071ce9c5f66357947dd009080", size = 2146670, upload-time = "2026-06-15T16:23:11.048Z" },
+    { url = "https://files.pythonhosted.org/packages/54/fe/a210d52fd1a90ecfae8a78e9d8b27e18d733d60818a8bf250ff690b75120/sqlalchemy-2.0.51-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:7c2056838b6685b72fdb36c99996cf862753461a62f2e84f4196371d3b2d6a07", size = 2157184, upload-time = "2026-06-15T16:08:50.374Z" },
+    { url = "https://files.pythonhosted.org/packages/17/6b/2dce8369b199cb855110e056032f94a9f66dacc2237d3d39c115a86eac56/sqlalchemy-2.0.51-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:483b11bd46bf35fc14c52faf338b04300c9e6ce554bce9b11be85bfec3bc3195", size = 3284735, upload-time = "2026-06-15T16:19:46.934Z" },
+    { url = "https://files.pythonhosted.org/packages/53/ff/dbc495b8a14da840faffb353857a72d4190113cac33727906fb997047f0f/sqlalchemy-2.0.51-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1bed1ee8b01da6088210aa9412023326fb98a599ba502e6118308601dcbef77f", size = 3302756, upload-time = "2026-06-15T16:26:41.336Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/d5/fde8f4dddcf518ee15ab35a7c6a28acc32c8ba548d1d2aa451f96e6dbb0b/sqlalchemy-2.0.51-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:72ca54c952107ba5cd58854b67a5a6268631289d21651a1235396f3b98b47400", size = 3232055, upload-time = "2026-06-15T16:19:49.286Z" },
+    { url = "https://files.pythonhosted.org/packages/67/d1/43d3a0ac955a58601c24fa23038b1c55ee3a1ec02c0f96ebb1eae2bcf614/sqlalchemy-2.0.51-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:b3e693d15533a45cd5906f0589f9c35090bef6ef45bf1e8195c424aa0ae06a8d", size = 3269850, upload-time = "2026-06-15T16:26:43.017Z" },
+    { url = "https://files.pythonhosted.org/packages/94/df/de669c7054cd47c4439ac34b1b2ee8b804a794791fbb10720e997a2c87c7/sqlalchemy-2.0.51-cp313-cp313-win32.whl", hash = "sha256:b93ab07b5292dbe7e6b8da89475275e7042744283921344b56105f3eeb0f828b", size = 2117721, upload-time = "2026-06-15T16:23:12.36Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/8a/403c51d064196bae20a0bc2476577f83a3f8dd299719a97417086b7f2ec5/sqlalchemy-2.0.51-cp313-cp313-win_amd64.whl", hash = "sha256:0f053118c30e53161857a953e4de667d90e274980dccbe5dd3829bbbeece72a5", size = 2143615, upload-time = "2026-06-15T16:23:13.906Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/49/a739be2e1d02a96a658eb71ab45d921c874249252358ad24a5bffdd02525/sqlalchemy-2.0.51-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:6ea306caaae6bd5afd0a46050003c88f6bf33227377a49298c498c3cb88ff491", size = 2158999, upload-time = "2026-06-15T16:08:51.759Z" },
+    { url = "https://files.pythonhosted.org/packages/23/6b/2e0e38cf75c8780eca78d9b2e78164f8bcfd70125e5caa588ff5cbb9c9f4/sqlalchemy-2.0.51-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c45a496d6bc05dec41dcd4c3a2b183723f47473255c159cd80b503c8f246424d", size = 3282539, upload-time = "2026-06-15T16:19:51.065Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/a1/e77854cb5336fd37dc3c6ae3b71de242c98caac5725120be0b526b31cbd0/sqlalchemy-2.0.51-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4004ada0aafe8ae1991b2cd1d99c6d9146126e123bd6f883c260d974aa012e54", size = 3287545, upload-time = "2026-06-15T16:26:44.735Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/ab/9e17272fd4dac8df3b83c4fbe52b998a1c9d89a843c8c35ff29b74ff7364/sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:0f6bcad487aee1c638d707235682fc96f741de00663619881ab235400d03289e", size = 3230929, upload-time = "2026-06-15T16:19:52.625Z" },
+    { url = "https://files.pythonhosted.org/packages/02/3c/52f408ea701781caee975606beccc48845f2aee8711ac29843d612c0306c/sqlalchemy-2.0.51-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:39a76529db6305693d8d4affa58ad5b5e2e18edd62daea628b29b97930b3513d", size = 3252888, upload-time = "2026-06-15T16:26:46.454Z" },
+    { url = "https://files.pythonhosted.org/packages/24/16/3efd2ee6bc4ca4693a30a1dd17a91b606cae15d517d2a4746611d9b73ce8/sqlalchemy-2.0.51-cp314-cp314-win32.whl", hash = "sha256:08a204d8b5638717c26a24df18fcf40af45a6b22e35b70b1d62f0113c2e278e8", size = 2120551, upload-time = "2026-06-15T16:23:15.629Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/78/55b12e70f45bccc40d9e483925c065027b3b98ea4cbbdf6f8c2546feaf6c/sqlalchemy-2.0.51-cp314-cp314-win_amd64.whl", hash = "sha256:96747bfbadb055466e5b46d572618170046b45ce5a4879167f50d70a5319a499", size = 2146318, upload-time = "2026-06-15T16:23:17.108Z" },
+    { url = "https://files.pythonhosted.org/packages/21/db/a9574ed40fed418924b1b1a3e54f47ee3963053b3d3d325a0d36b41f2c08/sqlalchemy-2.0.51-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:e5ea1a213be1fcd5e49d9904c3b9939211ded90bc2a64e93f4c01963474285de", size = 2178920, upload-time = "2026-06-15T15:59:56.285Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/90/a1bb5c7cbba76b7bc1fbd586d0a5479a7bc9c27b4a8298f22ec9423b2bb3/sqlalchemy-2.0.51-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7c6b36ed71f41942bdcd2ad2522be46bfce09d5705be5640ecf19bbc7660e4b7", size = 3566534, upload-time = "2026-06-15T15:58:35.024Z" },
+    { url = "https://files.pythonhosted.org/packages/15/4b/481f1fed30e0e9e8dd24aecbb49f29eb57fe7657ece5cf06ee9b84bb97d8/sqlalchemy-2.0.51-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0c2c62877097e1a0db401fba5cb4debee33265e5b2a55c4ccb489c02c53b4f72", size = 3535844, upload-time = "2026-06-15T16:02:43.973Z" },
+    { url = "https://files.pythonhosted.org/packages/02/71/0aa64aeda645510af0a43f7d9ee70932f0d1dc4263aed34c50ee891d9df3/sqlalchemy-2.0.51-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:0378d055e9e8cd6ce4d8dff683bdd3d7d413533c4ee51d67a2b1e0f9eacc0f23", size = 3475355, upload-time = "2026-06-15T15:58:36.592Z" },
+    { url = "https://files.pythonhosted.org/packages/05/db/6061db32316446135a3abae5f308d144ab988a34234726042da3e58b1c63/sqlalchemy-2.0.51-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:6e46fc36029eff666391e0531e5387b62ce6c4f1d8e50b3fb3099eaca1b42522", size = 3486591, upload-time = "2026-06-15T16:02:45.346Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/c9/f14fdf71bb8957e0c7e39db69bbdf12b5c80f4ef775fdfa127bf4e0d6760/sqlalchemy-2.0.51-cp314-cp314t-win32.whl", hash = "sha256:9161cfc9efce70d1715f47d6ff40f79c6778c00d53be4fbc09d70301e4b83ba7", size = 2151313, upload-time = "2026-06-15T16:03:39.127Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/c6/673e618e6f4f297e126d9b56ea2f6478708f6c1af4e3223835c22e2c3697/sqlalchemy-2.0.51-cp314-cp314t-win_amd64.whl", hash = "sha256:159bb6ba32059f57ad7375a8f50d844dd2f19d14954ecf820cd33e20debd46b2", size = 2186280, upload-time = "2026-06-15T16:03:40.569Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/22/dbf013a12ec759e54a34a119e9e217435b3f71b2dd5c61a7ade0a25dae87/sqlalchemy-2.0.51-py3-none-any.whl", hash = "sha256:bb024d8b621d0be75f4f44ecc7c950450026e76d66dc8f791bb5331d7fed59d5", size = 1944334, upload-time = "2026-06-15T16:09:22.418Z" },
+]
+
+[[package]]
 name = "sse-starlette"
 version = "3.4.8"
 source = { registry = "https://pypi.org/simple" }
@@ -6061,7 +6357,7 @@ version = "1.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0f/3c/76d2fd1f1357ed0f0108d8a5aa233dcf16e2946a8559c84912fe08e01ac7/starlette-1.4.1.tar.gz", hash = "sha256:b7332de6e9375593a29ba9eee1e6ecfeb3eb2043e2e19a13b4b71da73ff35540", size = 2709041, upload-time = "2026-08-05T15:17:26.23Z" }
 wheels = [
@@ -6264,7 +6560,7 @@ name = "tqdm"
 version = "4.70.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/21/3b/6c24bec5be5e743ffd99576daa5cc077722fc7d5bbc00bd133fa0c698dc6/tqdm-4.70.0.tar.gz", hash = "sha256:55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220", size = 795438, upload-time = "2026-07-27T11:33:15.271Z" }
 wheels = [
@@ -6301,7 +6597,7 @@ version = "0.27.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-all' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain' and extra == 'extra-7-easycat-langchain-v0') or (extra == 'extra-7-easycat-langchain-v0' and extra == 'extra-7-easycat-langgraph') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "rich" },
     { name = "shellingham" },
 ]

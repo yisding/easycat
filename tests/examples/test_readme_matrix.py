@@ -264,14 +264,14 @@ def test_examples_readme_install_extras_cover_docstring_setup() -> None:
 
 def test_examples_readme_install_package_collector_reads_pip_and_package_snippets() -> None:
     install = (
-        "`uv sync --extra quickstart --group dev`; `langchain<1`, `langchain-openai<1`, "
+        "`uv sync --extra quickstart --group dev`; `acme-sdk<1`, `acme-plugin<1`, "
         "`--extra ten-vad`, or `uv pip install krisp_audio` for optional backends"
     )
 
     assert _readme_install_packages(install) == {
+        "acme-plugin<1",
+        "acme-sdk<1",
         "krisp_audio",
-        "langchain-openai<1",
-        "langchain<1",
     }
 
 

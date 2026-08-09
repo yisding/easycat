@@ -31,11 +31,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# pydantic-ai-v2 installs a different major version of the same bridge SDK;
-# the provider surface matrix keys the bridge row by "pydantic-ai", so the v2
-# cell smokes the same EasyCat adapters. The two extras never co-install:
-# every nightly matrix cell syncs exactly one extra into a fresh environment.
-MATRIX_EXTRA_ALIASES: dict[str, str] = {"pydantic-ai-v2": "pydantic-ai"}
+# Versioned extras install different majors of the same bridge SDK. The provider
+# surface matrix uses the unsuffixed adapter row; every nightly cell installs
+# exactly one extra into a fresh environment.
+MATRIX_EXTRA_ALIASES: dict[str, str] = {
+    "langchain-v0": "langchain",
+    "pydantic-ai-v2": "pydantic-ai",
+}
 
 
 def extra_requirements(extra: str) -> list:

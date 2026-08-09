@@ -129,7 +129,18 @@ def test_install_guide_documents_all_extra_exclusions() -> None:
     assert "`ten-vad`" in all_guidance
     assert "`pydantic-ai`" in all_guidance
     assert "`pydantic-ai-v2`" in all_guidance
+    assert "`langchain-v0`" in all_guidance
+    assert "Install `langchain-v0` separately" in all_guidance
     assert "mutually exclusive" in all_guidance
+
+
+def test_install_guide_documents_both_langchain_lines() -> None:
+    guidance = (REPO_ROOT / "docs" / "install.md").read_text(encoding="utf-8")
+
+    assert "uv sync --extra langchain --group dev" in guidance
+    assert "uv sync --extra langchain-v0 --group dev" in guidance
+    assert "Both lines\nrun the same EasyCat bridge contract" in guidance
+    assert "`langchain-v0` also cannot be combined with `langgraph`\nor `all`" in guidance
 
 
 def test_pydantic_ai_v1_extra_has_a_dated_compatibility_exit_plan() -> None:

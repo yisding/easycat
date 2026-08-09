@@ -83,6 +83,7 @@ def test_bridge_contract_extras_have_exact_nodes_and_sha_evidence() -> None:
 
     assert set(evidence.BRIDGE_CONTRACT_NODES) == {
         "langchain",
+        "langchain-v0",
         "langgraph",
         "llama-agents",
         "openai-agents",
@@ -234,10 +235,19 @@ def test_smoke_covers_cartesia_marker_extra_via_adapters() -> None:
     assert any("cartesia_tts" in target for target in targets)
 
 
-def test_smoke_aliases_pydantic_ai_v2_to_the_v1_bridge_row() -> None:
+def test_smoke_aliases_versioned_extras_to_their_bridge_rows() -> None:
     extras_smoke = _load_script("extras_smoke")
 
-    assert extras_smoke.MATRIX_EXTRA_ALIASES == {"pydantic-ai-v2": "pydantic-ai"}
+    assert extras_smoke.MATRIX_EXTRA_ALIASES == {
+        "langchain-v0": "langchain",
+        "pydantic-ai-v2": "pydantic-ai",
+    }
+    assert extras_smoke.adapter_targets("langchain-v0") == extras_smoke.adapter_targets(
+        "langchain"
+    )
+    assert extras_smoke.adapter_targets("langchain") == [
+        "easycat.integrations.agents.langchain.LangChainBridge"
+    ]
     assert extras_smoke.adapter_targets("pydantic-ai-v2") == (
         extras_smoke.adapter_targets("pydantic-ai")
     )
