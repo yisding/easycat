@@ -27,12 +27,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from easycat import AudioChunk, AudioFormat, EasyConfig, require_env, run
-from easycat.providers import Transport
 from easycat.transports import LocalTransport
 
 
 class CountingTransport:
-    """Wraps any ``Transport`` and counts the audio bytes flowing each way.
+    """Wraps a ``LocalTransport`` and counts the audio bytes flowing each way.
 
     Implements the ``Transport`` Protocol structurally — no base class.
     The ``audio_format`` / ``clear_audio`` / ``default_echo_cancellation_enabled``
@@ -42,7 +41,7 @@ class CountingTransport:
 
     default_echo_cancellation_enabled = True
 
-    def __init__(self, inner: Transport) -> None:
+    def __init__(self, inner: LocalTransport) -> None:
         self._inner = inner
         self.bytes_in = 0
         self.bytes_out = 0

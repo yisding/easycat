@@ -109,6 +109,17 @@ var micCtx = null;
 var levelRAF = 0;
 var manualStop = false;
 
+// The observability server prints tokenized URLs when signaling auth is
+// enabled. Read that token and forward it as a bearer credential on every
+// signaling request.
+var authToken = new URLSearchParams(location.search).get("token") || "";
+
+function authHeaders(extra) {
+  var headers = extra || {};
+  if (authToken) headers["Authorization"] = "Bearer " + authToken;
+  return headers;
+}
+
 // ── UI ───────────────────────────────────────────────────────────
 var startBtn     = document.getElementById("startBtn");
 var stopBtn      = document.getElementById("stopBtn");
@@ -168,7 +179,7 @@ function stopLevelMeter() {
 // ── Fetch ICE config from server ─────────────────────────────────
 async function fetchIceConfig(baseUrl) {
   try {
-    var response = await fetch(baseUrl + "/config");
+    var response = await fetch(baseUrl + "/config", { headers: authHeaders() });
     if (response.ok) {
       return await response.json();
     }
@@ -200,7 +211,7 @@ async function negotiate(offerUrl) {
 
   var response = await fetch(offerUrl + "/offer", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       sdp: pc.localDescription.sdp,
       type: pc.localDescription.type,

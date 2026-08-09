@@ -28,6 +28,7 @@ Setup:
 from __future__ import annotations
 
 import argparse
+from typing import Literal
 
 try:
     from agents import Agent  # type: ignore[import-untyped]
@@ -40,7 +41,7 @@ from easycat.vad import VADConfig, create_vad
 BACKENDS = ("auto", "silero", "funasr", "ten", "krisp")
 
 
-def main(backend: str) -> None:
+def main(backend: Literal["auto", "silero", "funasr", "ten", "krisp"]) -> None:
     if Agent is None:
         raise SystemExit(
             "openai-agents is required. For an app, run: "

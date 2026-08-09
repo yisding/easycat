@@ -27,7 +27,7 @@
   <span class="hint">talk to the bot up top — watch the journal below</span>
 </header>
 <div class="panes">
-  <iframe class="controls" src="/webrtc_client.html"
+  <iframe class="controls" id="webrtc-frame"
     allow="microphone; autoplay" title="WebRTC client (mic + Start/Stop)"></iframe>
   <iframe class="debugger" id="debugger-frame" title="Debugger UI"></iframe>
 </div>
@@ -41,6 +41,13 @@
   const params = new URLSearchParams(location.search);
   const override = params.get("debugger");
   const debuggerPort = params.get("debugger_port") || "8090";
+  const signalingToken = params.get("token") || "";
+
+  const webrtcParams = new URLSearchParams();
+  if (signalingToken) webrtcParams.set("token", signalingToken);
+  const webrtcQuery = webrtcParams.toString();
+  document.getElementById("webrtc-frame").src =
+    "/webrtc_client.html" + (webrtcQuery ? `?${webrtcQuery}` : "");
 
   function isLoopbackHost(hostname) {
     return hostname === "localhost"

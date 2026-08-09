@@ -240,10 +240,10 @@ Provider choice and transport choice optimise **different axes**:
 | Axis you care about         | Choose this |
 |-----------------------------|-------------|
 | First-audio latency         | Provider mix — compare `easycat latency` on repeated, matched turns |
-| Jitter + packet loss        | Transport — WebRTC preserves UDP end-to-end |
-| Codec quality               | Transport — Local / WebRTC (24 kHz) vs Twilio (μ-law 8 kHz) |
+| Jitter + packet loss        | Transport — inspect WebRTC's selected ICE path and client stats; TURN can relay media over UDP or TCP |
+| Codec quality               | Transport — Local uses 24 kHz PCM; WebRTC uses 48 kHz media frames with Opus around a 16 kHz pipeline; Twilio uses μ-law at 8 kHz on the wire |
 | Cost per turn               | Provider mix — usually the dominant cost driver |
-| Offline / on-device         | Provider mix — (future: Cartesia / local models) |
+| Offline / on-device         | Provider mix — use a custom local/self-hosted provider; the bundled STT/TTS providers are hosted |
 | Reach a regular phone       | Transport — Twilio only |
 
 Measure the production bundles with `easycat latency`; choose with

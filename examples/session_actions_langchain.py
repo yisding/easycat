@@ -10,8 +10,8 @@ closure rather than a deps/context parameter.
 For telephony-specific actions (transfer, DTMF, SMS) see
 ``examples/twilio_app.py``.
 
-Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain --group dev
-       uv pip install "langchain<1" langchain-openai
+Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --group dev
+       uv pip install "langchain<1" "langchain-openai<1"
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
        uv run easycat doctor --env-file .env --json  # for parseable checks
@@ -32,9 +32,9 @@ try:
 except ImportError as exc:
     raise SystemExit(
         "LangChain (<1.0) is required. For an app, run: "
-        "uv add 'easycat[quickstart,langchain]' 'langchain<1' langchain-openai. "
-        "In this repo, run: uv sync --extra quickstart --extra langchain --group dev; "
-        'uv pip install "langchain<1" langchain-openai'
+        "uv add 'easycat[quickstart]' 'langchain<1' 'langchain-openai<1'. "
+        "In this repo, run: uv sync --extra quickstart --group dev; "
+        'uv pip install "langchain<1" "langchain-openai<1"'
     ) from exc
 
 from easycat import EasyConfig, SessionActions, run

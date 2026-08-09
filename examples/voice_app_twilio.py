@@ -36,6 +36,7 @@ except ImportError as exc:
     ) from exc
 
 from easycat import EasyConfig, TelephonyConfig, VoiceApp, require_env
+from easycat.transports import TwilioConnectionTransport
 
 
 def main() -> None:
@@ -43,7 +44,7 @@ def main() -> None:
     stream_url = require_env("TWILIO_STREAM_URL")
     twilio_auth_token = require_env("TWILIO_AUTH_TOKEN")
 
-    def config_factory(transport: object) -> EasyConfig:
+    def config_factory(transport: TwilioConnectionTransport) -> EasyConfig:
         return EasyConfig.phone(
             transport=transport,
             agent=Agent(name="assistant", instructions="You are a helpful phone assistant."),

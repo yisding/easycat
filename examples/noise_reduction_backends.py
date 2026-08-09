@@ -13,6 +13,8 @@ Run:   uv run python examples/noise_reduction_backends.py --backend rnnoise
        # Other choices: --backend krisp or --backend auto
 """
 
+from typing import Literal
+
 try:
     from agents import Agent  # type: ignore[import-untyped]
 except ImportError as exc:
@@ -25,8 +27,10 @@ except ImportError as exc:
 from easycat import EasyConfig, run
 from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 
+NoiseReductionBackend = Literal["auto", "krisp", "rnnoise"]
 
-def main(backend: str) -> None:
+
+def main(backend: NoiseReductionBackend) -> None:
     # Probe so you can see which class actually resolved before the session starts.
     # Close the probe afterwards: Krisp/RNNoise reducers hold native
     # resources (and Krisp may allow only one session at a time), so

@@ -649,6 +649,19 @@ def test_webrtc_observability_debugger_url_is_validated():
     assert "const url = override ||" not in html
 
 
+def test_webrtc_observability_client_forwards_signaling_token() -> None:
+    client = (REPO_ROOT / "examples/webrtc_static/webrtc_client.html").read_text()
+    observability = (REPO_ROOT / "examples/webrtc_static/webrtc_observability.html").read_text()
+
+    assert 'new URLSearchParams(location.search).get("token")' in client
+    assert 'headers["Authorization"] = "Bearer " + authToken' in client
+    assert 'fetch(baseUrl + "/config", { headers: authHeaders() })' in client
+    assert 'headers: authHeaders({ "Content-Type": "application/json" })' in client
+    assert 'const signalingToken = params.get("token") || ""' in observability
+    assert 'webrtcParams.set("token", signalingToken)' in observability
+    assert 'document.getElementById("webrtc-frame").src =' in observability
+
+
 def test_webrtc_examples_default_signaling_to_loopback():
     server = (REPO_ROOT / "examples" / "webrtc_server.py").read_text(encoding="utf-8")
     observability = (REPO_ROOT / "examples" / "webrtc_observability_server.py").read_text(

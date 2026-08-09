@@ -210,9 +210,12 @@ ICE server configuration for the bundled browser client, `POST /stats` accepts
 sanitized WebRTC stats snapshots, and `/health` reports `status`,
 `active_sessions`, and `max_sessions` for readiness checks.
 For public deployments, put the signaling server behind HTTPS so
-`getUserMedia()` works, configure TURN, set `SIGNALING_AUTH_TOKEN` so `/offer`
-and `/stats` require a bearer/query token, and tune `WEBRTC_MAX_SESSIONS` from
-load-test data before raising the default cap.
+`getUserMedia()` works, configure TURN, set `WEBRTC_SIGNALING_TOKEN` so
+`/config`, `/offer`, and `/stats` require a bearer token, and tune
+`WEBRTC_MAX_SESSIONS` from load-test data before raising the default cap. The
+bundled client can read that token from its initial `?token=` URL and forwards
+it in the `Authorization` header; direct query-token authentication remains
+off unless `allow_query_token=True` is set explicitly.
 
 ### Flat routes vs. the `VoiceServer` `/webrtc/*` namespace
 
