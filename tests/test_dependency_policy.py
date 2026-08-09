@@ -97,9 +97,9 @@ def test_declared_dependency_floors_are_compatibility_tested() -> None:
 
     assert _requirement(project["dependencies"], "httpx") == "httpx>=0.27"
     assert _requirement(project["dependencies"], "rich") == "rich>=13.8"
-    assert _requirement(project["dependencies"], "typer") == "typer>=0.26"
+    assert _requirement(project["dependencies"], "typer") == "typer>=0.27.1"
     assert _requirement(project["dependencies"], "websockets") == "websockets>=14.0,<17"
-    assert _requirement(extras["langchain"], "langchain-core") == "langchain-core>=1.2.28"
+    assert _requirement(extras["langchain"], "langchain-core") == "langchain-core>=1.5.3"
     assert _requirement(extras["telephony"], "aiohttp") == "aiohttp>=3.13.3"
 
     workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -112,9 +112,9 @@ def test_declared_dependency_floors_are_compatibility_tested() -> None:
     for floor in (
         '"aiohttp==3.13.3"',
         '"httpx==0.27.0"',
-        '"langchain-core==1.2.28"',
+        '"langchain-core==1.5.3"',
         '"rich==13.8.0"',
-        '"typer==0.26.0"',
+        '"typer==0.27.1"',
         '"websockets==14.0"',
     ):
         assert floor in minimum_job
