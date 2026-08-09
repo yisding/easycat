@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from collections.abc import Set as AbstractSet
 from typing import Any
 
@@ -358,7 +358,7 @@ class TestTemplateDefaults:
             def __contains__(self, item: object) -> bool:
                 return item in self._items
 
-            def __iter__(self):
+            def __iter__(self) -> Iterator[str]:
                 return iter(self._items)
 
             def __len__(self) -> int:
