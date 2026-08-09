@@ -3,6 +3,6 @@ name = "easycat-pipecat-latency-benchmark"
 version = "0.0.0"
 requires-python = ">=3.11,<3.15"
 dependencies = [
-    "pipecat-ai==1.4.0",
-    "websockets==15.0.1",
+    "pipecat-ai==1.7.0",
+    "websockets==17.0.1",
 ]

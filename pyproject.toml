@@ -37,7 +37,7 @@ dependencies = [
     "sentencesplit>=0.1.0",
     "soxr>=1.0.0",
     "typing-extensions>=4.16.0",
-    "typer>=0.26",
+    "typer>=0.27.1",
     "websockets>=14.0,<17",
 ]
 
@@ -53,19 +53,19 @@ Repository = "https://github.com/yisding/easycat"
 easycat = "easycat.debug._pytest_plugin"
 
 [project.optional-dependencies]
-openai-agents = ["openai-agents>=0.18.3"]
+openai-agents = ["openai-agents>=0.19.4"]
 # Compatibility schedule: retain the PydanticAI v1 extra through 2027-07-31.
 # In the next breaking EasyCat release after that date, ``pydantic-ai`` can
 # move to the supported 2.x range, the transitional ``pydantic-ai-v2`` alias
 # can be removed, and the [tool.uv].conflicts entry below can be collapsed.
 pydantic-ai = ["pydantic-ai>=1.99.0,<2.0.0"]
-pydantic-ai-v2 = ["pydantic-ai>=2.5.1,<3.0.0"]
+pydantic-ai-v2 = ["pydantic-ai>=2.24.0,<3.0.0"]
 # Security floor: 1.2.28 includes the LangChain prompt-validation fixes from
 # GHSA-c67j-w6g6-q2cm, GHSA-qh6h-p6c9-ff54, and GHSA-926x-3r5x-gfhw.
-langchain = ["langchain-core>=1.2.28"]
-langgraph = ["langchain-core>=1.2.28", "langgraph>=1.2.9"]
-llama-agents = ["llama-index-workflows>=2.22.2,<3.0.0", "llama-agents-client>=0.3.11,<1.0.0"]
-openai = ["openai>=2.44.0"]
+langchain = ["langchain-core>=1.5.3"]
+langgraph = ["langchain-core>=1.5.3", "langgraph>=1.2.10"]
+llama-agents = ["llama-index-workflows>=2.23.0,<3.0.0", "llama-agents-client>=0.3.11,<1.0.0"]
+openai = ["openai>=2.53.0"]
 # Deepgram, ElevenLabs, and Cartesia STT/TTS talk directly to their
 # provider WebSocket/HTTP APIs via the core ``websockets`` / ``httpx``
 # dependencies — no vendor SDK install is required. These marker extras
@@ -79,18 +79,18 @@ telephony = [
     # 3.13.3 fixes the request parsing and resource-exhaustion advisories
     # published for every aiohttp release through 3.13.2.
     "aiohttp>=3.13.3",
-    "phonenumberslite>=9.0.35",
+    "phonenumberslite>=9.0.36",
     "twilio>=9.0.0",
 ]
 # The bundled lower-level reference app and twilio-phone scaffold use FastAPI
 # and uvicorn; the reusable telephony library itself does not. FastAPI form
 # handling also requires python-multipart for Twilio webhook endpoints.
 telephony-fastapi = [
-    "fastapi>=0.140.0",
+    "fastapi>=0.141.1",
     "python-multipart>=0.0.29",
-    "uvicorn>=0.51.0",
+    "uvicorn>=0.52.1",
 ]
-aec = ["livekit>=1.1.13"]
+aec = ["livekit>=1.1.14"]
 local = ["sounddevice>=0.4.6", "numpy>=1.24.0"]
 rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.33.0"]
 # TEN VAD has a non-permissive license, so we do not vendor its
@@ -111,11 +111,11 @@ webrtc = ["aiortc>=1.15.0", "aiohttp>=3.13.3"]
 webtransport = ["aioquic>=1.3.0,<2"]
 quickstart = [
     "sounddevice>=0.4.6",
-    "openai>=2.44.0",
-    "openai-agents>=0.18.3",
+    "openai>=2.53.0",
+    "openai-agents>=0.19.4",
     "numpy>=1.24.0",
     "onnxruntime>=1.28.0",
-    "livekit>=1.1.13",
+    "livekit>=1.1.14",
 ]
 # ``all`` is the union of every extra EXCEPT three deliberate exclusions:
 #   - ten-vad: non-permissive license (binaries not vendored)
@@ -125,29 +125,29 @@ quickstart = [
 all = [
     "aioquic>=1.3.0,<2",
     "aiortc>=1.15.0",
-    "livekit>=1.1.13",
+    "livekit>=1.1.14",
     "aiohttp>=3.13.3",
-    "fastapi>=0.140.0",
-    "openai>=2.44.0",
-    "openai-agents>=0.18.3",
-    "langchain-core>=1.2.28",
-    "langgraph>=1.2.9",
-    "llama-index-workflows>=2.22.2,<3.0.0",
+    "fastapi>=0.141.1",
+    "openai>=2.53.0",
+    "openai-agents>=0.19.4",
+    "langchain-core>=1.5.3",
+    "langgraph>=1.2.10",
+    "llama-index-workflows>=2.23.0,<3.0.0",
     "llama-agents-client>=0.3.11,<1.0.0",
-    "phonenumberslite>=9.0.35",
+    "phonenumberslite>=9.0.36",
     "python-multipart>=0.0.29",
     "sounddevice>=0.4.6",
     "pyrnnoise>=0.3.0",
     "requests>=2.33.0",
     "twilio>=9.0.0",
-    "uvicorn>=0.51.0",
+    "uvicorn>=0.52.1",
     "kaldi-native-fbank>=1.22.3",
     "numpy>=1.24.0",
     "onnxruntime>=1.28.0",
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.31,<0.13.0"]
+requires = ["uv_build>=0.12.1,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -239,9 +239,9 @@ docs = [
 ]
 dev = [
     "diff-cover>=10.4.1",
-    "hypothesis>=6.161.5",
+    "hypothesis>=6.165.2",
     "import-linter>=2",
-    "mutmut>=3.2.3",
+    "mutmut>=3.7.0",
     "mypy>=2.3.0",
     # NumPy 2.5+ requires Python 3.12 and uses 3.12-only syntax in its stubs.
     # Keep the dev environment compatible with mypy's Python 3.11 target.

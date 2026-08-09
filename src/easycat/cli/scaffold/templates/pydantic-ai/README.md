@@ -81,7 +81,7 @@ uv run pytest
   release instead, first switch `pydantic-ai` to `pydantic-ai-v2` inside the
   `easycat[...]` extras in `pyproject.toml` (the v1 extra pins
   `pydantic-ai<2`, so the two conflict), then
-  `uv add "pydantic-ai[groq]>=2.5.1,<3.0.0"`.
+  `uv add "pydantic-ai[groq]>=2.24.0,<3.0.0"`.
 - **Need multiple agents?** Scaffold the workflow template:
   `uv run easycat init my-workflow --template pydantic-ai-workflow`.
   It shows a two-specialist `on_user_turn(...)` workflow that EasyCat

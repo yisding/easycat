@@ -91,13 +91,13 @@ def test_examples_can_run_as_scripts_without_package_import_errors(script_path: 
     # no provider env var is set. A few still surface the bare
     # "STT configuration is required." (e.g. an explicit non-key config gap),
     # and others call ``require_env`` and emit "OPENAI_API_KEY is required."
-    # PydanticAI >= 1.107 validates the key at ``Agent(...)`` construction and
-    # raises its own "set the `OPENAI_API_KEY` ... environment variable"
-    # message before EasyCat config validation runs — accept any of the four.
+    # PydanticAI validates the key at ``Agent(...)`` construction and raises
+    # its own provider-specific message before EasyCat config validation runs.
     assert (
         "OPENAI_API_KEY is required." in completed.stderr
         or "STT configuration is required." in completed.stderr
         or "Missing API key: OPENAI_API_KEY" in completed.stderr
         or "set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` environment variable"
         in completed.stderr
+        or "Set the `OPENAI_API_KEY` environment variable" in completed.stderr
     )

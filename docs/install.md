@@ -125,7 +125,7 @@ their extras are install markers and do not add vendor SDKs. LangChain model
 packages such as `langchain-openai` remain application choices.
 
 The `pydantic-ai` extra targets stable v1. The `pydantic-ai-v2` extra installs
-`pydantic-ai>=2.5.1,<3.0.0`; the two extras are mutually exclusive.
+`pydantic-ai>=2.24.0,<3.0.0`; the two extras are mutually exclusive.
 
 ## Broad evaluation install
 

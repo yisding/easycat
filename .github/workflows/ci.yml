@@ -31,7 +31,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -53,7 +53,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -90,7 +90,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: ${{ matrix.python-version }}
@@ -134,7 +134,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -150,14 +150,14 @@ jobs:
       - name: Install exact downstream compatibility floors
         run: >-
           uv pip install --python .venv/bin/python
-          "aiohttp==3.13.3" "httpx==0.27.0" "langchain-core==1.2.28"
-          "rich==13.8.0" "typer==0.26.0" "websockets==14.0"
+          "aiohttp==3.13.3" "httpx==0.27.0" "langchain-core==1.5.3"
+          "rich==13.8.0" "typer==0.27.1" "websockets==14.0"
       - name: Assert exact direct dependency floors
         run: >-
           .venv/bin/python -c
           'from importlib.metadata import version;
-          expected={"aiohttp":"3.13.3","httpx":"0.27.0","langchain-core":"1.2.28",
-          "rich":"13.8.0","typer":"0.26.0","websockets":"14.0"};
+          expected={"aiohttp":"3.13.3","httpx":"0.27.0","langchain-core":"1.5.3",
+          "rich":"13.8.0","typer":"0.27.1","websockets":"14.0"};
           actual={name:version(name) for name in expected};
           assert actual == expected, actual'
       - name: Test exact downstream compatibility floors
@@ -184,7 +184,7 @@ jobs:
           fetch-depth: 0  # diff-cover needs origin/main history
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -233,7 +233,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -264,7 +264,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
@@ -292,7 +292,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"

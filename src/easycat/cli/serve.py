@@ -292,7 +292,7 @@ def serve(
     ),
 ) -> None:
     """Serve the playground, or use --manifest for a declarative VoiceServer."""
-    # Typer 0.26 is the supported dependency floor, but it does not populate
+    # Typer's supported dependency floor does not populate
     # Path options from ``envvar=`` in every supported Click combination. Keep
     # the option metadata for help and newer Typer versions, while resolving
     # the documented fallback ourselves when the CLI option was not supplied.

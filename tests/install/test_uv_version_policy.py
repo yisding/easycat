@@ -31,8 +31,8 @@ def test_build_backend_accepts_the_current_ci_uv_minor() -> None:
     requirement = Requirement(pyproject["build-system"]["requires"][0])
 
     assert requirement.name == "uv_build"
-    assert Version("0.11.31") in requirement.specifier
-    assert Version("0.12.0") in requirement.specifier
+    assert Version("0.12.0") not in requirement.specifier
+    assert Version("0.12.1") in requirement.specifier
     assert Version("0.13.0") not in requirement.specifier
 
 
@@ -45,7 +45,7 @@ def test_every_setup_uv_step_uses_an_exact_ci_pin() -> None:
                 continue
             setup_steps += 1
             step = "\n".join(lines[index : index + 10])
-            assert 'version: "0.12.0"' in step, workflow_path.name
+            assert 'version: "0.12.1"' in step, workflow_path.name
 
     assert setup_steps > 0
 

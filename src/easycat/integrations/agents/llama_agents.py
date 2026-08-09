@@ -1255,15 +1255,15 @@ def _raise_if_remote_failed(handler_data: Any, workflow_name: str | None) -> Non
 
 def _start_event_from_payload(payload: dict[str, Any]) -> Any:
     try:
-        from workflows.events import StartEvent
+        from workflows.events import StartEvent as WorkflowStartEvent
 
-        return StartEvent(**payload)
+        return WorkflowStartEvent(**payload)
     except ImportError:
         pass
     try:
-        from llama_index.core.workflow import StartEvent
+        from llama_index.core.workflow import StartEvent as LlamaStartEvent
 
-        return StartEvent(**payload)
+        return LlamaStartEvent(**payload)
     except ImportError:
         return payload
 
@@ -1352,15 +1352,15 @@ def _is_input_required_event(event: Any) -> bool:
 
 def _human_response_event(payload: dict[str, Any]) -> Any:
     try:
-        from workflows.events import HumanResponseEvent
+        from workflows.events import HumanResponseEvent as WorkflowHumanResponseEvent
 
-        return HumanResponseEvent(**payload)
+        return WorkflowHumanResponseEvent(**payload)
     except ImportError:
         pass
     try:
-        from llama_index.core.workflow import HumanResponseEvent
+        from llama_index.core.workflow import HumanResponseEvent as LlamaHumanResponseEvent
 
-        return HumanResponseEvent(**payload)
+        return LlamaHumanResponseEvent(**payload)
     except ImportError:
         return payload
 
