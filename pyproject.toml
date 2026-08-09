@@ -60,8 +60,9 @@ openai-agents = ["openai-agents>=0.19.4"]
 # can be removed, and the [tool.uv].conflicts entry below can be collapsed.
 pydantic-ai = ["pydantic-ai>=1.99.0,<2.0.0"]
 pydantic-ai-v2 = ["pydantic-ai>=2.24.0,<3.0.0"]
-# Security floor: 1.2.28 includes the LangChain prompt-validation fixes from
-# GHSA-c67j-w6g6-q2cm, GHSA-qh6h-p6c9-ff54, and GHSA-926x-3r5x-gfhw.
+# Advisory floor: 1.2.28 includes the LangChain prompt-validation fixes from
+# GHSA-c67j-w6g6-q2cm, GHSA-qh6h-p6c9-ff54, and GHSA-926x-3r5x-gfhw. The
+# higher 1.5.3 requirement below is the enforced compatibility floor.
 langchain = ["langchain-core>=1.5.3"]
 langgraph = ["langchain-core>=1.5.3", "langgraph>=1.2.10"]
 llama-agents = ["llama-index-workflows>=2.23.0,<3.0.0", "llama-agents-client>=0.3.11,<1.0.0"]
