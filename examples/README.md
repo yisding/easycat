@@ -45,10 +45,10 @@ emit the run or saved report inside the standard CLI envelope.
 `quickstart` includes local audio, OpenAI providers, the OpenAI Agents SDK,
 NumPy, ONNX Runtime, and LiveKit AEC3 echo cancellation. RNNoise is opt-in
 through the `rnnoise` extra. It does not install every framework/provider
-variant. Install cells are repo-local commands that start with EasyCat extras,
-such as `uv sync --extra quickstart --group dev`; anything after a semicolon is
-an additional third-party package to install in the same environment with
-`uv pip install`.
+variant. Install cells start with a complete repo-local `uv sync` command.
+After a semicolon, `--extra <name>` snippets extend that sync command; package
+specifiers such as `langchain<1` or `krisp_audio` are installed in the same
+environment with `uv pip install`.
 
 ## Choose An Example
 
@@ -66,7 +66,7 @@ an additional third-party package to install in the same environment with
 | Example | Use When | Run | Install | Env |
 | --- | --- | --- | --- | --- |
 | [voice_app.py](voice_app.py) | App-first VoiceApp with one-word mode switching (browser/local/websocket/twilio). | `uv run python examples/voice_app.py` | `uv sync --extra quickstart --extra webrtc --group dev` | `OPENAI_API_KEY` |
-| [voice_app_twilio.py](voice_app_twilio.py) | App-first Twilio phone bot via `VoiceApp.run("twilio")` and the reusable `easycat.telephony.server` helper. | `uv run python examples/voice_app_twilio.py` | `uv sync --extra openai --extra telephony --extra openai-agents --group dev` | `OPENAI_API_KEY`, `TWILIO_STREAM_URL`, `TWILIO_AUTH_TOKEN`; optional `TWILIO_STREAM_TOKEN_SECRET` |
+| [voice_app_twilio.py](voice_app_twilio.py) | App-first Twilio phone bot via `VoiceApp.run("twilio")` and the reusable `easycat.telephony.server` helper. | `uv run python examples/voice_app_twilio.py` | `uv sync --extra openai --extra telephony --extra openai-agents --group dev` | `OPENAI_API_KEY`, `TWILIO_STREAM_URL`, `TWILIO_AUTH_TOKEN`; optional `TWILIO_STREAM_TOKEN_SECRET`, `TRUST_PROXY_HEADERS`, `TWILIO_PUBLIC_TWIML_URL` |
 | [openai_agents_voice.py](openai_agents_voice.py) | First local mic/speaker bot with OpenAI Agents SDK. | `uv run python examples/openai_agents_voice.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [pydantic_ai_voice.py](pydantic_ai_voice.py) | Single-agent PydanticAI voice bot. | `uv run python examples/pydantic_ai_voice.py` | `uv sync --extra quickstart --extra pydantic-ai --group dev` | `OPENAI_API_KEY` |
 | [pydantic_ai_workflow_voice.py](pydantic_ai_workflow_voice.py) | Workflow-level PydanticAI hand-off across turns. | `uv run python examples/pydantic_ai_workflow_voice.py` | `uv sync --extra quickstart --extra pydantic-ai --group dev` | `OPENAI_API_KEY` |
@@ -115,8 +115,9 @@ Support files:
   `ws_browser_example.py`.
 - [ws_supervisor_client.html](ws_supervisor_client.html): browser caller and
   supervisor client for `ws_supervisor_server.py`.
-- [webrtc_static/webrtc_client.html](webrtc_static/webrtc_client.html): browser
-  client served by `webrtc_server.py`.
+- [webrtc_static/webrtc_client.html](webrtc_static/webrtc_client.html): compact
+  browser client served by `webrtc_observability_server.py`; `webrtc_server.py`
+  uses the richer client bundled with the EasyCat package.
 - [webrtc_static/webrtc_observability.html](webrtc_static/webrtc_observability.html):
   combined WebRTC/debugger page served by `webrtc_observability_server.py`.
 - [webtransport_browser_client.html](webtransport_browser_client.html): browser

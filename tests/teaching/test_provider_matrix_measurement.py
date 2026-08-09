@@ -163,6 +163,11 @@ async def test_run_stops_before_export_and_prints_measurement_commands(
 
 
 def test_lesson_distinguishes_pipeline_from_delivery_latency() -> None:
+    from easycat.transports._webrtc_audio import WEBRTC_SAMPLE_RATE
+    from easycat.transports._webrtc_config import WebRTCTransportConfig
+    from easycat.transports.local import LocalTransportConfig
+    from easycat.transports.twilio_media import MULAW_8K
+
     readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
     exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
     normalized_readme = " ".join(readme.split())
@@ -174,6 +179,14 @@ def test_lesson_distinguishes_pipeline_from_delivery_latency() -> None:
     assert "client `getStats()` artifacts" in exercises
     assert "you will need a small translator" not in readme
     assert "`evals.py` translator" not in exercises
+    assert "Custom local providers on Local" in readme
+    assert "future: local models" not in readme
+    assert LocalTransportConfig().audio_format.sample_rate == 24_000
+    assert WebRTCTransportConfig().audio_format.sample_rate == 16_000
+    assert WEBRTC_SAMPLE_RATE == 48_000
+    assert (MULAW_8K.sample_rate, MULAW_8K.encoding) == (8_000, "mulaw")
+    for claim in ("Local uses 24 kHz PCM", "48 kHz media frames", "μ-law at 8 kHz"):
+        assert claim in readme
 
 
 def test_exercises_name_current_provider_and_session_action_contracts() -> None:

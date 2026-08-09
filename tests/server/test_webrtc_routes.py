@@ -103,8 +103,11 @@ async def test_config_handler_runs_without_a_transport_instance() -> None:
         WebRTCTransportConfig(
             static_dir=None,
             ice_servers=[
-                ICEServer(urls="stun:stun.example.com:3478"),
-                ICEServer(urls=["turn:turn.example.com:3478"], username="user", credential="pass"),
+                ICEServer(
+                    urls=["stun:stun.example.com:3478", "turn:turn.example.com:3478"],
+                    username="user",
+                    credential="pass",
+                ),
             ],
         )
     )
@@ -114,12 +117,47 @@ async def test_config_handler_runs_without_a_transport_instance() -> None:
         assert resp.status == 200
         data = await resp.json()
     assert "iceServers" in data
-    assert len(data["iceServers"]) == 2
-    turn = data["iceServers"][1]
-    assert turn["urls"] == ["turn:turn.example.com:3478"]
-    # TURN credentials omitted by default.
-    assert "username" not in turn
-    assert "credential" not in turn
+    # Hidden TURN URLs are omitted rather than producing an invalid browser
+    # RTCIceServer; a STUN URL in the same configured entry remains public.
+    assert data["iceServers"] == [{"urls": ["stun:stun.example.com:3478"]}]
+
+
+def test_public_ice_config_filters_incomplete_turn_but_server_config_keeps_it() -> None:
+    routes = _make_routes(
+        WebRTCTransportConfig(
+            static_dir=None,
+            ice_servers=[
+                ICEServer(urls="turn:missing-user.example.com", credential="pass"),
+                ICEServer(urls="turns:missing-credential.example.com", username="user"),
+                ICEServer(
+                    urls=["stun:stun.example.com", "turn:turn.example.com"],
+                    username="user",
+                    credential="pass",
+                ),
+            ],
+        )
+    )
+
+    signaling = routes._signaling()
+    assert signaling.ice_servers_as_dicts(include_credentials=True) == [
+        {"urls": ["turn:missing-user.example.com"], "credential": "pass"},
+        {"urls": ["turns:missing-credential.example.com"], "username": "user"},
+        {
+            "urls": ["stun:stun.example.com", "turn:turn.example.com"],
+            "username": "user",
+            "credential": "pass",
+        },
+    ]
+    assert signaling.ice_servers_as_dicts(
+        include_credentials=True,
+        browser_safe=True,
+    ) == [
+        {
+            "urls": ["stun:stun.example.com", "turn:turn.example.com"],
+            "username": "user",
+            "credential": "pass",
+        },
+    ]
 
 
 @pytest.mark.integration_socket
@@ -218,11 +256,12 @@ async def test_cors_preflight_handler_runs_without_a_transport_instance() -> Non
 
 
 @pytest.mark.integration_socket
-async def test_root_redirect_appends_webrtc_base_and_preserves_token(
+async def test_root_redirect_appends_webrtc_base_and_drops_token(
     tmp_path: object,
 ) -> None:
     # A static dir with a bundled client triggers the root redirect; it must
-    # append ``?webrtc=/webrtc`` (the mounted base) and preserve ``?token=``.
+    # append ``?webrtc=/webrtc`` (the mounted base), preserve non-secret query
+    # state, and avoid copying a token into a second request.
     from pathlib import Path
 
     from aiohttp.test_utils import TestClient, TestServer
@@ -232,11 +271,12 @@ async def test_root_redirect_appends_webrtc_base_and_preserves_token(
     routes = _make_routes(WebRTCTransportConfig(static_dir=str(static_dir)))
     app = await _aiohttp_app_with_routes(routes)
     async with TestClient(TestServer(app)) as client:
-        resp = await client.get("/?token=sekrit", allow_redirects=False)
+        resp = await client.get("/?token=sekrit&view=compact", allow_redirects=False)
         assert resp.status == 302
         location = resp.headers["Location"]
     assert location.startswith("/webrtc_client.html?")
-    assert "token=sekrit" in location
+    assert "token=" not in location
+    assert "view=compact" in location
     assert "webrtc=/webrtc" in location
 
 
@@ -253,11 +293,14 @@ async def test_root_redirect_replaces_untrusted_webrtc_base(
     routes = _make_routes(WebRTCTransportConfig(static_dir=str(static_dir)))
     app = await _aiohttp_app_with_routes(routes)
     async with TestClient(TestServer(app)) as client:
-        resp = await client.get("/?webrtc=.attacker.test&token=sekrit", allow_redirects=False)
+        resp = await client.get(
+            "/?webrtc=.attacker.test&token=sekrit&view=compact",
+            allow_redirects=False,
+        )
         assert resp.status == 302
         location = resp.headers["Location"]
 
-    assert location == "/webrtc_client.html?token=sekrit&webrtc=/webrtc"
+    assert location == "/webrtc_client.html?view=compact&webrtc=/webrtc"
 
 
 @pytest.mark.integration_socket
@@ -276,12 +319,16 @@ async def test_root_redirect_preserves_sanitized_flat_base(
     routes = _make_routes(WebRTCTransportConfig(static_dir=str(static_dir)))
     app = await _aiohttp_app_with_routes(routes, prefix="")
     async with TestClient(TestServer(app)) as client:
-        resp = await client.get("/?webrtc=/proxy/&token=sekrit", allow_redirects=False)
+        resp = await client.get(
+            "/?webrtc=/proxy/&token=sekrit&view=compact",
+            allow_redirects=False,
+        )
         assert resp.status == 302
         location = resp.headers["Location"]
 
-    # Trailing slash trimmed; same-origin prefix kept; token preserved.
-    assert location == "/webrtc_client.html?token=sekrit&webrtc=/proxy"
+    # Trailing slash trimmed; same-origin prefix and non-secret state kept;
+    # the query token is dropped.
+    assert location == "/webrtc_client.html?view=compact&webrtc=/proxy"
 
 
 @pytest.mark.integration_socket
@@ -311,14 +358,14 @@ async def test_root_redirect_rejects_unsafe_flat_base(
     (static_dir / "webrtc_client.html").write_text("<html></html>", encoding="utf-8")
     routes = _make_routes(WebRTCTransportConfig(static_dir=str(static_dir)))
     app = await _aiohttp_app_with_routes(routes, prefix="")
-    query = urlencode({"webrtc": raw, "token": "sekrit"})
+    query = urlencode({"webrtc": raw, "token": "sekrit", "view": "compact"})
     async with TestClient(TestServer(app)) as client:
         resp = await client.get(f"/?{query}", allow_redirects=False)
         assert resp.status == 302
         location = resp.headers["Location"]
 
     assert "webrtc=" not in location
-    assert location == "/webrtc_client.html?token=sekrit"
+    assert location == "/webrtc_client.html?view=compact"
 
 
 # ── Mounted VoiceServer integration tests ────────────────────────────────
@@ -403,7 +450,7 @@ async def test_offer_returns_answer_and_one_session_per_offer(
 
 
 @pytest.mark.integration_socket
-async def test_config_omits_turn_credentials_on_mounted_route(
+async def test_config_exposes_default_stun_on_mounted_route(
     fake_webrtc: None, client: object
 ) -> None:
     config = VoiceServerConfig(

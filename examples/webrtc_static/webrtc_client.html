@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
   <title>EasyCat WebRTC Voice Chat</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -109,10 +110,26 @@ var micCtx = null;
 var levelRAF = 0;
 var manualStop = false;
 
-// The observability server prints tokenized URLs when signaling auth is
-// enabled. Read that token and forward it as a bearer credential on every
-// signaling request.
-var authToken = new URLSearchParams(location.search).get("token") || "";
+// The observability server puts the token in the URL fragment so it is never
+// sent in the initial HTTP request. Query-token bootstraps are ignored because
+// they can leak through request logs; scrub a legacy query if present.
+function readBootstrapToken() {
+  var current = new URL(location.href);
+  var fragment = new URLSearchParams(current.hash.replace(/^#/, ""));
+  var token = fragment.get("token") || "";
+  var ignoredQueryToken = current.searchParams.has("token");
+  if (ignoredQueryToken) {
+    console.warn("Ignoring ?token= bootstrap; use #token= so it is not sent over HTTP.");
+  }
+  if (token || ignoredQueryToken) {
+    fragment.delete("token");
+    current.searchParams.delete("token");
+    current.hash = fragment.toString();
+    history.replaceState(null, "", current.pathname + current.search + current.hash);
+  }
+  return token;
+}
+var authToken = readBootstrapToken();
 
 function authHeaders(extra) {
   var headers = extra || {};

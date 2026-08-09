@@ -738,6 +738,18 @@ def test_vad_backends_example_uses_easyconfig_provider_config_surface():
     assert "SessionConfig" not in source
     assert "Session(" not in source
     assert "AgentRunner(" not in source
+    assert "uv sync --extra quickstart --extra funasr-vad --group dev" in source
+    assert "uv sync --extra quickstart --extra ten-vad --group dev" in source
+    assert "uv sync --extra silero-vad --group dev" not in source
+
+
+def test_twilio_voice_app_documents_proxy_signature_settings():
+    source = (REPO_ROOT / "examples/voice_app_twilio.py").read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+
+    for setting in ("TRUST_PROXY_HEADERS", "TWILIO_PUBLIC_TWIML_URL"):
+        assert setting in source
+        assert setting in readme
 
 
 def test_journal_demo_uses_easyconfig_provider_instance_surface():

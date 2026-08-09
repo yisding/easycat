@@ -25,6 +25,7 @@ from tests.examples._examples_helpers import (
 
 
 def test_examples_readme_lists_browser_and_deploy_support_files() -> None:
+    readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     documented = _documented_support_file_links()
     expected = _support_files_to_document()
 
@@ -33,6 +34,8 @@ def test_examples_readme_lists_browser_and_deploy_support_files() -> None:
 
     assert not missing, "examples/README.md missing support-file links for: " + ", ".join(missing)
     assert not stale, "examples/README.md has stale support-file links for: " + ", ".join(stale)
+    assert "browser client served by `webrtc_observability_server.py`" in readme
+    assert "`webrtc_server.py`\n  uses the richer client bundled" in readme
 
 
 def test_bundled_browser_playground_page_serves_transcript_and_latency_ui() -> None:
@@ -59,9 +62,14 @@ def test_bundled_browser_playground_page_serves_transcript_and_latency_ui() -> N
         "turn_latency",
     ):
         assert f'"{message_type}"' in client, f"client misses {message_type} handling"
-    # Token forwarding keeps the WS/docker security defaults working when
-    # ``easycat serve --token`` prints a tokenized Open URL.
-    assert 'new URLSearchParams(location.search).get("token")' in client
+    # Fragment bootstrap avoids sending the bearer token in the initial HTTP
+    # request; a legacy query token is ignored and scrubbed rather than used.
+    assert 'new URLSearchParams(current.hash.replace(/^#/, ""))' in client
+    assert 'current.searchParams.has("token")' in client
+    assert 'current.searchParams.get("token")' not in client
+    assert "Ignoring ?token= bootstrap" in client
+    assert 'history.replaceState(null, "",' in client
+    assert '<meta name="referrer" content="no-referrer">' in client
 
 
 def test_ec2_webrtc_deploy_docs_do_not_claim_to_configure_https() -> None:
@@ -72,6 +80,8 @@ def test_ec2_webrtc_deploy_docs_do_not_claim_to_configure_https() -> None:
     assert "behind an HTTPS reverse proxy" in server
     assert "Backend HTTP URL: http://$EXTERNAL_IP:8080/webrtc_client.html" in deploy
     assert "Browser URL:      https://<your-domain>/webrtc_client.html" in deploy
+    assert "webrtc_client.html#token=<WEBRTC_SIGNALING_TOKEN>" in deploy
+    assert "webrtc_client.html?token=<WEBRTC_SIGNALING_TOKEN>" not in deploy
     assert (
         "Signaling URL:    https://<your-domain>                     (after TLS proxy)" in deploy
     )
@@ -83,8 +93,10 @@ def test_ec2_webrtc_deploy_keeps_browser_turn_credentials_opt_in() -> None:
     deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
 
     assert "WEBRTC_EXPOSE_ICE_CREDENTIALS=0" in deploy
-    assert "Browser TURN auth remains hidden from /config by default." in deploy
-    assert "trusted demos or short-lived TURN creds" in deploy
+    assert "Browser TURN entries are omitted from /config by default" in deploy
+    assert "server-side relay only" in deploy
+    assert "Clients that require their own relay need short-lived TURN credentials." in deploy
+    assert "trusted demos or short-lived credentials" in deploy
 
 
 def test_ec2_webrtc_turns_port_is_optional_until_certs_are_configured() -> None:
@@ -107,6 +119,14 @@ def test_ec2_webrtc_turn_template_handles_generated_password_characters() -> Non
     assert 'sed -i "s/__EXTERNAL_IP__/$EXTERNAL_IP/"' not in deploy
     assert "<<'PY' | sudo tee /etc/turnserver.conf" in deploy
     assert '.replace("__TURN_PASSWORD__", sys.argv[3])' in deploy
+
+
+def test_ec2_webrtc_generated_signaling_token_is_url_safe() -> None:
+    deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert "WEBRTC_SIGNALING_TOKEN:-$(openssl rand -hex 32)" in deploy
+    assert "WEBRTC_SIGNALING_TOKEN:-$(openssl rand -base64" not in deploy
+    assert "Percent-encode the value first if you supplied a custom token." in deploy
 
 
 def test_ec2_webrtc_deploy_enables_coturn_across_default_variants() -> None:
@@ -653,12 +673,22 @@ def test_webrtc_observability_client_forwards_signaling_token() -> None:
     client = (REPO_ROOT / "examples/webrtc_static/webrtc_client.html").read_text()
     observability = (REPO_ROOT / "examples/webrtc_static/webrtc_observability.html").read_text()
 
-    assert 'new URLSearchParams(location.search).get("token")' in client
+    assert 'new URLSearchParams(current.hash.replace(/^#/, ""))' in client
+    assert 'current.searchParams.has("token")' in client
+    assert 'current.searchParams.get("token")' not in client
+    assert "Ignoring ?token= bootstrap" in client
+    assert 'history.replaceState(null, "",' in client
     assert 'headers["Authorization"] = "Bearer " + authToken' in client
     assert 'fetch(baseUrl + "/config", { headers: authHeaders() })' in client
     assert 'headers: authHeaders({ "Content-Type": "application/json" })' in client
-    assert 'const signalingToken = params.get("token") || ""' in observability
-    assert 'webrtcParams.set("token", signalingToken)' in observability
+    assert 'const fragmentParams = new URLSearchParams(location.hash.replace(/^#/, ""))' in (
+        observability
+    )
+    assert 'const signalingToken = fragmentParams.get("token") || ""' in observability
+    assert 'const ignoredQueryToken = params.has("token")' in observability
+    assert 'params.get("token")' not in observability
+    assert 'webrtcFragment.set("token", signalingToken)' in observability
+    assert "`#${webrtcHash}`" in observability
     assert 'document.getElementById("webrtc-frame").src =' in observability
 
 
@@ -674,11 +704,16 @@ def test_webrtc_examples_default_signaling_to_loopback():
     assert 'os.getenv("SIGNALING_HOST", "127.0.0.1")' not in server
     assert "_build_ice_servers" not in server
     assert "_env_flag" not in server
+    assert 'url.lower().startswith(("turn:", "turns:"))' in server
     assert "webrtc_transport_config_from_env(static_dir=_STATIC_DIR)" in observability
     assert 'os.getenv("SIGNALING_HOST", "127.0.0.1")' not in observability
     assert "_build_ice_servers" not in observability
     assert "_env_flag" not in observability
     assert "SIGNALING_HOST=0.0.0.0" in deploy
+    assert "#token=<URL_ENCODED_TOKEN>" in server
+    assert "#token=<URL_ENCODED_TOKEN>" in observability
+    assert "?token=<WEBRTC_SIGNALING_TOKEN>" not in server
+    assert "?token=<WEBRTC_SIGNALING_TOKEN>" not in observability
 
 
 def test_browser_transport_examples_use_run_session_lifecycle():

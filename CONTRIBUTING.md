@@ -51,7 +51,7 @@ raw equivalent in the table below. Install it with `uv tool install rust-just`,
 | Lint auto-fix | `just lint-fix` | `uv run ruff check --fix .` |
 | Format | `just fmt` | `uv run ruff format .` |
 | Format check | `just fmt-check` | `uv run ruff format --check .` |
-| Type gate (mypy, whole package) | `just typecheck` | `uv run mypy src/easycat` |
+| Type gate (mypy + legacy smoke script) | `just typecheck` | `uv run mypy src/easycat scripts/smoke_legacy_langchain_examples.py` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
 | Coverage | `just cov` | `uv run pytest -n auto --dist load --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not latency and not slow and not stress and not serial and not flaky and not guard"` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
@@ -63,7 +63,7 @@ raw equivalent in the table below. Install it with `uv tool install rust-just`,
 | Validate (release) | `just validate-release` | `uv run easycat validate release` |
 | Validate report | `just validate-report .easycat/validation/latest.json` | `uv run easycat validate report .easycat/validation/latest.json` |
 | Pre-commit hooks | `just pre-commit` | `uv run pre-commit run --all-files` |
-| Pre-PR gauntlet | `just check` | `uv run pre-commit run --all-files && uv run mypy src/easycat && uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external and not serial" && uv run pytest -o faulthandler_timeout=0 -o timeout=0 -m "serial and not integration_live and not integration_external"` |
+| Pre-PR gauntlet | `just check` | `uv run pre-commit run --all-files && uv run mypy src/easycat scripts/smoke_legacy_langchain_examples.py && uv run pytest -n auto --dist loadscope -m "not integration_live and not integration_external and not serial" && uv run pytest -o faulthandler_timeout=0 -o timeout=0 -m "serial and not integration_live and not integration_external"` |
 
 `just check` mirrors CI's core source-quality gates, but it is not a literal
 replay of the workflow: CI also covers the supported Python matrix, minimum

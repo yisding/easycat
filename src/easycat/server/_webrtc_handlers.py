@@ -148,12 +148,34 @@ class WebRTCSignalingHandlers:
 
     # ── ICE ───────────────────────────────────────────────────────────
 
-    def ice_servers_as_dicts(self, *, include_credentials: bool) -> list[dict[str, Any]]:
-        """Serialize the configured ICE servers to plain dicts."""
+    def ice_servers_as_dicts(
+        self,
+        *,
+        include_credentials: bool,
+        browser_safe: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Serialize configured ICE servers to plain dictionaries.
+
+        With ``browser_safe=True``, omit TURN URLs unless their complete
+        credentials are explicitly included: credential-less TURN makes browser
+        ``RTCPeerConnection`` construction fail. The default full serialization
+        keeps incomplete TURN entries available to the server peer.
+        """
         result: list[dict[str, Any]] = []
         for srv in self._config.ice_servers:
-            entry: dict[str, Any] = {"urls": srv.urls}
-            if include_credentials:
+            has_complete_credentials = bool(srv.username and srv.credential)
+            expose_turn = include_credentials and has_complete_credentials
+            urls = [
+                url
+                for url in srv.urls
+                if not browser_safe
+                or expose_turn
+                or url.partition(":")[0].lower() not in {"turn", "turns"}
+            ]
+            if not urls:
+                continue
+            entry: dict[str, Any] = {"urls": urls}
+            if include_credentials and (not browser_safe or expose_turn):
                 if srv.username:
                     entry["username"] = srv.username
                 if srv.credential:
@@ -245,7 +267,7 @@ class WebRTCSignalingHandlers:
     # ── Handlers ──────────────────────────────────────────────────────
 
     async def handle_config(self, request: Any) -> Any:
-        """``GET /config`` — ICE servers (TURN creds omitted unless opted in)."""
+        """``GET /config`` — browser-safe ICE servers; TURN is explicit opt-in."""
         web = self._web
         if not self.authorized(request):
             return self.unauthorized_response(request)
@@ -254,7 +276,8 @@ class WebRTCSignalingHandlers:
             text=json.dumps(
                 {
                     "iceServers": self.ice_servers_as_dicts(
-                        include_credentials=self._config.expose_ice_credentials
+                        include_credentials=self._config.expose_ice_credentials,
+                        browser_safe=True,
                     )
                 }
             ),
@@ -314,7 +337,8 @@ class WebRTCSignalingHandlers:
         whatever the client supplied. In flat mode (``client_base == ""``) there
         is no trusted base, so a sanitized same-origin ``?webrtc=`` prefix
         (reverse-proxy path prefixes) is preserved and any untrusted / cross-origin
-        value dropped.
+        value dropped. A legacy ``?token=`` is also dropped so the redirect does
+        not copy a secret into another request or browser-history entry.
         """
         web = self._web
         if self.has_bundled_client:
@@ -326,6 +350,8 @@ class WebRTCSignalingHandlers:
                 if key == "webrtc":
                     if not user_base:
                         user_base = value
+                    continue
+                if key == "token":
                     continue
                 params.append((key, value))
             base = self._client_base or sanitize_webrtc_base(user_base)

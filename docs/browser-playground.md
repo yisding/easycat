@@ -33,8 +33,9 @@ Useful options:
   defaults.
 - `--token` (or `EASYCAT_SERVE_TOKEN`) — shared secret required by the
   signaling endpoints. `easycat serve` refuses a non-loopback `--host`
-  without a token. The printed Open URL embeds it as `?token=...` and the
-  bundled client forwards it as an `Authorization: Bearer` header.
+  without a token. The printed Open URL embeds it in a `#token=...` fragment,
+  which is not sent in the HTTP request; the bundled client removes it from the
+  visible URL and forwards it as an `Authorization: Bearer` header.
 - `--agent-model` / `--instructions` — swap the playground agent's OpenAI
   Responses API model or its guidance.
 - `--manifest` / `--profile` — build a manifest-backed `VoiceServer` instead

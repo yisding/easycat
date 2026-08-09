@@ -49,7 +49,10 @@ if [ -z "$EXTERNAL_IP" ]; then
 fi
 
 TURN_PASSWORD="${TURN_PASSWORD:-$(openssl rand -base64 24)}"
-WEBRTC_SIGNALING_TOKEN="${WEBRTC_SIGNALING_TOKEN:-$(openssl rand -base64 32)}"
+# Keep the generated browser bootstrap token URL-safe. URLSearchParams treats
+# an unescaped "+" in an encoded value as a space, which corrupts standard Base64
+# tokens before the client forwards them in the Authorization header.
+WEBRTC_SIGNALING_TOKEN="${WEBRTC_SIGNALING_TOKEN:-$(openssl rand -hex 32)}"
 OPENAI_API_KEY="${OPENAI_API_KEY:?Set OPENAI_API_KEY before running this script}"
 INSTALL_DIR="/opt/easycat"
 
@@ -184,13 +187,15 @@ echo ""
 echo "=== Deployment complete ==="
 echo ""
 echo "  Backend HTTP URL: http://$EXTERNAL_IP:8080/webrtc_client.html"
-echo "  Browser URL:      https://<your-domain>/webrtc_client.html?token=<WEBRTC_SIGNALING_TOKEN>"
+echo "  Browser URL:      https://<your-domain>/webrtc_client.html#token=<WEBRTC_SIGNALING_TOKEN>"
+echo "                    Percent-encode the value first if you supplied a custom token."
 echo "  Signaling URL:    https://<your-domain>                     (after TLS proxy)"
 echo "  TURN server:     turn:$EXTERNAL_IP:3478"
 echo "  TURN user:       easycat"
 echo "  TURN password:   $TURN_PASSWORD"
-echo "  Browser TURN auth remains hidden from /config by default."
-echo "  Set WEBRTC_EXPOSE_ICE_CREDENTIALS=1 only for trusted demos or short-lived TURN creds."
+echo "  Browser TURN entries are omitted from /config by default (server-side relay only)."
+echo "  Clients that require their own relay need short-lived TURN credentials."
+echo "  Set WEBRTC_EXPOSE_ICE_CREDENTIALS=1 only for trusted demos or short-lived credentials."
 echo ""
 echo "  Check status:    sudo systemctl status easycat-webrtc"
 echo "  View logs:       sudo journalctl -u easycat-webrtc -f"

@@ -5,6 +5,7 @@
 
 Setup: export OPENAI_API_KEY=...;
        uv sync --extra quickstart --extra rnnoise --group dev
+       uv pip install krisp_audio  # required only for --backend krisp (commercial SDK)
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
        uv run easycat doctor --env-file .env --json  # for parseable checks
@@ -12,8 +13,6 @@ Run:   uv run python examples/noise_reduction_backends.py --backend rnnoise
        uv run --env-file .env python examples/noise_reduction_backends.py --backend rnnoise
        # Other choices: --backend krisp or --backend auto
 """
-
-from typing import Literal
 
 try:
     from agents import Agent  # type: ignore[import-untyped]
@@ -25,12 +24,14 @@ except ImportError as exc:
     ) from exc
 
 from easycat import EasyConfig, run
-from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
+from easycat.noise_reduction import (
+    NoiseReducerBackend,
+    NoiseReducerConfig,
+    create_noise_reducer,
+)
 
-NoiseReductionBackend = Literal["auto", "krisp", "rnnoise"]
 
-
-def main(backend: NoiseReductionBackend) -> None:
+def main(backend: NoiseReducerBackend) -> None:
     # Probe so you can see which class actually resolved before the session starts.
     # Close the probe afterwards: Krisp/RNNoise reducers hold native
     # resources (and Krisp may allow only one session at a time), so

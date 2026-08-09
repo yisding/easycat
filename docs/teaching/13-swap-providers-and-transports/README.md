@@ -290,7 +290,7 @@ numbers from your own environment:
 | Phone IVR                     |   ⭐    |  ⭐    |  ⭐⭐⭐ |  ⭐   | `openai` on Twilio |
 | Retail kiosk (noisy)          |   ⭐⭐   |  ⭐⭐⭐  |  ⭐   |  ⭐   | `deepgram-eleven` on Local |
 | Multilingual hotline          |   ⭐    |  ⭐⭐⭐  |  ⭐⭐⭐ |  ⭐⭐  | `deepgram-eleven` on Twilio |
-| Offline embedded device       |   ⭐⭐⭐  |  ⭐⭐   |  ⭐   |  ⭐⭐⭐ | (future: local models) |
+| Offline embedded device       |   ⭐⭐⭐  |  ⭐⭐   |  ⭐   |  ⭐⭐⭐ | Custom local providers on Local |
 
 Cost is not a measured axis in this chapter — it's an annotation
 from provider pricing pages. Chapter 12 deliberately stops short

@@ -202,7 +202,7 @@ def test_serve_allows_non_loopback_host_with_token(
     result = cli.invoke(typer_app, ["serve", "--host", "0.0.0.0", "--token", "sekrit"])
 
     assert result.exit_code == 0
-    assert "?token=sekrit" in result.stdout
+    assert "#token=sekrit" in result.stdout
     run = stub_runtime["ran"][0]
     assert run["token"] == "sekrit"
     assert run["host"] == "0.0.0.0"
@@ -523,15 +523,15 @@ def test_playground_factory_preserves_transport_echo_cancellation_default(
 def test_playground_url_shapes() -> None:
     assert _playground_url("127.0.0.1", 8080, None) == "http://localhost:8080"
     assert (
-        _playground_url("0.0.0.0", 8443, "t") == "http://0.0.0.0:8443/webrtc_client.html?token=t"
+        _playground_url("0.0.0.0", 8443, "t") == "http://0.0.0.0:8443/webrtc_client.html#token=t"
     )
     assert (
-        _playground_url("0.0.0.0", 8443, "token with/slash")
-        == "http://0.0.0.0:8443/webrtc_client.html?token=token+with%2Fslash"
+        _playground_url("0.0.0.0", 8443, "a+b&c#d e")
+        == "http://0.0.0.0:8443/webrtc_client.html#token=a%2Bb%26c%23d+e"
     )
     assert (
         _playground_url("2001:db8::1", 8443, "t")
-        == "http://[2001:db8::1]:8443/webrtc_client.html?token=t"
+        == "http://[2001:db8::1]:8443/webrtc_client.html#token=t"
     )
 
 

@@ -669,7 +669,7 @@ class WebRTCRoutes:
     # :meth:`register`) and the private helper names the parity test pins.
 
     async def handle_config(self, request: Any) -> Any:
-        """``GET /config`` — ICE servers (TURN creds omitted unless opted in)."""
+        """``GET /config`` — STUN-only unless complete TURN auth is opted in."""
         return await self._signaling().handle_config(request)
 
     async def handle_stats(self, request: Any) -> Any:
@@ -698,7 +698,8 @@ class WebRTCRoutes:
         When a bundled client is served, redirect to it, appending the
         ``?webrtc=<prefix>`` base (the ``_client_base``) so the served client
         targets the mounted (``/webrtc/*``) or flat (``""``) routes, while
-        preserving any existing ``?token=``.
+        dropping any legacy ``?token=`` to avoid copying a secret into the
+        redirect response and a second HTTP request.
         """
         return await self._signaling().handle_root(request)
 

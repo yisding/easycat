@@ -23,15 +23,19 @@ Environment variables:
     TURN_SERVER_URL       — Optional.  TURN server URL (e.g. turn:1.2.3.4:3478).
     TURN_USERNAME         — Optional.  TURN server username.
     TURN_CREDENTIAL       — Optional.  TURN server credential.
-    WEBRTC_EXPOSE_ICE_CREDENTIALS — Optional. Set to 1 to return TURN
-                                    credentials from /config. Use only with
-                                    trusted demos or short-lived credentials.
+    WEBRTC_EXPOSE_ICE_CREDENTIALS — Optional. Set to 1 to return complete TURN
+                                    entries from /config. Use only with
+                                    trusted demos or short-lived credentials;
+                                    otherwise browser config is STUN-only and
+                                    TURN is server-side relay only.
     SIGNALING_HOST        — Optional.  Bind address (default 127.0.0.1).
     SIGNALING_PORT        — Optional.  Listen port (default 8080).
     WEBRTC_SIGNALING_TOKEN — Optional on localhost; required for public binds.
     WEBRTC_MAX_SESSIONS   — Optional.  Concurrent browser sessions (default 64).
 
-Then open http://localhost:8080 in your browser.
+Then open http://localhost:8080 in your browser. When
+``WEBRTC_SIGNALING_TOKEN`` is set, use the printed ``#token=`` bootstrap URL and
+replace its placeholder with the URL-encoded token value.
 The bundled client is same-origin with the signaling server. If you host a
 custom browser UI elsewhere, pass explicit cors_allowed_origins to
 WebRTCTransportConfig instead of relying on wildcard CORS.
@@ -61,14 +65,15 @@ def main() -> None:
         return EasyConfig.browser(transport=transport, agent=agent)
 
     transport = webrtc_transport_config_from_env()
-    token_hint = "?token=<WEBRTC_SIGNALING_TOKEN>" if transport.auth_token else ""
+    token_hint = "#token=<URL_ENCODED_TOKEN>" if transport.auth_token else ""
     print(f"Open http://localhost:{transport.port}/webrtc_client.html{token_hint} in your browser")
-    if any(any("turn:" in u for u in s.urls) for s in transport.ice_servers):
+    ice_urls = (url for server in transport.ice_servers for url in server.urls)
+    if any(url.lower().startswith(("turn:", "turns:")) for url in ice_urls):
         print("TURN server:  configured")
         if transport.expose_ice_credentials:
-            print("TURN auth:    exposed via /config")
+            print("TURN browser: /config includes only entries with complete credentials")
         else:
-            print("TURN auth:    hidden from /config")
+            print("TURN browser: omitted from /config (server-side relay only)")
     else:
         print("TURN server:  not configured (STUN only — NAT traversal may fail)")
 

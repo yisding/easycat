@@ -8,7 +8,7 @@ live transcript, interruption indicator, and per-turn latency readout).
 Security defaults mirror the WebSocket/docker golden path: the signaling
 server binds loopback (``127.0.0.1``) unless ``--host`` is overridden, and a
 non-loopback bind requires a shared ``--token`` (or ``EASYCAT_SERVE_TOKEN``)
-that the bundled client forwards from the page URL's ``?token=`` query.
+that the bundled client forwards from the page URL's ``#token=`` fragment.
 ``VoiceApp`` also enforces this guard internally (defense in depth); the CLI
 keeps its own pre-flight check so it can emit the exit-code-2 message contract.
 
@@ -71,8 +71,8 @@ def _url_host(host: str) -> str:
 def _playground_url(host: str, port: int, token: str | None) -> str:
     url = f"http://{_url_host(host)}:{port}"
     if token:
-        query = urlencode({"token": token})
-        return f"{url}/webrtc_client.html?{query}"
+        fragment = urlencode({"token": token})
+        return f"{url}/webrtc_client.html#{fragment}"
     return url
 
 
@@ -275,7 +275,7 @@ def serve(
         "--token",
         help=(
             "Shared secret required by the signaling endpoints. Defaults to "
-            "EASYCAT_SERVE_TOKEN when set. The printed Open URL includes it as ?token=."
+            "EASYCAT_SERVE_TOKEN when set. The printed Open URL includes it as #token=."
         ),
         envvar="EASYCAT_SERVE_TOKEN",
         show_envvar=True,

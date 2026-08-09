@@ -173,6 +173,30 @@ jobs:
           tests/tts/test_tts_openai.py
           tests/server/test_webrtc_routes.py
 
+  legacy-langchain-examples:
+    name: Legacy LangChain Examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          version: "0.12.1"
+          enable-cache: true
+          python-version: "3.12"
+      - name: Create isolated legacy environment
+        run: uv venv --python 3.12 .venv-legacy-langchain
+      - name: Install documented legacy constraints
+        run: >-
+          uv pip install --python .venv-legacy-langchain/bin/python
+          -e ".[quickstart]" "langchain<1" "langchain-openai<1"
+      - name: Load legacy AgentExecutor examples
+        run: >-
+          .venv-legacy-langchain/bin/python
+          scripts/smoke_legacy_langchain_examples.py
+
   coverage:
     name: Coverage + guard suite (diff-cover report-only)
     runs-on: ubuntu-latest

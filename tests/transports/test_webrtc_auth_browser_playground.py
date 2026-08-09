@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -230,15 +231,15 @@ class TestWebRTCAuthToken:
         assert transport._request_authorized(_FakeOfferRequest()) is True
 
     @pytest.mark.asyncio
-    async def test_root_redirect_preserves_token_query_for_bundled_client(self):
+    async def test_root_redirect_drops_token_query_for_bundled_client(self):
         transport = WebRTCTransport()
         transport._web = _FakeRootWeb
         transport._has_bundled_client = True
 
         with pytest.raises(_FakeRootWeb.HTTPFound) as exc_info:
-            await transport._handle_root(_FakeRootRequest("token=sekrit"))
+            await transport._handle_root(_FakeRootRequest("token=sekrit&view=compact"))
 
-        assert exc_info.value.location == "/webrtc_client.html?token=sekrit"
+        assert exc_info.value.location == "/webrtc_client.html?view=compact"
 
     @pytest.mark.asyncio
     async def test_root_redirect_without_query_keeps_existing_location(self):
@@ -274,7 +275,11 @@ def test_bundled_client_renders_playground_ui():
         assert f'"{message_type}"' in html
     # Debugger UI link and token forwarding.
     assert 'id="debuggerLink"' in html
-    assert 'new URLSearchParams(location.search).get("token")' in html
+    assert 'new URLSearchParams(current.hash.replace(/^#/, ""))' in html
+    assert 'current.searchParams.has("token")' in html
+    assert 'current.searchParams.get("token")' not in html
+    assert "Ignoring ?token= bootstrap" in html
+    assert 'history.replaceState(null, "",' in html
     assert "authHeaders(" in html
 
 
@@ -343,6 +348,9 @@ class TestWebRTCServedPlaygroundPage(_UsesPytestTcpPortFactory):
             channel = _FakeEventsChannel()
             transport._events_channel = channel
             await bus.emit(STTFinal(text="hello", turn_id="t1"))
+            forwarder = transport._browser_event_forwarder
+            assert forwarder is not None
+            await asyncio.wait_for(forwarder._send_queue.join(), timeout=0.2)
             payloads = [json.loads(item) for item in channel.sent]
             assert payloads == [{"type": "stt_final", "text": "hello", "turn_id": "t1"}]
         finally:

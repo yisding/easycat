@@ -213,9 +213,16 @@ For public deployments, put the signaling server behind HTTPS so
 `getUserMedia()` works, configure TURN, set `WEBRTC_SIGNALING_TOKEN` so
 `/config`, `/offer`, and `/stats` require a bearer token, and tune
 `WEBRTC_MAX_SESSIONS` from load-test data before raising the default cap. The
-bundled client can read that token from its initial `?token=` URL and forwards
-it in the `Authorization` header; direct query-token authentication remains
-off unless `allow_query_token=True` is set explicitly.
+bundled client can read that token from its initial `#token=` fragment, removes
+it from the visible URL, and forwards it in the `Authorization` header. URL
+fragments are not included in HTTP requests, while direct `?token=` query
+authentication remains off unless `allow_query_token=True` is set explicitly.
+
+The server can use configured TURN credentials without returning TURN entries
+from `/config`: the browser receives STUN-only config while the server peer can
+still gather a relay candidate. Browser-side relay requires
+`WEBRTC_EXPOSE_ICE_CREDENTIALS=1`; expose only short-lived TURN credentials (or
+use this with a trusted demo), because every authorized client can read them.
 
 ### Flat routes vs. the `VoiceServer` `/webrtc/*` namespace
 
@@ -235,9 +242,11 @@ implementation (`easycat.server.webrtc_routes.WebRTCRoutes`):
 
 The SAME bundled client HTML serves both. It resolves its route base from a
 `?webrtc=<prefix>` query parameter (defaulting to `""` for the flat helper);
-`VoiceServer`'s root redirect appends `?webrtc=/webrtc` (preserving any
-`?token=`) so the served client targets the namespaced routes. A custom client
-can target either surface by setting `?webrtc=` (or its own base) accordingly.
+`VoiceServer`'s root redirect appends `?webrtc=/webrtc` so the served client
+targets the namespaced routes. It drops any legacy `?token=` rather than copy a
+secret into another HTTP request; bootstrap the bundled client with the
+`#token=` fragment instead. A custom client can target either surface by
+setting `?webrtc=` (or its own base) accordingly.
 
 ## WebTransport servers
 

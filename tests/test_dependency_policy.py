@@ -123,6 +123,21 @@ def test_declared_dependency_floors_are_compatibility_tested() -> None:
     assert "tests/server/test_webrtc_routes.py" in minimum_job
 
 
+def test_legacy_langchain_examples_have_isolated_ci_smoke() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    smoke = (REPO_ROOT / "scripts/smoke_legacy_langchain_examples.py").read_text(encoding="utf-8")
+    job = workflow[workflow.index("  legacy-langchain-examples:") :]
+    job = job[: job.index("\n  coverage:")]
+
+    assert "uv venv --python 3.12 .venv-legacy-langchain" in job
+    assert '-e ".[quickstart]" "langchain<1" "langchain-openai<1"' in job
+    assert "scripts/smoke_legacy_langchain_examples.py" in job
+    assert "auto_adapt_agent(config.agent)" in smoke
+    assert "isinstance(adapted, LangChainBridge)" in smoke
+    assert "RunnableLambda" in smoke
+    assert "bridge.invoke(AgentTurnInput.from_text" in smoke
+
+
 def test_dependabot_uses_uv_for_python_dependencies_and_keeps_pydantic_ai_v1() -> None:
     config = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
 
@@ -174,7 +189,9 @@ def test_mypy_gate_covers_whole_package_with_strict_core_override() -> None:
     justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
     match = re.search(r"^typecheck:\n    (?P<command>.+)$", justfile, re.MULTILINE)
     assert match is not None, "justfile `typecheck` recipe not found"
-    assert match.group("command") == "uv run mypy src/easycat"
+    assert match.group("command") == (
+        "uv run mypy src/easycat scripts/smoke_legacy_langchain_examples.py"
+    )
 
     overrides = _pyproject()["tool"]["mypy"]["overrides"]
     assert any(o.get("check_untyped_defs") for o in overrides), (
