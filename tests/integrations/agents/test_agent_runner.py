@@ -480,6 +480,14 @@ class _CancelAwareBridge(_FakeBridge):
         yield AgentBridgeEvent(kind="done", text="bridged")
 
 
+class _ReplacingBridge(_FakeBridge):
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        _ = turn_input, recorder, cancel_token
+        yield AgentBridgeEvent(kind="text_replace", text="stale", part_index=0)
+        yield AgentBridgeEvent(kind="text_replace", text="correct", part_index=0)
+        yield AgentBridgeEvent(kind="done")
+
+
 class _CancellationIgnoringBridge(_FakeBridge):
     def __init__(self):
         super().__init__()
@@ -541,6 +549,16 @@ async def test_agent_runner_wrapping_a_bridge_delegates_invoke():
     events = await _drain(runner, "hello")
     assert inner.invoke_called
     assert [e.kind for e in events] == ["text_delta", "done"]
+
+
+@pytest.mark.asyncio
+async def test_agent_runner_mirrors_replaced_text_into_shadow_history():
+    runner = AgentRunner(_ReplacingBridge())
+
+    events = await _drain(runner, "hello")
+
+    assert [event.kind for event in events] == ["text_replace", "text_replace", "done"]
+    assert runner.history[-1] == {"role": "assistant", "content": "correct"}
 
 
 @pytest.mark.asyncio

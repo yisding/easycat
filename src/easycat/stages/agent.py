@@ -19,6 +19,7 @@ from easycat.integrations.agents._agent_runner import (
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents._helpers import aclose_quietly
 from easycat.integrations.agents._recorder import JournalAgentRecorder
+from easycat.integrations.agents._text_stream import AgentTextStream
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -175,15 +176,15 @@ class AgentStage:
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> str:
         """Drive a full turn and return the accumulated text response."""
-        accumulated = ""
+        accumulated = AgentTextStream()
         async for event in self.execute_streaming(input, ctx, turn):
             kind = getattr(event, "kind", None)
             text = getattr(event, "text", "")
-            if kind == "text_delta" and text:
-                accumulated += text
+            if kind in {"text_delta", "text_replace"}:
+                accumulated.apply(event)
             elif kind == "done" and text:
-                accumulated = text
-        return accumulated
+                accumulated.replace_final(text)
+        return accumulated.text
 
     async def execute_streaming(
         self,
@@ -244,7 +245,7 @@ class AgentStage:
             role=input_role,
         )
 
-        accumulated: list[str] = []
+        accumulated = AgentTextStream()
         errored = False
         started = time.perf_counter()
         try:
@@ -283,7 +284,7 @@ class AgentStage:
                             break
                         kind = getattr(event, "kind", None)
                         text = getattr(event, "text", "")
-                        if kind == "text_delta" and text:
+                        if kind in {"text_delta", "text_replace"}:
                             # Record the delivered token before yielding it.
                             # Async generator cleanup (``aclose()``, disconnects,
                             # or cancellation) resumes by injecting
@@ -293,15 +294,24 @@ class AgentStage:
                             # clients.
                             cancelled = bool(cancel_token and cancel_token.is_cancelled)
                             if journal_enabled and not cancelled:
+                                delta_data: dict[str, Any] = {
+                                    "type": (
+                                        "TEXT_REPLACE" if kind == "text_replace" else "TEXT_DELTA"
+                                    ),
+                                    "text": text,
+                                }
+                                part_index = getattr(event, "part_index", None)
+                                if part_index is not None:
+                                    delta_data["part_index"] = part_index
                                 journal_append_event(
                                     ctx,
                                     stage=self.name,
                                     name="agent_delta",
                                     turn_id=turn.id,
-                                    data_extra={"type": "TEXT_DELTA", "text": text},
+                                    data_extra=delta_data,
                                 )
                             if not cancelled:
-                                accumulated.append(text)
+                                accumulated.apply(event)
                             yield event
                             continue
                         elif kind == "done":
@@ -315,7 +325,7 @@ class AgentStage:
                                         turn_id=turn.id,
                                         data_extra={"type": "DONE", "text": text},
                                     )
-                                accumulated = [text]
+                                accumulated.replace_final(text)
                         elif kind == "tool_started" and getattr(event, "tool_name", ""):
                             if journal_enabled:
                                 journal_append_event(
@@ -397,7 +407,7 @@ class AgentStage:
                     ""
                     if (cancel_token and cancel_token.is_cancelled)
                     or (commit_guard is not None and not commit_guard())
-                    else "".join(accumulated)
+                    else accumulated.text
                 )
                 if (
                     self._tracks_history

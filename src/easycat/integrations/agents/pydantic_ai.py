@@ -14,6 +14,7 @@ import shlex
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import ExitStack
+from dataclasses import replace
 from typing import Any, ClassVar
 from urllib.parse import unquote
 from uuid import uuid4
@@ -28,6 +29,7 @@ from easycat.integrations.agents._helpers import (
     split_replacement_by_original_parts,
 )
 from easycat.integrations.agents._pydantic_ai_events import translate_event
+from easycat.integrations.agents._text_stream import AgentTextStream, is_text_event
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -54,6 +56,62 @@ def _completion_text(accumulated: str, structured_output: Any) -> str:
     if structured_output is None:
         return ""
     return str(structured_output)
+
+
+class _RunPartIndexAllocator:
+    """Remap stream-local text part indexes onto one run-global namespace.
+
+    PydanticAI part indexes are local to a single streamed model response.
+    A run that spans several responses (tool-call rounds in ``agent.iter()``,
+    per-agent streams inside a graph) restarts at index 0 for each response,
+    so forwarding raw indexes would misreport a later response's text as a
+    replacement of an earlier response's part.
+    """
+
+    def __init__(self) -> None:
+        self._next_index = 0
+
+    def _allocate(self) -> int:
+        index = self._next_index
+        self._next_index += 1
+        return index
+
+    def remap_scoped(
+        self, event: AgentBridgeEvent, stream_map: dict[int, int]
+    ) -> AgentBridgeEvent:
+        """Remap within one response stream via first-sight allocation.
+
+        Allocation is synchronous on the event loop, so concurrent streams
+        can never claim the same slot, while a repeated same-index start
+        reuses its reservation and keeps replacement semantics.
+        """
+        local = event.part_index
+        if local is None:
+            return event
+        global_index = stream_map.get(local)
+        if global_index is None:
+            global_index = self._allocate()
+            stream_map[local] = global_index
+        return event if global_index == local else replace(event, part_index=global_index)
+
+    def remap_unscoped(
+        self, event: AgentBridgeEvent, sticky_map: dict[int, int]
+    ) -> AgentBridgeEvent:
+        """Remap events whose stream boundaries are not observable.
+
+        The v1 one-arg handler convention delivers bare events, so a part
+        start at an already-seen local index is indistinguishable from a new
+        response's first part. Every start therefore claims a fresh global
+        part — degrading a true same-index restart to an appended part — and
+        later deltas follow their local index's most recent allocation.
+        """
+        local = event.part_index
+        if local is None:
+            return event
+        if event.kind == "text_replace" or local not in sticky_map:
+            sticky_map[local] = self._allocate()
+        global_index = sticky_map[local]
+        return event if global_index == local else replace(event, part_index=global_index)
 
 
 _DEFAULT_HISTORY_KEY = "__default__"
@@ -582,7 +640,7 @@ class PydanticAIBridge:
             entered_at=time.monotonic_ns(),
             committable=False,
         )
-        accumulated = ""
+        accumulated = AgentTextStream()
         raw_output: Any = None
         done_emitted = False
 
@@ -599,10 +657,10 @@ class PydanticAIBridge:
                 if hasattr(agent, "iter"):
                     inner = self._stream_via_iter(turn_input, recorder, cancel_token, history_key)
                     async for ev in inner:
-                        if ev.kind == "text_delta":
-                            accumulated += ev.text
-                        elif ev.kind == "done":
+                        if ev.kind == "done":
                             done_emitted = True
+                        else:
+                            accumulated.apply(ev)
                         yield ev
                     raw_output = self._last_output
                 else:
@@ -613,8 +671,7 @@ class PydanticAIBridge:
                         history_key,
                     )
                     async for ev in inner:
-                        if ev.kind == "text_delta":
-                            accumulated += ev.text
+                        accumulated.apply(ev)
                         yield ev
                     raw_output = self._last_output
             finally:
@@ -630,7 +687,7 @@ class PydanticAIBridge:
         if not done_emitted:
             yield AgentBridgeEvent(
                 kind="done",
-                text=_completion_text(accumulated, raw_output),
+                text=_completion_text(accumulated.text, raw_output),
                 structured_output=raw_output,
             )
 
@@ -644,6 +701,7 @@ class PydanticAIBridge:
         """Stream using ``agent.iter()`` with full event capture."""
         agent = self._require_agent()
         tool_call_ids: dict[int, str] = {}
+        part_indexes = _RunPartIndexAllocator()
         async with agent.iter(
             turn_input.text,
             **self._agent_run_kwargs(agent.iter, turn_input, history_key),
@@ -663,6 +721,9 @@ class PydanticAIBridge:
                         continue
 
                     async with node.stream(agent_run.ctx) as stream:
+                        # Each node streams one model response whose part
+                        # indexes restart at 0; namespace them per stream.
+                        node_part_index_map: dict[int, int] = {}
                         async for event in stream:
                             if cancel_token and cancel_token.is_cancelled and not interrupted:
                                 interrupted = True
@@ -674,8 +735,9 @@ class PydanticAIBridge:
                                 tool_call_ids=tool_call_ids,
                             )
                             if mapped is not None:
-                                if interrupted and mapped.kind == "text_delta":
+                                if interrupted and is_text_event(mapped):
                                     continue
+                                mapped = part_indexes.remap_scoped(mapped, node_part_index_map)
                                 yield mapped
 
             except GeneratorExit:
@@ -1027,14 +1089,18 @@ class _GraphEventHandler:
 
     def __init__(self, recorder: AgentRecorder) -> None:
         self._recorder = recorder
-        self._accumulated_text = ""
+        self._text_stream = AgentTextStream()
         self._was_called = False
         self._pending: list[AgentBridgeEvent] = []
         self._tool_call_ids: dict[int, str] = {}
+        self._part_indexes = _RunPartIndexAllocator()
+        # v1 single events carry no stream identity; this sticky map routes
+        # each local index's deltas to its most recent part allocation.
+        self._v1_part_index_map: dict[int, int] = {}
 
     @property
     def accumulated_text(self) -> str:
-        return self._accumulated_text
+        return self._text_stream.text
 
     @property
     def was_called(self) -> bool:
@@ -1045,15 +1111,24 @@ class _GraphEventHandler:
         self._pending = []
         return events
 
-    async def _handle_event(self, event: Any) -> None:
+    async def _handle_event(
+        self,
+        event: Any,
+        *,
+        part_index_map: dict[int, int] | None = None,
+        tool_call_ids: dict[int, str] | None = None,
+    ) -> None:
         mapped = translate_event(
             event,
             self._recorder,
-            tool_call_ids=self._tool_call_ids,
+            tool_call_ids=self._tool_call_ids if tool_call_ids is None else tool_call_ids,
         )
         if mapped is not None:
-            if mapped.kind == "text_delta":
-                self._accumulated_text += mapped.text
+            if part_index_map is not None:
+                mapped = self._part_indexes.remap_scoped(mapped, part_index_map)
+            else:
+                mapped = self._part_indexes.remap_unscoped(mapped, self._v1_part_index_map)
+            self._text_stream.apply(mapped)
             self._pending.append(mapped)
 
     async def __call__(self, *args: Any) -> None:
@@ -1064,9 +1139,15 @@ class _GraphEventHandler:
             return
         if len(args) == 2:
             ctx, events = args
+            part_index_map: dict[int, int] = {}
+            tool_call_ids: dict[int, str] = {}
             try:
                 async for event in events:
-                    await self._handle_event(event)
+                    await self._handle_event(
+                        event,
+                        part_index_map=part_index_map,
+                        tool_call_ids=tool_call_ids,
+                    )
             finally:
                 await record_usage_from_result(
                     self._recorder,

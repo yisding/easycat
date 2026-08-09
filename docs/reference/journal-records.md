@@ -76,7 +76,7 @@ remain top-level envelope fields, not `data` keys.
 
 | Name | Kind | Required `data` keys | Optional or variant `data` keys |
 |---|---|---|---|
-| `agent_delta` | `EVENT` | - | Text form: `text: str` and optional `type: str`; tool form: `type: str`, `tool_name: str`, `call_id: str`, or `result: Any`. |
+| `agent_delta` | `EVENT` | - | Text form: `text: str` and optional `type: str`, `part_index: int`, `replacement: bool`; tool form: `type: str`, `tool_name: str`, `call_id: str`, or `result: Any`. |
 | `agent_final` | `EVENT` | `text: str` | `structured_output: Any` |
 | `agent_request_started` | `EVENT` | - | - |
 | `bot_started_speaking` | `EVENT` | - | - |

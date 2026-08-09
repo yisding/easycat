@@ -75,8 +75,9 @@ class TextPartDelta:
 
 
 class PartDeltaEvent:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, *, index: int = 0) -> None:
         self.delta = TextPartDelta(text)
+        self.index = index
 
 
 class _EventStream:
@@ -302,7 +303,8 @@ async def test_real_sdk_aclose_preserves_prior_turn_and_commits_current_turn() -
 
     stream = bridge.invoke(AgentTurnInput.from_text("current"), _recorder())
     first = await anext(stream)
-    assert first.kind == "text_delta"
+    assert first.kind == "text_replace"
+    assert first.part_index == 0
     await stream.aclose()
 
     bridge.apply_interruption(

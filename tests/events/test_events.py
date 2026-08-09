@@ -66,6 +66,13 @@ def _markers_len_1(value: object) -> bool:
     return len(value) == 1  # type: ignore[arg-type]
 
 
+def test_agent_delta_can_describe_an_indexed_replacement() -> None:
+    event = AgentDelta(text="correct", part_index=2, replacement=True)
+
+    assert event.part_index == 2
+    assert event.replacement is True
+
+
 @pytest.mark.parametrize(
     ("make_event", "field_checks"),
     [

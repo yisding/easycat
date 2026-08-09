@@ -26,6 +26,7 @@ from easycat.events import (
     ToolCallResult,
     ToolCallStarted,
 )
+from easycat.integrations.agents._text_stream import AgentTextStream, AgentTextUpdate
 from easycat.session.text import (
     _FIRST_PHRASE_TARGET_CHARS,
     _split_first_phrase,
@@ -175,13 +176,39 @@ class _SentenceStreamBuffer:
         # recheck eagerly rather than waiting for a markdown-closer character.
         self._awaiting_link_dest = False
         self._payload_count = 0
+        self._suppressed = False
+
+    @property
+    def has_payloads(self) -> bool:
+        """Whether any text has crossed the replaceable TTS boundary."""
+        return self._payload_count > 0
 
     def replace(self, text: str) -> None:
         """Replace the pending buffer wholesale (used by the ``done`` event)."""
-        self._text = text
+        if not self._suppressed:
+            self._text = text
+
+    async def replace_pending(self, text: str) -> bool:
+        """Replace all uncommitted text and re-run streaming segmentation."""
+        if self.has_payloads:
+            raise RuntimeError("cannot replace text after a TTS payload was admitted")
+        if self._suppressed:
+            return False
+        self._text = ""
+        self._first_payload_pending = True
+        self._markdown_window_open = False
+        self._awaiting_link_dest = False
+        return await self.add_delta(text)
+
+    def suppress(self) -> None:
+        """Drop pending text and prevent further payloads for this turn."""
+        self._suppressed = True
+        self._text = ""
 
     async def add_delta(self, delta: str) -> bool:
         """Buffer *delta* and report whether it queued a TTS payload."""
+        if self._suppressed:
+            return False
         if self._strip_md:
             return await self._add_markdown_delta(delta)
         self._text += delta
@@ -247,6 +274,9 @@ class _SentenceStreamBuffer:
 
     async def flush(self) -> bool:
         """Queue remaining text and report whether it produced a payload."""
+        if self._suppressed:
+            self._text = ""
+            return False
         queued = False
         if self._text.strip():
             text = self._text
@@ -316,6 +346,7 @@ async def consume_agent_stream(
     first_tts_payload_ready: asyncio.Future[bool] | None = None,
     abort_event: asyncio.Event | None = None,
     is_active: Callable[[], bool] | None = None,
+    on_tts_replacement_conflict: Callable[[], Awaitable[None]] | None = None,
 ) -> AgentStreamResult:
     """Consume an :class:`AgentBridgeEvent` stream and queue TTS payloads.
 
@@ -341,6 +372,7 @@ async def consume_agent_stream(
         first_tts_payload_ready=first_tts_payload_ready,
         abort_event=abort_event,
         is_active=is_active,
+        on_tts_replacement_conflict=on_tts_replacement_conflict,
     )
     return await consumer.run(stream_factory)
 
@@ -366,6 +398,7 @@ class _AgentStreamConsumer:
         first_tts_payload_ready: asyncio.Future[bool] | None,
         abort_event: asyncio.Event | None,
         is_active: Callable[[], bool] | None,
+        on_tts_replacement_conflict: Callable[[], Awaitable[None]] | None,
     ) -> None:
         self._cancel_token = cancel_token
         self._tts_queue = tts_queue
@@ -374,14 +407,17 @@ class _AgentStreamConsumer:
         self._first_tts_payload_ready = first_tts_payload_ready
         self._abort_event = abort_event
         self._is_active_callback = is_active
+        self._on_tts_replacement_conflict = on_tts_replacement_conflict
         self._buffer = _SentenceStreamBuffer(
             tts_queue=tts_queue,
             prepare_tts_payload=prepare_tts_payload,
             strip_md=strip_md,
         )
         self.result = AgentStreamResult()
+        self._text_stream = AgentTextStream()
         self._pending_tool_calls = 0
         self._done_received = False
+        self._tts_suppressed_for_replacement = False
 
     async def run(self, stream_factory: Callable[[], AsyncIterator[Any]]) -> AgentStreamResult:
         stream: AsyncIterator[Any] | None = None
@@ -444,8 +480,8 @@ class _AgentStreamConsumer:
         return True
 
     async def _consume_event(self, event: Any, kind: str) -> None:
-        if kind == "text_delta":
-            await self._consume_text_delta(event)
+        if kind in {"text_delta", "text_replace"}:
+            await self._consume_text_update(event)
         elif kind == "tool_started":
             self._pending_tool_calls += 1
             await emit_tool_event(event, kind, emit=self._emit)
@@ -456,19 +492,43 @@ class _AgentStreamConsumer:
         elif kind == "done":
             await self._consume_done(event)
 
-    async def _consume_text_delta(self, event: Any) -> None:
-        self.result.text += event.text
+    async def _consume_text_update(self, event: Any) -> None:
+        update = self._text_stream.apply(event)
+        if update is None:  # pragma: no cover - guarded by _consume_event
+            return
+        self.result.text = update.text
+        if update.text == update.previous_text:
+            return
+        delta_event = AgentDelta(
+            text=event.text,
+            part_index=update.part_index,
+            replacement=update.operation == "replace",
+        )
         gate = self._first_tts_payload_ready
         if gate is None or gate.done():
-            await self._emit(AgentDelta(text=event.text))
-            if not self._is_active():
-                return
-            if self._turn.first_agent_time is None:
-                self._turn.first_agent_time = time.monotonic()
-            await self._buffer.add_delta(event.text)
+            await self._consume_ungated_text_update(update, delta_event)
             return
 
-        delta_event = AgentDelta(text=event.text)
+        await self._consume_gated_text_update(update, delta_event, gate)
+
+    async def _consume_ungated_text_update(
+        self,
+        update: AgentTextUpdate,
+        delta_event: AgentDelta,
+    ) -> None:
+        await self._emit(delta_event)
+        if not self._is_active():
+            return
+        if self._turn.first_agent_time is None:
+            self._turn.first_agent_time = time.monotonic()
+        await self._queue_text_update(update)
+
+    async def _consume_gated_text_update(
+        self,
+        update: AgentTextUpdate,
+        delta_event: AgentDelta,
+        gate: asyncio.Future[bool],
+    ) -> None:
         if self._turn.first_agent_time is None:
             self._turn.first_agent_time = delta_event.timestamp
 
@@ -478,7 +538,7 @@ class _AgentStreamConsumer:
             # the provider can overlap its TTFB with async AgentDelta handlers.
             # The TTS consumer holds public lifecycle/audio events behind the
             # gate until dispatch completes below.
-            queued = await self._buffer.add_delta(event.text)
+            queued = await self._queue_text_update(update)
             await self._emit(delta_event)
         except BaseException:
             if queued and not gate.done():
@@ -488,11 +548,47 @@ class _AgentStreamConsumer:
             if queued and not gate.done():
                 gate.set_result(True)
 
+    async def _queue_text_update(self, update: AgentTextUpdate) -> bool:
+        if self._tts_suppressed_for_replacement:
+            return False
+        if update.operation == "append" and update.appended_text is not None:
+            return await self._buffer.add_delta(update.appended_text)
+        if not self._buffer.has_payloads:
+            return await self._buffer.replace_pending(update.text)
+        if update.appended_text is not None:
+            # A full-part replacement that only extends the current response
+            # is still safe after speech started; synthesize only its suffix.
+            return await self._buffer.add_delta(update.appended_text)
+        await self._suppress_tts_after_replacement()
+        return False
+
+    async def _suppress_tts_after_replacement(self) -> None:
+        """Fail closed when a replacement crosses admitted speech.
+
+        Audio already heard cannot be retracted. Clear queued/current playback
+        and suppress the rest of this turn rather than replaying corrected
+        text over the stale prefix or continuing stale pending speech.
+        """
+        if self._tts_suppressed_for_replacement:
+            return
+        self._tts_suppressed_for_replacement = True
+        self._buffer.suppress()
+        while not self._tts_queue.empty():
+            self._tts_queue.get_nowait()
+        logger.warning("Agent text replacement crossed the admitted TTS boundary; speech cut off")
+        callback = self._on_tts_replacement_conflict
+        if callback is not None:
+            try:
+                await callback()
+            except Exception:
+                logger.exception("Failed to cut off TTS after an agent text replacement")
+
     async def _consume_done(self, event: Any) -> None:
         if event.text:
             if not self.result.text:
                 self._buffer.replace(event.text)
             self.result.text = event.text
+            self._text_stream.replace_final(event.text)
         if getattr(event, "structured_output", None) is not None:
             self.result.structured_output = event.structured_output
         queued = await self._buffer.flush()
@@ -502,6 +598,7 @@ class _AgentStreamConsumer:
     def _capture_done_payload(self, event: Any) -> None:
         if event.text:
             self.result.text = event.text
+            self._text_stream.replace_final(event.text)
         if getattr(event, "structured_output", None) is not None:
             self.result.structured_output = event.structured_output
 

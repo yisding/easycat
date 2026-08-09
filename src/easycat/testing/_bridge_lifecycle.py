@@ -21,6 +21,7 @@ from typing import Any, ClassVar, Literal, Protocol, TypeVar
 
 import pytest
 
+from easycat.integrations.agents._text_stream import AgentTextStream
 from easycat.integrations.agents.base import AgentBridgeEvent, FrameworkStateSnapshot
 from easycat.testing.contracts import ContractSuite
 
@@ -188,12 +189,15 @@ class BridgeLifecycleScenarioSuite(ContractSuite):
             scenario="tool_inflight_cancellation_drain",
         )
 
-        before_text = "".join(
-            event.text for event in observation.events_before_cancel if event.kind == "text_delta"
-        )
-        assert before_text == self.delivered_text
+        before_text = AgentTextStream()
+        for event in observation.events_before_cancel:
+            before_text.apply(event)
+        assert before_text.text == self.delivered_text
         assert all(event.kind != "done" for event in observation.events_before_cancel)
-        assert all(event.kind != "text_delta" for event in observation.events_after_cancel)
+        assert all(
+            event.kind not in {"text_delta", "text_replace"}
+            for event in observation.events_after_cancel
+        )
         assert observation.tool_phases_before_cancel
         assert observation.tool_phases_before_cancel[0] == "start"
         assert "result" not in observation.tool_phases_before_cancel

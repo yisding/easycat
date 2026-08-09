@@ -15,6 +15,71 @@ from easycat.integrations.agents.base import AgentBridgeEvent
 from easycat.tts.input import TTSInput
 
 
+async def test_indexed_replacement_updates_buffer_before_tts_admission():
+    from easycat.session._streaming import consume_agent_stream
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        yield AgentBridgeEvent(kind="text_replace", text="stale fragment", part_index=0)
+        yield AgentBridgeEvent(kind="text_replace", text="Correct sentence.", part_index=0)
+        yield AgentBridgeEvent(kind="done", text="Correct sentence.")
+
+    turn = TurnContext(turn_id="replacement-buffered", cancel_token=CancelToken())
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    emitted: list[object] = []
+
+    result = await consume_agent_stream(
+        _stream,
+        cancel_token=turn.cancel_token,
+        tts_queue=tts_queue,
+        emit=lambda event: _append_event(emitted, event),
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=False,
+        turn=turn,
+    )
+
+    assert result.text == "Correct sentence."
+    assert (await tts_queue.get()).text == "Correct sentence."
+    assert await tts_queue.get() is None
+    deltas = [event for event in emitted if isinstance(event, AgentDelta)]
+    assert [(event.text, event.part_index, event.replacement) for event in deltas] == [
+        ("stale fragment", 0, True),
+        ("Correct sentence.", 0, True),
+    ]
+
+
+async def test_indexed_replacement_cuts_off_tts_after_payload_admission():
+    from easycat.session._streaming import consume_agent_stream
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        yield AgentBridgeEvent(kind="text_replace", text="Stale sentence.", part_index=0)
+        yield AgentBridgeEvent(kind="text_replace", text="Correct sentence.", part_index=0)
+        yield AgentBridgeEvent(kind="done", text="Correct sentence.")
+
+    turn = TurnContext(turn_id="replacement-spoken", cancel_token=CancelToken())
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    cutoff = AsyncMock()
+
+    result = await consume_agent_stream(
+        _stream,
+        cancel_token=turn.cancel_token,
+        tts_queue=tts_queue,
+        emit=AsyncMock(),
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=False,
+        turn=turn,
+        on_tts_replacement_conflict=cutoff,
+    )
+
+    assert result.text == "Correct sentence."
+    cutoff.assert_awaited_once_with()
+    assert await tts_queue.get() is None
+    assert tts_queue.empty()
+
+
+async def _append_event(events: list[object], event: object) -> None:
+    events.append(event)
+
+
 async def test_consume_agent_stream_captures_done_on_cancel_without_tool_calls():
     """A cancelled stream with no pending tool calls still surfaces the
     trailing ``done`` payload (text + structured_output) instead of

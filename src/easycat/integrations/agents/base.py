@@ -120,6 +120,7 @@ class AgentTurnInput:
 
 AgentEventKind = Literal[
     "text_delta",
+    "text_replace",
     "tool_started",
     "tool_delta",
     "tool_result",
@@ -129,10 +130,17 @@ AgentEventKind = Literal[
 
 @dataclass(frozen=True)
 class AgentBridgeEvent:
-    """Event yielded by ``ExternalAgentBridge.invoke()``."""
+    """Event yielded by ``ExternalAgentBridge.invoke()``.
+
+    ``text_delta`` appends ``text`` to the response, or to the indexed text
+    part when ``part_index`` is present. ``text_replace`` sets the complete
+    content of ``part_index`` and therefore preserves frameworks whose part
+    starts may replace an earlier start at the same index.
+    """
 
     kind: AgentEventKind
     text: str = ""
+    part_index: int | None = field(default=None, kw_only=True)
     tool_name: str = ""
     call_id: str = ""
     result: str = ""
@@ -142,6 +150,18 @@ class AgentBridgeEvent:
     to_unit: str | None = None
     reason: str | None = None
     snapshot: FrameworkStateSnapshot | None = None
+
+    def __post_init__(self) -> None:
+        if self.part_index is not None and (
+            not isinstance(self.part_index, int)
+            or isinstance(self.part_index, bool)
+            or self.part_index < 0
+        ):
+            raise ValueError("part_index must be a non-negative integer")
+        if self.kind == "text_replace" and self.part_index is None:
+            raise ValueError("text_replace events require a non-negative part_index")
+        if self.part_index is not None and self.kind not in {"text_delta", "text_replace"}:
+            raise ValueError("part_index is only valid for text events")
 
 
 @dataclass(frozen=True)

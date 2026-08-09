@@ -204,7 +204,8 @@ depend on this surface:
 
 - `ExternalAgentBridge` — async protocol implemented by every bridge.
 - `AgentTurnInput` — normalized user turn input passed into bridges.
-- `AgentBridgeEvent` — normalized stream event yielded by bridges.
+- `AgentBridgeEvent` — normalized stream event yielded by bridges, including
+  append-only text deltas and indexed text-part replacements.
 - `AgentRecorder` — write-side journal protocol passed into bridge turns.
 - `CancellationMode` — supported interruption and drain strategies.
 - `FrameworkStateSnapshot` — JSON-safe framework state captured by bridges.

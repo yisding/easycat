@@ -137,6 +137,7 @@ class SessionWiringContext:
 
     # ── Lifecycle verbs ──────────────────────────────────────────
     cancel_turn: Callable[..., Awaitable[None]]
+    cut_off_tts_for_text_replacement: Callable[[], Awaitable[None]]
     begin_barge_in: Callable[[], Awaitable[None]]
     stop: Callable[[], Awaitable[None]]
 
@@ -197,6 +198,7 @@ def build_wiring(session: Session) -> SessionWiringContext:
         clear_turn=_clear_turn,
         reset_turn_state=session._reset_turn_state,
         cancel_turn=session.cancel_turn,
+        cut_off_tts_for_text_replacement=session._cut_off_tts_for_text_replacement,
         begin_barge_in=session._begin_barge_in,
         stop=lambda: session.stop(),
     )
