@@ -44,6 +44,7 @@ from easycat.teardown_budgets import (
     SERVER_DRAIN_TIMEOUT_S,
     SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
 )
+from easycat.telephony._stream_tokens import StreamTokenStore
 from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 
 if TYPE_CHECKING:
@@ -58,7 +59,7 @@ __all__ = ["TwilioVoiceServerConfig", "run_twilio_voice_app", "serve_twilio_voic
 
 
 def _issue_call_bound_stream_token(
-    store: Any,
+    store: StreamTokenStore,
     form_items: list[tuple[str, str]],
     *,
     idempotency_key: str | None,

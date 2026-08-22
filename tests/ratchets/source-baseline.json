@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "rationale": "TurnManager shutdown now reaps completed timers without callback-scheduling starvation",
+  "rationale": "extract shared telephony codecs/tokens",
   "counts": {
     "cancelled_error_handler": 118,
     "epoch_field": 12,
