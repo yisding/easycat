@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "update_rationale": "address PR review: centralize the STT commit task name and align rejected-start cleanup budgets",
-  "counts": {
-    "configurable": 23,
-    "lifecycle_budget": 95,
-    "not_teardown": 34,
-    "protocol_local": 41
-  },
+ "update_rationale": "classify telnyx protocol-core budgets (unregistered until phase 3)",
+ "counts": {
+  "configurable": 23,
+  "lifecycle_budget": 95,
+  "not_teardown": 34,
+  "protocol_local": 45
+ },
   "entries": [
     "config_default\t_bounded_queue.py\tBoundedAudioQueue.__init__\tdefault block_timeout\t0e52caa456688a04\t0\tnot_teardown\tBounds queue backpressure during ordinary audio delivery.",
     "config_default\t_concurrency.py\treap\tdefault timeout\t8f2cda988d9ca730\t0\tlifecycle_budget\tBounds reusable task cancellation and reaping.",
@@ -37,11 +37,14 @@
     "config_default\ttelephony/outbound.py\tOutboundCallManager.__init__\tdefault amd_timeout\t14e182932528b6c4\t0\tprotocol_local\tBounds provider answering-machine detection.",
     "config_default\ttelephony/outbound.py\tOutboundCallManager.__init__\tdefault silence_timeout\t2183ec41632f9e50\t0\tprotocol_local\tBounds outbound-call silence detection.",
     "config_default\ttelephony/screening.py\tCallScreeningDetector.__init__\tdefault agent_timeout_s\t64453a703d24902f\t0\tprotocol_local\tBounds a call-screening agent response.",
+    "config_default\ttelephony/telnyx.py\tbuild_dial_payload\tdefault timeout_secs\t8f2cda988d9ca730\t0\tprotocol_local\tBounds the outbound dial ringing window.",
+    "config_default\ttelephony/telnyx_client.py\tTelnyxCallControlClient.__init__\tdefault timeout_s\t6f3fab6123c5b963\t0\tprotocol_local\tBounds per-request Call Control API latency.",
     "config_default\ttelephony/twiml.py\ttwiml_gather\tdefault timeout\t8101619acb0f71cd\t0\tprotocol_local\tConfigures the TwiML gather response window.",
     "config_default\ttelephony/voicemail.py\tPostScreeningVoicemailDetector.__init__\tdefault timeout_s\t6f3fab6123c5b963\t0\tprotocol_local\tBounds post-screening voicemail detection.",
     "config_default\ttelephony/voicemail.py\tSTTAMDFusionClassifier.__init__\tdefault stt_timeout_s\t0e52caa456688a04\t0\tprotocol_local\tBounds the STT-assisted AMD decision.",
     "config_default\ttransports/_base.py\tAudioQueueMixin.wait_for_client\tdefault timeout\t8f2cda988d9ca730\t0\tprotocol_local\tBounds transport client attachment.",
     "config_default\ttransports/_browser_events.py\tBrowserEventForwarder.__init__\tdefault send_timeout_s\tf77780c771074cf2\t0\tprotocol_local\tBounds an individual browser event send.",
+    "config_default\ttransports/telnyx_media.py\tTelnyxConnectionTransport.wait_for_start\tdefault timeout_s\t8f2cda988d9ca730\t0\tprotocol_local\tBounds the Telnyx media-start handshake.",
     "config_default\ttransports/twilio_media.py\tTwilioConnectionTransport.wait_for_start\tdefault timeout_s\t8f2cda988d9ca730\t0\tprotocol_local\tBounds the Twilio media-start handshake.",
     "config_default\ttransports/webtransport.py\tWebTransportConnectionTransport.wait_closed\tdefault timeout\t8f2cda988d9ca730\t0\tlifecycle_budget\tBounds waiting for transport closure.",
     "lifecycle_call\t_concurrency.py\treap\tcall asyncio.wait\t021501dcc478d52d\t0\tlifecycle_budget\tEnforces the reusable task-reaping deadline.",
@@ -185,6 +188,7 @@
     "named_constant\ttimeouts.py\tTimeoutConfig\tconstant tts_first_byte_timeout\tc79a8bc150b4afb0\t0\tnot_teardown\tConfigures ordinary TTS first-byte latency.",
     "named_constant\ttransports/_browser_events.py\t<module>\tconstant _DEFAULT_SEND_TIMEOUT_S\tc311a82f52135fe2\t0\tprotocol_local\tCaps an individual browser event send.",
     "named_constant\ttransports/_webrtc_audio.py\tOutboundAudioSource\tconstant _ACLOSE_TIMEOUT_S\t3cb7df42806a1654\t0\tlifecycle_budget\tKeeps the canonical WebRTC audio-close budget overridable for focused policy tests.",
+    "named_constant\ttransports/telnyx_media.py\tTelnyxTransportConfig\tconstant stream_token_validation_timeout_s\t21b83b11a1785d50\t0\tprotocol_local\tConfigures Telnyx stream-token validation.",
     "named_constant\ttransports/twilio_media.py\tTwilioTransportConfig\tconstant stream_token_validation_timeout_s\t21b83b11a1785d50\t0\tprotocol_local\tConfigures Twilio stream-token validation.",
     "named_constant\ttransports/websocket.py\tWebSocketSessionServerConfig\tconstant drain_timeout_s\td6b276227e6e0f86\t0\tconfigurable\tConfigures the WebSocket session-server graceful-drain budget.",
     "named_constant\ttransports/websocket.py\tWebSocketSessionServerConfig\tconstant force_shutdown_timeout_s\t25b51b96cb4e0a0f\t0\tconfigurable\tConfigures the WebSocket session-server forced-shutdown budget.",
