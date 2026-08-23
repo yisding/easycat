@@ -1,11 +1,15 @@
-"""Outbound call management: Twilio status callback parsing and call placement."""
+"""Outbound call management: status callback parsing and call placement."""
 
 from __future__ import annotations
 
 __all__ = [
+    "OutboundCallClient",
     "OutboundCallManager",
     "OutboundCallManagerState",
+    "TelnyxOutboundClient",
+    "TwilioRestOutboundClient",
     "emit_call_status",
+    "emit_telnyx_call_event",
     "parse_call_status_callback",
 ]
 
@@ -14,7 +18,7 @@ import logging
 import math
 from collections.abc import Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from easycat._concurrency import shielded_cleanup
 from easycat._epoch import Epoch, Lease
@@ -24,6 +28,7 @@ from easycat.events import (
     CallFailed,
     CallInitiated,
     CallRinging,
+    Event,
     EventBus,
     VoicemailDetected,
 )
@@ -203,6 +208,213 @@ class OutboundCallManagerState(Enum):
     ACTIVE = "active"
 
 
+# ── Outbound call client seam ────────────────────────────────────
+
+
+class OutboundCallUpdater(Protocol):
+    """Per-call resource the manager drives to complete a live call."""
+
+    def update(self, **kwargs: Any) -> Any: ...
+
+
+class OutboundCallsResource(Protocol):
+    """Provider calls collection: create a call, address one by SID."""
+
+    def create(self, **kwargs: Any) -> Any: ...
+
+    def __call__(self, call_sid: str) -> OutboundCallUpdater: ...
+
+
+@runtime_checkable
+class OutboundCallClient(Protocol):
+    """Provider boundary used by :class:`OutboundCallManager`.
+
+    Mirrors the Twilio SDK resource surface the manager offloads to worker
+    threads (``calls.create(...)`` / ``calls(sid).update(status=...)``).
+    Implementations adapt other providers (e.g. Telnyx Call Control v2) onto
+    this shape; ``create`` must return an object exposing ``sid``.
+    """
+
+    @property
+    def calls(self) -> OutboundCallsResource: ...
+
+
+class TwilioRestOutboundClient:
+    """Default :class:`OutboundCallClient` backed by the Twilio REST SDK."""
+
+    def __init__(self, account_sid: str, auth_token: str) -> None:
+        try:
+            from twilio.rest import Client as TwilioClient
+        except ImportError:
+            raise ImportError(
+                "The 'twilio' package is required for OutboundCallManager. "
+                + TELEPHONY_INSTALL_HINT
+            ) from None
+        self._sdk_client = TwilioClient(account_sid, auth_token)
+
+    @property
+    def calls(self) -> Any:
+        return self._sdk_client.calls
+
+    async def close(self) -> None:
+        return None
+
+
+_TELNYX_AMD_BY_TWILIO_MODE = {
+    "DetectMessageEnd": "greeting_end",
+    "Enable": "detect",
+    "Disabled": "disabled",
+}
+
+
+def telnyx_dial_payload_from_create_kwargs(
+    create_kwargs: dict[str, Any],
+    *,
+    connection_id: str,
+    webhook_url: str = "",
+) -> dict[str, Any]:
+    """Translate the manager's Twilio-shaped create kwargs to a Dial body.
+
+    Only the provider-shared subset is translated (destination, caller,
+    AMD mode, webhook target, stream parameters when present); Twilio-only
+    media-stream/transcription keys are ignored.
+    """
+    from easycat.telephony.telnyx import build_stream_parameters
+
+    if not connection_id:
+        raise ValueError("connection_id must be non-empty")
+    payload: dict[str, Any] = {
+        "to": create_kwargs["to"],
+        "from": create_kwargs["from_"],
+        "connection_id": connection_id,
+    }
+    amd_mode = _TELNYX_AMD_BY_TWILIO_MODE.get(str(create_kwargs.get("machine_detection", "")))
+    if amd_mode:
+        payload["answering_machine_detection"] = amd_mode
+    stream_url = create_kwargs.get("stream_url")
+    if isinstance(stream_url, str) and stream_url:
+        payload.update(build_stream_parameters(stream_url=stream_url))
+    effective_webhook_url = webhook_url or create_kwargs.get("status_callback")
+    if isinstance(effective_webhook_url, str) and effective_webhook_url:
+        payload["webhook_url"] = effective_webhook_url
+    return payload
+
+
+class _TelnyxCreatedCall:
+    """Minimal created-call carrier matching the Twilio SDK's ``sid`` shape."""
+
+    __slots__ = ("sid",)
+
+    def __init__(self, sid: str) -> None:
+        self.sid = sid
+
+
+class TelnyxOutboundClient:
+    """:class:`OutboundCallClient` adapter over Telnyx Call Control v2.
+
+    The sync ``calls`` surface bridges into the async
+    :class:`~easycat.telephony.telnyx_client.TelnyxCallControlClient` because
+    the manager invokes it inside ``asyncio.to_thread`` workers with no running
+    loop; each command runs on a short-lived loop with a dedicated client so
+    no aiohttp session spans loops. Prefer the native ``dial``/``hangup``
+    coroutines when calling from async code directly.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        connection_id: str = "",
+        webhook_url: str = "",
+        base_url: str | None = None,
+        client_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._connection_id = connection_id
+        self._webhook_url = webhook_url
+        self._base_url = base_url
+        self._client_factory = client_factory
+        self.calls = _TelnyxCallsResource(self)
+
+    def _fresh_client(self) -> Any:
+        if self._client_factory is not None:
+            return self._client_factory()
+        from easycat.telephony.telnyx_client import TELNYX_API_BASE_URL, TelnyxCallControlClient
+
+        return TelnyxCallControlClient(
+            self._api_key,
+            base_url=self._base_url or TELNYX_API_BASE_URL,
+        )
+
+    async def dial(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client = self._fresh_client()
+        try:
+            return await client.dial(payload)
+        finally:
+            await client.close()
+
+    async def hangup(self, call_control_id: str) -> dict[str, Any]:
+        client = self._fresh_client()
+        try:
+            return await client.hangup(call_control_id)
+        finally:
+            await client.close()
+
+    async def close(self) -> None:
+        return None
+
+    async def _dial_translated(self, create_kwargs: dict[str, Any]) -> _TelnyxCreatedCall:
+        payload = telnyx_dial_payload_from_create_kwargs(
+            create_kwargs,
+            connection_id=self._connection_id,
+            webhook_url=self._webhook_url,
+        )
+        response = await self.dial(payload)
+        data = response.get("data") if isinstance(response, dict) else None
+        call_control_id = str(data.get("call_control_id", "")) if isinstance(data, dict) else ""
+        return _TelnyxCreatedCall(call_control_id)
+
+
+class _TelnyxCallsResource:
+    def __init__(self, owner: TelnyxOutboundClient) -> None:
+        self._owner = owner
+
+    def create(self, **kwargs: Any) -> _TelnyxCreatedCall:
+        return asyncio.run(self._owner._dial_translated(kwargs))
+
+    def __call__(self, call_control_id: str) -> _TelnyxCallUpdater:
+        return _TelnyxCallUpdater(self._owner, call_control_id)
+
+
+class _TelnyxCallUpdater:
+    def __init__(self, owner: TelnyxOutboundClient, call_control_id: str) -> None:
+        self._owner = owner
+        self._call_control_id = call_control_id
+
+    def update(self, **kwargs: Any) -> dict[str, Any]:
+        return asyncio.run(self._owner.hangup(self._call_control_id))
+
+
+async def emit_telnyx_call_event(
+    envelope: dict[str, Any],
+    event_bus: EventBus,
+    *,
+    session_id: str | None = None,
+) -> Event | None:
+    """Parse a Telnyx webhook envelope and emit the resulting neutral event.
+
+    Returns the emitted event, or ``None`` when the envelope carries no
+    supported call event. AMD results are already mapped by
+    :func:`easycat.telephony.telnyx.parse_telnyx_call_event`.
+    """
+    from easycat.telephony.telnyx import parse_telnyx_call_event
+
+    event = parse_telnyx_call_event(envelope, session_id=session_id)
+    if event is not None:
+        await event_bus.emit(event)
+    return event
+
+
 class OutboundCallManager:
     """Orchestrates placing outbound calls via the Twilio REST API.
 
@@ -238,20 +450,16 @@ class OutboundCallManager:
         status_callback_url: str = "",
         twiml_url: str = "",
         session_id: str | None = None,
+        client: OutboundCallClient | None = None,
     ) -> None:
-        # Lazy-import twilio at instantiation time.
-        try:
-            from twilio.rest import Client as TwilioClient
-        except ImportError:
-            raise ImportError(
-                "The 'twilio' package is required for OutboundCallManager. "
-                + TELEPHONY_INSTALL_HINT
-            ) from None
+        if client is None:
+            # Lazy-import twilio at instantiation time.
+            client = TwilioRestOutboundClient(twilio_account_sid, twilio_auth_token)
 
-        if not twilio_account_sid or not twilio_auth_token:
-            raise ValueError(
-                "twilio_account_sid and twilio_auth_token are required for OutboundCallManager"
-            )
+            if not twilio_account_sid or not twilio_auth_token:
+                raise ValueError(
+                    "twilio_account_sid and twilio_auth_token are required for OutboundCallManager"
+                )
 
         self._event_bus = event_bus
         self._session_id = session_id
@@ -265,7 +473,7 @@ class OutboundCallManager:
         self._enable_realtime_transcription = enable_realtime_transcription
         self._status_callback_url = status_callback_url
         self._twiml_url = twiml_url
-        self._client: TwilioClient = TwilioClient(twilio_account_sid, twilio_auth_token)
+        self._client: OutboundCallClient = client
         self._state = OutboundCallManagerState.IDLE
         self._active_call_sid: str | None = None
         self._owned_call_sids: set[str] = set()
