@@ -1,4 +1,3 @@
-
 """Telnyx Call Control voice agent with per-call EasyCat sessions.
 
 Setup:
@@ -28,9 +27,7 @@ from easycat.voice_app import VoiceApp
 def main() -> None:
     """Run the Telnyx voice app."""
     if not os.environ.get("OPENAI_API_KEY"):
-        raise SystemExit(
-            "OPENAI_API_KEY is required. Set it in your environment or .env file."
-        )
+        raise SystemExit("OPENAI_API_KEY is required. Set it in your environment or .env file.")
 
     app = VoiceApp(stt="openai", tts="openai")
     app.run("telnyx")

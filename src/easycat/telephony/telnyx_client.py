@@ -85,6 +85,7 @@ class TelnyxCallControlClient:
 
     async def _post(self, path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         url = f"{self._base_url}{path}"
+        retryable = bool(payload.get("command_id"))
 
         last_error: Exception | None = None
         for attempt in range(1 + self._max_retries):
@@ -104,6 +105,13 @@ class TelnyxCallControlClient:
                 last_error = exc
 
             if attempt < self._max_retries:
+                if not retryable:
+                    logger.warning(
+                        "Telnyx API command without command_id failed (%s); "
+                        "not retrying to avoid duplicate non-idempotent commands",
+                        last_error,
+                    )
+                    break
                 delay = min(
                     self._retry_backoff_s * (2**attempt) * random.uniform(0.5, 1.0),
                     _MAX_RETRY_BACKOFF_S,

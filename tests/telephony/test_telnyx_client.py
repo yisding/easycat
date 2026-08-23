@@ -18,6 +18,13 @@ from easycat.telephony.telnyx_client import (
 
 BASE_URL = "https://api.example.test/v2"
 
+pytestmark = [
+    pytest.mark.skipif(
+        __import__("importlib.util", fromlist=["find_spec"]).find_spec("aiohttp") is None,
+        reason="aiohttp is required for the telnyx client tests",
+    ),
+]
+
 
 # ── Fakes ─────────────────────────────────────────────────────────
 
@@ -277,7 +284,7 @@ class TestRetryBackoff:
         )
         client._retry_backoff_s = 0.0
 
-        result = await client.answer("CC9", {})
+        result = await client.answer("CC9", {"command_id": "cmd-1"})
 
         assert result == {"data": {"id": "CC9"}}
         assert len(session.calls) == 2
@@ -292,7 +299,7 @@ class TestRetryBackoff:
         )
         client._retry_backoff_s = 0.0
 
-        await client.answer("CC9", {})
+        await client.answer("CC9", {"command_id": "cmd-1"})
 
         assert len(session.calls) == 2
 
@@ -310,15 +317,23 @@ class TestRetryBackoff:
         assert excinfo.value.status == 400
         assert len(session.calls) == 1
 
-    async def test_exhausted_retries_raise_last_api_error(self) -> None:
-        client, session = make_client(
-            [_FakeResponse(status=503) for _ in range(3)]
-        )
-        client._max_retries = 2
+    async def test_no_command_id_does_not_retry_transient_errors(self) -> None:
+        client, session = make_client([_FakeResponse(status=503), _FakeResponse(body={})])
         client._retry_backoff_s = 0.0
 
         with pytest.raises(TelnyxApiError) as excinfo:
             await client.answer("CC9", {})
+
+        assert excinfo.value.status == 503
+        assert len(session.calls) == 1
+
+    async def test_exhausted_retries_raise_last_api_error(self) -> None:
+        client, session = make_client([_FakeResponse(status=503) for _ in range(3)])
+        client._max_retries = 2
+        client._retry_backoff_s = 0.0
+
+        with pytest.raises(TelnyxApiError) as excinfo:
+            await client.answer("CC9", {"command_id": "cmd-1"})
 
         assert excinfo.value.status == 503
         assert len(session.calls) == 3
@@ -342,7 +357,7 @@ class TestRetryBackoff:
         client._retry_backoff_s = 0.0
 
         with pytest.raises(aiohttp.ClientConnectionError):
-            await client.answer("CC9", {})
+            await client.answer("CC9", {"command_id": "cmd-1"})
 
         assert len(calls) == 3
 
@@ -365,7 +380,7 @@ class TestRetryBackoff:
             unittest.mock.patch.object(asyncio, "sleep", fake_sleep),
             pytest.raises(TelnyxApiError),
         ):
-            await client.answer("CC9", {})
+            await client.answer("CC9", {"command_id": "cmd-1"})
 
         for i, delay in enumerate(delays):
             expected_base = 0.5 * (2**i)
@@ -389,7 +404,7 @@ class TestRetryBackoff:
         client._retry_backoff_s = 0.0
 
         with pytest.raises(TelnyxApiError):
-            await client.answer("CC9", {})
+            await client.answer("CC9", {"command_id": "cmd-1"})
 
         assert len(session.calls) == 2
 
@@ -404,14 +419,11 @@ class TestRetryBackoff:
             TelnyxCallControlClient("key-123", max_retries=max_retries, retry_backoff_s=backoff)
 
     async def test_constructor_retry_parameters_are_behavioral(self) -> None:
-        client, session = make_client(
-            [_FakeResponse(status=503), _FakeResponse(body={})]
-        )
+        client, session = make_client([_FakeResponse(status=503), _FakeResponse(body={})])
         client._max_retries = 1
         client._retry_backoff_s = 0.0
 
-        result = await client.answer("CC9", {})
+        result = await client.answer("CC9", {"command_id": "cmd-1"})
 
         assert result == {}
         assert len(session.calls) == 2
-

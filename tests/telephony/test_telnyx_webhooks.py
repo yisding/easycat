@@ -7,10 +7,22 @@ import datetime as dt
 from typing import Any
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+)
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    PublicFormat,
+)
 
-from easycat.events import (
+pytestmark = [
+    pytest.mark.skipif(
+        __import__("importlib.util", fromlist=["find_spec"]).find_spec("cryptography") is None,
+        reason="cryptography is required for telnyx webhook tests",
+    ),
+]
+
+from easycat.events import (  # noqa: E402
     CallAnswered,
     CallEnded,
     CallFailed,
@@ -19,7 +31,7 @@ from easycat.events import (
     TransportDegraded,
     VoicemailDetected,
 )
-from easycat.telephony.telnyx import (
+from easycat.telephony.telnyx import (  # noqa: E402
     TELNYX_DEFAULT_REPLAY_WINDOW_S,
     build_answer_payload,
     build_dial_payload,
@@ -253,9 +265,7 @@ class TestVerifyTelnyxWebhookSignature:
 
         key, public_key_b64 = _ed25519_pair()
         real_sig = sign(key, self.TIMESTAMP, self.BODY)
-        tampered_sig = base64.b64encode(
-            base64.b64decode(real_sig) + b"\x00extra"
-        ).decode()
+        tampered_sig = base64.b64encode(base64.b64decode(real_sig) + b"\x00extra").decode()
 
         verified = self._verify(
             key,

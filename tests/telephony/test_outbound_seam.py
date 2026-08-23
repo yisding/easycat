@@ -217,6 +217,7 @@ class TestTelnyxOutboundClientRouting:
 
         with pytest.raises(RuntimeError, match="sync facade.*owner\\.hangup"):
             client.calls("CC7").update(status="completed")
+
     def test_isinstance_outbound_call_client_protocol(self) -> None:
         assert isinstance(TelnyxOutboundClient("key", connection_id="c"), OutboundCallClient)
 
