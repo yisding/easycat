@@ -195,6 +195,7 @@ nav:
       - Events: reference/events.md
       - EasyConfig fields: reference/easyconfig.md
       - Journal records: reference/journal-records.md
+      - Telnyx Call Control setup: reference/telnyx-setup.md
       - Session lifecycle: reference/session-lifecycle.md
       - Validation vocabulary: reference/validation-vocabulary.md
       - Public API contract: public-api.md
