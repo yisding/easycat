@@ -6,10 +6,11 @@ import asyncio
 import unittest.mock
 from typing import Any
 
-import aiohttp
 import pytest
 
-from easycat.telephony.telnyx_client import (
+aiohttp = pytest.importorskip("aiohttp")
+
+from easycat.telephony.telnyx_client import (  # noqa: E402
     TELNYX_API_BASE_URL,
     TelnyxApiError,
     TelnyxCallControlClient,
@@ -17,13 +18,6 @@ from easycat.telephony.telnyx_client import (
 )
 
 BASE_URL = "https://api.example.test/v2"
-
-pytestmark = [
-    pytest.mark.skipif(
-        __import__("importlib.util", fromlist=["find_spec"]).find_spec("aiohttp") is None,
-        reason="aiohttp is required for the telnyx client tests",
-    ),
-]
 
 
 # ── Fakes ─────────────────────────────────────────────────────────

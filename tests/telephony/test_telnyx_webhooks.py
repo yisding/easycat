@@ -7,6 +7,9 @@ import datetime as dt
 from typing import Any
 
 import pytest
+
+pytest.importorskip("cryptography")
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
 )
@@ -15,14 +18,7 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
 )
 
-pytestmark = [
-    pytest.mark.skipif(
-        __import__("importlib.util", fromlist=["find_spec"]).find_spec("cryptography") is None,
-        reason="cryptography is required for telnyx webhook tests",
-    ),
-]
-
-from easycat.events import (  # noqa: E402
+from easycat.events import (
     CallAnswered,
     CallEnded,
     CallFailed,
@@ -31,7 +27,7 @@ from easycat.events import (  # noqa: E402
     TransportDegraded,
     VoicemailDetected,
 )
-from easycat.telephony.telnyx import (  # noqa: E402
+from easycat.telephony.telnyx import (
     TELNYX_DEFAULT_REPLAY_WINDOW_S,
     build_answer_payload,
     build_dial_payload,

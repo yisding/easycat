@@ -17,6 +17,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+
+pytest.importorskip("cryptography")
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
 )
@@ -27,28 +30,20 @@ from cryptography.hazmat.primitives.serialization import (
 
 import easycat.telephony.telnyx_client as telnyx_client_module
 import easycat.telephony.telnyx_server as telnyx_server_module
-
-pytestmark = [
-    pytest.mark.skipif(
-        __import__("importlib.util", fromlist=["find_spec"]).find_spec("cryptography") is None,
-        reason="cryptography is required for telnyx webhook tests",
-    ),
-]
-
-from easycat.config import EasyConfig  # noqa: E402
-from easycat.telephony.telnyx import (  # noqa: E402
+from easycat.config import EasyConfig
+from easycat.telephony.telnyx import (
     TELNYX_WEBHOOK_SIGNATURE_HEADER,
     TELNYX_WEBHOOK_TIMESTAMP_HEADER,
     decode_client_state,
 )
-from easycat.telephony.telnyx_server import (  # noqa: E402
+from easycat.telephony.telnyx_server import (
     TelnyxVoiceServerConfig,
     run_telnyx_voice_app,
     serve_telnyx_voice_app,
 )
-from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES  # noqa: E402
-from easycat.voice_app import VoiceApp  # noqa: E402
-from tests.transports.test_telnyx_transport import (  # noqa: E402
+from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
+from easycat.voice_app import VoiceApp
+from tests.transports.test_telnyx_transport import (
     _ScriptedTelnyxWebSocket,
     _start_msg,
 )
