@@ -358,9 +358,9 @@ async def serve_telnyx_voice_app(
 
     from easycat.config import create_session
     from easycat.session_manager import SessionManager
+    from easycat.telephony.telnyx_client import TelnyxCallControlClient
     from easycat.transports.telnyx_media import TelnyxConnectionTransport
     from easycat.transports.telnyx_media import TelnyxTransportConfig as _TelnyxTransportConfig
-    from easycat.telephony.telnyx_client import TelnyxCallControlClient
 
     manager: SessionManager[int] = SessionManager()
     stream_tokens = StreamTokenStore(config.stream_token_secret)

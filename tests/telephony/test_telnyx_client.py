@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import unittest.mock
-
-import aiohttp
 from typing import Any
 
+import aiohttp
 import pytest
 
 from easycat.telephony.telnyx_client import (
@@ -362,9 +361,11 @@ class TestRetryBackoff:
 
         client._ensure_session = ensure_session  # type: ignore[method-assign]
 
-        with unittest.mock.patch.object(asyncio, "sleep", fake_sleep):
-            with pytest.raises(TelnyxApiError):
-                await client.answer("CC9", {})
+        with (
+            unittest.mock.patch.object(asyncio, "sleep", fake_sleep),
+            pytest.raises(TelnyxApiError),
+        ):
+            await client.answer("CC9", {})
 
         for i, delay in enumerate(delays):
             expected_base = 0.5 * (2**i)

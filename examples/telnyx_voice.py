@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 
 """Telnyx Call Control voice agent with per-call EasyCat sessions.
 
