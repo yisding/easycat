@@ -28,7 +28,7 @@ from easycat.smart_turn import SmartTurnConfig
 from easycat.stt.factory import _CATALOG as _STT_CATALOG
 from easycat.stt.factory import STTProviderConfig
 from easycat.telephony.server import TwilioVoiceServerConfig
-from easycat.telephony.session_actions import TwilioSessionActionConfig
+from easycat.telephony.session_actions import TelnyxSessionActionConfig, TwilioSessionActionConfig
 from easycat.telephony.twilio_app import TwilioAppSettings
 from easycat.transports._webrtc_config import ICEServer, WebRTCTransportConfig
 from easycat.transports.local import LocalTransportConfig
@@ -52,6 +52,7 @@ _PROVIDER_CONFIGS = tuple(
 _SECRET_FIELD_INVENTORY = frozenset(
     {
         "config/easy.py:EasyConfig.openai_api_key",
+        "config/easy.py:OutboundCallConfig.telnyx_api_key",
         "config/easy.py:OutboundCallConfig.twilio_auth_token",
         "config/easy.py:_AgentSessionConfig.remote_agent_api_key",
         "server/auth.py:BearerTokenAuth.token",
@@ -63,6 +64,7 @@ _SECRET_FIELD_INVENTORY = frozenset(
         "stt/openai_realtime_provider.py:OpenAIRealtimeSTTConfig.api_key",
         "telephony/server.py:TwilioVoiceServerConfig.stream_token_secret",
         "telephony/server.py:TwilioVoiceServerConfig.twilio_auth_token",
+        "telephony/session_actions.py:TelnyxSessionActionConfig.api_key",
         "telephony/session_actions.py:TwilioSessionActionConfig.auth_token",
         "telephony/twilio_app.py:TwilioAppSettings.auth_token",
         "telephony/twilio_app.py:TwilioAppSettings.call_api_token",
@@ -300,6 +302,19 @@ def test_registered_provider_config_repr_omits_api_key(
             WebSocketSessionServerConfig,
             ("auth_token",),
             lambda: WebSocketSessionServerConfig(auth_token=_SENTINEL),
+        ),
+        (
+            OutboundCallConfig,
+            ("telnyx_api_key", "twilio_auth_token"),
+            lambda: OutboundCallConfig(
+                telnyx_api_key=_SENTINEL,
+                twilio_auth_token=_SENTINEL,
+            ),
+        ),
+        (
+            TelnyxSessionActionConfig,
+            ("api_key",),
+            lambda: TelnyxSessionActionConfig(api_key=_SENTINEL),
         ),
         (
             TwilioVoiceServerConfig,

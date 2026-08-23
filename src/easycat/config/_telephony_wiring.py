@@ -87,6 +87,10 @@ def create_action_executors(config: TelephonyConfig | None) -> list[SessionActio
         from easycat.telephony.session_actions import TwilioSessionActionExecutor
 
         executors.append(TwilioSessionActionExecutor(config.twilio_actions))
+    if config.telnyx_actions is not None:
+        from easycat.telephony.session_actions import TelnyxSessionActionExecutor
+
+        executors.append(TelnyxSessionActionExecutor(config.telnyx_actions))
     return executors
 
 
