@@ -1,20 +1,20 @@
 {
   "version": 1,
-  "update_rationale": "WS5.1 routes VoiceServer raw-WebSocket startup through authorized_bind",
+  "update_rationale": "add telnyx voice app server",
   "counts": {
     "backends": {
       "aiohttp_run_app": 1,
-      "aiohttp_tcp_site": 5,
+      "aiohttp_tcp_site": 6,
       "aioquic_serve": 1,
       "socket_bind": 2,
-      "websockets_serve": 5
+      "websockets_serve": 6
     },
     "classifications": {
       "authorized_capability": 6,
       "generated_template": 1,
       "guarded_embedding": 2,
       "loopback_probe": 2,
-      "pending_migration": 3
+      "pending_migration": 5
     }
   },
   "entries": [
@@ -23,6 +23,7 @@
     "aiohttp_tcp_site\tserver/voice_server.py\tVoiceServer._start_http_listener.start_site\tcall web.TCPSite\t81a95578536f42e3\t0\tauthorized_capability\tVoiceServer TCPSite construction and startup run only inside the deferred binder passed to authorized_bind.",
     "aiohttp_tcp_site\tserver/webrtc_routes.py\tserve_webrtc_config_sessions.start_site\tcall web.TCPSite\tcfe0af8c696c0cf1\t0\tauthorized_capability\tStandalone WebRTC TCPSite construction and startup run only inside the deferred binder passed to authorized_bind.",
     "aiohttp_tcp_site\ttelephony/server.py\t_start_twiml_http_listener\tcall web.TCPSite\t2f02b5074a42df2d\t0\tpending_migration\tRetained TwiML HTTP listener; migrate while preserving its two-listener rollback ordering.",
+    "aiohttp_tcp_site\ttelephony/telnyx_server.py\t_start_webhook_http_listener\tcall web.TCPSite\t2f02b5074a42df2d\t0\tpending_migration\tRetained Telnyx webhook HTTP listener; migrate while preserving its two-listener rollback ordering.",
     "aiohttp_tcp_site\ttransports/webrtc.py\tWebRTCTransport._connect_unlocked.start_site\tcall self._web.TCPSite\t04e0376fb2b0f1fe\t0\tauthorized_capability\tWebRTC transport TCPSite construction and startup run only inside the deferred binder passed to authorized_bind.",
     "aioquic_serve\ttransports/webtransport.py\tWebTransportServer._start_unlocked\tcall aioquic_server.serve\t9c08d77332f2f2c4\t0\tauthorized_capability\tWebTransport's aioquic listener is constructed only by the deferred binder passed to authorized_bind.",
     "socket_bind\tdebugger/dev.py\t_port_is_free\tcall @socket.bind\t861867d6028314be\t0\tloopback_probe\tIntentional dev-UI port probe receives only the module's fixed loopback host.",
@@ -31,6 +32,7 @@
     "websockets_serve\tserver/voice_server.py\tVoiceServer._start_websocket_listener\tcall websockets.serve\t5d18cc1d088b055a\t0\tauthorized_capability\tVoiceServer raw-WebSocket listener construction runs only inside the deferred binder passed to authorized_bind.",
     "websockets_serve\tserver/websocket.py\tserve_websocket_sessions\tcall websockets.serve\t7ef41f8f2897daff\t0\tauthorized_capability\tStandalone raw-WebSocket listener is invoked only as the deferred binder passed to authorized_bind.",
     "websockets_serve\ttelephony/server.py\tserve_twilio_voice_app\tcall websockets.serve\t37b0cf837621d8b2\t0\tpending_migration\tRetained Twilio media listener; migrate while preserving signature validation and HTTP-listener rollback.",
+    "websockets_serve\ttelephony/telnyx_server.py\tserve_telnyx_voice_app\tcall websockets.serve\t41f97c6dcfc370c4\t0\tpending_migration\tRetained Telnyx media listener; migrate while preserving token validation and HTTP-listener rollback.",
     "websockets_serve\ttransports/_base.py\tServerTransportBase.connect\tcall websockets.serve\t7bf68d42d803d92c\t0\tpending_migration\tShared retained WebSocket transport listener currently has no mandatory bind capability at the backend call."
   ]
 }

@@ -1,12 +1,12 @@
 {
   "version": 1,
- "update_rationale": "classify telnyx protocol-core budgets (unregistered until phase 3)",
- "counts": {
-  "configurable": 23,
-  "lifecycle_budget": 95,
-  "not_teardown": 34,
-  "protocol_local": 45
- },
+  "update_rationale": "add telnyx voice app server",
+  "counts": {
+    "configurable": 29,
+    "lifecycle_budget": 96,
+    "not_teardown": 34,
+    "protocol_local": 48
+  },
   "entries": [
     "config_default\t_bounded_queue.py\tBoundedAudioQueue.__init__\tdefault block_timeout\t0e52caa456688a04\t0\tnot_teardown\tBounds queue backpressure during ordinary audio delivery.",
     "config_default\t_concurrency.py\treap\tdefault timeout\t8f2cda988d9ca730\t0\tlifecycle_budget\tBounds reusable task cancellation and reaping.",
@@ -110,6 +110,7 @@
     "lifecycle_call\tsession/_turn_runner.py\tTurnRunner.cancel_application_prompt\tcall asyncio.wait\t26ef1e1a0bc222a1\t0\tlifecycle_budget\tBounds application-prompt drain before cancellation.",
     "lifecycle_call\tstt/websocket_base.py\tWebSocketSTTBase._drain_and_close\tcall asyncio.wait_for\tf3004ab296dcff32\t0\tprotocol_local\tBounds the provider WebSocket close exchange.",
     "lifecycle_call\ttelephony/server.py\t_shutdown_twilio_voice_app\tcall runtime.drain\t00540fd5c7274e3f\t0\tlifecycle_budget\tBounds Twilio application session drain.",
+    "lifecycle_call\ttelephony/telnyx_server.py\t_shutdown_telnyx_voice_app\tcall runtime.drain\t00540fd5c7274e3f\t0\tlifecycle_budget\tBounds Telnyx application session drain.",
     "lifecycle_call\ttesting/contracts.py\tAgentBridgeContractSuite.test_consumer_close_balances_recorded_units\tcall asyncio.timeout\t0ec59286f1f9983e\t0\tnot_teardown\tBounds the public contract assertion while it closes a model bridge stream.",
     "lifecycle_call\ttesting/contracts.py\tAgentBridgeContractSuite.test_consumer_close_balances_recorded_units\tcall asyncio.timeout\t179575d17576259a\t0\tnot_teardown\tBounds the public contract probe while it waits for the model bridge's first event.",
     "lifecycle_call\ttransports/_webrtc_audio.py\tOutboundAudioSource.aclose\tcall asyncio.wait\te2adbf7dee1f8214\t0\tlifecycle_budget\tBounds outbound WebRTC audio-source closure.",
@@ -178,6 +179,12 @@
     "named_constant\ttelephony/server.py\tTwilioVoiceServerConfig\tconstant drain_timeout_s\td6b276227e6e0f86\t0\tconfigurable\tConfigures the Twilio voice-server graceful-drain budget.",
     "named_constant\ttelephony/server.py\tTwilioVoiceServerConfig\tconstant force_shutdown_timeout_s\t25b51b96cb4e0a0f\t0\tconfigurable\tConfigures the Twilio voice-server forced-shutdown budget.",
     "named_constant\ttelephony/server.py\tTwilioVoiceServerConfig\tconstant start_timeout_s\tdc83ea9aef9d59d6\t0\tprotocol_local\tConfigures the Twilio media-start handshake.",
+    "named_constant\ttelephony/telnyx_app.py\tTelnyxAppSettings\tconstant drain_timeout_s\td6b276227e6e0f86\t0\tconfigurable\tConfigures the Telnyx app graceful-drain budget.",
+    "named_constant\ttelephony/telnyx_app.py\tTelnyxAppSettings\tconstant force_shutdown_timeout_s\t25b51b96cb4e0a0f\t0\tconfigurable\tConfigures the Telnyx app forced-shutdown budget.",
+    "named_constant\ttelephony/telnyx_app.py\tTelnyxAppSettings\tconstant start_timeout_s\tdc83ea9aef9d59d6\t0\tprotocol_local\tConfigures the Telnyx media-start handshake.",
+    "named_constant\ttelephony/telnyx_server.py\tTelnyxVoiceServerConfig\tconstant drain_timeout_s\td6b276227e6e0f86\t0\tconfigurable\tConfigures the Telnyx voice-server graceful-drain budget.",
+    "named_constant\ttelephony/telnyx_server.py\tTelnyxVoiceServerConfig\tconstant force_shutdown_timeout_s\t25b51b96cb4e0a0f\t0\tconfigurable\tConfigures the Telnyx voice-server forced-shutdown budget.",
+    "named_constant\ttelephony/telnyx_server.py\tTelnyxVoiceServerConfig\tconstant start_timeout_s\tdc83ea9aef9d59d6\t0\tprotocol_local\tConfigures the Telnyx media-start handshake.",
     "named_constant\ttelephony/twilio_app.py\tTwilioAppSettings\tconstant drain_timeout_s\td6b276227e6e0f86\t0\tconfigurable\tConfigures the Twilio app graceful-drain budget.",
     "named_constant\ttelephony/twilio_app.py\tTwilioAppSettings\tconstant force_shutdown_timeout_s\t25b51b96cb4e0a0f\t0\tconfigurable\tConfigures the Twilio app forced-shutdown budget.",
     "named_constant\ttelephony/twilio_app.py\tTwilioAppSettings\tconstant start_timeout_s\tdc83ea9aef9d59d6\t0\tprotocol_local\tConfigures the Twilio media-start handshake.",
@@ -202,6 +209,9 @@
     "named_constant\ttts/elevenlabs_tts.py\tElevenLabsTTSConfig\tconstant inactivity_timeout\tc8a6e48ab1783430\t0\tprotocol_local\tConfigures provider inactivity handling.",
     "named_constant\ttts/elevenlabs_tts.py\tElevenLabsTTSConfig\tconstant warmup_timeout_s\t7d08bd3d80f73049\t0\tnot_teardown\tBounds provider warmup rather than teardown.",
     "named_constant\tvalidation/_failure_classification.py\tFailureCategory\tconstant TIMEOUT\tc63079ef01b6bf50\t0\tnot_teardown\tLabels validation failures rather than defining a budget.",
+    "named_constant\tvoice_app.py\t_TelnyxModeKwargs\tconstant drain_timeout_s\t85c1fab6614cee37\t0\tconfigurable\tTypes graceful Telnyx application drain.",
+    "named_constant\tvoice_app.py\t_TelnyxModeKwargs\tconstant force_shutdown_timeout_s\t7131914f697c8f1f\t0\tconfigurable\tTypes forced Telnyx application shutdown.",
+    "named_constant\tvoice_app.py\t_TelnyxModeKwargs\tconstant start_timeout_s\t2f524f01b1ba8a7a\t0\tprotocol_local\tTypes the Telnyx media-start handshake budget.",
     "named_constant\tvoice_app.py\t_TwilioModeKwargs\tconstant drain_timeout_s\t85c1fab6614cee37\t0\tconfigurable\tTypes graceful Twilio application drain.",
     "named_constant\tvoice_app.py\t_TwilioModeKwargs\tconstant force_shutdown_timeout_s\t7131914f697c8f1f\t0\tconfigurable\tTypes forced Twilio application shutdown.",
     "named_constant\tvoice_app.py\t_TwilioModeKwargs\tconstant start_timeout_s\t2f524f01b1ba8a7a\t0\tprotocol_local\tTypes the Twilio media-start handshake budget."

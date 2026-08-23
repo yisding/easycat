@@ -14,7 +14,7 @@ Construction accepts inputs three **mutually exclusive** ways:
 #. A static ``config=EasyConfig.<preset>(...)`` — valid for ``local`` only,
    because a transport-bearing config cannot be safely cloned per connection.
 #. A per-transport ``config_factory`` — the only safe per-connection path for
-   ``browser`` / ``websocket`` / ``twilio``.
+   ``browser`` / ``websocket`` / ``twilio`` / ``telnyx``.
 
 The module imports no heavy provider SDKs at import time; transport and session
 construction is deferred to the per-mode methods.
@@ -34,13 +34,14 @@ if TYPE_CHECKING:
     from easycat.transports.webrtc import WebRTCTransport
     from easycat.transports.websocket import WebSocketConnectionTransport
 
-VoiceMode = Literal["local", "browser", "websocket", "twilio"]
-VoiceModeInput = Literal["local", "browser", "websocket", "twilio", "mic", "ws", "phone"]
+VoiceMode = Literal["local", "browser", "websocket", "twilio", "telnyx"]
+VoiceModeInput = Literal["local", "browser", "websocket", "twilio", "telnyx", "mic", "ws", "phone"]
 
 _LocalMode = Literal["local", "mic"]
 _BrowserMode = Literal["browser"]
 _WebSocketMode = Literal["websocket", "ws"]
 _TwilioMode = Literal["twilio", "phone"]
+_TelnyxMode = Literal["telnyx"]
 
 
 class _VoiceConfigKwargs(TypedDict, total=False):
@@ -102,13 +103,30 @@ class _TwilioModeKwargs(TypedDict, total=False):
     force_shutdown_timeout_s: float
 
 
+class _TelnyxModeKwargs(TypedDict, total=False):
+    host: str
+    media_port: int
+    http_host: str
+    http_port: int
+    webhook_path: str
+    stream_url: str | None
+    stream_token_secret: str | None
+    telnyx_api_key: str | None
+    telnyx_public_key: str | None
+    unsafe_allow_unsigned_webhooks: bool
+    max_sessions: int
+    start_timeout_s: float
+    drain_timeout_s: float
+    force_shutdown_timeout_s: float
+
+
 # Mode aliases resolve to their canonical name before any dispatch.
 _MODE_ALIASES: dict[str, VoiceMode] = {
     "mic": "local",
     "ws": "websocket",
     "phone": "twilio",
 }
-_CANONICAL_MODES: frozenset[str] = frozenset({"local", "browser", "websocket", "twilio"})
+_CANONICAL_MODES: frozenset[str] = frozenset({"local", "browser", "websocket", "twilio", "telnyx"})
 
 # High-level ``EasyConfig`` fields ``VoiceApp`` forwards into the chosen preset.
 # These are the ONLY keys forwarded into ``mic()`` / ``browser()`` / ``phone()``
@@ -163,6 +181,21 @@ def _normalize_mode(mode: str) -> VoiceMode:
 # minus ``debug``, which is always a flag/level, never a stateful collaborator —
 # so a new forwardable field is covered by the live-reuse guard automatically.
 _LIVE_CAPABLE_FIELDS: frozenset[str] = _FORWARDED_CONFIG_FIELDS - frozenset({"debug"})
+
+
+def _phone_preset_factory(
+    mode: VoiceMode,
+    forwarded: dict[str, Any],
+) -> Callable[[Any], EasyConfig]:
+    """Build the per-transport factory for the ``phone`` preset modes."""
+    from easycat.config import EasyConfig
+
+    provider: Literal["twilio", "telnyx"] = "telnyx" if mode == "telnyx" else "twilio"
+
+    def _phone_config(transport: Any) -> EasyConfig:
+        return EasyConfig.phone(provider=provider, transport=transport, **forwarded)
+
+    return _phone_config
 
 
 def _is_shareable_spec(field: str, value: Any) -> bool:
@@ -221,7 +254,8 @@ def _is_shareable_spec(field: str, value: Any) -> bool:
 
 
 class VoiceApp:
-    """A product-level voice bot that runs across local / browser / websocket / twilio.
+    """A product-level voice bot that runs across local / browser / websocket /
+    twilio / telnyx.
 
     Examples
     --------
@@ -412,7 +446,8 @@ class VoiceApp:
             from easycat.transports.websocket import WebSocketTransportConfig
 
             return EasyConfig(transport=WebSocketTransportConfig(), **forwarded)
-        return EasyConfig.phone(**forwarded)
+        provider: Literal["twilio", "telnyx"] = "telnyx" if resolved == "telnyx" else "twilio"
+        return EasyConfig.phone(provider=provider, **forwarded)
 
     @overload
     async def serve(
@@ -442,6 +477,13 @@ class VoiceApp:
         **kwargs: Unpack[_TwilioModeKwargs],
     ) -> None: ...
 
+    @overload
+    async def serve(
+        self,
+        mode: _TelnyxMode,
+        **kwargs: Unpack[_TelnyxModeKwargs],
+    ) -> None: ...
+
     async def serve(self, mode: VoiceModeInput, **kwargs: object) -> None:
         """Async entry point — run the app for *mode* until shutdown.
 
@@ -461,6 +503,8 @@ class VoiceApp:
             await self._serve_browser(**mode_kwargs)
         elif resolved == "websocket":
             await self._serve_websocket(**mode_kwargs)
+        elif resolved == "telnyx":
+            await self._serve_telnyx(**mode_kwargs)
         else:  # twilio
             await self._serve_twilio(**mode_kwargs)
 
@@ -492,6 +536,13 @@ class VoiceApp:
         **kwargs: Unpack[_TwilioModeKwargs],
     ) -> None: ...
 
+    @overload
+    def run(
+        self,
+        mode: _TelnyxMode,
+        **kwargs: Unpack[_TelnyxModeKwargs],
+    ) -> None: ...
+
     def run(self, mode: VoiceModeInput, **kwargs: object) -> None:
         """Synchronous entry point — the only method that owns the event loop.
 
@@ -512,6 +563,8 @@ class VoiceApp:
             self._run_browser(**mode_kwargs)
         elif resolved == "websocket":
             self._run_websocket(**mode_kwargs)
+        elif resolved == "telnyx":
+            self._run_telnyx(**mode_kwargs)
         else:  # twilio
             self._run_twilio(**mode_kwargs)
 
@@ -886,6 +939,115 @@ class VoiceApp:
         server_config = self._twilio_server_config(**kwargs)
         await serve_twilio_voice_app(factory, server_config)
 
+    # ── Telnyx mode ──────────────────────────────────────────────────
+
+    def _telnyx_server_config(self, **kwargs: Any) -> Any:
+        """Build the :class:`TelnyxVoiceServerConfig` for the telnyx listeners.
+
+        Telnyx-listener fields (``host`` / ``media_port`` / ``http_host`` /
+        ``http_port`` / ``webhook_path`` / ``stream_url`` /
+        ``stream_token_secret`` / ``telnyx_api_key`` / ``telnyx_public_key`` /
+        ``unsafe_allow_unsigned_webhooks``) come from ``run('telnyx', ...)`` /
+        ``serve('telnyx', ...)`` ``**kwargs``. They are telnyx-specific (two
+        listeners, each with its own host/port pair), so they are NOT taken
+        from the generic constructor ``host`` / ``port``. ``max_sessions`` is
+        the one mode-neutral server-policy field, so it mirrors the
+        browser/websocket builders: a ``run``/``serve`` value wins, otherwise a
+        ``max_sessions=`` given at construction, otherwise the
+        ``TelnyxVoiceServerConfig`` default. ``stream_url`` /
+        ``stream_token_secret`` / ``telnyx_api_key`` / ``telnyx_public_key``
+        fall back to ``TELNYX_STREAM_URL`` / ``TELNYX_STREAM_TOKEN_SECRET`` /
+        ``TELNYX_API_KEY`` / ``TELNYX_PUBLIC_KEY`` as a convenience.
+        ``telnyx_api_key`` answers inbound calls via Call Control and
+        ``telnyx_public_key`` verifies webhook Ed25519 signatures — both are
+        required by the helper (the public-key one waivable only via
+        ``unsafe_allow_unsigned_webhooks``).
+        """
+        from easycat.telephony.telnyx_server import TelnyxVoiceServerConfig
+
+        host = kwargs.pop("host", "0.0.0.0")
+        media_port = kwargs.pop("media_port", 8766)
+        http_host = kwargs.pop("http_host", "0.0.0.0")
+        http_port = kwargs.pop("http_port", 8000)
+        webhook_path = kwargs.pop("webhook_path", "/telnyx")
+        stream_url = kwargs.pop("stream_url", None) or os.environ.get("TELNYX_STREAM_URL")
+        stream_token_secret = kwargs.pop("stream_token_secret", None) or os.environ.get(
+            "TELNYX_STREAM_TOKEN_SECRET"
+        )
+        # The Call Control API key answers verified call.initiated deliveries;
+        # source it from TELNYX_API_KEY so the secure path is automatic when
+        # the operator sets it.
+        telnyx_api_key = kwargs.pop("telnyx_api_key", None) or os.environ.get("TELNYX_API_KEY")
+        telnyx_public_key = kwargs.pop("telnyx_public_key", None) or os.environ.get(
+            "TELNYX_PUBLIC_KEY"
+        )
+        unsafe_allow_unsigned_webhooks = kwargs.pop("unsafe_allow_unsigned_webhooks", False)
+        max_sessions = kwargs.pop(
+            "max_sessions",
+            self._config_kwargs.get("max_sessions", TelnyxVoiceServerConfig.max_sessions),
+        )
+        start_timeout_s = kwargs.pop(
+            "start_timeout_s",
+            float(
+                os.environ.get(
+                    "TELNYX_START_TIMEOUT_S",
+                    TelnyxVoiceServerConfig.start_timeout_s,
+                )
+            ),
+        )
+        drain_timeout_s = kwargs.pop(
+            "drain_timeout_s",
+            float(
+                os.environ.get(
+                    "TELNYX_DRAIN_TIMEOUT_S",
+                    TelnyxVoiceServerConfig.drain_timeout_s,
+                )
+            ),
+        )
+        force_shutdown_timeout_s = kwargs.pop(
+            "force_shutdown_timeout_s",
+            float(
+                os.environ.get(
+                    "TELNYX_FORCE_SHUTDOWN_TIMEOUT_S",
+                    TelnyxVoiceServerConfig.force_shutdown_timeout_s,
+                )
+            ),
+        )
+        self._reject_unknown_mode_kwargs("telnyx", kwargs)
+        return TelnyxVoiceServerConfig(
+            host=host,
+            media_port=media_port,
+            http_host=http_host,
+            http_port=http_port,
+            webhook_path=webhook_path,
+            stream_url=stream_url,
+            stream_token_secret=stream_token_secret,
+            telnyx_api_key=telnyx_api_key,
+            telnyx_public_key=telnyx_public_key,
+            unsafe_allow_unsigned_webhooks=unsafe_allow_unsigned_webhooks,
+            max_sessions=max_sessions,
+            start_timeout_s=start_timeout_s,
+            drain_timeout_s=drain_timeout_s,
+            force_shutdown_timeout_s=force_shutdown_timeout_s,
+        )
+
+    def _telnyx_factory(self) -> Callable[[Any], EasyConfig]:
+        return self._per_connection_factory("telnyx")
+
+    def _run_telnyx(self, **kwargs: Any) -> None:
+        from easycat.telephony.telnyx_server import run_telnyx_voice_app
+
+        factory = self._telnyx_factory()
+        server_config = self._telnyx_server_config(**kwargs)
+        run_telnyx_voice_app(factory, server_config)
+
+    async def _serve_telnyx(self, **kwargs: Any) -> None:
+        from easycat.telephony.telnyx_server import serve_telnyx_voice_app
+
+        factory = self._telnyx_factory()
+        server_config = self._telnyx_server_config(**kwargs)
+        await serve_telnyx_voice_app(factory, server_config)
+
     # ── Shared helpers ───────────────────────────────────────────────
 
     def _per_connection_factory(self, mode: VoiceMode) -> Callable[[Any], EasyConfig]:
@@ -939,12 +1101,8 @@ class VoiceApp:
 
             return _browser_config
 
-        if mode == "twilio":
-
-            def _phone_config(transport: Any) -> EasyConfig:
-                return EasyConfig.phone(transport=transport, **forwarded)
-
-            return _phone_config
+        if mode in {"twilio", "telnyx"}:
+            return _phone_preset_factory(mode, forwarded)
 
         # WebSocket has no dedicated preset; build EasyConfig with the
         # per-connection transport directly.

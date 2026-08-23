@@ -45,6 +45,19 @@ _LAZY_ATTR: dict[str, str] = {
     "TwilioCallSessionIndex": "easycat.telephony.twilio_app",
     "bearer_token_matches": "easycat.telephony.twilio_app",
     "twilio_app_settings_from_env": "easycat.telephony.twilio_app",
+    # Telnyx protocol helpers
+    "build_answer_payload": "easycat.telephony.telnyx",
+    "build_dial_payload": "easycat.telephony.telnyx",
+    "build_stream_parameters": "easycat.telephony.telnyx",
+    "decode_client_state": "easycat.telephony.telnyx",
+    "encode_client_state": "easycat.telephony.telnyx",
+    "parse_telnyx_call_event": "easycat.telephony.telnyx",
+    "parse_telnyx_webhook": "easycat.telephony.telnyx",
+    "telnyx_webhook_idempotency_key": "easycat.telephony.telnyx",
+    "verify_telnyx_webhook_signature": "easycat.telephony.telnyx",
+    # Telnyx app settings
+    "TelnyxAppSettings": "easycat.telephony.telnyx_app",
+    "telnyx_app_settings_from_env": "easycat.telephony.telnyx_app",
     # Voicemail
     "VoicemailDetector": "easycat.telephony.voicemail",
     "VoicemailDetectorConfig": "easycat.telephony.voicemail",
@@ -133,6 +146,21 @@ if TYPE_CHECKING:
     from easycat.telephony.session_actions import (
         TwilioSessionActionConfig,
         TwilioSessionActionExecutor,
+    )
+    from easycat.telephony.telnyx import (
+        build_answer_payload,
+        build_dial_payload,
+        build_stream_parameters,
+        decode_client_state,
+        encode_client_state,
+        parse_telnyx_call_event,
+        parse_telnyx_webhook,
+        telnyx_webhook_idempotency_key,
+        verify_telnyx_webhook_signature,
+    )
+    from easycat.telephony.telnyx_app import (
+        TelnyxAppSettings,
+        telnyx_app_settings_from_env,
     )
     from easycat.telephony.twilio_app import (
         TwilioAppSettings,

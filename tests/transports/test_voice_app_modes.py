@@ -131,6 +131,7 @@ def test_browser_factory_builds_fresh_config_per_transport(
         ("browser", "WebRTCTransportConfig"),
         ("websocket", "WebSocketTransportConfig"),
         ("twilio", "TwilioTransportConfig"),
+        ("telnyx", "TelnyxTransportConfig"),
     ],
 )
 def test_resolve_config_previews_defaults_without_starting_runtime(
