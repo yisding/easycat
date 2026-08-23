@@ -383,10 +383,23 @@ class TelnyxOutboundClient:
 
 
 class _TelnyxCallsResource:
+    """Sync ``calls`` facade bridging into the async Telnyx control client.
+
+    These methods spin up a short-lived event loop per invocation because the
+    manager offloads to worker threads with no running loop. Calling them from
+    async code raises immediately with guidance rather than a cryptic
+    ``RuntimeError: asyncio.run() cannot be called from a running event loop``.
+    """
+
     def __init__(self, owner: TelnyxOutboundClient) -> None:
         self._owner = owner
 
     def create(self, **kwargs: Any) -> _TelnyxCreatedCall:
+        if _in_running_loop():
+            raise RuntimeError(
+                "TelnyxOutboundClient.calls is the sync facade for thread workers; "
+                "call owner.dial()/owner.hangup() directly from async code instead."
+            )
         return asyncio.run(self._owner._dial_translated(kwargs))
 
     def __call__(self, call_control_id: str) -> _TelnyxCallUpdater:
@@ -406,6 +419,11 @@ class _TelnyxCallUpdater:
         self._call_control_id = call_control_id
 
     def update(self, **kwargs: Any) -> dict[str, Any]:
+        if _in_running_loop():
+            raise RuntimeError(
+                "TelnyxOutboundClient.calls().update() is the sync facade for thread "
+                "workers; call owner.hangup() directly from async code instead."
+            )
         status = kwargs.pop("status", None)
         if kwargs:
             unsupported = ", ".join(sorted(kwargs))
@@ -418,6 +436,15 @@ class _TelnyxCallUpdater:
                 f"Telnyx calls().update() only supports status='completed'; got {status!r}"
             )
         return asyncio.run(self._owner.hangup(self._call_control_id))
+
+
+def _in_running_loop() -> bool:
+    """Return True when called from within a running event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
 
 
 async def emit_telnyx_call_event(

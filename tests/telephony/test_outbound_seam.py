@@ -201,6 +201,22 @@ class TestTelnyxOutboundClientRouting:
         client.calls("CC7").update()
 
         assert fake.hangups == ["CC7"]
+
+    @pytest.mark.asyncio
+    async def test_sync_create_from_async_context_raises_clear_error(self) -> None:
+        fake = _FakeTelnyxControl()
+        client = self._make_owner_client(fake)
+
+        with pytest.raises(RuntimeError, match="sync facade.*owner\\.dial"):
+            client.calls.create(to="+1", from_="+2")
+
+    @pytest.mark.asyncio
+    async def test_sync_update_from_async_context_raises_clear_error(self) -> None:
+        fake = _FakeTelnyxControl()
+        client = self._make_owner_client(fake)
+
+        with pytest.raises(RuntimeError, match="sync facade.*owner\\.hangup"):
+            client.calls("CC7").update(status="completed")
     def test_isinstance_outbound_call_client_protocol(self) -> None:
         assert isinstance(TelnyxOutboundClient("key", connection_id="c"), OutboundCallClient)
 
