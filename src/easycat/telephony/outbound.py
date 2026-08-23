@@ -387,11 +387,29 @@ class _TelnyxCallsResource:
 
 
 class _TelnyxCallUpdater:
+    """Adapt ``calls(sid).update(...)`` onto the Telnyx Call Control surface.
+
+    Only the subset the manager actually invokes is supported. Any other
+    keyword raises immediately so Twilio-shaped callers get a clear signal
+    rather than a silent no-op or unintended hangup.
+    """
+
     def __init__(self, owner: TelnyxOutboundClient, call_control_id: str) -> None:
         self._owner = owner
         self._call_control_id = call_control_id
 
     def update(self, **kwargs: Any) -> dict[str, Any]:
+        status = kwargs.pop("status", None)
+        if kwargs:
+            unsupported = ", ".join(sorted(kwargs))
+            raise TypeError(
+                f"Telnyx calls().update() does not support: {unsupported}. "
+                f"Only status='completed' is translated to a hangup command."
+            )
+        if status is not None and status != "completed":
+            raise ValueError(
+                f"Telnyx calls().update() only supports status='completed'; got {status!r}"
+            )
         return asyncio.run(self._owner.hangup(self._call_control_id))
 
 

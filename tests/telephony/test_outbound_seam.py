@@ -182,6 +182,25 @@ class TestTelnyxOutboundClientRouting:
 
         assert fake.hangups == ["CC7"]
 
+    def test_update_with_unsupported_kwarg_raises_type_error(self) -> None:
+        client = self._make_owner_client(_FakeTelnyxControl())
+
+        with pytest.raises(TypeError, match="does not support.*twiml"):
+            client.calls("CC7").update(twiml="<Response><Dial>+1555</Dial></Response>")
+
+    def test_update_with_non_completed_status_raises_value_error(self) -> None:
+        client = self._make_owner_client(_FakeTelnyxControl())
+
+        with pytest.raises(ValueError, match="only supports status='completed'"):
+            client.calls("CC7").update(status="canceled")
+
+    def test_update_without_kwargs_defaults_to_hangup(self) -> None:
+        fake = _FakeTelnyxControl()
+        client = self._make_owner_client(fake)
+
+        client.calls("CC7").update()
+
+        assert fake.hangups == ["CC7"]
     def test_isinstance_outbound_call_client_protocol(self) -> None:
         assert isinstance(TelnyxOutboundClient("key", connection_id="c"), OutboundCallClient)
 
