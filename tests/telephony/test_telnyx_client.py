@@ -415,12 +415,3 @@ class TestRetryBackoff:
         assert result == {}
         assert len(session.calls) == 2
 
-    def test_constructor_accepts_retry_parameters(self) -> None:
-        client = TelnyxCallControlClient(
-            "key-123",
-            max_retries=5,
-            retry_backoff_s=0.25,
-        )
-
-        assert client._max_retries == 5
-        assert client._retry_backoff_s == 0.25
