@@ -79,6 +79,7 @@ async def _handle_telnyx_webhook_request(
     web: Any,
     config: TelnyxVoiceServerConfig,
     stream_tokens: Any,
+    api_client: Any,
 ) -> Any:
     from easycat.telephony.telnyx import (
         parse_telnyx_webhook,
@@ -124,14 +125,14 @@ async def _handle_telnyx_webhook_request(
         return web.Response(status=400, text=str(exc))
 
     from easycat.telephony.telnyx import build_answer_payload
-    from easycat.telephony.telnyx_client import TelnyxApiError, TelnyxCallControlClient
+    from easycat.telephony.telnyx_client import TelnyxApiError
 
     answer_payload = build_answer_payload(
         stream_url=f"{config.stream_url}/?{STREAM_TOKEN_PARAMETER}={stream_token}",
         client_state={"call_control_id": call_control_id},
     )
-    assert config.telnyx_api_key is not None
-    client = TelnyxCallControlClient(config.telnyx_api_key)
+
+    client = api_client
     try:
         await client.answer(call_control_id, answer_payload)
     except TelnyxApiError as exc:
@@ -140,8 +141,6 @@ async def _handle_telnyx_webhook_request(
     except Exception:
         logger.warning("Telnyx answer command raised", exc_info=True)
         return web.Response(status=502, text="Telnyx answer failed")
-    finally:
-        await client.close()
     return web.Response(status=200)
 
 
@@ -360,9 +359,12 @@ async def serve_telnyx_voice_app(
     from easycat.session_manager import SessionManager
     from easycat.transports.telnyx_media import TelnyxConnectionTransport
     from easycat.transports.telnyx_media import TelnyxTransportConfig as _TelnyxTransportConfig
+    from easycat.telephony.telnyx_client import TelnyxCallControlClient
 
     manager: SessionManager[int] = SessionManager()
     stream_tokens = StreamTokenStore(config.stream_token_secret)
+    assert config.telnyx_api_key is not None
+    api_client = TelnyxCallControlClient(config.telnyx_api_key)
 
     async def build_session(ws: ServerConnection) -> Session | None:
         transport = TelnyxConnectionTransport(
@@ -392,6 +394,7 @@ async def serve_telnyx_voice_app(
             web=web,
             config=config,
             stream_tokens=stream_tokens,
+            api_client=api_client,
         )
 
     media_server = await websockets.serve(
@@ -427,6 +430,7 @@ async def serve_telnyx_voice_app(
             runner=runner,
             config=config,
         )
+        await api_client.close()
 
 
 def run_telnyx_voice_app(
