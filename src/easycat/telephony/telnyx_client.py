@@ -8,12 +8,21 @@ telephony integration needs is one authenticated POST against
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import math
+import random
 from collections.abc import Mapping
 from typing import Any
 
 import aiohttp
 
 TELNYX_API_BASE_URL = "https://api.telnyx.com/v2"
+
+_RETRYABLE_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+_MAX_RETRY_BACKOFF_S = 8.0
+
+logger = logging.getLogger(__name__)
 
 
 class TelnyxApiError(RuntimeError):
@@ -32,6 +41,8 @@ class TelnyxCallControlClient:
         api_key: Bearer token from ``TELNYX_API_KEY``.
         base_url: Override for tests / private gateways.
         timeout_s: Per-request timeout in seconds.
+        max_retries: Maximum retry attempts after an initial transient failure.
+        retry_backoff_s: Base exponential backoff delay between retries.
     """
 
     def __init__(
@@ -40,15 +51,23 @@ class TelnyxCallControlClient:
         *,
         base_url: str = TELNYX_API_BASE_URL,
         timeout_s: float = 15.0,
+        max_retries: int = 2,
+        retry_backoff_s: float = 0.5,
     ) -> None:
         if not api_key:
             raise ValueError("api_key must be non-empty")
+        if max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
+        if retry_backoff_s < 0:
+            raise ValueError("retry_backoff_s must be non-negative")
         self._base_url = base_url.rstrip("/")
         self._headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
         self._timeout_s = timeout_s
+        self._max_retries = max_retries
+        self._retry_backoff_s = retry_backoff_s
         self._session: aiohttp.ClientSession | None = None
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
@@ -66,14 +85,41 @@ class TelnyxCallControlClient:
         self._session = None
 
     async def _post(self, path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        session = await self._ensure_session()
         url = f"{self._base_url}{path}"
-        async with session.post(url, json=dict(payload)) as response:
-            body = await response.json(content_type=None)
-            if response.status >= 400:
-                detail = _error_detail(body)
-                raise TelnyxApiError(response.status, detail)
-            return body if isinstance(body, dict) else {}
+
+        last_error: Exception | None = None
+        for attempt in range(1 + self._max_retries):
+            session = await self._ensure_session()
+            try:
+                async with session.post(url, json=dict(payload)) as response:
+                    body = await response.json(content_type=None)
+                    if response.status >= 400:
+                        detail = _error_detail(body)
+                        error = TelnyxApiError(response.status, detail)
+                        if response.status not in _RETRYABLE_HTTP_STATUSES:
+                            raise error
+                        last_error = error
+                    else:
+                        return body if isinstance(body, dict) else {}
+            except aiohttp.ClientError as exc:
+                last_error = exc
+
+            if attempt < self._max_retries:
+                delay = min(
+                    self._retry_backoff_s * (2**attempt) * random.uniform(0.5, 1.0),
+                    _MAX_RETRY_BACKOFF_S,
+                )
+                logger.warning(
+                    "Telnyx API attempt %d/%d failed (%s); retrying in %.1fs",
+                    attempt + 1,
+                    1 + self._max_retries,
+                    last_error,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+        assert last_error is not None
+        raise last_error
 
     async def answer(self, call_control_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Answer an inbound call and attach the bidirectional media stream."""
