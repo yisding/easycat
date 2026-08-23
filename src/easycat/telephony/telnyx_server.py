@@ -407,7 +407,8 @@ async def serve_telnyx_voice_app(
     # leaked before the steady-state try/finally below takes over teardown.
     runner, site = await _start_webhook_http_listener(web, config, handle_webhook, media_server)
     logger.info(
-        "Telnyx voice server ready: media ws://%s:%s, webhook http://%s:%s%s",
+        "Telnyx voice server ready: media listener bound at %s:%s (WSS via public ingress), "
+        "webhook http://%s:%s%s",
         config.host,
         config.media_port,
         config.http_host,
