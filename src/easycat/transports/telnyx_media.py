@@ -391,7 +391,15 @@ def _parse_telnyx_int(value: Any) -> int | None:
 
 
 class _TelnyxStreamDiagnostics:
-    """Sequence-gap detection across the negotiated stream."""
+    """Sequence-gap detection across the negotiated stream.
+
+    Gaps are reported as degraded events but audio is never re-requested or
+    buffered for replay. This is intentional: in real-time voice, stale media
+    is worthless by the time it could be recovered, and holding the pipeline
+    to resync would add latency that compounds with every subsequent gap.
+    Downstream consumers (session metrics, journaling) decide whether a gap
+    rate warrants operator attention.
+    """
 
     def __init__(self, emit_degraded: Callable[..., None]) -> None:
         self._emit_degraded = emit_degraded
