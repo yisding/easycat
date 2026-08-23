@@ -577,6 +577,7 @@ class _TelnyxProtocolMixin:
     _inbound_resampler: PCM16StreamResampler
     _negotiated_encoding: str
     _negotiated_sample_rate: int
+    _coalescer: _TelnyxOutboundCoalescer
 
     # ── Per-class hooks ───────────────────────────────────────────
 
@@ -752,6 +753,12 @@ class _TelnyxProtocolMixin:
             return False
         self._negotiated_encoding = encoding
         self._negotiated_sample_rate = sample_rate
+        # Outbound frame bounds are sized by the wire codec; a start frame
+        # that negotiates away from the configured codec must resize the
+        # coalescer or a full L16-sized frame becomes ~400 ms of PCMU audio.
+        self._coalescer = _TelnyxOutboundCoalescer(
+            _codec_bytes_per_ms(encoding, sample_rate, channels)
+        )
         return True
 
     async def _reject_start(self, close_code: int, reason: str) -> None:

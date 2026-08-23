@@ -325,6 +325,31 @@ async def test_mark_ack_and_expire_on_clear() -> None:
     assert transport._pending_marks == {}
 
 
+@pytest.mark.asyncio
+async def test_negotiating_pcmu_resizes_outbound_frame_bounds() -> None:
+    """A start-frame codec switch must resize send coalescing to the wire codec."""
+    ws = _DummyTelnyxWebSocket()
+    transport = TelnyxTransport(TelnyxTransportConfig())
+    transport._ws = ws
+    transport._stream_id = "ST1"
+
+    await transport._handle_message(_start_msg(encoding="PCMU", sample_rate=8000))
+
+    for _ in range(10):
+        sent = await transport.send_audio(
+            AudioChunk(data=_pcm_silence(120, rate=8000), format=PCM16_MONO_16K)
+        )
+        assert sent is True
+
+    payloads = [
+        json.loads(message)["media"]["payload"] for message in ws.sent if '"media"' in message
+    ]
+    assert payloads
+    # PCMU @ 8 kHz is 8 bytes/ms; every wire frame stays within ~100 ms (800 B)
+    # even though the transport was constructed with L16-sized bounds.
+    assert all(len(base64.b64decode(payload)) <= 800 for payload in payloads)
+
+
 # ── Error events ──────────────────────────────────────────────────
 
 
