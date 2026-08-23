@@ -605,6 +605,10 @@ def test_signed_call_initiated_mints_token_and_answers(
     assert payload["send_silence_when_idle"] is True
     # client_state binds the call back to its control id.
     assert decode_client_state(payload["client_state"]) == {"call_control_id": "CC1"}
+    # command_id is the webhook delivery id so Telnyx deduplicates redeliveries.
+    assert payload["command_id"]
+    _, retry_payload = answered[1]
+    assert retry_payload["command_id"] == payload["command_id"]
     # The stream URL carries the one-time token on our public wss:// origin.
     parsed = urlsplit(payload["stream_url"])
     assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/") == "wss://example/media"

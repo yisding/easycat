@@ -130,6 +130,7 @@ async def _handle_telnyx_webhook_request(
     answer_payload = build_answer_payload(
         stream_url=f"{config.stream_url}/?{STREAM_TOKEN_PARAMETER}={stream_token}",
         client_state={"call_control_id": call_control_id},
+        command_id=grant_key,
     )
 
     client = api_client
