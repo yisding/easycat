@@ -643,8 +643,9 @@ def test_examples_keep_easyconfig_env_first_for_openai_key():
     """Examples preflight OPENAI_API_KEY but let EasyConfig consume the env var."""
     exceptions = {
         # create_app(api_key=...) intentionally supports injection without
-        # mutating process env, so this example must pass the key explicitly.
+        # mutating process env, so these examples must pass the key explicitly.
         "twilio_app.py",
+        "telnyx_app.py",
     }
     stale: list[str] = []
 
