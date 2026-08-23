@@ -41,8 +41,9 @@ _DEFAULT_INSTRUCTIONS = (
     "You are a helpful voice assistant. Keep responses concise and conversational."
 )
 
-# Modes the serve CLI surfaces (plus the VoiceApp aliases it accepts). Twilio is
-# intentionally excluded here — it has its own server shape (Phase 1 / M3).
+# Modes the serve CLI surfaces (plus the VoiceApp aliases it accepts). Twilio
+# and Telnyx are intentionally excluded here — they have their own server
+# shape (two-listener telephony apps).
 _SERVE_MODES = frozenset({"browser", "websocket", "local", "ws", "mic"})
 
 
