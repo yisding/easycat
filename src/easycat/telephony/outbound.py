@@ -266,6 +266,10 @@ _TELNYX_AMD_BY_TWILIO_MODE = {
     "Disabled": "disabled",
 }
 
+_NATIVE_TELNYX_AMD_MODES = frozenset(
+    {"premium", "detect", "detect_beep", "detect_words", "greeting_end", "disabled"}
+)
+
 
 def telnyx_dial_payload_from_create_kwargs(
     create_kwargs: dict[str, Any],
@@ -288,7 +292,10 @@ def telnyx_dial_payload_from_create_kwargs(
         "from": create_kwargs["from_"],
         "connection_id": connection_id,
     }
-    amd_mode = _TELNYX_AMD_BY_TWILIO_MODE.get(str(create_kwargs.get("machine_detection", "")))
+    machine_detection = str(create_kwargs.get("machine_detection", ""))
+    amd_mode = _TELNYX_AMD_BY_TWILIO_MODE.get(machine_detection)
+    if amd_mode is None and machine_detection.lower() in _NATIVE_TELNYX_AMD_MODES:
+        amd_mode = machine_detection.lower()
     if amd_mode:
         payload["answering_machine_detection"] = amd_mode
     stream_url = create_kwargs.get("stream_url")

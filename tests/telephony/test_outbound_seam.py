@@ -276,6 +276,38 @@ class TestDialPayloadTranslation:
         with pytest.raises(ValueError, match="connection_id"):
             telnyx_dial_payload_from_create_kwargs({"to": "+1", "from_": "+2"}, connection_id="")
 
+    @pytest.mark.parametrize(
+        "native_mode",
+        ["premium", "detect", "detect_beep", "detect_words", "greeting_end", "disabled"],
+    )
+    def test_native_telnyx_amd_modes_pass_through(self, native_mode: str) -> None:
+        payload = telnyx_dial_payload_from_create_kwargs(
+            {"to": "+1", "from_": "+2", "machine_detection": native_mode},
+            connection_id="conn",
+        )
+
+        assert payload["answering_machine_detection"] == native_mode
+
+    @pytest.mark.parametrize(
+        "native_mode",
+        ["Premium", "DETECT_BEEP", "Detect_Words"],
+    )
+    def test_native_telnyx_amd_modes_are_case_insensitive(self, native_mode: str) -> None:
+        payload = telnyx_dial_payload_from_create_kwargs(
+            {"to": "+1", "from_": "+2", "machine_detection": native_mode},
+            connection_id="conn",
+        )
+
+        assert payload["answering_machine_detection"] == native_mode.lower()
+
+    def test_unknown_amd_mode_is_omitted(self) -> None:
+        payload = telnyx_dial_payload_from_create_kwargs(
+            {"to": "+1", "from_": "+2", "machine_detection": "not_a_real_mode"},
+            connection_id="conn",
+        )
+
+        assert "answering_machine_detection" not in payload
+
 
 class TestEmitTelnyxCallEvent:
     @pytest.mark.asyncio
