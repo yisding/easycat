@@ -247,6 +247,25 @@ class TestVerifyTelnyxWebhookSignature:
 
         assert verified is True
 
+    def test_non_canonical_base64_signature_rejects_false(self) -> None:
+        """Strict b64 validation rejects signatures with embedded padding."""
+        import base64
+
+        key, public_key_b64 = _ed25519_pair()
+        real_sig = sign(key, self.TIMESTAMP, self.BODY)
+        tampered_sig = base64.b64encode(
+            base64.b64decode(real_sig) + b"\x00extra"
+        ).decode()
+
+        verified = self._verify(
+            key,
+            public_key_b64,
+            signature=tampered_sig,
+            now=lambda: float(self.TIMESTAMP),
+        )
+
+        assert verified is False
+
     def test_bytes_and_str_payload_are_equivalent(self) -> None:
         key, public_key_b64 = _ed25519_pair()
 

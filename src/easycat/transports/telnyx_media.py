@@ -319,7 +319,7 @@ def _decode_client_state(raw: Any) -> dict[str, str]:
     if not isinstance(raw, str) or not raw:
         return {}
     try:
-        decoded = json.loads(base64.b64decode(raw).decode("utf-8"))
+        decoded = json.loads(base64.b64decode(raw, validate=True).decode("utf-8"))
     except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return {}
     if not isinstance(decoded, dict):
@@ -902,7 +902,7 @@ class _TelnyxProtocolMixin:
             return
 
         try:
-            payload = base64.b64decode(payload_text)
+            payload = base64.b64decode(payload_text, validate=True)
         except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.warning("Ignoring Telnyx media frame with invalid base64 payload")
             self._emit_degraded(_DEGRADED_TELNYX_ERROR, "invalid base64 media payload")
