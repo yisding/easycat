@@ -73,6 +73,7 @@ _LINE_BUDGETS: dict[str, int] = {
     "pydantic-ai-workflow": 20,
     "text-chat": 17,
     "twilio-phone": 15,
+    "telnyx-phone": 15,
     "webrtc-browser": 14,
 }
 
@@ -81,6 +82,7 @@ _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
     "provider-stt": ("custom_stt.py", "test_custom_stt.py"),
     "provider-tts": ("custom_tts.py", "test_custom_tts.py"),
     "twilio-phone": ("server.py",),
+    "telnyx-phone": ("server.py",),
 }
 
 # Per-template dev dependency groups; the provider package skeleton ships a
@@ -132,6 +134,7 @@ def test_catalog_is_nonempty(templates: list[str]) -> None:
         "pydantic-ai-workflow",
         "text-chat",
         "twilio-phone",
+        "telnyx-phone",
         "webrtc-browser",
     ):
         assert required in templates, f"missing template: {required}"
@@ -200,6 +203,7 @@ def test_template_specs_make_audio_capabilities_explicit() -> None:
         "pydantic-ai",
         "pydantic-ai-workflow",
         "twilio-phone",
+        "telnyx-phone",
         "webrtc-browser",
     }
     assert {
@@ -211,6 +215,7 @@ def test_template_specs_make_audio_capabilities_explicit() -> None:
         "pydantic-ai": "local",
         "pydantic-ai-workflow": "local",
         "twilio-phone": "twilio",
+        "telnyx-phone": "telnyx",
         "webrtc-browser": "webrtc",
     }
     # Provider-authoring packages have focused voice demos but intentionally
@@ -234,6 +239,25 @@ def test_template_env_var_collector_reads_twilio_server_code() -> None:
     assert "TWILIO_MAX_SESSIONS" not in required
     assert "TWILIO_START_TIMEOUT_S" not in required
     assert "TRUST_PROXY_HEADERS" not in required
+
+
+def test_template_env_var_collector_reads_telnyx_server_code() -> None:
+    required, referenced = _template_code_env_vars("telnyx-phone")
+
+    assert required == {
+        "OPENAI_API_KEY",
+        "TELNYX_STREAM_URL",
+        "TELNYX_API_KEY",
+        "TELNYX_PUBLIC_KEY",
+    }
+    for name in (
+        "TELNYX_WS_PORT",
+        "TELNYX_STREAM_TOKEN_SECRET",
+        "TELNYX_MAX_SESSIONS",
+        "TELNYX_START_TIMEOUT_S",
+    ):
+        assert name in referenced
+        assert name not in required
 
 
 def test_scaffold_templates_keep_easyconfig_env_first_for_openai_key() -> None:
@@ -1283,3 +1307,26 @@ def test_twilio_phone_template_authenticates_public_entrypoints() -> None:
     assert "TWILIO_PUBLIC_TWIML_URL" in env_example
     assert "TRUST_PROXY_HEADERS" in env_example
     assert "one-time stream token" in readme
+
+
+def test_telnyx_phone_template_authenticates_public_entrypoints() -> None:
+    server = (_template_dir("telnyx-phone") / "server.py").read_text(encoding="utf-8")
+    env_example = (_template_dir("telnyx-phone") / ".env.example").read_text(encoding="utf-8")
+    readme = (_template_dir("telnyx-phone") / "README.md").read_text(encoding="utf-8")
+
+    assert 'require_env("TELNYX_API_KEY")' in server
+    assert 'require_env("TELNYX_PUBLIC_KEY")' in server
+    assert "verify_telnyx_webhook_signature" in server
+    assert "TELNYX_WEBHOOK_SIGNATURE_HEADER" in server
+    assert "TelnyxStreamTokenValidator" not in server
+    assert "stream_token_validator=stream_tokens.consume_start" in server
+    assert "if not await transport.wait_for_start(timeout_s=start_timeout_s):" in server
+    assert "TELNYX_API_KEY" in env_example
+    assert "TELNYX_MAX_SESSIONS" in env_example
+    assert "TELNYX_START_TIMEOUT_S" in env_example
+    assert "TELNYX_DRAIN_TIMEOUT_S" in env_example
+    assert "TELNYX_FORCE_SHUTDOWN_TIMEOUT_S" in env_example
+    # Telnyx does not sign the media handshake; the README must say how the
+    # one-time stream token compensates.
+    assert "one-time stream token" in readme
+    assert "NOT signed" in readme
