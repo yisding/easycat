@@ -293,6 +293,28 @@ For public Twilio deployments:
 - Send barge-in `clear` messages when interruption policy requires clearing
   already-buffered Twilio playback.
 
+## Telnyx multi-call servers
+
+Use `VoiceApp.run("telnyx")` or
+`easycat.telephony.telnyx_server.serve_telnyx_voice_app` as the production
+starting point for Telnyx Call Control v2 calls. The reusable helper verifies
+Telnyx's Ed25519 webhook signatures, answers `call.initiated` with a one-time
+stream token embedded in the media `stream_url`, caps concurrent calls, and
+stops all sessions during shutdown. `examples/telnyx_app.py:create_app` is the
+lower-level reference when you also need outbound-call or status-callback
+routes.
+
+For public Telnyx deployments:
+
+- Set `TELNYX_STREAM_URL` to a public `wss://` URL; it is rejected otherwise.
+- Verify `telnyx-signature-ed25519` on every webhook (five-minute replay
+  window).
+- Treat the stream token as the entire media auth boundary — Telnyx does not
+  sign the WebSocket handshake.
+- Preserve `call_control_id` in logs and metrics for call lifecycle routing.
+- L16 @ 16 kHz is the default negotiated codec and matches EasyCat's internal
+  bus exactly.
+
 ## Journal persistence, replication, and metrics scraping
 
 `debug="full"` (opt in — the `EasyConfig` default is the in-memory

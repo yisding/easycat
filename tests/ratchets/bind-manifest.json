@@ -7,11 +7,11 @@
       "aiohttp_tcp_site": 6,
       "aioquic_serve": 1,
       "socket_bind": 2,
-      "websockets_serve": 6
+      "websockets_serve": 7
     },
     "classifications": {
       "authorized_capability": 6,
-      "generated_template": 1,
+      "generated_template": 2,
       "guarded_embedding": 2,
       "loopback_probe": 2,
       "pending_migration": 5
@@ -29,6 +29,7 @@
     "socket_bind\tdebugger/dev.py\t_port_is_free\tcall @socket.bind\t861867d6028314be\t0\tloopback_probe\tIntentional dev-UI port probe receives only the module's fixed loopback host.",
     "socket_bind\tdebugger/server.py\t_probe_bind\tcall @socket.bind\tf4688465a5a60a12\t0\tloopback_probe\tIntentional collision probe rewrites the target to a concrete IPv4 or IPv6 loopback address.",
     "websockets_serve\tcli/scaffold/templates/twilio-phone/server.py\tcreate_app.lifespan\tcall websockets.serve\t5a39da69f8643192\t0\tgenerated_template\tGenerated Twilio listener is authenticated by Twilio signature and stream-token checks; migrate the template without changing that policy.",
+    "websockets_serve\tcli/scaffold/templates/telnyx-phone/server.py\tcreate_app.lifespan\tcall websockets.serve\t6a716e3867aeb854\t0\tgenerated_template\tGenerated Telnyx listener is authenticated by Ed25519 webhook verification and one-time stream-token checks; migrate the template without changing that policy.",
     "websockets_serve\tserver/voice_server.py\tVoiceServer._start_websocket_listener\tcall websockets.serve\t5d18cc1d088b055a\t0\tauthorized_capability\tVoiceServer raw-WebSocket listener construction runs only inside the deferred binder passed to authorized_bind.",
     "websockets_serve\tserver/websocket.py\tserve_websocket_sessions\tcall websockets.serve\t7ef41f8f2897daff\t0\tauthorized_capability\tStandalone raw-WebSocket listener is invoked only as the deferred binder passed to authorized_bind.",
     "websockets_serve\ttelephony/server.py\tserve_twilio_voice_app\tcall websockets.serve\t37b0cf837621d8b2\t0\tpending_migration\tRetained Twilio media listener; migrate while preserving signature validation and HTTP-listener rollback.",

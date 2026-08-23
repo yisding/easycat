@@ -367,6 +367,7 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "docs/teaching/12-evals-and-latency/evals.py" = ["C901", "PLR0912", "PLR0915"]
 "examples/reconnecting_ws_client.py" = ["C901"]
 "examples/twilio_app.py" = ["C901", "PLR0915"]
+"examples/telnyx_app.py" = ["C901", "PLR0915"]
 # Landed in concurrent wave-4 items, grandfathered at integration time.
 "scripts/extras_smoke.py" = ["C901", "PLR0912"]
 "src/easycat/cli/debug/diff.py" = ["B904"]

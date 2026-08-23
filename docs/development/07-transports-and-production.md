@@ -286,7 +286,7 @@ flowchart TD
 WebRTC libraries are optional and loaded lazily at the route/feature boundary.
 `import easycat.server` must not require aiohttp or aiortc.
 
-## 7.8 Twilio and Telephony
+## 7.8 Twilio, Telnyx, and Telephony
 
 [`telephony/server.py`](../../src/easycat/telephony/server.py) runs two
 coordinated listeners:
@@ -312,16 +312,33 @@ public URL used for signature reconstruction. The media listener independently
 validates handshake/start claims and bounds how long a pre-start socket can
 hold capacity.
 
+[`telephony/telnyx_server.py`](../../src/easycat/telephony/telnyx_server.py)
+mirrors the same two-listener shape for Telnyx Call Control v2:
+
+- The webhook listener verifies Telnyx's Ed25519 signature over
+  `{timestamp}|{raw_body}` with a five-minute replay window, then answers
+  `call.initiated` with a one-time stream token embedded in the
+  `stream_url`.
+- The media WebSocket handshake is **not** signed by Telnyx, so the one-time
+  token is the entire transport-auth boundary: it is consumed once in the
+  start frame and bounded by TTL.
+- Media negotiates L16 @ 16 kHz by default (the internal bus format); PCMU @
+  8 kHz is the configured fallback negotiated from the authoritative
+  `start.media_format`.
+
 TwiML/token orchestration belongs above the transport. Per-call DTMF,
 voicemail, outbound state, screening, compliance, and session actions are
 wired through `TelephonyConfig` and helpers under
 [`telephony/`](../../src/easycat/telephony), not duplicated on the server
-config.
+config. Telnyx session actions use native Call Control commands (transfer,
+send DTMF, hangup) instead of TwiML redirects.
 
 The transport must filter stale/wrong stream frames and label trusted inbound
 STT tracks so downstream telephony classifiers do not confuse bot/outbound
 audio with caller speech. See
-[`tests/transports/test_twilio_transport.py`](../../tests/transports/test_twilio_transport.py).
+[`tests/transports/test_twilio_transport.py`](../../tests/transports/test_twilio_transport.py)
+and
+[`tests/transports/test_telnyx_transport.py`](../../tests/transports/test_telnyx_transport.py).
 
 ## 7.9 Draining and Shutdown
 

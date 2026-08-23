@@ -138,7 +138,13 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   push-to-talk mode, silence timeouts, and pre-roll buffering.
 - `timeouts` — `TimeoutConfig` with per-stage deadlines (STT, agent, TTS).
 - `telephony` — optional `TelephonyConfig` enabling DTMF aggregation,
-  voicemail detection, and outbound call management.
+  voicemail detection, and outbound call management. Twilio and Telnyx are
+  both first-class: `EasyConfig.phone(provider="telnyx", ...)` builds a
+  Telnyx Call Control transport (L16 @ 16 kHz by default), and
+  `TelephonyConfig.telnyx_actions` configures the native-commands session
+  action executor. Outbound calls select the provider via
+  `OutboundCallConfig(provider=...)` (`"twilio"` default; `"telnyx"` uses
+  `telnyx_connection_id` / `telnyx_webhook_url`).
 - `strip_markdown` — strip markdown formatting from agent output before
   synthesis.
 - `auto_align_tts_output_to_transport` — resample/reformat TTS output to the

@@ -33,7 +33,7 @@ Source: https://github.com/yisding/easycat
 - [Feature observability](https://github.com/yisding/easycat/tree/main/docs/using-easycat/07-observability) — for learners: Record, inspect, replay, and compare journals and debug bundles.
 - [Feature testing and evals](https://github.com/yisding/easycat/tree/main/docs/using-easycat/08-testing-evals) — for learners: Test offline turns, evaluation oracles, and latency budgets.
 - [Feature multi-caller servers](https://github.com/yisding/easycat/tree/main/docs/using-easycat/09-multi-caller) — for learners: Serve isolated callers with auth, capacity limits, and draining.
-- [Feature telephony](https://github.com/yisding/easycat/tree/main/docs/using-easycat/10-telephony) — for learners: Secure Twilio webhooks, media streams, callbacks, and call control.
+- [Feature telephony](https://github.com/yisding/easycat/tree/main/docs/using-easycat/10-telephony) — for learners: Secure Twilio and Telnyx webhooks, media streams, callbacks, and call control.
 - [Feature production operations](https://github.com/yisding/easycat/tree/main/docs/using-easycat/11-production-ops) — for learners: Validate, deploy, observe, preserve, and drain production services.
 - [Examples](https://github.com/yisding/easycat/blob/main/examples/README.md) — for app builders: Find runnable local, browser, WebSocket, and telephony apps.
 - [Architecture](https://github.com/yisding/easycat/blob/main/docs/architecture.md) — for maintainers: Understand the pipeline, session collaborators, stages, providers, and agent bridges.

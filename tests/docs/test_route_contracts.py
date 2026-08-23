@@ -451,6 +451,10 @@ def test_feature_ladder_docs_route_matches_first_lesson_commands() -> None:
                     "uv run --env-file .env uvicorn examples.twilio_app:create_app "
                     "--factory --host 0.0.0.0"
                 ),
+                (
+                    "uv run --env-file .env uvicorn examples.telnyx_app:create_app "
+                    "--factory --host 0.0.0.0"
+                ),
             ),
         ),
         (
