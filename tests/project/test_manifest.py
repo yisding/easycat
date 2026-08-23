@@ -251,6 +251,68 @@ def test_to_easyconfig_twilio_profile_requires_token_reference(
     assert "requires a token reference" in str(exc_info.value)
 
 
+@pytest.mark.asyncio
+async def test_to_easyconfig_telnyx_profile_enforces_manifest_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.transports.telnyx_media import TelnyxTransportConfig
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    monkeypatch.setenv("TELNYX_STREAM_TOKEN_SECRET", "expected-stream-token")
+    manifest = parse_manifest(
+        {
+            "voice": {
+                "phone": {
+                    "transport": "telnyx",
+                    "token": "bearer-env:TELNYX_STREAM_TOKEN_SECRET",
+                }
+            }
+        }
+    )
+
+    config = manifest.to_easyconfig("phone", resolve_agent=False)
+
+    assert isinstance(config.transport, TelnyxTransportConfig)
+    assert config.transport.stream_token_validator is not None
+    assert not config.transport.stream_token_validator("wrong-stream-token")  # type: ignore[func-returns-value]
+    assert config.transport.stream_token_validator("expected-stream-token")  # type: ignore[func-returns-value]
+
+
+def test_to_easyconfig_telnyx_profile_token_unset_env_raises_e604(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    monkeypatch.delenv("TELNYX_STREAM_TOKEN_SECRET", raising=False)
+    manifest = parse_manifest(
+        {
+            "voice": {
+                "phone": {
+                    "transport": "telnyx",
+                    "token": "bearer-env:TELNYX_STREAM_TOKEN_SECRET",
+                }
+            }
+        }
+    )
+
+    with pytest.raises(EasyCatError) as exc_info:
+        manifest.to_easyconfig("phone", resolve_agent=False)
+
+    assert exc_info.value.code == "EASYCAT_E604"
+
+
+def test_to_easyconfig_telnyx_profile_requires_token_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    manifest = parse_manifest({"voice": {"phone": {"transport": "telnyx"}}})
+
+    with pytest.raises(EasyCatError) as exc_info:
+        manifest.to_easyconfig("phone", resolve_agent=False)
+
+    assert exc_info.value.code == "EASYCAT_E602"
+    assert "bearer-env:TELNYX_STREAM_TOKEN_SECRET" in str(exc_info.value)
+
+
 def test_to_easyconfig_coerces_vad_shortcut_to_vad_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
