@@ -45,6 +45,9 @@ EXTRA_PROBE_MODULE: dict[str, str | None] = {
     # Transport extras.
     "webrtc": "aiortc",
     "telephony": "twilio",
+    # ``telnyx`` reuses the webrtc/webtransport ``cryptography`` install, so a
+    # shared wheel may already satisfy it (same overlap heuristic as webrtc).
+    "telnyx": "cryptography",
     "local": "sounddevice",
     "webtransport": "aioquic",
     # VAD extras.
@@ -92,7 +95,8 @@ class RoleBackend:
 # config-type names mirror ``config/_factory.py::_transport_factories`` dispatch.
 # ``webrtc`` needs the ``webrtc`` extra (aiortc + aiohttp); ``websocket`` is
 # stdlib (``websockets`` is a core dep, no extra); ``twilio`` needs
-# ``telephony``; ``local`` needs ``local`` (sounddevice).
+# ``telephony``; ``telnyx`` needs ``telnyx``; ``local`` needs ``local``
+# (sounddevice).
 TRANSPORT_BACKENDS: dict[str, RoleBackend] = {
     "webrtc": RoleBackend(
         config_type="WebRTCTransportConfig",
@@ -110,6 +114,12 @@ TRANSPORT_BACKENDS: dict[str, RoleBackend] = {
         config_type="TwilioTransportConfig",
         extra="telephony",
         capabilities=frozenset({"telephony", "mulaw", "8khz"}),
+        default_echo_cancellation_enabled=False,
+    ),
+    "telnyx": RoleBackend(
+        config_type="TelnyxTransportConfig",
+        extra="telnyx",
+        capabilities=frozenset({"telephony", "l16", "16khz"}),
         default_echo_cancellation_enabled=False,
     ),
     "local": RoleBackend(

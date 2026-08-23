@@ -160,6 +160,7 @@ _register(
 
 # Transport config and endpoint types used by README/examples.
 _register("easycat.transports.local", "LocalTransportConfig")
+_register("easycat.transports.telnyx_media", "TelnyxConnectionTransport")
 _register("easycat.transports.twilio_media", "TwilioConnectionTransport")
 _register("easycat.telephony.session_actions", "TwilioSessionActionConfig")
 _register("easycat.transports._webrtc_config", "ICEServer", "WebRTCTransportConfig")

@@ -158,6 +158,7 @@ if TYPE_CHECKING:
         WebRTCTransportConfig,
     )
     from easycat.transports.local import LocalTransportConfig
+    from easycat.transports.telnyx_media import TelnyxConnectionTransport
     from easycat.transports.twilio_media import TwilioConnectionTransport
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Any, ClassVar
 
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.testing import TransportContractSuite
+from easycat.transports.telnyx_media import TelnyxConnectionTransport
 from tests.contracts.provider_surface_matrix import PROVIDER_SURFACE_CONTRACTS
 
 pytestmark = [
@@ -65,6 +67,7 @@ def test_transport_contract_matrix_has_rows() -> None:
         "local",
         "websocket",
         "twilio",
+        "telnyx",
         "webrtc",
         "webtransport",
     }
@@ -103,3 +106,45 @@ class TestTransportContractSuite(TransportContractSuite):
         await provider.clear_audio()
 
         assert provider.clear_calls == 2
+
+
+class _FakeTelnyxWebSocket:
+    """Scripted accepted socket that blocks its receive stream until closed."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.close_calls = 0
+        self._closed = asyncio.Event()
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    async def close(self, *_args: object) -> None:
+        self.close_calls += 1
+        self._closed.set()
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        return self
+
+    async def __anext__(self) -> str:
+        await self._closed.wait()
+        raise StopAsyncIteration
+
+
+class TestTelnyxTransportContractSuite(TransportContractSuite):
+    """Run the shipped kit suite against the offline Telnyx connection transport.
+
+    Mirrors the Twilio accepted-socket pattern (scripted WebSocket, no live
+    listener); no start frame is staged, so sends legally drop and the kit's
+    ``expects_send_accepted_after_connect`` override applies.
+    """
+
+    pytestmark: ClassVar[list[Any]] = [pytest.mark.provider("telnyx")]
+
+    expects_send_accepted_after_connect = False
+
+    @staticmethod
+    def provider_factory() -> TelnyxConnectionTransport:
+        return TelnyxConnectionTransport(
+            _FakeTelnyxWebSocket(),  # type: ignore[arg-type]
+        )

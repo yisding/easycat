@@ -161,17 +161,32 @@ class ProjectManifest:
         if preset == "browser":
             return EasyConfig.browser(**kwargs)
         if preset == "phone":
+            # Both phone transports bind the one-time stream token through the
+            # same ``bearer-env:NAME`` contract; only the secret's env var and
+            # the transport config differ per provider.
+            token_env_var = (
+                "TELNYX_STREAM_TOKEN_SECRET"
+                if spec.transport == "telnyx"
+                else "TWILIO_STREAM_TOKEN_SECRET"
+            )
             if spec.token is None:
                 raise EASYCAT_E602(
                     path=str(self.source_path or "easycat.toml"),
                     problem=(
                         f"phone profile {profile!r} requires a token reference; "
-                        "set token = 'bearer-env:TWILIO_STREAM_TOKEN_SECRET'"
+                        f"set token = 'bearer-env:{token_env_var}'"
                     ),
                 )
+            token = spec.token.resolve(dict(os.environ))
+            if spec.transport == "telnyx":
+                from easycat.transports.telnyx_media import TelnyxTransportConfig
+
+                kwargs["transport"] = TelnyxTransportConfig(
+                    stream_token_validator=lambda candidate: compare_digest(candidate, token)
+                )
+                return EasyConfig.phone(provider="telnyx", **kwargs)
             from easycat.transports.twilio_media import TwilioTransportConfig
 
-            token = spec.token.resolve(dict(os.environ))
             kwargs["transport"] = TwilioTransportConfig(
                 stream_token_validator=lambda candidate: compare_digest(candidate, token)
             )
