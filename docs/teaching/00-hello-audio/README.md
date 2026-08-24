@@ -36,7 +36,7 @@
   `libportaudio2` from your package manager.
 - Later chapters and cumulative checkpoint replay use provider/model extras;
   follow each chapter's prerequisites or install the ladder-level
-  [`quickstart`](../../../README.md#install) bundle before continuing.
+  [prerequisites](../README.md#prerequisites) before continuing.
 - A working microphone and speakers.
 
 ## Run it
