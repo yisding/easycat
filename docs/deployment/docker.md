@@ -343,8 +343,11 @@ The entrypoint fails fast when `EASYCAT_WS_HOST` is non-loopback and
 `EASYCAT_WS_TOKEN` is unset. If your mounted script deliberately serves
 without a token because authentication terminates at an ingress proxy
 (the `unsafe_allow_no_auth=True` pattern), set
-`EASYCAT_UNSAFE_ALLOW_NO_AUTH=1` so the container starts; the entrypoint
-logs a loud warning instead of exiting.
+`EASYCAT_UNSAFE_ALLOW_NO_AUTH=1` so the entrypoint check passes, **and** update
+the mounted script to pass `unsafe_allow_no_auth=True` to its server helper.
+Both are required: the env var bypasses only the container preflight, while
+Python's bind guard rejects an unauthenticated non-loopback listener unless the
+server call itself enables that explicit escape hatch.
 
 ## Latency notes
 

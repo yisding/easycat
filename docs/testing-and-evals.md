@@ -26,7 +26,8 @@ from easycat.debug.testing import assert_no_error, assert_tool_called
 
 
 def test_refund_flow_regression(easycat_bundle):
-    bundle = easycat_bundle("tests/fixtures/refund_flow.zip")
+    # Point this at a bundle exported from your own regression session.
+    bundle = easycat_bundle("artifacts/regression/refund_flow.zip")
     assert_no_error(bundle)
     assert_tool_called(bundle, tool_name="lookup_order")
 ```
