@@ -116,7 +116,9 @@ them. Multi-word audience filters accept hyphens or underscores, so
   [events reference](reference/events.md), the
   [journal record reference](reference/journal-records.md), the
   [EasyConfig field reference](reference/easyconfig.md), and the
-  [session lifecycle reference](reference/session-lifecycle.md). Run
+  [session lifecycle reference](reference/session-lifecycle.md); for Telnyx,
+  also use the
+  [Call Control setup guide](reference/telnyx-setup.md). Run
   `uv run easycat explain events`, `uv run easycat explain turn-taking`, or
   `uv run easycat explain journal` for terminal summaries that print the
   matching docs route. Every `easycat docs --json` route entry also carries a

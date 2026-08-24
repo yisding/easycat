@@ -145,6 +145,7 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
         "Feature testing and evals",
         "Feature multi-caller servers",
         "Feature telephony",
+        "Telnyx Call Control setup",
         "Feature production operations",
         "Examples",
         "Architecture",

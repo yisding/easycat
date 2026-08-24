@@ -49,13 +49,13 @@ Reusable STT, TTS, VAD, noise-reducer, and echo-canceller packages can register
 a provider/config pair. Registration adds shortcut parsing, planner metadata,
 readiness probes, and lazy package discovery while preserving direct injection:
 
-- `register_stt_provider` / `easycat.stt_providers`
-- `register_tts_provider` / `easycat.tts_providers`
-- `register_vad_provider` / `easycat.vad_providers`
+- `register_stt_provider` / entry-point group `easycat.stt_providers`
+- `register_tts_provider` / entry-point group `easycat.tts_providers`
+- `register_vad_provider` / entry-point group `easycat.vad_providers`
 - `easycat.noise_reduction.register_noise_reducer_provider` /
-  `easycat.noise_reducer_providers`
+  entry-point group `easycat.noise_reducer_providers`
 - `easycat.echo_cancellation.register_echo_canceller_provider` /
-  `easycat.echo_canceller_providers`
+  entry-point group `easycat.echo_canceller_providers`
 
 ## Verifying conformance
 

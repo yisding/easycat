@@ -448,6 +448,21 @@ uv run --env-file .env uvicorn examples.twilio_app:create_app --factory --host 0
 uv run --env-file .env uvicorn examples.telnyx_app:create_app --factory --host 0.0.0.0
 ```
 
+## Telnyx Call Control setup
+
+- Path: docs/reference/telnyx-setup.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/reference/telnyx-setup.md
+- Audience: app builders
+- Diataxis: reference
+- Configure Telnyx portal credentials, media streams, webhook signing, and EasyCat environment variables.
+
+Commands:
+
+```bash
+uv sync --extra telnyx --group dev
+uv run python examples/telnyx_voice.py
+```
+
 ## Feature production operations
 
 - Path: docs/using-easycat/11-production-ops/

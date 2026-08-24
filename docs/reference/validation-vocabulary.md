@@ -398,22 +398,23 @@ counts.
 
 ### Release
 
-Planned command:
+Command:
 
 ```bash
 easycat validate release
 ```
 
-Release validation should build distributions, install the wheel into a clean
-environment, run import smoke and `easycat doctor --json`, run quick tests
-against the installed wheel, run configured live canaries, run latency smoke
-or sweep when prerequisites exist, and upload a final validation report. The
-installed-wheel check should run outside the source tree, clear `PYTHONPATH`,
-and assert `easycat.__file__` resolves under site-packages.
+Release validation builds distributions, installs the wheel into a clean
+environment, verifies package metadata and installed-package imports, smokes
+the CLI and public API, runs quick, guard, stress, contracts, live, and latency
+gates against that installed environment, and writes a validation report. The
+installed-wheel check clears `PYTHONPATH` and asserts `easycat.__file__`
+resolves under site-packages. Configure the Python version, extras, providers,
+surfaces, and latency gate with the command options above.
 
 ## Artifact Model
 
-Default planned layout:
+Default layout:
 
 ```text
 .easycat/validation/

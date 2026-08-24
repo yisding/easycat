@@ -595,6 +595,20 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Telnyx Call Control setup",
+        "path": "docs/reference/telnyx-setup.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": (
+            "Configure Telnyx portal credentials, media streams, webhook signing, "
+            "and EasyCat environment variables."
+        ),
+        "commands": (
+            "uv sync --extra telnyx --group dev",
+            "uv run python examples/telnyx_voice.py",
+        ),
+    },
+    {
         "label": "Feature production operations",
         "path": "docs/using-easycat/11-production-ops/",
         "audience": "learners",

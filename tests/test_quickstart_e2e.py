@@ -310,7 +310,7 @@ def test_readme_quickstart_leads_and_install_block_uses_env_convention() -> None
     assert 'app.run("local")' in voice_app_block
     assert "from easycat import VoiceApp" in voice_app_block
 
-    repo_block = readme.split("For this repository, four commands", 1)[1]
+    repo_block = readme.split("For this repository, the commands below go", 1)[1]
     repo_commands = repo_block.split("```bash", 1)[1].split("```", 1)[0].strip().splitlines()
     install_command = repo_commands[0]
     assert "--extra quickstart" in install_command

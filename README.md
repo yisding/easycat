@@ -100,9 +100,9 @@ a portable scaffold directly with
 `uv run easycat init my-agent --easycat-git https://github.com/yisding/easycat.git --easycat-git-rev <commit-sha>`;
 Git and local source options are mutually exclusive.
 
-For this repository, four commands go from the checkout to a talking bot. The
-first command preserves an existing `.env`; after it runs, edit `.env` and add
-your key before running doctor:
+For this repository, the commands below go from the checkout to a talking bot.
+The first command preserves an existing `.env`; after it runs, edit `.env` and
+add your key before running doctor:
 
 ```bash
 uv sync --extra quickstart --group dev

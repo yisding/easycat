@@ -79,7 +79,7 @@
 
 - **Added:** a hand-rolled `MyWorkflow` class with
   `on_user_turn(text, *, recorder, cancel_token)` (deep mode);
-  the `auto_adapt_agent()` → `BridgeAdapterShim` flow; the seven
+  the `auto_adapt_agent()` → bridge flow; the seven
   `SessionAction` types and their executors; the four output
   processors (`MarkdownStripProcessor`, `PhoneticReplacementProcessor`,
   `PauseProcessor`, custom); `mcp_servers=[...]` config entry.
@@ -535,23 +535,22 @@ workflow object.
                auto_adapt_agent()
                          │
              ┌───────────┼──────────────────────────┐
-             ▼           ▼                          ▼
+            ▼           ▼                          ▼
      OpenAIAgentsBridge  PydanticAIBridge   GenericWorkflowBridge
              │           │                          │
              └───────────┴──────────┬───────────────┘
                                     ▼
-                          BridgeAdapterShim
+                        ExternalAgentBridge
                                     │
                                     ▼
                               Session.run()
 ```
 
 Every `agent=` value the config accepts is routed through
-`auto_adapt_agent()`, which picks the right concrete bridge and
-wraps it in `BridgeAdapterShim`. The shim is the thing `Session`
-actually calls `run_streaming()` on. So the "Session orchestration"
-in chapters 2-13 has always been framework-agnostic; bridges are
-the seam.
+`auto_adapt_agent()`, which picks the right concrete bridge. EasyCat then wraps
+the result in `AgentRunner` unless wrapping is disabled, so Session can drive it
+through one bridge surface. So the "Session orchestration" in chapters 2-13 has
+always been framework-agnostic; bridges are the seam.
 
 ## The three things ch 14's script shows
 
@@ -799,7 +798,7 @@ EasyConfig(
 ```
 
 The validator accepts `stdio://`, `sse://`, `http://`, `https://`.
-`BridgeAdapterShim` forwards the list into `RecorderContext`, and
+EasyCat forwards the list into `RecorderContext`, and
 each bridge injects it into its framework's agent object
 (`agent.mcp_servers = [...]` before `run_streamed()`). Shallow-mode
 `GenericWorkflowBridge` logs a warning because it has no way to
