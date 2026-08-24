@@ -455,7 +455,7 @@ def _accepted_telnyx_media(
         logger.debug("Ignoring Telnyx media frame with non-object media payload")
         return None
 
-    track = media.get("track", "")
+    track = str(media.get("track", "")).strip().lower()
     if not track or track in _TELNYX_INBOUND_TRACKS:
         # One bidirectional stream per call; untagged frames are inbound.
         return media
