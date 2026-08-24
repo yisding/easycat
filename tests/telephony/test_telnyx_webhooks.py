@@ -7,6 +7,9 @@ import datetime as dt
 from typing import Any
 
 import pytest
+
+pytest.importorskip("cryptography")
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -65,6 +68,23 @@ class TestParseTelnyxWebhook:
             "event_type": "call.initiated",
             "payload": {"call_control_id": "CC1"},
         }
+
+    def test_nested_telnyx_envelope_is_unwrapped(self) -> None:
+        raw = (
+            b'{"data":{"id":"evt-9","event_type":"call.answered",'
+            b'"payload":{"call_control_id":"CC2"}}}'
+        )
+
+        parsed = parse_telnyx_webhook(raw)
+
+        assert parsed == {
+            "id": "evt-9",
+            "event_type": "call.answered",
+            "payload": {"call_control_id": "CC2"},
+        }
+
+    def test_nested_envelope_without_inner_event_type_returns_none(self) -> None:
+        assert parse_telnyx_webhook(b'{"data":{"id":"evt-10"}}') is None
 
     @pytest.mark.parametrize("raw", [b"not json", b'{"event_type": ', ""])
     def test_non_json_returns_none(self, raw: bytes | str) -> None:
