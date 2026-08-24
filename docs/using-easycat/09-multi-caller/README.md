@@ -94,7 +94,8 @@ header to a native WebSocket handshake, so the standalone browser demo can opt
 into `allow_query_token=True` for loopback development. Prefer bearer headers
 and edge-issued credentials in production.
 
-The simple helper reads `EASYCAT_WS_TOKEN` when using its environment defaults.
+The simple helper reads `EASYCAT_WS_TOKEN` through its `EASYCAT_WS_*`
+environment defaults.
 The unified process layer standardizes on `EASYCAT_SERVE_TOKEN` through
 `bearer_auth_from_env()`.
 

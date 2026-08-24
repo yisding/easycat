@@ -52,7 +52,7 @@ uv run --env-file .env python docs/using-easycat/01-runtime-modes/main.py browse
 The source change from chapter 0 is the final line: instead of fixing
 `"local"`, the script passes the selected mode to the same `VoiceApp`.
 
-## Four modes, four boundaries
+## Modes and boundaries
 
 These are the defaults all wrappers resolve. An explicit `agent=`, `stt=`,
 `tts=`, or `vad=` has the same meaning in `VoiceApp`, an `EasyConfig` preset,
@@ -66,6 +66,7 @@ resolution.
 | `VoiceApp(...).run("browser")` / `EasyConfig.browser()` | Same resolution | Same resolution | Same resolution | WebRTC listener and one fresh session per peer; echo cancellation defaults on | Provider keys plus a serve token for non-loopback binds | Prints the browser URL; live provider calls can be billable |
 | `VoiceApp(...).run("websocket")` / `EasyConfig(transport=WebSocketTransportConfig())` | Same resolution | Same resolution | Same resolution | PCM/JSON WebSocket listener and one fresh session per client | Provider keys plus a serve token for non-loopback binds | Headless server; live provider calls can be billable |
 | `VoiceApp(...).run("twilio")` / `EasyConfig.phone()` | Same resolution | Same resolution | Same resolution | TwiML + media listeners and one fresh session per call | Provider keys, `TWILIO_STREAM_URL`, and `TWILIO_AUTH_TOKEN` | Receives real calls; telephony and provider usage can be billable |
+| `VoiceApp(...).run("telnyx")` | Same resolution | Same resolution | Same resolution | Telnyx Call Control webhook plus media listeners and one fresh session per call | Provider keys plus Telnyx setup variables | Receives real calls; telephony and provider usage can be billable. See chapter 10 before running it |
 | `create_session(config)` | Uses exactly the config's resolved agent | Uses exactly the config's resolved provider descriptors | Uses exactly the config's resolved VAD/turn policy | Returns one unstarted caller-owned session | Validates configuration; creates clients but does not start streaming | No automatic terminal feedback and no media flow until `start()` |
 | `easycat console` | Built-in offline echo unless `--live` is explicit | Not applicable in offline mode | Not applicable | Text REPL, or real mic/speaker for `--voice-demo` | No key offline; live mode requires its selected provider key | Offline by default; `--voice-demo` runs one scripted audio turn and writes a replayable bundle, while `--live` is the explicit network/billable boundary |
 

@@ -21,6 +21,7 @@ Self-check:
   they do not share one live agent bridge or provider stream.
 
 For a security stretch, try constructing
-`VoiceApp(agent=..., host="0.0.0.0")` and running browser mode without a
-`serve_token`. Read the error, then stop—do not use the unsafe override merely
-to silence the guard. In a real deployment, load the token from a secret store.
+`VoiceApp(agent="openai", host="0.0.0.0", serve_token=...)` with a fresh
+`config_factory`, then run browser mode without a `serve_token`. Read the
+non-loopback bind error, then stop—do not use the unsafe override merely to
+silence the guard. In a real deployment, load the token from a secret store.
