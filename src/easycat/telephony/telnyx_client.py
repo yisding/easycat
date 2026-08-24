@@ -194,6 +194,66 @@ class TelnyxCallControlClient:
             body["connection_id"] = connection_id
         return await self._post("/messages", body)
 
+    async def reject(
+        self,
+        call_control_id: str,
+        reason: str = "busy",
+        *,
+        command_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Reject an inbound call with a Telnyx-supported reason."""
+        body: dict[str, Any] = {"reason": reason}
+        if command_id:
+            body["command_id"] = command_id
+        return await self._post(f"/calls/{call_control_id}/actions/reject", body)
+
+    async def speak(
+        self,
+        call_control_id: str,
+        text: str,
+        voice: str = "female",
+        language: str = "en-US",
+        *,
+        command_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Speak text on a live call."""
+        body: dict[str, Any] = {"text": text, "voice": voice, "language": language}
+        if command_id:
+            body["command_id"] = command_id
+        return await self._post(f"/calls/{call_control_id}/actions/speak", body)
+
+    async def start_streaming(
+        self,
+        call_control_id: str,
+        stream_url: str,
+        codec: str = "PCMU",
+        stream_token: str | None = None,
+        *,
+        command_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Start bidirectional audio streaming to a WebSocket endpoint."""
+        body: dict[str, Any] = {"stream_url": stream_url, "codec": codec}
+        if stream_token:
+            body["stream_token"] = stream_token
+        if command_id:
+            body["command_id"] = command_id
+        return await self._post(f"/calls/{call_control_id}/actions/start_streaming", body)
+
+    async def stop_streaming(
+        self,
+        call_control_id: str,
+        stream_id: str | None = None,
+        *,
+        command_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Stop a previously started audio stream on a live call."""
+        body: dict[str, Any] = {}
+        if stream_id:
+            body["stream_id"] = stream_id
+        if command_id:
+            body["command_id"] = command_id
+        return await self._post(f"/calls/{call_control_id}/actions/stop_streaming", body)
+
 
 async def _response_body(response: Any) -> Any:
     """Return a parsed JSON body, falling back to raw text.
