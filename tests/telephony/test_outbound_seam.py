@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import types
+import unittest.mock
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -120,6 +121,86 @@ class TestInjectedClientPlacement:
             assert manager.state is OutboundCallManagerState.IDLE
         finally:
             manager.stop()
+
+
+class TestOutboundClientCleanupLifecycle:
+    async def test_manager_closes_built_telnyx_client_exactly_once(self) -> None:
+        from easycat.config import (
+            OutboundCallConfig,
+            TelephonyConfig,
+            _create_telephony_helpers,
+        )
+
+        result = _create_telephony_helpers(
+            EventBus(),
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(
+                    provider="telnyx",
+                    from_number="+15550000000",
+                    telnyx_api_key="key",
+                    telnyx_connection_id="conn",
+                ),
+            ),
+        )
+
+        manager = next(
+            helper for helper in result.helpers if isinstance(helper, OutboundCallManager)
+        )
+        client = manager._client
+        assert isinstance(client, TelnyxOutboundClient)
+        close_calls = 0
+        real_close = TelnyxOutboundClient.close
+
+        async def counting_close(self: TelnyxOutboundClient) -> None:
+            nonlocal close_calls
+            close_calls += 1
+            await real_close(self)
+
+        with unittest.mock.patch.object(
+            TelnyxOutboundClient,
+            "close",
+            counting_close,
+        ):
+            for helper in reversed(result.helpers):
+                helper.start()
+            for helper in reversed(result.helpers):
+                helper.stop()
+            await manager.aclose()
+            await manager.aclose()
+
+        assert close_calls == 1
+
+    async def test_repeated_aclose_is_safe_for_custom_client(self) -> None:
+        class _ClosableClient(_FakeOutboundClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.close_count = 0
+
+            async def close(self) -> None:
+                self.close_count += 1
+
+        client = _ClosableClient()
+        manager = OutboundCallManager(EventBus(), from_number="+1555", client=client)
+
+        await manager.aclose()
+        await manager.aclose()
+
+        assert client.close_count == 1
+
+    async def test_twilio_client_cleanup_is_unaffected(self) -> None:
+        with _stub_twilio_sdk():
+            manager = OutboundCallManager(
+                EventBus(),
+                from_number="+1555",
+                twilio_account_sid="AC123",
+                twilio_auth_token="token",
+            )
+
+            await manager.aclose()
+            await manager.aclose()
+
+            assert isinstance(manager._client, TwilioRestOutboundClient)
 
     def test_fake_satisfies_runtime_checkable_protocol(self) -> None:
         assert isinstance(_FakeOutboundClient(), OutboundCallClient)

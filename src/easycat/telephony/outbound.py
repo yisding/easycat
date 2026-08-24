@@ -14,11 +14,12 @@ __all__ = [
 ]
 
 import asyncio
+import inspect
 import logging
 import math
 from collections.abc import Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from easycat._concurrency import shielded_cleanup
 from easycat._epoch import Epoch, Lease
@@ -237,6 +238,13 @@ class OutboundCallClient(Protocol):
 
     @property
     def calls(self) -> OutboundCallsResource: ...
+
+
+@runtime_checkable
+class _AsyncClosableOutboundClient(Protocol):
+    """Optional cleanup hook for clients that own async resources."""
+
+    def close(self) -> Any: ...
 
 
 class TwilioRestOutboundClient:
@@ -565,6 +573,7 @@ class OutboundCallManager:
         self.dnc_list: DNCStore | None = None
         self.compliance_check: Callable[[str], bool] | None = None
         self.retry_strategy: Any | None = None
+        self._client_closed = False
 
     @property
     def state(self) -> OutboundCallManagerState:
@@ -604,6 +613,21 @@ class OutboundCallManager:
         self._active_call_sid = None
         self._owned_call_sids.clear()
         self._started = False
+
+    async def aclose(self) -> None:
+        """Close an injected client once when it exposes async cleanup.
+
+        Twilio's REST client is stateless for this manager and intentionally
+        remains a no-op. The hook is idempotent so repeated lifecycle calls
+        cannot close the same provider resource twice.
+        """
+        if self._client_closed or not callable(getattr(self._client, "close", None)):
+            return
+        self._client_closed = True
+        client = cast(_AsyncClosableOutboundClient, self._client)
+        result = client.close()
+        if inspect.isawaitable(result):
+            await result
 
     async def hangup_call(self, call_sid: str | None = None) -> None:
         """Hang up an active Twilio call without making ``stop()`` block on REST I/O."""
