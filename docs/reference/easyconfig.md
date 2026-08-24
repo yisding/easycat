@@ -130,7 +130,9 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   detection. When unset, it defaults on for local-microphone transports and
   off for server, browser, and telephony transports.
 - `smart_turn_sensitivity` — beginner-facing 0–1 shortcut; higher values end
-  turns on lower completion probabilities (implies `smart_turn=True`).
+  turns on lower completion probabilities. When `smart_turn` is unset, supplying
+  sensitivity enables smart turn; combining it with explicit
+  `smart_turn=False` raises `EasyConfigError`.
 - `transport` — where audio comes from and goes to: local microphone
   (default), WebSocket, WebRTC, WebTransport, Twilio, or a live `Transport`
   instance.
