@@ -73,12 +73,13 @@ checkpoint" rule bends here because the chapter's whole point is
 are checked in so you can work offline, on a plane, without API
 keys, without a mic — pick the constraint that fits.
 
-If you do want to scrub a *live* bundle: any chapter from 2
-onward dumps one to its own `runs/` directory. Chapter 9's variant C,
-`estimate.py` (`docs/teaching/09-interruption/runs/`), is the most
-interesting — barge-in turns have the richest record set. Open one with
-`investigate.py` in this chapter once you've finished the three
-planted-bug investigations below.
+If you do want to scrub a *live* bundle: any chapter from 2 onward dumps
+one to its own generated `runs/` directory after you run it. Chapter 9's
+variant C, `estimate.py`, is the most interesting — barge-in turns have
+the richest record set. Run that chapter first, then pass one of the
+generated `runs/*.bundle` files from
+`docs/teaching/09-interruption/runs/` to `investigate.py` in this
+chapter once you've finished the three planted-bug investigations below.
 
 ## Diff from chapter 10
 
