@@ -18,7 +18,6 @@ from easycat.session.actions import (
     TransferCallAction,
 )
 from easycat.telephony._install import TELEPHONY_INSTALL_HINT
-from easycat.telephony.telnyx_client import TELNYX_API_BASE_URL, TelnyxCallControlClient
 from easycat.telephony.twiml import twiml_dial_number, twiml_play_digits
 
 logger = logging.getLogger(__name__)
@@ -120,10 +119,6 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
             kwargs["status"] = status
         await asyncio.to_thread(client.calls(call_sid).update, **kwargs)
 
-    async def close(self) -> None:
-        """Release no shared resources; present for executor lifecycle parity."""
-        return
-
 
 def _apply_inter_digit_delay(digits: str, inter_digit_delay_ms: int) -> str:
     if inter_digit_delay_ms <= 0 or len(digits) <= 1:
@@ -219,6 +214,17 @@ class TelnyxSessionActionExecutor(SessionActionExecutor):
             return self._client
         if not self._config.api_key:
             raise RuntimeError("Telnyx session actions require api_key")
+        try:
+            from easycat.telephony.telnyx_client import (
+                TELNYX_API_BASE_URL,
+                TelnyxCallControlClient,
+            )
+        except ImportError as exc:  # pragma: no cover - exercised via config tests
+            raise RuntimeError(
+                "The 'aiohttp' package is required for Telnyx session actions. "
+                + "Install with: uv add 'easycat[telnyx]'. From the EasyCat repo, "
+                "use: uv sync --extra telnyx --group dev."
+            ) from exc
         self._client = TelnyxCallControlClient(self._config.api_key, base_url=TELNYX_API_BASE_URL)
         return self._client
 
