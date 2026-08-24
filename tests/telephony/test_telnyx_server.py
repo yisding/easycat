@@ -17,6 +17,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+
+pytest.importorskip("cryptography")
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
