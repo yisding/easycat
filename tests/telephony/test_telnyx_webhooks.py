@@ -7,6 +7,9 @@ import datetime as dt
 from typing import Any
 
 import pytest
+
+pytest.importorskip("cryptography")
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
