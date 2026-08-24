@@ -67,7 +67,10 @@ class TestParseTelnyxWebhook:
         }
 
     def test_nested_telnyx_envelope_is_unwrapped(self) -> None:
-        raw = b'{"data":{"id":"evt-9","event_type":"call.answered","payload":{"call_control_id":"CC2"}}}'
+        raw = (
+            b'{"data":{"id":"evt-9","event_type":"call.answered",'
+            b'"payload":{"call_control_id":"CC2"}}}'
+        )
 
         parsed = parse_telnyx_webhook(raw)
 
