@@ -217,3 +217,20 @@ class TestErrorParity:
         assert executor.supports(SendDTMFAction(digits="1"))
         assert executor.supports(SendSMSAction(to="+1", body="x"))
         assert not executor.supports(AddToDNCAction(number="+15550003333"))
+
+    @pytest.mark.asyncio
+    async def test_close_releases_created_client_once(self) -> None:
+        client = _FakeTelnyxControlClient()
+        closes = 0
+
+        async def _close() -> None:
+            nonlocal closes
+            closes += 1
+
+        client.close = _close  # type: ignore[method-assign]
+        executor = _executor(client)
+
+        await executor.close()
+        await executor.close()
+
+        assert closes == 1

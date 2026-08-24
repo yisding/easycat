@@ -1843,9 +1843,10 @@ class Session:
             agent_close_error: Exception | None = None
             try:
                 await aclose_if_supported(self.agent)
+                await self._close_action_executors()
             except Exception as exc:
                 agent_close_error = exc
-                logger.warning("Error closing agent during stop", exc_info=True)
+                logger.warning("Error closing runtime resources during stop", exc_info=True)
             try:
                 await self._close_audio_providers(skip_stt=stt_provider_close_transferred)
             except Exception as provider_close_error:
@@ -2271,6 +2272,11 @@ class Session:
                 helper.stop()
             except Exception:
                 logger.debug("Error stopping session helper", exc_info=True)
+
+    async def _close_action_executors(self) -> None:
+        """Release provider resources owned by optional action executors."""
+        for executor in self._action_executors:
+            await aclose_if_supported(executor)
 
     async def _close_audio_providers(self, *, skip_stt: bool = False) -> None:
         """Release optional resources owned by audio providers."""
