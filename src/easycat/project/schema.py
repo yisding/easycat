@@ -43,8 +43,10 @@ REDACTED_AUTH_PLACEHOLDER = "[REDACTED_SECRET]"
 # ``transport`` role (M6a). Each maps a shortcut to the EasyConfig preset path
 # the profile converts to. ``ProjectManifest.to_easyconfig`` consumes this;
 # ``manifest.py`` owns the conversion so this leaf stays SDK-free.
-TransportShortcut = Literal["webrtc", "websocket", "twilio", "local"]
-TRANSPORT_SHORTCUTS: frozenset[str] = frozenset({"webrtc", "websocket", "twilio", "local"})
+TransportShortcut = Literal["webrtc", "websocket", "twilio", "telnyx", "local"]
+TRANSPORT_SHORTCUTS: frozenset[str] = frozenset(
+    {"webrtc", "websocket", "twilio", "telnyx", "local"}
+)
 
 # The EasyConfig preset each transport shortcut converts to. ``websocket`` has no
 # dedicated preset (it builds a bare ``EasyConfig`` with the websocket transport),
@@ -52,6 +54,7 @@ TRANSPORT_SHORTCUTS: frozenset[str] = frozenset({"webrtc", "websocket", "twilio"
 TRANSPORT_PRESET: dict[str, str | None] = {
     "webrtc": "browser",
     "twilio": "phone",
+    "telnyx": "phone",
     "local": "mic",
     "websocket": None,
 }

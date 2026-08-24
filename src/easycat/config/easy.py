@@ -62,6 +62,7 @@ from easycat.telephony.voicemail import VoicemailDetectorConfig
 from easycat.timeouts import TimeoutConfig
 from easycat.transports._webrtc_config import WebRTCTransportConfig
 from easycat.transports.local import LocalTransportConfig
+from easycat.transports.telnyx_media import TelnyxTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
@@ -635,6 +636,7 @@ TransportConfig = (
     LocalTransportConfig
     | WebSocketTransportConfig
     | TwilioTransportConfig
+    | TelnyxTransportConfig
     | WebRTCTransportConfig
     | WebTransportTransportConfig
     | Transport
@@ -1097,21 +1099,30 @@ class EasyConfig(_AgentSessionConfig):
         return cls(**kwargs)
 
     @classmethod
-    def phone(cls, **kwargs: Unpack[_EasyConfigPresetKwargs]) -> EasyConfig:
+    def phone(
+        cls,
+        provider: Literal["twilio", "telnyx"] = "twilio",
+        **kwargs: Unpack[_EasyConfigPresetKwargs],
+    ) -> EasyConfig:
         """Inbound telephony preset.
 
-        Uses the Twilio Media Streams transport and leaves echo-cancel
-        on its tri-state default (off for PSTN, which has no loopback).
+        Uses the Twilio Media Streams transport by default (``provider="twilio"``);
+        pass ``provider="telnyx"`` for the Telnyx media-streams transport. Echo-
+        cancel stays on its tri-state default (off for PSTN, which has no
+        loopback).
 
         Next: phone needs a server process + the ``easycat[telephony]``
-        extra — see ``examples/twilio_app.py``.  Swapping ``stt=``/
-        ``tts=`` accepts shortcut strings, config dataclasses, or provider
-        instances; string/config providers need that provider's API key
-        **and** its extra (e.g. ``stt="deepgram/nova-2"`` →
-        ``DEEPGRAM_API_KEY`` + ``easycat[deepgram]``). Pass ``vad=`` to
-        pin or replace voice activity detection.
+        (Twilio) or ``easycat[telnyx]`` extra — see ``examples/twilio_app.py``.
+        Swapping ``stt=``/``tts=`` accepts shortcut strings, config dataclasses,
+        or provider instances; string/config providers need that provider's API
+        key **and** its extra (e.g. ``stt="deepgram/nova-2"`` →
+        ``DEEPGRAM_API_KEY`` + ``easycat[deepgram]``). Pass ``vad=`` to pin or
+        replace voice activity detection.
         """
-        kwargs.setdefault("transport", TwilioTransportConfig())
+        kwargs.setdefault(
+            "transport",
+            TelnyxTransportConfig() if provider == "telnyx" else TwilioTransportConfig(),
+        )
         return cls(**kwargs)
 
 

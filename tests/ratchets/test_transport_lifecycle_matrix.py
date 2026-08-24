@@ -11,7 +11,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO_ROOT / "tests" / "transports" / "transport-lifecycle-matrix.json"
 
-TRANSPORTS = frozenset({"local", "twilio", "webrtc", "websocket", "webtransport"})
+TRANSPORTS = frozenset({"local", "telnyx", "twilio", "webrtc", "websocket", "webtransport"})
 SCENARIOS = frozenset(
     {
         "connect_leadership_race",

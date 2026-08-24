@@ -51,6 +51,7 @@ from easycat.stt.factory import (
 from easycat.stubs import NoopAgent
 from easycat.transports._webrtc_config import WebRTCTransportConfig
 from easycat.transports.local import LocalTransportConfig
+from easycat.transports.telnyx_media import TelnyxTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
@@ -123,6 +124,7 @@ def _transport_factories() -> dict[type[TransportConfig], Any]:
     to keeping ``EasyConfig`` cold starts free of every transport SDK.
     """
     from easycat.transports.local import LocalTransport
+    from easycat.transports.telnyx_media import TelnyxTransport
     from easycat.transports.twilio_media import TwilioTransport
     from easycat.transports.webrtc import WebRTCTransport
     from easycat.transports.websocket import WebSocketTransport
@@ -132,6 +134,9 @@ def _transport_factories() -> dict[type[TransportConfig], Any]:
         LocalTransportConfig: lambda config, event_bus: LocalTransport(config),
         WebSocketTransportConfig: lambda config, event_bus: WebSocketTransport(config),
         TwilioTransportConfig: lambda config, event_bus: TwilioTransport(
+            config=config, event_bus=event_bus
+        ),
+        TelnyxTransportConfig: lambda config, event_bus: TelnyxTransport(
             config=config, event_bus=event_bus
         ),
         WebRTCTransportConfig: lambda config, event_bus: WebRTCTransport(config),

@@ -10,6 +10,7 @@ from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 from easycat.transports._base import AudioQueueMixin, make_version_info
 from easycat.transports.local import LocalTransport
+from easycat.transports.telnyx_media import TelnyxConnectionTransport, TelnyxTransport
 from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransport
 from easycat.transports.webrtc import WebRTCTransport
 from easycat.transports.websocket import WebSocketConnectionTransport, WebSocketTransport
@@ -116,6 +117,16 @@ class TestTransportVersionInfo:
         info = TwilioTransport.version_info(None)
         assert set(info.keys()) == EXPECTED_KEYS
         assert info["provider"] == "twilio"
+
+    def test_telnyx_transport(self):
+        info = TelnyxTransport.version_info(None)
+        assert set(info.keys()) == EXPECTED_KEYS
+        assert info["provider"] == "telnyx"
+
+    def test_telnyx_connection_transport(self):
+        info = TelnyxConnectionTransport.version_info(None)
+        assert set(info.keys()) == EXPECTED_KEYS
+        assert info["provider"] == "telnyx-connection"
 
     def test_twilio_connection_transport(self):
         info = TwilioConnectionTransport.version_info(None)

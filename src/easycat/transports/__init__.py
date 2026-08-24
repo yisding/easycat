@@ -26,6 +26,9 @@ _LAZY_ATTR: dict[str, str] = {
     "TransportDegraded": "easycat.events",
     "LocalTransport": "easycat.transports.local",
     "LocalTransportConfig": "easycat.transports.local",
+    "TelnyxTransport": "easycat.transports.telnyx_media",
+    "TelnyxTransportConfig": "easycat.transports.telnyx_media",
+    "TelnyxConnectionTransport": "easycat.transports.telnyx_media",
     "TwilioTransport": "easycat.transports.twilio_media",
     "TwilioTransportConfig": "easycat.transports.twilio_media",
     "TwilioConnectionTransport": "easycat.transports.twilio_media",
@@ -62,6 +65,11 @@ if TYPE_CHECKING:
         webrtc_transport_config_from_env,
     )
     from easycat.transports.local import LocalTransport, LocalTransportConfig
+    from easycat.transports.telnyx_media import (
+        TelnyxConnectionTransport,
+        TelnyxTransport,
+        TelnyxTransportConfig,
+    )
     from easycat.transports.twilio_media import (
         TWILIO_STREAM_TOKEN_PARAMETER,
         StreamTokenContext,

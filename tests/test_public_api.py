@@ -91,6 +91,7 @@ PUBLIC_API_SNAPSHOT = (
     "TTSProvider",
     "TTSProviderConfig",
     "TelephonyConfig",
+    "TelnyxConnectionTransport",
     "ToolCallDelta",
     "ToolCallResult",
     "ToolCallStarted",
@@ -244,7 +245,7 @@ AGENT_BRIDGE_CONSTRUCTOR_SNAPSHOT = {
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 121
+    assert len(easycat.__all__) <= 122
 
 
 def test_public_api_registry_tracks_snapshot() -> None:

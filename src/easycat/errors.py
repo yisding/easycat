@@ -621,7 +621,7 @@ EASYCAT_E602 = register(
     fix=(
         "Check the manifest against `docs/deployment/production-servers.md`. "
         "Each `[voice.<profile>]` needs a known `transport` "
-        "(`webrtc`/`websocket`/`twilio`/`local`)."
+        "(`webrtc`/`websocket`/`twilio`/`telnyx`/`local`)."
     ),
     example='[voice.default]\ntransport = "webrtc"',
     related=["EASYCAT_E601", "EASYCAT_E603"],

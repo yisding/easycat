@@ -365,6 +365,7 @@ from easycat.integrations.agents import PydanticAIBridge
 - `PCM16_MONO_48K`
 - `ICEServer`
 - `LocalTransportConfig`
+- `TelnyxConnectionTransport`
 - `TwilioConnectionTransport`
 - `TwilioSessionActionConfig`
 - `WebRTCTransportConfig`
@@ -376,8 +377,8 @@ from easycat.integrations.agents import PydanticAIBridge
 - `WebTransportServer`
 - `WebTransportTransportConfig`
 
-`WebSocketConnectionTransport.request` and
-`TwilioConnectionTransport.request` expose the accepted `websockets`
+`WebSocketConnectionTransport.request`, `TwilioConnectionTransport.request`,
+and `TelnyxConnectionTransport.request` expose the accepted `websockets`
 handshake request when the server provides one. `WebRTCTransport.offer_request`
 exposes the accepted aiohttp offer request when the transport is created by
 the mounted WebRTC route, so session factories can derive per-connection

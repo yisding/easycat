@@ -31,8 +31,11 @@ def test_transport_backends_cover_manifest_shortcuts() -> None:
     assert TRANSPORT_BACKENDS["webrtc"].extra == "webrtc"
     assert TRANSPORT_BACKENDS["websocket"].extra is None  # stdlib websockets
     assert TRANSPORT_BACKENDS["twilio"].extra == "telephony"
+    assert TRANSPORT_BACKENDS["telnyx"].extra == "telnyx"
     assert TRANSPORT_BACKENDS["local"].extra == "local"
     assert TRANSPORT_BACKENDS["webrtc"].config_type == "WebRTCTransportConfig"
+    assert TRANSPORT_BACKENDS["telnyx"].capabilities == frozenset({"telephony", "l16", "16khz"})
+    assert TRANSPORT_BACKENDS["telnyx"].default_echo_cancellation_enabled is False
 
 
 def test_vad_backends_cover_vad_literal() -> None:
@@ -108,6 +111,7 @@ def test_probe_module_for_extra_resolves() -> None:
     assert probe_module_for_extra("deepgram") is None
     assert probe_module_for_extra("silero-vad") == "onnxruntime"
     assert probe_module_for_extra("webrtc") == "aiortc"
+    assert probe_module_for_extra("telnyx") == "cryptography"
 
 
 def test_probe_module_for_unmapped_third_party_extra_falls_back_to_extra_name() -> None:
@@ -137,14 +141,15 @@ def test_transport_aec_defaults_match_manifest_resolved_easyconfig(
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-registry-test")
     monkeypatch.setenv("TWILIO_STREAM_TOKEN_SECRET", "twilio-registry-test")
+    monkeypatch.setenv("TELNYX_STREAM_TOKEN_SECRET", "telnyx-registry-test")
 
     for shortcut, backend in TRANSPORT_BACKENDS.items():
         token = (
             parse_auth_reference(
-                "bearer-env:TWILIO_STREAM_TOKEN_SECRET",
+                f"bearer-env:{shortcut.upper()}_STREAM_TOKEN_SECRET",
                 field_name="voice.default.token",
             )
-            if shortcut == "twilio"
+            if shortcut in {"twilio", "telnyx"}
             else None
         )
         profile = VoiceProfile(name="default", transport=shortcut, token=token)

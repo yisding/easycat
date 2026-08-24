@@ -1,8 +1,9 @@
 {
   "version": 1,
-  "update_rationale": "WS4.1d5 closes the execution registry with a zero-pending ratchet while preserving five complete drivers and forty exact evidence cells.",
+  "update_rationale": "Phase 3 Telnyx registration closes the execution registry with a zero-pending ratchet while preserving six complete drivers and forty-eight exact evidence cells.",
   "transports": [
     "local",
+    "telnyx",
     "twilio",
     "webrtc",
     "websocket",
@@ -20,12 +21,26 @@
   },
   "driver_execution": {
     "counts": {
-      "complete": 5
+      "complete": 6
     },
     "transports": {
       "local": {
         "status": "complete",
         "suite_node": "tests/transports/test_lifecycle_scenarios_local_websocket.py::TestLocalTransportLifecycleScenarios",
+        "scenarios": [
+          "connect_leadership_race",
+          "degraded_emission",
+          "disconnect_during_connect",
+          "interrupted_disconnect_publication",
+          "late_frames",
+          "mid_stream_teardown",
+          "queue_overflow",
+          "startup_rollback"
+        ]
+      },
+      "telnyx": {
+        "status": "complete",
+        "suite_node": "tests/transports/test_lifecycle_scenarios_telnyx.py::TestTelnyxTransportLifecycleScenarios",
         "scenarios": [
           "connect_leadership_race",
           "degraded_emission",
@@ -97,10 +112,10 @@
   },
   "counts": {
     "applicability": {
-      "required": 40
+      "required": 48
     },
     "coverage": {
-      "existing": 40
+      "existing": 48
     }
   },
   "cells": {
@@ -167,6 +182,72 @@
         "rationale": "Speaker startup can fail after microphone acquisition and must close both streams.",
         "evidence": [
           "tests/transports/test_local_transport.py::TestLocalTransport::test_connect_rolls_back_input_when_output_start_fails"
+        ]
+      }
+    },
+    "telnyx": {
+      "connect_leadership_race": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Concurrent accepted-socket startup must share one tentative start outcome.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_telnyx.py::TestTelnyxTransportLifecycleScenarios::test_connect_leadership_race"
+        ]
+      },
+      "degraded_emission": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Sequence and media-format faults must produce correlated degraded observations.",
+        "evidence": [
+          "tests/transports/test_telnyx_transport.py::test_sequence_gap_emits_degraded"
+        ]
+      },
+      "disconnect_during_connect": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Disconnect may arrive while deferred start validation still owns the accepted socket.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_telnyx.py::TestTelnyxTransportLifecycleScenarios::test_disconnect_during_connect"
+        ]
+      },
+      "interrupted_disconnect_publication": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Caller cancellation while reaping the receiver must preserve exact cleanup ownership.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_telnyx.py::TestTelnyxTransportLifecycleScenarios::test_interrupted_disconnect_publication"
+        ]
+      },
+      "late_frames": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Untagged media arriving after the stop boundary of its stream generation cannot mutate the replacement call.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_telnyx.py::TestTelnyxTransportLifecycleScenarios::test_late_frames"
+        ]
+      },
+      "mid_stream_teardown": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Remote stop or EOF must consume the accepted socket once and terminate inbound consumers.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_telnyx.py::TestTelnyxTransportLifecycleScenarios::test_mid_stream_teardown"
+        ]
+      },
+      "queue_overflow": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "The Telnyx capability driver fills the one-slot accepted-socket ingress queue and proves the second frame is dropped with one canonical degraded event.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_telnyx.py::TestTelnyxTransportLifecycleScenarios::test_queue_overflow"
+        ]
+      },
+      "startup_rollback": {
+        "applicability": "required",
+        "coverage": "existing",
+        "rationale": "Deferred start-handler failure must close the socket and erase tentative call state.",
+        "evidence": [
+          "tests/transports/test_lifecycle_scenarios_telnyx.py::TestTelnyxTransportLifecycleScenarios::test_startup_rollback"
         ]
       }
     },
