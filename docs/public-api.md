@@ -229,7 +229,7 @@ depend on this surface:
   agents=None, mcp_servers=None, toolsets=None)`.
 - `RemoteResponsesAPIBridge` — constructor
   `RemoteResponsesAPIBridge(base_url, model, *, api_key=None, timeout=120.0,
-  metadata=None)`.
+  metadata=None, reasoning_effort=None)`.
 - `GenericWorkflowBridge` — constructor
   `GenericWorkflowBridge(workflow, *, display_name=None)`.
 - `LangChainBridge` — constructor `LangChainBridge(runnable, *,

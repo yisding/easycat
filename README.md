@@ -20,8 +20,8 @@ app.run("local")
 ```
 
 `local` uses your microphone and speakers. The same app can run in `browser`,
-`websocket`, or `twilio` mode when you install that mode's extras and server
-requirements. See [examples/voice_app.py](examples/voice_app.py). The separate
+`websocket`, `twilio`, or `telnyx` mode when you install that mode's extras and
+server requirements. See [examples/voice_app.py](examples/voice_app.py). The separate
 `easycat serve` command runs EasyCat's bundled playground (or an explicit
 server manifest); it does not import the `VoiceApp` in your Python file.
 
@@ -181,7 +181,8 @@ JSON envelope. Coding agents should start with [AGENTS.md](AGENTS.md) and
 - STT and TTS: OpenAI, Deepgram, ElevenLabs, and Cartesia.
 - VAD: Silero, FunASR, optional TEN VAD, and Krisp. Noise reduction: RNNoise,
   Krisp, and a passthrough fallback.
-- Transports: Local, WebSocket, WebRTC, WebTransport, and Twilio Media Streams.
+- Transports: Local, WebSocket, WebRTC, WebTransport, Twilio Media Streams, and
+  Telnyx Media Streams / Call Control.
 - Agent/workflow adapters: `OpenAIAgentsBridge`, `PydanticAIBridge`,
   `LangChainBridge`, `LangGraphBridge`, `LlamaAgentsBridge`,
   `RemoteResponsesAPIBridge`, and `GenericWorkflowBridge`.

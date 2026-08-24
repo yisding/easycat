@@ -28,8 +28,8 @@ flowchart TB
 The progression is a ladder, not a set of competing APIs:
 
 - [`VoiceApp`](../../src/easycat/voice_app.py) chooses a product mode
-  (`local`, `browser`, `websocket`, or `twilio`) and owns the synchronous
-  versus asynchronous serving entrance.
+  (`local`, `browser`, `websocket`, `twilio`, or `telnyx`) and owns the
+  synchronous versus asynchronous serving entrance.
 - [`EasyConfig`](../../src/easycat/config/easy.py) accepts provider names,
   typed provider configs, and a small number of prebuilt objects.
 - [`create_session`](../../src/easycat/config/_factory.py) resolves those

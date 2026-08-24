@@ -282,7 +282,7 @@ requires three keyword fields (enforced by `tests/_marker_lint.py`):
 
 ```python
 @pytest.mark.flaky(
-    issue="https://github.com/yisding/easycat2/issues/123",
+    issue="https://github.com/yisding/easycat/issues/123",
     owner="yi",
     review_by="2026-07-01",  # YYYY-MM-DD; a past date fails collection
 )

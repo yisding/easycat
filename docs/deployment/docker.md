@@ -13,7 +13,7 @@ automation needs that same operator map with command hints.
 
 ```bash
 export OPENAI_API_KEY=sk-...
-export EASYCAT_WS_TOKEN=$(python - <<'PY'
+export EASYCAT_WS_TOKEN=$(uv run python - <<'PY'
 import secrets
 print(secrets.token_urlsafe(32))
 PY

@@ -75,6 +75,7 @@ the new transport and build fresh session-scoped collaborators.
 | `browser` | per-WebRTC connection | per-transport config factory for live objects |
 | `websocket` (`ws`) | per-WebSocket connection | per-transport config factory |
 | `twilio` (`phone`) | per-call connection + TwiML listener | per-transport config factory |
+| `telnyx` | per-call connection + Call Control webhook listener | per-transport config factory |
 
 Construction styles are mutually exclusive:
 
@@ -94,7 +95,7 @@ flowchart TD
 
     APP --> MODE
     MODE -->|local| LOCAL
-    MODE -->|browser/ws/twilio| MULTI
+    MODE -->|browser/ws/twilio/telnyx| MULTI
     MULTI --> CONN --> FACTORY --> SESSION
 ```
 
