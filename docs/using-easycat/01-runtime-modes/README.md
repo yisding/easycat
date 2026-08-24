@@ -1,7 +1,7 @@
 # Chapter 1 — Run It Anywhere
 
 > Keep one voice product and choose whether it runs on your machine, in a
-> browser, behind a WebSocket, or on a phone call.
+> browser, behind a WebSocket, or on a phone call (Twilio here; Telnyx later).
 
 Chapter 0 ended with one explicit deployment choice:
 

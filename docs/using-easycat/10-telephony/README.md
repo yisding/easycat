@@ -320,6 +320,7 @@ Install and preflight the live example deliberately:
 ```bash
 uv sync --extra openai --extra telephony --extra telnyx --extra telephony-fastapi --extra openai-agents --group dev
 uv sync --extra openai --extra telephony --extra telephony-fastapi --extra openai-agents --group dev
+uv sync --extra telnyx --group dev
 uv run easycat doctor
 uv run easycat doctor --json
 uv run easycat doctor --env-file .env
