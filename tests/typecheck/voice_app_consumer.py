@@ -6,7 +6,7 @@ from typing import Any, Literal
 from easycat import EasyConfig, VoiceApp
 from easycat.session import Session
 
-Mode = Literal["local", "browser", "websocket", "twilio"]
+Mode = Literal["local", "browser", "websocket", "twilio", "telnyx"]
 
 
 def build_apps(
@@ -63,6 +63,23 @@ def run_literal_modes(app: VoiceApp) -> Session:
         force_shutdown_timeout_s=5.0,
     )
     app.run("phone", stream_url=None, twilio_auth_token=None)
+    app.run(
+        "telnyx",
+        host="0.0.0.0",
+        media_port=8766,
+        http_host="0.0.0.0",
+        http_port=8000,
+        webhook_path="/telnyx",
+        stream_url="wss://example.test/media",
+        stream_token_secret="stream-secret",
+        telnyx_api_key="telnyx-key",
+        telnyx_public_key="telnyx-public-key",
+        unsafe_allow_unsigned_webhooks=False,
+        max_sessions=20,
+        start_timeout_s=10.0,
+        drain_timeout_s=30.0,
+        force_shutdown_timeout_s=5.0,
+    )
     app.session("local", agent=object(), vad="silero")
     return app.session("mic", debug="off")
 
@@ -80,4 +97,10 @@ async def serve_literal_modes(app: VoiceApp) -> None:
         "phone",
         stream_url="wss://example.test/media",
         twilio_auth_token="twilio-secret",
+    )
+    await app.serve(
+        "telnyx",
+        stream_url="wss://example.test/media",
+        telnyx_api_key="telnyx-key",
+        telnyx_public_key="telnyx-public-key",
     )

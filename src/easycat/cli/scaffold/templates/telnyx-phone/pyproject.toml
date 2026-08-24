@@ -1,0 +1,24 @@
+[project]
+name = "$PYPROJECT_NAME"
+version = "0.1.0"
+description = "EasyCat Telnyx phone agent (Call Control media streams + OpenAI Agents SDK)."
+requires-python = ">=3.11"
+dependencies = [
+    "easycat[$EXTRAS]>=$EASYCAT_VERSION_FLOOR",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.9",
+]
+
+[tool.ruff]
+line-length = 99
+target-version = "py311"
+
+[tool.easycat.scaffold]
+template = "$TEMPLATE"
+required_env = $REQUIRED_ENV
+optional_env = $OPTIONAL_ENV
+$EASYCAT_SOURCES_BLOCK

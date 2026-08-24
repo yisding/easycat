@@ -20,6 +20,7 @@ from tests.examples._examples_helpers import (
     [
         "examples/voice_app.py",
         "examples/voice_app_twilio.py",
+        "examples/voice_app_telnyx.py",
         "examples/openai_agents_voice.py",
         "examples/ws_server.py",
         "examples/ws_supervisor_server.py",

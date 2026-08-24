@@ -447,6 +447,38 @@ def test_init_twilio_phone_honors_provider_shortcuts(
     assert "DEEPGRAM_API_KEY" in (project / ".env.example").read_text()
 
 
+def test_init_telnyx_phone_template(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "telnyx-phone",
+            "transport": "telnyx",
+            "agent_name": "PhoneBot",
+            "agent_instructions": "Take concise phone messages.",
+        }
+    )
+
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    assert (project / "server.py").exists()
+    agent_py = (project / "agent.py").read_text()
+    assert "def make_agent" in agent_py
+    assert 'name="PhoneBot"' in agent_py
+    assert "Take concise phone messages." in agent_py
+    server_py = (project / "server.py").read_text()
+    assert "TelnyxConnectionTransport" in server_py
+    assert 'provider="telnyx"' in server_py
+    pyproject = (project / "pyproject.toml").read_text()
+    assert "openai-agents,telnyx,telephony-fastapi" in pyproject
+    env_example = (project / ".env.example").read_text()
+    assert "TELNYX_STREAM_URL" in env_example
+
+
 def test_init_omits_cache_artifacts(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

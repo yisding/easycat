@@ -238,6 +238,8 @@ _PLACEHOLDER_MARKERS = (
     "your_auth_token",
     "your-twilio",
     "your_twilio",
+    "your-telnyx",
+    "your_telnyx",
     "://your-public-host",
     "://example.",
 )
@@ -334,31 +336,39 @@ def _missing_provider_result(
 
 def _scaffold_env_value_error(var: str, value: str) -> str | None:
     """Return the generated runtime's numeric validation error, if any."""
-    if var in {"TWILIO_WS_PORT", "TWILIO_MAX_SESSIONS"}:
+    if var in {
+        "TWILIO_WS_PORT",
+        "TWILIO_MAX_SESSIONS",
+        "TELNYX_WS_PORT",
+        "TELNYX_MAX_SESSIONS",
+    }:
         try:
             parsed_int = int(value)
         except ValueError:
             parsed_int = 0
-        if var == "TWILIO_WS_PORT" and not 1 <= parsed_int <= 65_535:
-            return "TWILIO_WS_PORT must be an integer from 1 to 65535"
-        if var == "TWILIO_MAX_SESSIONS" and parsed_int <= 0:
-            return "TWILIO_MAX_SESSIONS must be a positive integer"
+        if var in {"TWILIO_WS_PORT", "TELNYX_WS_PORT"} and not 1 <= parsed_int <= 65_535:
+            return f"{var} must be an integer from 1 to 65535"
+        if var in {"TWILIO_MAX_SESSIONS", "TELNYX_MAX_SESSIONS"} and parsed_int <= 0:
+            return f"{var} must be a positive integer"
 
     if var in {
         "TWILIO_START_TIMEOUT_S",
         "TWILIO_DRAIN_TIMEOUT_S",
         "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
+        "TELNYX_START_TIMEOUT_S",
+        "TELNYX_DRAIN_TIMEOUT_S",
+        "TELNYX_FORCE_SHUTDOWN_TIMEOUT_S",
     }:
         try:
             parsed_float = float(value)
         except ValueError:
             parsed_float = float("nan")
-        if var == "TWILIO_START_TIMEOUT_S":
-            valid = math.isfinite(parsed_float) and parsed_float > 0
-        else:
-            valid = math.isfinite(parsed_float) and parsed_float >= 0
+        start_timeout = var in {"TWILIO_START_TIMEOUT_S", "TELNYX_START_TIMEOUT_S"}
+        valid = math.isfinite(parsed_float) and (
+            parsed_float > 0 if start_timeout else parsed_float >= 0
+        )
         if not valid:
-            if var == "TWILIO_START_TIMEOUT_S":
+            if start_timeout:
                 return f"{var} must be a finite number greater than zero"
             return f"{var} must be a finite non-negative number"
     return None
@@ -383,8 +393,10 @@ def _check_scaffold_env_var(
         detail = f"{var} is not set"
     elif state == "placeholder":
         detail = f"{var} looks like a placeholder"
-    elif var == "TWILIO_STREAM_URL" and not str(value).casefold().startswith("wss://"):
-        detail = "TWILIO_STREAM_URL must use wss://"
+    elif var in {"TWILIO_STREAM_URL", "TELNYX_STREAM_URL"} and not str(
+        value
+    ).casefold().startswith("wss://"):
+        detail = f"{var} must use wss://"
     else:
         detail = _scaffold_env_value_error(var, str(value))
 

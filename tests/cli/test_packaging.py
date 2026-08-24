@@ -39,6 +39,7 @@ _EXPECTED_TEMPLATES: tuple[str, ...] = (
     "provider",
     "pydantic-ai",
     "pydantic-ai-workflow",
+    "telnyx-phone",
     "text-chat",
     "twilio-phone",
     "webrtc-browser",

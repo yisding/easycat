@@ -68,12 +68,12 @@ _INIT_SCHEMA_BODY = """\
       "schema_version": 1,
       "template": "openai-agents" | "provider" | "provider-stt" |
                   "provider-tts" |
-                  "pydantic-ai" | "pydantic-ai-workflow" |
-                  "text-chat" | "twilio-phone" | "webrtc-browser",
+                  "pydantic-ai" | "pydantic-ai-workflow" | "text-chat" |
+                  "twilio-phone" | "telnyx-phone" | "webrtc-browser",
       "stt": "<provider>/<model>",            // optional
       "tts": "<provider>/<model>",            // optional
       "llm": "string",                        // reserved; currently rejected
-      "transport": "local" | "webrtc" | "twilio", // optional
+      "transport": "local" | "webrtc" | "twilio" | "telnyx", // optional
       "agent_name": "string",                 // optional
       "agent_instructions": "string",         // optional
       "tools": ["tool-name", ...],            // reserved; currently rejected

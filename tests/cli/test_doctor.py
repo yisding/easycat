@@ -19,6 +19,21 @@ from easycat.errors import REGISTRY
 
 _DiskUsage = namedtuple("DiskUsage", ["total", "used", "free"])
 
+_TELNYX_REQUIRED_ENV = (
+    'required_env = ["OPENAI_API_KEY", "TELNYX_STREAM_URL", "TELNYX_API_KEY", "TELNYX_PUBLIC_KEY"]'
+)
+
+
+def _write_telnyx_scaffold(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        f"""
+[tool.easycat.scaffold]
+template = "telnyx-phone"
+{_TELNYX_REQUIRED_ENV}
+""".strip(),
+        encoding="utf-8",
+    )
+
 
 def _plain_console() -> tuple[StringIO, Console]:
     stream = StringIO()
@@ -552,6 +567,126 @@ TWILIO_FORCE_SHUTDOWN_TIMEOUT_S=inf
         "twilio_start_timeout_s",
         "twilio_drain_timeout_s",
         "twilio_force_shutdown_timeout_s",
+    ):
+        check = checks[f"env_{name}"]
+        assert check["status"] == "fail"
+        assert check["requirement"] == "optional"
+        assert check["code"] == "EASYCAT_E210"
+
+
+def test_doctor_uses_scaffold_metadata_to_validate_all_telnyx_requirements(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    """TELNYX_* scaffold values mirror TWILIO_*: placeholders and non-wss:// URLs
+    fail with E210."""
+    monkeypatch.chdir(tmp_path)
+    _write_telnyx_scaffold(tmp_path)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        """
+OPENAI_API_KEY=sk-real-value
+TELNYX_STREAM_URL=https://not-a-ws-host:8766
+TELNYX_API_KEY=your-telnyx-api-key
+TELNYX_PUBLIC_KEY=your_telnyx_public_key
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["scaffold"]["status"] == "ok"
+    assert checks["env_openai"]["status"] == "ok"
+    assert checks["env_telnyx_stream_url"]["status"] == "fail"
+    assert "wss://" in checks["env_telnyx_stream_url"]["detail"]
+    for name in ("env_telnyx_api_key", "env_telnyx_public_key"):
+        assert checks[name]["status"] == "fail"
+        assert "placeholder" in checks[name]["detail"]
+    for name in ("env_telnyx_stream_url", "env_telnyx_api_key", "env_telnyx_public_key"):
+        assert checks[name]["code"] == "EASYCAT_E210"
+
+
+def test_doctor_telnyx_scaffold_requirements_pass_with_real_values(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_telnyx_scaffold(tmp_path)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        """
+OPENAI_API_KEY=sk-real-value
+TELNYX_STREAM_URL=wss://voice.example.net/media
+TELNYX_API_KEY=telnyx-real-key-value
+TELNYX_PUBLIC_KEY=cHVibGljLWtleS1iYXNlNjQtc3RyaW5nLXZhbHVl
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    checks = {check["name"]: check for check in json.loads(result.stdout)["checks"]}
+    assert checks["env_telnyx_stream_url"]["status"] == "ok"
+    assert checks["env_telnyx_api_key"]["status"] == "ok"
+    assert checks["env_telnyx_public_key"]["status"] == "ok"
+
+
+def test_doctor_rejects_invalid_numeric_telnyx_scaffold_values(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.easycat.scaffold]
+template = "telnyx-phone"
+required_env = ["OPENAI_API_KEY"]
+optional_env = [
+    "TELNYX_WS_PORT",
+    "TELNYX_MAX_SESSIONS",
+    "TELNYX_START_TIMEOUT_S",
+    "TELNYX_DRAIN_TIMEOUT_S",
+    "TELNYX_FORCE_SHUTDOWN_TIMEOUT_S",
+]
+""".strip(),
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        """
+OPENAI_API_KEY=sk-real-value
+TELNYX_WS_PORT=abc
+TELNYX_MAX_SESSIONS=0
+TELNYX_START_TIMEOUT_S=nan
+TELNYX_DRAIN_TIMEOUT_S=-1
+TELNYX_FORCE_SHUTDOWN_TIMEOUT_S=inf
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 1
+    checks = {check["name"]: check for check in json.loads(result.stdout)["checks"]}
+    for name in (
+        "telnyx_ws_port",
+        "telnyx_max_sessions",
+        "telnyx_start_timeout_s",
+        "telnyx_drain_timeout_s",
+        "telnyx_force_shutdown_timeout_s",
     ):
         check = checks[f"env_{name}"]
         assert check["status"] == "fail"
