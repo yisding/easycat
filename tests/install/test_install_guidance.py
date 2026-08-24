@@ -244,6 +244,7 @@ def test_reader_guidance_lets_easyconfig_read_openai_env_key() -> None:
         # create_app(api_key=...) intentionally supports injection without
         # mutating process env, so this example must pass the key explicitly.
         REPO_ROOT / "examples" / "twilio_app.py",
+        REPO_ROOT / "examples" / "telnyx_app.py",
     }
     stale: list[str] = []
 

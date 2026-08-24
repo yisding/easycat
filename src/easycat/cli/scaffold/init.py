@@ -213,6 +213,34 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         expected_transport="twilio",
         supports_audio_config=True,
     ),
+    "telnyx-phone": _TemplateSpec(
+        mode="voice",
+        transport="Telnyx",
+        framework="OpenAI Agents",
+        best_for="Phone-call prototypes and Telnyx Call Control media-stream servers.",
+        required_env=(
+            "OPENAI_API_KEY",
+            "TELNYX_STREAM_URL",
+            "TELNYX_API_KEY",
+            "TELNYX_PUBLIC_KEY",
+        ),
+        optional_env=(
+            "TELNYX_WS_PORT",
+            "TELNYX_STREAM_TOKEN_SECRET",
+            "TELNYX_MAX_SESSIONS",
+            "TELNYX_START_TIMEOUT_S",
+            "TELNYX_DRAIN_TIMEOUT_S",
+            "TELNYX_FORCE_SHUTDOWN_TIMEOUT_S",
+        ),
+        description="Phone-call voice agent with a Telnyx Call Control server.",
+        base_extras=("openai-agents", "telnyx", "telephony-fastapi"),
+        run_command=(
+            "uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000"
+        ),
+        check_files=("agent.py", "server.py"),
+        expected_transport="telnyx",
+        supports_audio_config=True,
+    ),
     "webrtc-browser": _TemplateSpec(
         mode="voice",
         transport="WebRTC",

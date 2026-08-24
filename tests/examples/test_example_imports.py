@@ -340,6 +340,74 @@ def test_twilio_example_missing_auth_token_is_actionable(monkeypatch: pytest.Mon
         twilio_app.create_app(stream_url="wss://example.com/stream")
 
 
+def test_telnyx_example_factory(monkeypatch: pytest.MonkeyPatch):
+    if importlib.util.find_spec("fastapi") is None:
+        pytest.skip("fastapi not installed")
+    if importlib.util.find_spec("agents") is None:
+        pytest.skip("openai-agents not installed")
+    monkeypatch.setenv("TELNYX_API_KEY", "telnyx-test-key")
+    monkeypatch.setenv("TELNYX_PUBLIC_KEY", "dGVzdC1wdWJsaWMta2V5")
+    from examples import telnyx_app
+
+    app = telnyx_app.create_app(api_key="test-key", stream_url="wss://example.com/stream")
+    assert app is not None
+
+
+def test_telnyx_example_uses_manager_feedback_lifecycle():
+    path = REPO_ROOT / "examples" / "telnyx_app.py"
+    source = path.read_text(encoding="utf-8")
+
+    # Authentication posture, bounded capacity, and the outbound client seam
+    # are intentionally visible in this maintained production example.
+    assert _visible_code_line_count(path) <= 180
+    assert "WebSocketSessionRuntime(" in source
+    assert "runtime_feedback=True" in source
+    assert "session_slots" not in source
+    assert "verify_telnyx_webhook_signature" in source
+    assert "telnyx_app_settings_from_env" in source
+    assert "TelnyxOutboundClient" in source
+    assert "bearer_token_matches" in source
+    assert "attach_runtime_feedback" not in source
+
+
+def test_telnyx_example_missing_openai_key_is_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from examples import telnyx_app
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        telnyx_app.create_app(stream_url="wss://example.com/stream")
+
+    message = str(exc_info.value)
+    assert "OPENAI_API_KEY is required." in message
+    assert "uv run easycat doctor" in message
+    assert "uv run easycat doctor --env-file .env" in message
+
+
+def test_telnyx_example_missing_public_key_is_actionable(monkeypatch: pytest.MonkeyPatch):
+    from examples import telnyx_app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("TELNYX_API_KEY", "telnyx-test-key")
+    monkeypatch.delenv("TELNYX_PUBLIC_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="TELNYX_PUBLIC_KEY is required"):
+        telnyx_app.create_app(stream_url="wss://example.com/stream")
+
+
+def test_telnyx_example_missing_api_key_is_actionable(monkeypatch: pytest.MonkeyPatch):
+    from examples import telnyx_app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("TELNYX_PUBLIC_KEY", "dGVzdC1wdWJsaWMta2V5")
+    monkeypatch.delenv("TELNYX_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="TELNYX_API_KEY is required"):
+        telnyx_app.create_app(stream_url="wss://example.com/stream")
+
+
 def test_example_session_smoke():
     config = EasyConfig(
         openai_api_key="test-key",

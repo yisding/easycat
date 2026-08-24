@@ -435,7 +435,7 @@ uv run python docs/using-easycat/09-multi-caller/main.py
 - URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/10-telephony
 - Audience: learners
 - Diataxis: tutorial
-- Secure Twilio webhooks, media streams, callbacks, and call control.
+- Secure Twilio and Telnyx webhooks, media streams, callbacks, and call control.
 
 Commands:
 
@@ -445,6 +445,7 @@ uv run python docs/using-easycat/10-telephony/main.py
 uv sync --extra openai --extra telephony --extra telephony-fastapi --extra openai-agents --group dev
 uv run easycat doctor --env-file .env --json
 uv run --env-file .env uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0
+uv run --env-file .env uvicorn examples.telnyx_app:create_app --factory --host 0.0.0.0
 ```
 
 ## Feature production operations

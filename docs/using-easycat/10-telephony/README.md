@@ -237,6 +237,42 @@ interruption policy requires it, then uses `mark` acknowledgements to track
 playback progress. Stopping only local TTS generation is insufficient: the
 caller would still hear provider-buffered audio.
 
+## Telnyx on the same ladder
+
+Telnyx Call Control v2 support mirrors the Twilio structure with three
+provider differences:
+
+1. **Webhook auth is Ed25519, not an HMAC over form values.** Telnyx signs
+   `{timestamp}|{raw_body}`; verify `telnyx-signature-ed25519` against your
+   portal public key with a five-minute replay window.
+2. **The media WebSocket handshake is not signed at all.** The one-time
+   stream token embedded in the answer/dial `stream_url` is the entire
+   transport-auth boundary — treat token TTL and one-time consumption as
+   load-bearing.
+3. **Media defaults to L16 @ 16 kHz**, which matches EasyCat's internal bus
+   exactly (no μ-law companding); PCMU @ 8 kHz negotiates from the
+   authoritative `start.media_format`.
+
+The app-first path is identical in shape:
+
+```python
+app.run(
+    "telnyx",
+    stream_url=stream_url,
+    api_key=api_key,
+    public_key=public_key,
+)
+```
+
+Session actions use native Call Control commands (`transfer`, `send_dtmf`,
+`hangup`) instead of TwiML redirects, outbound calls flow through
+`OutboundCallConfig(provider="telnyx")`, and status callbacks map
+`call.initiated` / `call.answered` / `call.hangup` onto the same neutral
+`CallInitiated` / `CallAnswered` / `CallEnded` / `CallFailed` events. Start
+from `examples/telnyx_app.py`; required environment variables are
+`TELNYX_API_KEY`, `TELNYX_PUBLIC_KEY`, and `TELNYX_STREAM_URL` (which must be
+`wss://`).
+
 ## Graduate to a live phone last
 
 Install and preflight the live example deliberately:
@@ -253,6 +289,12 @@ Then run the reference app behind a public TLS/WSS ingress:
 
 ```bash
 uv run --env-file .env uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0
+```
+
+For Telnyx, run the Telnyx reference app instead:
+
+```bash
+uv run --env-file .env uvicorn examples.telnyx_app:create_app --factory --host 0.0.0.0
 ```
 
 Use a Twilio test project or tightly controlled destination first. Verify

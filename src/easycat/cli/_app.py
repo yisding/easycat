@@ -572,7 +572,9 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "docs/using-easycat/10-telephony/",
         "audience": "learners",
         "diataxis": "tutorial",
-        "description": "Secure Twilio webhooks, media streams, callbacks, and call control.",
+        "description": (
+            "Secure Twilio and Telnyx webhooks, media streams, callbacks, and call control."
+        ),
         "commands": (
             "uv sync --group dev",
             "uv run python docs/using-easycat/10-telephony/main.py",
@@ -584,6 +586,10 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat doctor --env-file .env --json",
             (
                 "uv run --env-file .env uvicorn examples.twilio_app:create_app "
+                "--factory --host 0.0.0.0"
+            ),
+            (
+                "uv run --env-file .env uvicorn examples.telnyx_app:create_app "
                 "--factory --host 0.0.0.0"
             ),
         ),
