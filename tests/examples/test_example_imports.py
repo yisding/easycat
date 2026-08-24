@@ -373,6 +373,8 @@ def test_telnyx_example_uses_manager_feedback_lifecycle():
 def test_telnyx_example_missing_openai_key_is_actionable(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    pytest.importorskip("aiohttp")
+
     from examples import telnyx_app
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -387,6 +389,8 @@ def test_telnyx_example_missing_openai_key_is_actionable(
 
 
 def test_telnyx_example_missing_public_key_is_actionable(monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("aiohttp")
+
     from examples import telnyx_app
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -398,6 +402,8 @@ def test_telnyx_example_missing_public_key_is_actionable(monkeypatch: pytest.Mon
 
 
 def test_telnyx_example_missing_api_key_is_actionable(monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("aiohttp")
+
     from examples import telnyx_app
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
