@@ -171,8 +171,6 @@ class TestOutboundClientCleanupLifecycle:
 
         assert close_calls == 1
 
-        assert close_calls == 1
-
     async def test_repeated_aclose_is_safe_for_custom_client(self) -> None:
         class _ClosableClient(_FakeOutboundClient):
             def __init__(self) -> None:
