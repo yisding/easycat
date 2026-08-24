@@ -145,9 +145,7 @@ class TestOutboundClientCleanupLifecycle:
         )
 
         manager = next(
-            helper
-            for helper in result.helpers
-            if isinstance(helper, OutboundCallManager)
+            helper for helper in result.helpers if isinstance(helper, OutboundCallManager)
         )
         client = manager._client
         assert isinstance(client, TelnyxOutboundClient)
