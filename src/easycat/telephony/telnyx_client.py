@@ -92,7 +92,7 @@ class TelnyxCallControlClient:
             session = await self._ensure_session()
             try:
                 async with session.post(url, json=dict(payload)) as response:
-                    body = await response.json(content_type=None)
+                    body = await _response_body(response)
                     if response.status >= 400:
                         detail = _error_detail(body)
                         error = TelnyxApiError(response.status, detail)
@@ -101,7 +101,10 @@ class TelnyxCallControlClient:
                         last_error = error
                     else:
                         return body if isinstance(body, dict) else {}
-            except aiohttp.ClientError as exc:
+            # A total-timeout ``ClientTimeout`` surfaces as ``TimeoutError``,
+            # which is NOT an ``aiohttp.ClientError``; without it the most
+            # common transient failure would skip retry/backoff entirely.
+            except (aiohttp.ClientError, TimeoutError) as exc:
                 last_error = exc
 
             if attempt < self._max_retries:
@@ -190,6 +193,21 @@ class TelnyxCallControlClient:
         if connection_id:
             body["connection_id"] = connection_id
         return await self._post("/messages", body)
+
+
+async def _response_body(response: Any) -> Any:
+    """Return a parsed JSON body, falling back to raw text.
+
+    Gateways in front of the API answer 5xx with HTML; letting the JSON
+    decoder raise there would escape the retry loop and surface a bare
+    ``JSONDecodeError`` instead of a retryable :class:`TelnyxApiError`.
+    """
+    try:
+        return await response.json(content_type=None)
+    except ValueError:
+        # The body is already buffered by the failed decode, so text() reads
+        # from cache rather than re-reading the stream.
+        return await response.text()
 
 
 def _error_detail(body: Any) -> str:

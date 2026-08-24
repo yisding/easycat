@@ -42,9 +42,12 @@ security model for running EasyCat against Telnyx Call Control v2.
 | `TELNYX_PUBLIC_KEY` | Yes* | Ed25519 public key for webhook signature verification. |
 | `TELNYX_STREAM_TOKEN_SECRET` | No | Pins the stream-token signing key across restarts. |
 | `TELNYX_CONNECTION_ID` | Outbound only | Connection ID for outbound Dial commands. |
-| `TELNYX_WS_PORT` | No | Media WebSocket port (default: `8766`). |
-| `TELNYX_MAX_SESSIONS` | No | Max concurrent sessions (default: `64`). |
 | `TELNYX_START_TIMEOUT_S` | No | Seconds to wait for a valid `start` frame (default: `10`). |
+
+`TELNYX_WS_PORT` (default `8766`) and `TELNYX_MAX_SESSIONS` (default `64`) are
+read by `telnyx_app_settings_from_env()` for apps that build their own server
+config. `VoiceApp.run("telnyx")` does not read them — pass
+`media_port=` / `max_sessions=` to `run()` / `serve()` instead.
 
 *\* Required unless you explicitly pass `unsafe_allow_unsigned_webhooks=True`,
 which accepts unauthenticated webhooks and is intended only for local testing.*

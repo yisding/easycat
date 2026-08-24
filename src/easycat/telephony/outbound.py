@@ -250,6 +250,13 @@ class TwilioRestOutboundClient:
                 "The 'twilio' package is required for OutboundCallManager. "
                 + TELEPHONY_INSTALL_HINT
             ) from None
+        # Validate before handing the credentials to the SDK: an empty pair
+        # makes the Twilio client raise its own opaque error, which would mask
+        # the actionable message below.
+        if not account_sid or not auth_token:
+            raise ValueError(
+                "twilio_account_sid and twilio_auth_token are required for OutboundCallManager"
+            )
         self._sdk_client = TwilioClient(account_sid, auth_token)
 
     @property
@@ -505,13 +512,8 @@ class OutboundCallManager:
         client: OutboundCallClient | None = None,
     ) -> None:
         if client is None:
-            # Lazy-import twilio at instantiation time.
+            # Lazy-import twilio (and validate credentials) at instantiation time.
             client = TwilioRestOutboundClient(twilio_account_sid, twilio_auth_token)
-
-            if not twilio_account_sid or not twilio_auth_token:
-                raise ValueError(
-                    "twilio_account_sid and twilio_auth_token are required for OutboundCallManager"
-                )
 
         self._event_bus = event_bus
         self._session_id = session_id

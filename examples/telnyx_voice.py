@@ -18,7 +18,6 @@ Setup:
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 from easycat.voice_app import VoiceApp
@@ -34,4 +33,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
