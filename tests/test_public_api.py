@@ -514,9 +514,12 @@ def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
     assert import_state["outbound_builder_loaded"] is False
     assert import_state["webrtc_transport_loaded"] is False
     assert import_state["webrtc_audio_loaded"] is False
-    # Only the package and the two config-only submodules are allowed.
+    # Only the package, the two config-only submodules, and the stdlib-only
+    # shared stream-token store (pulled in by twilio_media for its dataclass
+    # defaults) are allowed.
     allowed = {
         "easycat.telephony",
+        "easycat.telephony._stream_tokens",
         "easycat.telephony.dtmf",
         "easycat.telephony.voicemail",
     }

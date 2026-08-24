@@ -9,14 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
-import hmac
 import inspect
 import json
 import logging
 import math
-import secrets
-import struct
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -28,10 +24,9 @@ from websockets.asyncio.server import ServerConnection
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
-from easycat._audio_utils import PCM16StreamResampler, resample
+from easycat._audio_utils import PCM16StreamResampler
 from easycat._epoch import Epoch, Lease
 from easycat._net import is_loopback_host
-from easycat._numeric import is_finite_number
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import (
     CallAnswered,
@@ -41,13 +36,46 @@ from easycat.events import (
 )
 from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.runtime.scope import BackgroundTaskScope, RuntimeScope
+from easycat.telephony._stream_tokens import (
+    STREAM_TOKEN_PARAMETER,
+    StreamTokenContext,
+    StreamTokenStore,
+)
 from easycat.telephony.dtmf import parse_twilio_dtmf_message
 from easycat.transports._base import (
     AudioQueueMixin,
     ServerTransportBase,
     make_version_info,
 )
+from easycat.transports._g711 import (
+    _MULAW_DECODE_LUT,
+    _MULAW_ENCODE_LUT,
+    _mulaw_decode,
+    _mulaw_decode_sample,
+    _mulaw_encode,
+    _mulaw_encode_sample,
+    mulaw_to_pcm16,
+    pcm16_to_mulaw,
+)
 from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
+
+# Shared telephony codecs and stream tokens moved to ``easycat.transports._g711``
+# and ``easycat.telephony._stream_tokens``; these names stay importable from here.
+__all__ = [
+    "STREAM_TOKEN_PARAMETER",
+    "TWILIO_STREAM_TOKEN_PARAMETER",
+    "_MULAW_DECODE_LUT",
+    "_MULAW_ENCODE_LUT",
+    "StreamTokenContext",
+    "StreamTokenStore",
+    "TwilioStreamTokenStore",
+    "_mulaw_decode",
+    "_mulaw_decode_sample",
+    "_mulaw_encode",
+    "_mulaw_encode_sample",
+    "mulaw_to_pcm16",
+    "pcm16_to_mulaw",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +86,9 @@ _TWILIO_OUTBOUND_TRACKS = {"outbound", "outbound_track"}
 _DEGRADED_TWILIO_SEQUENCE_GAP = "twilio_sequence_gap"
 _DEGRADED_TWILIO_TIMESTAMP_GAP = "twilio_timestamp_gap"
 _TWILIO_MULAW_BYTES_PER_MS = 8
-_TWILIO_STREAM_TOKEN_TIME_SCALE = 1_000_000_000
-TWILIO_STREAM_TOKEN_PARAMETER = "EasyCatStreamToken"
+TWILIO_STREAM_TOKEN_PARAMETER = STREAM_TOKEN_PARAMETER
+
+TwilioStreamTokenStore = StreamTokenStore
 _TWILIO_RECEIVE_TASK_NAME = "twilio_receive"
 _TWILIO_RECEIVE_COHORT = "transport-receive"
 
@@ -85,166 +114,6 @@ def _decode_twilio_raw(raw: str | bytes) -> str | None:
     except UnicodeDecodeError:
         logger.warning("Ignoring non-UTF-8 Twilio message")
         return None
-
-
-@dataclass(frozen=True)
-class _TwilioStreamGrant:
-    token: str
-    expires_at_ns: int
-    claims: tuple[tuple[str, str], ...]
-
-
-class TwilioStreamTokenStore:
-    """Issue and consume signed one-time Twilio ``<Stream>`` tokens.
-
-    The store is intentionally in-memory: the process that emits TwiML also
-    consumes the subsequent Media Streams ``start`` event. Apps running multiple
-    replicas can provide their own validator via ``TwilioTransportConfig``.
-    """
-
-    def __init__(
-        self,
-        secret: str | bytes | None = None,
-        *,
-        ttl_s: float = 300.0,
-        now: Callable[[], float] = time.time,
-    ) -> None:
-        if not is_finite_number(ttl_s) or ttl_s <= 0:
-            raise ValueError("ttl_s must be a finite positive number")
-        if secret is None:
-            secret = secrets.token_urlsafe(32)
-        self._secret = secret.encode("utf-8") if isinstance(secret, str) else secret
-        self._ttl_s = float(ttl_s)
-        self._now = now
-        self._pending: dict[str, _TwilioStreamGrant] = {}
-        self._idempotent: dict[str, _TwilioStreamGrant] = {}
-
-    def issue(
-        self,
-        *,
-        idempotency_key: str | None = None,
-        claims: Mapping[str, str] | None = None,
-    ) -> str:
-        """Return a signed token accepted by exactly one future ``consume``.
-
-        Reusing an idempotency key returns the original token until its TTL
-        expires, even if media preflight already consumed it. Twilio can retry
-        the same webhook without receiving additional authorizations.
-        """
-        self._prune_expired()
-        normalized_claims = tuple(
-            sorted((str(name), str(value)) for name, value in (claims or {}).items() if value)
-        )
-        if idempotency_key:
-            existing = self._idempotent.get(idempotency_key)
-            if existing is not None:
-                if existing.claims != normalized_claims:
-                    raise ValueError("idempotency_key cannot be reused with different claims")
-                return existing.token
-
-        nonce = secrets.token_urlsafe(24)
-        expires_at_ns = math.ceil((self._now() + self._ttl_s) * _TWILIO_STREAM_TOKEN_TIME_SCALE)
-        payload = f"{nonce}.{expires_at_ns}"
-        signature = self._signature(payload)
-        token = f"{payload}.{signature}"
-        grant = _TwilioStreamGrant(
-            token=token,
-            expires_at_ns=expires_at_ns,
-            claims=normalized_claims,
-        )
-        self._pending[nonce] = grant
-        if idempotency_key:
-            self._idempotent[idempotency_key] = grant
-        return token
-
-    def issue_parameter(self) -> dict[str, str]:
-        """Return the TwiML ``<Parameter>`` mapping for a fresh token."""
-        return {TWILIO_STREAM_TOKEN_PARAMETER: self.issue()}
-
-    def consume(self, token: str) -> bool:
-        """Validate and consume a token, returning ``False`` on replay/expiry."""
-        return self._consume(token, start=None)
-
-    def consume_start(self, context: StreamTokenContext) -> bool:
-        """Consume a token only when its bound webhook claims match ``start``."""
-        return self._consume(
-            context.token,
-            start={
-                "callSid": context.call_sid,
-                "customParameters": context.parameters,
-            },
-        )
-
-    def _consume(self, token: str, *, start: Mapping[str, Any] | None) -> bool:
-        self._prune_expired()
-        parts = token.split(".")
-        if len(parts) != 3:
-            return False
-        nonce, expires_text, signature = parts
-        try:
-            expires_at_ns = int(expires_text)
-        except ValueError:
-            return False
-
-        payload = f"{nonce}.{expires_at_ns}"
-        try:
-            matches_signature = hmac.compare_digest(signature, self._signature(payload))
-        except TypeError:
-            return False
-        if not matches_signature:
-            return False
-        now_ns = math.floor(self._now() * _TWILIO_STREAM_TOKEN_TIME_SCALE)
-        if expires_at_ns < now_ns:
-            self._pending.pop(nonce, None)
-            return False
-        grant = self._pending.pop(nonce, None)
-        if grant is None or grant.expires_at_ns != expires_at_ns:
-            return False
-        return _twilio_grant_claims_match(grant.claims, start)
-
-    def _signature(self, payload: str) -> str:
-        digest = hmac.new(self._secret, payload.encode("utf-8"), hashlib.sha256).digest()
-        return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-
-    def _prune_expired(self) -> None:
-        now_ns = math.floor(self._now() * _TWILIO_STREAM_TOKEN_TIME_SCALE)
-        expired = [nonce for nonce, grant in self._pending.items() if grant.expires_at_ns < now_ns]
-        for nonce in expired:
-            self._pending.pop(nonce, None)
-        expired_keys = [
-            key for key, grant in self._idempotent.items() if grant.expires_at_ns < now_ns
-        ]
-        for key in expired_keys:
-            self._idempotent.pop(key, None)
-
-
-def _twilio_grant_claims_match(
-    claims: tuple[tuple[str, str], ...],
-    start: Mapping[str, Any] | None,
-) -> bool:
-    if not claims:
-        return True
-    if start is None:
-        return False
-    custom_parameters = start.get("customParameters")
-    params = custom_parameters if isinstance(custom_parameters, Mapping) else {}
-    for name, expected in claims:
-        actual = start.get("callSid") if name == "CallSid" else params.get(name)
-        if not isinstance(actual, (str, int)) or isinstance(actual, bool):
-            return False
-        if str(actual) != expected:
-            return False
-    return True
-
-
-@dataclass(frozen=True, slots=True)
-class StreamTokenContext:
-    """Twilio stream-token validation context from the ``start`` frame."""
-
-    token: str
-    call_sid: str | None
-    stream_sid: str | None
-    parameters: Mapping[str, str]
 
 
 StreamTokenClaims = Mapping[str, Any]
@@ -1354,87 +1223,6 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
 
     def version_info(self) -> dict[str, str]:
         return make_version_info("twilio", "websockets")
-
-
-# ── Audio conversion helpers ──────────────────────────────────────
-
-
-def mulaw_to_pcm16(mulaw_data: bytes, target_rate: int = 16000) -> bytes:
-    """Convert mulaw 8 kHz audio to PCM16 at ``target_rate``."""
-    pcm_8k = _mulaw_decode(mulaw_data)
-    if target_rate == 8000:
-        return pcm_8k
-    return resample(pcm_8k, 8000, target_rate)
-
-
-def pcm16_to_mulaw(pcm_data: bytes, source_rate: int = 16000) -> bytes:
-    """Convert PCM16 at ``source_rate`` to mulaw 8 kHz."""
-    if source_rate != 8000:
-        pcm_data = resample(pcm_data, source_rate, 8000)
-    return _mulaw_encode(pcm_data)
-
-
-_MULAW_BIAS = 0x84
-_MULAW_CLIP = 32635
-
-
-def _mulaw_decode(mulaw_data: bytes) -> bytes:
-    """Decode G.711 mu-law bytes into PCM16 little-endian bytes."""
-    if not mulaw_data:
-        return b""
-    return struct.pack(f"<{len(mulaw_data)}h", *map(_MULAW_DECODE_LUT.__getitem__, mulaw_data))
-
-
-def _mulaw_encode(pcm_data: bytes) -> bytes:
-    """Encode PCM16 little-endian bytes into G.711 mu-law bytes."""
-    if len(pcm_data) % 2 != 0:
-        pcm_data = pcm_data[:-1]
-    if not pcm_data:
-        return b""
-    count = len(pcm_data) // 2
-    return bytes(map(_MULAW_ENCODE_LUT.__getitem__, struct.unpack(f"<{count}H", pcm_data)))
-
-
-def _mulaw_decode_sample(value: int) -> int:
-    """Decode a single mu-law byte into a signed PCM16 sample."""
-    value = (~value) & 0xFF
-    sign = value & 0x80
-    exponent = (value >> 4) & 0x07
-    mantissa = value & 0x0F
-    sample = ((mantissa << 3) + _MULAW_BIAS) << exponent
-    sample -= _MULAW_BIAS
-    if sign:
-        sample = -sample
-    return sample
-
-
-def _mulaw_encode_sample(sample: int) -> int:
-    """Encode a signed PCM16 sample into a mu-law byte."""
-    if sample < 0:
-        sign = 0x80
-        sample = -sample
-    else:
-        sign = 0x00
-
-    sample = min(sample, _MULAW_CLIP)
-
-    sample += _MULAW_BIAS
-    exponent = 7
-    exp_mask = 0x4000
-    while exponent > 0 and (sample & exp_mask) == 0:
-        exponent -= 1
-        exp_mask >>= 1
-    mantissa = (sample >> (exponent + 3)) & 0x0F
-    return (~(sign | (exponent << 4) | mantissa)) & 0xFF
-
-
-# Table-driven G.711 codec. The tables are precomputed from the reference
-# per-sample formulas above, so table-driven output is byte-identical to the
-# per-sample loops while avoiding per-sample Python work on the hot audio path.
-_MULAW_DECODE_LUT: tuple[int, ...] = tuple(_mulaw_decode_sample(i) for i in range(256))
-_MULAW_ENCODE_LUT: bytes = bytes(
-    _mulaw_encode_sample(s if s < 32768 else s - 65536) for s in range(65536)
-)
 
 
 class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
