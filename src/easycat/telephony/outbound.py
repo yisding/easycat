@@ -348,7 +348,7 @@ class TelnyxOutboundClient:
         self._webhook_url = webhook_url
         self._base_url = base_url
         self._client_factory = client_factory
-        self.calls = _TelnyxCallsResource(self)
+        self.calls: OutboundCallsResource = _TelnyxCallsResource(self)  # type: ignore[assignment]
 
     def _fresh_client(self) -> Any:
         if self._client_factory is not None:

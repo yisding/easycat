@@ -236,6 +236,35 @@ class _OutboundHelperBuilder:
             self._helpers.append(NumberHealthMonitor(self._event_bus))
 
     def _add_manager(self) -> OutboundCallManager | None:
+        if self._config.provider == "telnyx":
+            if not (self._config.telnyx_api_key and self._config.telnyx_connection_id):
+                logger.warning(
+                    "OutboundCallManager enabled with provider='telnyx' but telnyx_api_key / "
+                    "telnyx_connection_id are blank — outbound calling is disabled."
+                )
+                return None
+            try:
+                from easycat.telephony.outbound import TelnyxOutboundClient
+
+                client = TelnyxOutboundClient(
+                    self._config.telnyx_api_key,
+                    connection_id=self._config.telnyx_connection_id,
+                    webhook_url=self._config.telnyx_webhook_url,
+                )
+            except ImportError:
+                logger.warning(
+                    "cryptography/aiohttp missing — Telnyx OutboundCallManager disabled"
+                )
+                return None
+            manager = self._manager_cls(
+                self._event_bus,
+                from_number=self._config.from_number,
+                enable_realtime_transcription=self._config.enable_realtime_transcription,
+                client=client,
+            )
+            manager.dnc_list = self._dnc_list
+            self._helpers.append(manager)
+            return manager
         if not (self._config.twilio_account_sid and self._config.twilio_auth_token):
             logger.warning(
                 "OutboundCallManager enabled but twilio_account_sid / twilio_auth_token "
