@@ -235,7 +235,7 @@
 -    if name == "twilio":
 -        # Requires `uv sync --extra telephony --group dev`. A live phone call connects
 -        # via Twilio Media Streams over WebSocket; see
--        # `examples/twilio_app.py` for the Flask app that wires this up.
+-        # `examples/twilio_app.py` for the FastAPI app that wires this up.
 -        from easycat.transports.twilio_media import TwilioTransportConfig
 -
 -        return TwilioTransportConfig()

@@ -74,9 +74,9 @@ are checked in so you can work offline, on a plane, without API
 keys, without a mic — pick the constraint that fits.
 
 If you do want to scrub a *live* bundle: any chapter from 2
-onward dumps one to its own `runs/` directory. Chapter 9c
-(`docs/teaching/09-interruption/runs/`) is the most interesting —
-barge-in turns have the richest record set. Open one with
+onward dumps one to its own `runs/` directory. Chapter 9's variant C,
+`estimate.py` (`docs/teaching/09-interruption/runs/`), is the most
+interesting — barge-in turns have the richest record set. Open one with
 `investigate.py` in this chapter once you've finished the three
 planted-bug investigations below.
 
