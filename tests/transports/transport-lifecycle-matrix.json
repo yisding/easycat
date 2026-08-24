@@ -52,7 +52,7 @@
           "startup_rollback"
         ]
       },
-    "twilio": {
+      "twilio": {
         "status": "complete",
         "suite_node": "tests/transports/test_lifecycle_scenarios_twilio.py::TestTwilioTransportLifecycleScenarios",
         "scenarios": [

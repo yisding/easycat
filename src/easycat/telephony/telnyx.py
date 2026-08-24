@@ -167,6 +167,9 @@ def parse_telnyx_webhook(
     if not isinstance(envelope, dict):
         logger.warning("Ignoring non-object Telnyx webhook")
         return None
+    data = envelope.get("data")
+    if isinstance(data, dict):
+        envelope = data
     event_type = envelope.get("event_type")
     if not isinstance(event_type, str) or not event_type:
         logger.warning("Ignoring Telnyx webhook without event_type")

@@ -334,7 +334,7 @@ class TelnyxOutboundClient:
         self._webhook_url = webhook_url
         self._base_url = base_url
         self._client_factory = client_factory
-        self.calls = _TelnyxCallsResource(self)
+        self.calls: OutboundCallsResource = _TelnyxCallsResource(self)  # type: ignore[assignment]
 
     def _fresh_client(self) -> Any:
         if self._client_factory is not None:
@@ -376,6 +376,8 @@ class TelnyxOutboundClient:
 
 
 class _TelnyxCallsResource:
+    """Adapter satisfying the manager's :class:`OutboundCallsResource` seam."""
+
     def __init__(self, owner: TelnyxOutboundClient) -> None:
         self._owner = owner
 
@@ -392,6 +394,11 @@ class _TelnyxCallUpdater:
         self._call_control_id = call_control_id
 
     def update(self, **kwargs: Any) -> dict[str, Any]:
+        status = kwargs.get("status")
+        if status is not None and status != "completed":
+            raise ValueError(
+                f"Telnyx adapter only supports completing calls; got status={status!r}"
+            )
         return asyncio.run(self._owner.hangup(self._call_control_id))
 
 

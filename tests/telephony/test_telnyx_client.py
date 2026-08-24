@@ -6,7 +6,9 @@ from typing import Any
 
 import pytest
 
-from easycat.telephony.telnyx_client import (
+aiohttp = pytest.importorskip("aiohttp")
+
+from easycat.telephony.telnyx_client import (  # noqa: E402
     TELNYX_API_BASE_URL,
     TelnyxApiError,
     TelnyxCallControlClient,
