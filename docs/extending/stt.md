@@ -184,7 +184,8 @@ construction; no provider is required to consume it. Live instances use
 both.
 For the `"yours/model-name"` shortcut syntax, it also needs a `model` field (or
 a `MODEL_FIELD: ClassVar[str]` naming the field to use if it is called
-something else, e.g. ElevenLabs' `model_id`).
+something else; TTS configs such as `ElevenLabsTTSConfig` use
+`MODEL_FIELD = "model_id"`).
 
 Once registered, `"yours"` participates in `create_stt_provider`,
 `available_stt_providers`, and `stt="yours/some-model"` resolution exactly
