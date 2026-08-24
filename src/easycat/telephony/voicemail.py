@@ -69,6 +69,20 @@ TWILIO_AMD_MAP: dict[str, VoicemailResult] = {
     "unknown": "unknown",
 }
 
+# Telnyx answering_machine_detection result tokens -> EasyCat result mapping
+TELNYX_AMD_MAP: dict[str, VoicemailResult] = {
+    "human": "human",
+    "human_residence": "human",
+    "human_business": "human",
+    "machine": "machine",
+    "machine_greeting": "machine",
+    "machine_beep": "machine",
+    "machine_silence": "machine",
+    "fax": "machine",
+    "beep": "machine",
+    "unknown": "unknown",
+}
+
 
 def parse_twilio_amd_webhook(params: dict[str, Any]) -> VoicemailDetected | None:
     """Parse a Twilio AMD status callback into a ``VoicemailDetected`` event.

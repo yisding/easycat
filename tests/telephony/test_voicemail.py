@@ -609,3 +609,50 @@ class TestVoicemailPolicyHandler:
 
         handler.stop()
         assert handler.last_action is None
+
+
+class TestTelnyxAmdMap:
+    """Tests for the TELNYX_AMD_MAP result-token mapping table."""
+
+    def test_importable_from_voicemail_module(self) -> None:
+        from easycat.telephony.voicemail import TELNYX_AMD_MAP
+
+        assert set(TELNYX_AMD_MAP) <= {
+            "human",
+            "human_residence",
+            "human_business",
+            "machine",
+            "machine_greeting",
+            "machine_beep",
+            "machine_silence",
+            "fax",
+            "beep",
+            "unknown",
+        }
+
+    @pytest.mark.parametrize(
+        ("token", "expected"),
+        [
+            ("human", "human"),
+            ("human_residence", "human"),
+            ("human_business", "human"),
+            ("machine", "machine"),
+            ("machine_greeting", "machine"),
+            ("machine_beep", "machine"),
+            ("machine_silence", "machine"),
+            ("fax", "machine"),
+            ("beep", "machine"),
+            ("unknown", "unknown"),
+        ],
+    )
+    def test_result_tokens_map_to_neutral_results(self, token: str, expected: str) -> None:
+        from easycat.telephony.voicemail import TELNYX_AMD_MAP
+
+        assert TELNYX_AMD_MAP[token] == expected
+        assert expected in {"human", "machine", "unknown"}
+
+    def test_unknown_token_falls_back_like_twilio_map(self) -> None:
+        from easycat.telephony.voicemail import TELNYX_AMD_MAP, TWILIO_AMD_MAP
+
+        assert TELNYX_AMD_MAP.get("not-a-result") is None
+        assert TWILIO_AMD_MAP.get("not-a-result") is None

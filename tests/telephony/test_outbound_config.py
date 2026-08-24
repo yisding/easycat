@@ -73,6 +73,42 @@ class TestVoicemailDetectionConfig:
         with pytest.raises(ValueError, match="voicemail_detection.mode"):
             cfg.to_twilio_params()
 
+    def test_defaults_map_to_telnyx_greeting_end(self) -> None:
+        params = VoicemailDetectionConfig().to_telnyx_params()
+        assert params == {"answering_machine_detection": "greeting_end"}
+
+    def test_detect_mode_maps_to_telnyx_detect(self) -> None:
+        params = VoicemailDetectionConfig(mode="detect").to_telnyx_params()
+        assert params == {"answering_machine_detection": "detect"}
+
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [
+            ("detect", "detect"),
+            ("detect_end_of_greeting", "greeting_end"),
+        ],
+    )
+    def test_telnyx_params_are_valid_amd_tokens(self, mode: str, expected: str) -> None:
+        value = VoicemailDetectionConfig(mode=mode).to_telnyx_params()[
+            "answering_machine_detection"
+        ]
+        assert value == expected
+        assert value in {
+            "premium",
+            "detect",
+            "detect_beep",
+            "detect_words",
+            "greeting_end",
+            "disabled",
+        }
+
+    def test_mutated_invalid_mode_rejected_before_telnyx_mapping(self) -> None:
+        cfg = VoicemailDetectionConfig()
+        cfg.mode = "detect_end"  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="voicemail_detection.mode"):
+            cfg.to_telnyx_params()
+
     @pytest.mark.parametrize("bad", [0, -1, 1.5, True, float("nan"), float("inf")])
     def test_invalid_detection_timeout_rejected(self, bad: object) -> None:
         # detection_timeout_s flows into asyncio.sleep with no runtime guard,
@@ -280,6 +316,58 @@ class TestOutboundCallConfig:
 
         with pytest.raises(ValueError, match="voicemail_detection.mode"):
             cfg.validate()
+
+    def test_telnyx_provider_defaults(self) -> None:
+        cfg = OutboundCallConfig(from_number="+1555")
+        assert cfg.provider == "twilio"
+        assert cfg.telnyx_api_key == ""
+        assert cfg.telnyx_connection_id == ""
+        assert cfg.telnyx_webhook_url == ""
+
+    def test_telnyx_provider_fields_configurable(self) -> None:
+        cfg = OutboundCallConfig(
+            from_number="+1555",
+            provider="telnyx",
+            telnyx_api_key="key",
+            telnyx_connection_id="conn-1",
+            telnyx_webhook_url="https://example.test/telnyx",
+        )
+        assert cfg.provider == "telnyx"
+        assert cfg.telnyx_api_key == "key"
+        assert cfg.telnyx_connection_id == "conn-1"
+        assert cfg.telnyx_webhook_url == "https://example.test/telnyx"
+
+    def test_telnyx_api_key_hidden_from_repr(self) -> None:
+        cfg = OutboundCallConfig(from_number="+1555", telnyx_api_key="secret-key")
+
+        assert "secret-key" not in repr(cfg)
+
+    @pytest.mark.parametrize("provider", ["plivo", "", None])
+    def test_invalid_provider_rejected(self, provider: object) -> None:
+        with pytest.raises(ValueError, match="Invalid outbound provider"):
+            OutboundCallConfig(from_number="+1555", provider=provider)  # type: ignore[arg-type]
+
+    def test_mutated_invalid_provider_rejected(self) -> None:
+        cfg = OutboundCallConfig(from_number="+1555")
+        cfg.provider = "sip"  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="Invalid outbound provider"):
+            cfg.validate()
+
+    def test_telnyx_provider_requires_connection_id(self) -> None:
+        with pytest.raises(ValueError, match="telnyx_connection_id is required"):
+            OutboundCallConfig(from_number="+1555", provider="telnyx")
+
+    def test_mutated_telnyx_provider_requires_connection_id(self) -> None:
+        cfg = OutboundCallConfig(from_number="+1555", twilio_account_sid="AC123")
+        cfg.provider = "telnyx"
+
+        with pytest.raises(ValueError, match="telnyx_connection_id is required"):
+            cfg.validate()
+
+    def test_twilio_provider_still_allows_blank_credentials(self) -> None:
+        cfg = OutboundCallConfig(from_number="+1555")
+        cfg.validate()
 
 
 class TestTelephonyConfigExtension:

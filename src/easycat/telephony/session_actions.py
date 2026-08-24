@@ -127,3 +127,123 @@ def _apply_inter_digit_delay(digits: str, inter_digit_delay_ms: int) -> str:
     pauses = max(1, round(bounded_delay_ms / 1000))
     separator = "W" * pauses
     return separator.join(digits)
+
+
+@dataclass
+class TelnyxSessionActionConfig:
+    """Configuration for Telnyx-backed session action execution."""
+
+    api_key: str = field(default="", repr=False)
+    sms_from_number: str = ""
+    connection_id: str = ""
+    client: Any = None
+
+
+class TelnyxSessionActionExecutor(SessionActionExecutor):
+    """Execute session actions via native Telnyx Call Control commands.
+
+    Transfer/DTMF/hangup map to the ``/actions/*`` command endpoints and SMS
+    to ``POST /v2/messages`` — no TwiML redirect round-trip.
+    """
+
+    def __init__(self, config: TelnyxSessionActionConfig) -> None:
+        self._config = config
+        self._client = config.client
+
+    def supports(self, action: SessionAction) -> bool:
+        return isinstance(
+            action,
+            (EndCallAction, TransferCallAction, SendDTMFAction, SendSMSAction),
+        )
+
+    async def execute(self, session: Any, action: SessionAction) -> SessionActionResult:
+        call_control_id = _call_control_id_from(session)
+        if not call_control_id:
+            raise RuntimeError("Telnyx session actions require an active call_control_id")
+
+        client = self._get_client()
+        if isinstance(action, EndCallAction):
+            await client.hangup(call_control_id)
+            return SessionActionResult(
+                stop_session=True,
+                metadata={"call_control_id": call_control_id},
+            )
+
+        if isinstance(action, TransferCallAction):
+            await client.transfer(
+                call_control_id,
+                action.target,
+                from_=action.plan.caller_id or None,
+            )
+            return SessionActionResult(
+                stop_session=True,
+                metadata={"call_control_id": call_control_id, "target": action.target},
+            )
+
+        if isinstance(action, SendDTMFAction):
+            digits = _apply_inter_digit_delay(action.digits, action.inter_digit_delay_ms)
+            await client.send_dtmf(call_control_id, digits)
+            return SessionActionResult(
+                metadata={"call_control_id": call_control_id, "digits": digits}
+            )
+
+        if isinstance(action, SendSMSAction):
+            if not self._config.sms_from_number:
+                raise RuntimeError("Telnyx SMS actions require sms_from_number")
+            message = await client.send_sms(
+                to=action.to,
+                from_=self._config.sms_from_number,
+                text=action.body,
+                connection_id=self._config.connection_id or None,
+            )
+            return SessionActionResult(
+                metadata={
+                    "message_id": _sms_message_id(message),
+                    "to": action.to,
+                }
+            )
+
+        raise RuntimeError(f"Unsupported Telnyx session action: {action.type}")
+
+    def _get_client(self) -> Any:
+        if self._client is not None:
+            return self._client
+        if not self._config.api_key:
+            raise RuntimeError("Telnyx session actions require api_key")
+        try:
+            from easycat.telephony.telnyx_client import (
+                TELNYX_API_BASE_URL,
+                TelnyxCallControlClient,
+            )
+        except ImportError as exc:  # pragma: no cover - exercised via config tests
+            raise RuntimeError(
+                "The 'aiohttp' package is required for Telnyx session actions. "
+                + "Install with: uv add 'easycat[telnyx]'. From the EasyCat repo, "
+                "use: uv sync --extra telnyx --group dev."
+            ) from exc
+        self._client = TelnyxCallControlClient(self._config.api_key, base_url=TELNYX_API_BASE_URL)
+        return self._client
+
+
+def _call_control_id_from(session: Any) -> str | None:
+    transport = getattr(session, "transport", None)
+    for attribute in ("call_control_id", "call_sid"):
+        value = getattr(transport, attribute, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _sms_message_id(message: Any) -> str:
+    data = getattr(message, "data", None) if not isinstance(message, dict) else message
+    if isinstance(data, dict):
+        record = data.get("data")
+        if isinstance(record, dict):
+            identifier = record.get("id") or record.get("sms_id")
+            if isinstance(identifier, str):
+                return identifier
+    for attribute in ("id", "sms_id"):
+        value = getattr(message, attribute, None)
+        if isinstance(value, str):
+            return value
+    return ""

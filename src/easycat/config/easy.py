@@ -78,7 +78,10 @@ if TYPE_CHECKING:
     from easycat.telephony.compliance import DNCStore
     from easycat.telephony.ivr import AgentCallback, DTMFDelivery
     from easycat.telephony.retry import RetryStrategyConfig
-    from easycat.telephony.session_actions import TwilioSessionActionConfig
+    from easycat.telephony.session_actions import (
+        TelnyxSessionActionConfig,
+        TwilioSessionActionConfig,
+    )
 
 logger = logging.getLogger("easycat.config")
 
@@ -518,6 +521,14 @@ class VoicemailDetectionConfig:
             "silence_timeout": self.silence_timeout_ms,
         }
 
+    def to_telnyx_params(self) -> dict[str, Any]:
+        """Render as Telnyx ``answering_machine_detection`` dial parameters."""
+        # Revalidate at this external-policy boundary, mirroring
+        # ``to_twilio_params``.
+        self.validate()
+        telnyx_mode = "greeting_end" if self.mode == "detect_end_of_greeting" else "detect"
+        return {"answering_machine_detection": telnyx_mode}
+
 
 @dataclass
 class OutboundCallConfig:
@@ -547,6 +558,10 @@ class OutboundCallConfig:
     callee_language: str = "en"
     twilio_account_sid: str = field(default="", repr=False)
     twilio_auth_token: str = field(default="", repr=False)
+    provider: Literal["twilio", "telnyx"] = "twilio"
+    telnyx_api_key: str = field(default="", repr=False)
+    telnyx_connection_id: str = ""
+    telnyx_webhook_url: str = ""
     twiml_url: str = ""
     status_callback_url: str = ""
     ivr_agent_callback: AgentCallback | None = None
@@ -571,6 +586,14 @@ class OutboundCallConfig:
                 "voicemail_detection must be a VoicemailDetectionConfig instance."
             )
         self.voicemail_detection.validate()
+        if self.provider not in ("twilio", "telnyx"):
+            raise EasyConfigError(
+                f"Invalid outbound provider={self.provider!r}. Must be 'twilio' or 'telnyx'."
+            )
+        if self.provider == "telnyx" and not self.telnyx_connection_id:
+            raise EasyConfigError(
+                "outbound.telnyx_connection_id is required when provider='telnyx'."
+            )
         if self.retry_strategy is not None:
             from easycat.telephony.retry import RetryStrategyConfig
 
@@ -613,6 +636,7 @@ class TelephonyConfig:
     voicemail_detector: VoicemailDetectorConfig = field(default_factory=VoicemailDetectorConfig)
     outbound: OutboundCallConfig | None = None
     twilio_actions: TwilioSessionActionConfig | None = None
+    telnyx_actions: TelnyxSessionActionConfig | None = None
 
     def __post_init__(self) -> None:
         self.validate()
@@ -625,6 +649,13 @@ class TelephonyConfig:
             "enable_outbound_call_manager",
         ):
             _require_boolean(name, getattr(self, name))
+        if self.telnyx_actions is not None:
+            from easycat.telephony.session_actions import TelnyxSessionActionConfig
+
+            if not isinstance(self.telnyx_actions, TelnyxSessionActionConfig):
+                raise EasyConfigError(
+                    "telephony.telnyx_actions must be a TelnyxSessionActionConfig instance."
+                )
         if self.outbound is None:
             return
         if not isinstance(self.outbound, OutboundCallConfig):
