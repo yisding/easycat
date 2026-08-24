@@ -182,11 +182,12 @@ JSON envelope. Coding agents should start with [AGENTS.md](AGENTS.md) and
 - VAD: Silero, FunASR, optional TEN VAD, and Krisp. Noise reduction: RNNoise,
   Krisp, and a passthrough fallback.
 - Transports: Local, WebSocket, WebRTC, WebTransport, Twilio Media Streams, and
-  Telnyx Media Streams / Call Control.
+  Telnyx Media Streams.
 - Agent/workflow adapters: `OpenAIAgentsBridge`, `PydanticAIBridge`,
   `LangChainBridge`, `LangGraphBridge`, `LlamaAgentsBridge`,
   `RemoteResponsesAPIBridge`, and `GenericWorkflowBridge`.
-- Typed events, interruption, telephony actions, multi-session servers,
+- Typed events, interruption, Twilio/Telnyx Call Control session actions,
+  multi-session servers,
   durable journals, replay, latency analysis, and debugger tooling.
 
 ## Build beyond the quickstart
