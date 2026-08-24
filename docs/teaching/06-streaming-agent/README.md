@@ -466,8 +466,8 @@ already pulling the sentence after that off the queue.
 
 Two coroutines. The splitter accumulates tokens and calls
 `split_at_sentence_boundaries(buffer)` after every delta. When
-pySBD finds a complete sentence prefix, it's pushed to an
-`asyncio.Queue`. The drain coroutine pulls sentences and streams
+the `sentencesplit` segmenter finds a complete sentence prefix, it's pushed to
+an `asyncio.Queue`. The drain coroutine pulls sentences and streams
 TTS audio to the transport. Because `transport.send_audio`
 returns as soon as the chunk is enqueued on the speaker, sentence
 N+1 can begin synthesising while sentence N is **still playing**

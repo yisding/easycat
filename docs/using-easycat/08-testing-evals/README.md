@@ -99,6 +99,9 @@ bundle = load_bundle("tests/fixtures/refund.bundle")
 assert_no_error(bundle)
 ```
 
+Replace that placeholder path with a reviewed `.bundle` fixture from your own
+project.
+
 Promote a production failure into a fixture only after reviewing and reducing
 its sensitive contents. Normal debug bundles may contain PII.
 
