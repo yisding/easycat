@@ -96,6 +96,7 @@ Commands below are for this repository. In an application, use the equivalent
 | WebTransport | `uv sync --extra webtransport --group dev` |
 | Twilio SDK/media streams | `uv sync --extra telephony --group dev` |
 | FastAPI/uvicorn telephony server | `uv sync --extra telephony-fastapi --group dev` |
+| Telnyx Call Control/webhooks | `uv sync --extra telnyx --group dev` |
 | OpenAI Agents SDK | `uv sync --extra openai-agents --group dev` |
 | PydanticAI stable v1 | `uv sync --extra pydantic-ai --group dev` |
 | PydanticAI stable v2 | `uv sync --extra pydantic-ai-v2 --group dev` |
