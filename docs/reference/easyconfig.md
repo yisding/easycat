@@ -141,8 +141,8 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   voicemail detection, and outbound call management. Twilio and Telnyx are
   both first-class: `EasyConfig.phone(provider="telnyx", ...)` builds a
   Telnyx Call Control transport (L16 @ 16 kHz by default), and
-  `TelephonyConfig.telnyx_actions` configures the native-commands session
-  action executor. Outbound calls select the provider via
+  `TelephonyConfig.telnyx_actions` configures the session action executor for
+  native transfer/send-DTMF/hangup commands and SMS. Outbound calls select the provider via
   `OutboundCallConfig(provider=...)` (`"twilio"` default; `"telnyx"` uses
   `telnyx_connection_id` / `telnyx_webhook_url`).
 - `strip_markdown` — strip markdown formatting from agent output before

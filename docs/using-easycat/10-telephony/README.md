@@ -195,22 +195,62 @@ session.
 
 ## Call control stays provider-neutral at the session boundary
 
-Agent tools enqueue provider-neutral session actions:
+Agent tools enqueue provider-neutral session actions. Two configured adapters
+execute those actions:
 
-- `SendDTMFAction` updates the call with safe TwiML tones;
+- `SendDTMFAction` plays tones through the active provider call;
 - `TransferCallAction` uses a `TransferPlan` for preamble, caller ID, and
   post-dial digits;
 - `EndCallAction` completes the active call and stops its session;
-- `SendSMSAction` sends from the configured Twilio SMS number.
+- `SendSMSAction` sends from the configured provider SMS number.
 
-`TwilioSessionActionExecutor` is the provider adapter. It requires an active
-`session.transport.call_sid`, then calls the Twilio REST client. The checkpoint
-injects a fake client and proves the exact update payloads without installing
-the Twilio SDK.
+`TwilioSessionActionExecutor` requires an active
+`session.transport.call_sid`. It updates the Twilio call with sanitized TwiML
+for transfer and DTMF and with a `status=completed` update for hangup. SMS uses
+the Twilio REST client. `TelnyxSessionActionExecutor` resolves the active call
+from the transport's `call_control_id`, with `call_sid` as a fallback. It uses
+native Telnyx Call Control commands: `transfer`, `send_dtmf`, and `hangup`;
+SMS uses Telnyx's messaging endpoint.
 
-Transfer and hangup results request session stop. Treat tool success as the
+For both providers, transfer and hangup results request session stop, while
+SMS and DTMF results leave the session active. Treat tool success as the
 provider request being accepted, not proof that a human received the transfer;
 observe later status callbacks for the final disposition.
+
+Configure one provider-specific executor through `TelephonyConfig`. Credentials
+and source numbers come from secrets/configuration, never model arguments:
+
+```python
+from easycat.config import TelephonyConfig
+from easycat.telephony.session_actions import TwilioSessionActionConfig
+
+telephony = TelephonyConfig(
+    twilio_actions=TwilioSessionActionConfig(
+        account_sid=account_sid,
+        auth_token=auth_token,
+        sms_from_number=sms_from_number,
+    )
+)
+```
+
+```python
+from easycat.config import TelephonyConfig
+from easycat.telephony.session_actions import TelnyxSessionActionConfig
+
+telephony = TelephonyConfig(
+    telnyx_actions=TelnyxSessionActionConfig(
+        api_key=api_key,
+        sms_from_number=sms_from_number,
+        connection_id=connection_id,
+    )
+)
+```
+
+`account_sid`, `auth_token`, and `sms_from_number` are required for Twilio
+SMS; `api_key` is required for Telnyx, while `sms_from_number` is required only
+when Telnyx sends SMS. `connection_id` is optional and scopes Telnyx SMS.
+The checkpoint injects fake clients and proves the exact update payloads
+without installing provider SDKs or contacting either provider.
 
 ## Outbound calling is a policy boundary
 
