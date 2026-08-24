@@ -82,11 +82,11 @@
   the `auto_adapt_agent()` → bridge flow; session-action wiring with
   `SessionActions`, `EndCallAction`, and `CoreSessionActionExecutor`; the
   three-item pronunciation chain (`MarkdownStripProcessor`,
-  `PhoneticReplacementProcessor`, and `PauseProcessor`);
-  `mcp_servers=[...]` config entry.
+  `PhoneticReplacementProcessor`, and `PauseProcessor`).
+- **Also covered:** related configuration guidance for
+  `mcp_servers=[...]`, even though this checkpoint's script does not use it.
 - **Modified:** `EasyConfig(agent=...)` now points at a
-  hand-rolled workflow, not an `agents.Agent(...)` from a
-  framework.
+  hand-rolled workflow, not an `agents.Agent(...)` from a framework.
 - **Removed:** dependence on the OpenAI Agents SDK as an agent
   surface. (It still works — chapter 13 used it — but this
   chapter shows you don't need any framework at all.)

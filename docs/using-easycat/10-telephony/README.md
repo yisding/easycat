@@ -299,8 +299,8 @@ The app-first path is identical in shape:
 app.run(
     "telnyx",
     stream_url=stream_url,
-    api_key=api_key,
-    public_key=public_key,
+    telnyx_api_key=api_key,
+    telnyx_public_key=public_key,
 )
 ```
 

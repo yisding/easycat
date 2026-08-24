@@ -51,6 +51,8 @@ maps the explicit `EASYCAT_WS_ALLOW_QUERY_TOKEN=1` environment setting to
 `allow_query_token=True`; without that opt-in, query auth remains off. This
 keeps a direct `uv run python examples/ws_server.py` launch header-only unless
 the developer deliberately enables the local browser flow.
+The same browser limitation applies whenever a bundled-browser demo is
+token-protected: it needs the explicit query-token opt-in even on loopback.
 
 To stop:
 

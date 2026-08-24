@@ -101,8 +101,9 @@ Audio flows over the Opus peer connection. Signaling is HTTP
 (`POST /offer`, `GET /config`, `POST /stats`, `GET /health`); when
 `WebRTCTransportConfig.auth_token` is set, `/config`, `/offer`, and `/stats`
 require the token as `Authorization: Bearer <token>`. A `?token=` query
-parameter is accepted only when `allow_query_token=True`; it is disabled by
-default because URLs leak more readily through logs and browser history.
+parameter is accepted only when `allow_query_token=True` is configured directly
+on that transport; it is disabled by default because URLs leak more readily
+through logs and browser history.
 Session event messages arrive on a client-created data channel named
 `events`.
 
