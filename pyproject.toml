@@ -94,6 +94,16 @@ telephony = [
     "phonenumberslite>=9.0.36",
     "twilio>=9.0.0",
 ]
+# Self-contained Telnyx Call Control support (media transport + webhooks +
+# REST client). Shares no SDK with ``telephony``: aiohttp carries the REST
+# surface and Ed25519 webhook verification comes from ``cryptography`` (also
+# an indirect dep of the webrtc extra). phonenumberslite covers E.164
+# normalization for outbound dialing.
+telnyx = [
+    "aiohttp>=3.13.3",
+    "phonenumberslite>=9.0.36",
+    "cryptography>=42",
+]
 # The bundled lower-level reference app and twilio-phone scaffold use FastAPI
 # and uvicorn; the reusable telephony library itself does not. FastAPI form
 # handling also requires python-multipart for Twilio webhook endpoints.
@@ -141,6 +151,7 @@ all = [
     "aiortc>=1.15.0",
     "livekit>=1.1.14",
     "aiohttp>=3.13.3",
+    "cryptography>=42",
     "fastapi>=0.141.1",
     "openai>=2.53.0",
     "openai-agents>=0.19.4",
