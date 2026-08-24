@@ -10,7 +10,8 @@ security model for running EasyCat against Telnyx Call Control v2.
 2. An EasyCat installation with the `telnyx` extra:
 
    ```bash
-   uv sync --extra telnyx --group dev
+   # This example also uses the OpenAI voice providers and agent bridge.
+   uv sync --extra openai --extra telnyx --extra openai-agents --group dev
    ```
 
 3. A public `wss://` endpoint that Telnyx can reach for media streams.

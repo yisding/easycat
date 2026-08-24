@@ -604,7 +604,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "and EasyCat environment variables."
         ),
         "commands": (
-            "uv sync --extra telnyx --group dev",
+            "uv sync --extra openai --extra telnyx --extra openai-agents --group dev",
             "uv run python examples/telnyx_voice.py",
         ),
     },
