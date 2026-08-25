@@ -159,6 +159,12 @@ class SessionActionExecutor(Protocol):
     async def execute(self, session: Any, action: SessionAction) -> SessionActionResult: ...
 
 
+class SessionActionExecutorCloser(Protocol):
+    """Optional lifecycle hook for executors that own provider resources."""
+
+    async def close(self) -> None: ...
+
+
 class SessionActions:
     """Thread-safe queue used by agent tools to request session actions."""
 

@@ -28,6 +28,10 @@ class _FakeTelnyxControlClient:
         self.dtmfs: list[tuple[str, str]] = []
         self.hangups: list[str] = []
         self.sms: list[dict[str, Any]] = []
+        self.close_calls = 0
+
+    async def close(self) -> None:
+        self.close_calls += 1
 
     async def transfer(
         self,
@@ -217,3 +221,13 @@ class TestErrorParity:
         assert executor.supports(SendDTMFAction(digits="1"))
         assert executor.supports(SendSMSAction(to="+1", body="x"))
         assert not executor.supports(AddToDNCAction(number="+15550003333"))
+
+    @pytest.mark.asyncio
+    async def test_close_releases_created_client_once(self) -> None:
+        client = _FakeTelnyxControlClient()
+        executor = _executor(client)
+
+        await executor.close()
+        await executor.close()
+
+        assert client.close_calls == 1

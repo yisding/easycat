@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -105,8 +106,8 @@ class FakeTTS:
         pass
 
 
-def _config(**overrides: object) -> SessionConfig:
-    defaults = {
+def _config(**overrides: Any) -> SessionConfig:
+    defaults: dict[str, Any] = {
         "transport": FakeTransport(),
         "vad": FakeVAD(),
         "stt": FakeSTT(),
@@ -523,7 +524,7 @@ async def test_streaming_agent_path_stops_session_after_end_call_action() -> Non
     actions = SessionActions()
     actions.end_call(reason="done")
     session = Session(_config(session_actions=actions))
-    session.stop = AsyncMock()
+    session.stop = AsyncMock()  # type: ignore[method-assign]
     session._turn = TurnContext(turn_id="turn-1", cancel_token=CancelToken())
 
     await session._turn_runner.run_streaming_agent("hello", CancelToken())

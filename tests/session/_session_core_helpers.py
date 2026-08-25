@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Any
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
@@ -155,8 +156,9 @@ class WarmupTTS(FakeTTS):
 
 
 class MarkerTTS(FakeTTS):
-    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
-        yield TTSEvent(type=TTSEventType.MARKERS, markers=[{"word": payload.text, "start_ms": 0}])
+    async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
+        text = payload if isinstance(payload, str) else payload.text
+        yield TTSEvent(type=TTSEventType.MARKERS, markers=[{"word": text, "start_ms": 0}])
         yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
 
 
@@ -208,9 +210,9 @@ class TrackingJournal:
         return False
 
 
-def _full_config(**overrides) -> SessionConfig:
+def _full_config(**overrides: Any) -> SessionConfig:
     """Build a SessionConfig with all required providers filled in."""
-    defaults = {
+    defaults: dict[str, Any] = {
         "transport": FakeTransport(),
         "vad": FakeVAD(),
         "stt": FakeSTT(),

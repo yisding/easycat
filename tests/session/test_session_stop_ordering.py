@@ -11,6 +11,7 @@ import pytest
 from easycat._epoch import Lease
 from easycat._turn_context import TurnContext
 from easycat.session._session import Session
+from easycat.session.actions import SessionAction, SessionActionResult
 from tests.session._session_core_helpers import (
     FakeSTT,
     FakeTransport,
@@ -286,6 +287,8 @@ async def test_stop_preserves_reviewed_partial_order(  # noqa: C901, PLR0915
 
     await session.stop(force=force)
 
+    branch_edges: tuple[tuple[str, str], ...]
+    health_edges: tuple[tuple[str, str], ...]
     if force:
         branch_edges = (
             ("scope.signal", "stt.cancel"),
@@ -329,3 +332,80 @@ async def test_stop_preserves_reviewed_partial_order(  # noqa: C901, PLR0915
     ):
         _assert_before(events, "agent.close", provider_close)
         _assert_before(events, provider_close, "identity.clear")
+
+
+class _RecordingExecutor:
+    """Minimal action executor double that records its close lifecycle."""
+
+    def __init__(
+        self,
+        record: Callable[[str], None],
+        *,
+        close_error: Exception | None = None,
+    ) -> None:
+        self._record = record
+        self._close_error = close_error
+        self.close_count = 0
+
+    def supports(self, action: SessionAction) -> bool:
+        return False
+
+    async def execute(
+        self,
+        session: Any,
+        action: SessionAction,
+    ) -> SessionActionResult:
+        raise AssertionError("executor should not execute during teardown")
+
+    async def close(self) -> None:
+        self.close_count += 1
+        self._record(f"executor.close:{id(self)}")
+        if self._close_error is not None:
+            raise self._close_error
+
+
+class _FailingCloseAgent:
+    async def run(self, text: str) -> str:
+        return text
+
+    async def aclose(self) -> None:
+        raise RuntimeError("agent close boom")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("force", [False, True])
+async def test_stop_closes_registered_action_executor_once(force: bool) -> None:
+    executor = _RecordingExecutor(lambda name: None)
+    session = Session(_full_config())
+    session.register_action_executor(executor)
+
+    await session.stop(force=force)
+
+    assert executor.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_close_failure_does_not_skip_executor_close() -> None:
+    executor = _RecordingExecutor(lambda name: None)
+    session = Session(_full_config(agent=_FailingCloseAgent()))
+    session.register_action_executor(executor)
+
+    with pytest.raises(RuntimeError, match="agent close boom"):
+        await session.stop()
+
+    assert executor.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_first_executor_close_failure_still_closes_remaining_executors() -> None:
+    failing = _RecordingExecutor(lambda name: None, close_error=RuntimeError("boom"))
+    healthy = _RecordingExecutor(lambda name: None)
+    session = Session(_full_config())
+    session.register_action_executor(healthy)
+    session.register_action_executor(failing)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await session.stop()
+
+    assert failing.close_count == 1
+    assert healthy.close_count == 1
