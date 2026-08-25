@@ -14,11 +14,12 @@ __all__ = [
 ]
 
 import asyncio
+import inspect
 import logging
 import math
 from collections.abc import Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from easycat._concurrency import shielded_cleanup
 from easycat._epoch import Epoch, Lease
@@ -239,6 +240,13 @@ class OutboundCallClient(Protocol):
     def calls(self) -> OutboundCallsResource: ...
 
 
+@runtime_checkable
+class _AsyncClosableOutboundClient(Protocol):
+    """Optional cleanup hook for clients that own async resources."""
+
+    def close(self) -> Any: ...
+
+
 class TwilioRestOutboundClient:
     """Default :class:`OutboundCallClient` backed by the Twilio REST SDK."""
 
@@ -250,6 +258,13 @@ class TwilioRestOutboundClient:
                 "The 'twilio' package is required for OutboundCallManager. "
                 + TELEPHONY_INSTALL_HINT
             ) from None
+        # Validate before handing the credentials to the SDK: an empty pair
+        # makes the Twilio client raise its own opaque error, which would mask
+        # the actionable message below.
+        if not account_sid or not auth_token:
+            raise ValueError(
+                "twilio_account_sid and twilio_auth_token are required for OutboundCallManager"
+            )
         self._sdk_client = TwilioClient(account_sid, auth_token)
 
     @property
@@ -265,6 +280,10 @@ _TELNYX_AMD_BY_TWILIO_MODE = {
     "Enable": "detect",
     "Disabled": "disabled",
 }
+
+_NATIVE_TELNYX_AMD_MODES = frozenset(
+    {"premium", "detect", "detect_beep", "detect_words", "greeting_end", "disabled"}
+)
 
 
 def telnyx_dial_payload_from_create_kwargs(
@@ -288,7 +307,10 @@ def telnyx_dial_payload_from_create_kwargs(
         "from": create_kwargs["from_"],
         "connection_id": connection_id,
     }
-    amd_mode = _TELNYX_AMD_BY_TWILIO_MODE.get(str(create_kwargs.get("machine_detection", "")))
+    machine_detection = str(create_kwargs.get("machine_detection", ""))
+    amd_mode = _TELNYX_AMD_BY_TWILIO_MODE.get(machine_detection)
+    if amd_mode is None and machine_detection.lower() in _NATIVE_TELNYX_AMD_MODES:
+        amd_mode = machine_detection.lower()
     if amd_mode:
         payload["answering_machine_detection"] = amd_mode
     stream_url = create_kwargs.get("stream_url")
@@ -376,12 +398,23 @@ class TelnyxOutboundClient:
 
 
 class _TelnyxCallsResource:
-    """Adapter satisfying the manager's :class:`OutboundCallsResource` seam."""
+    """Sync ``calls`` facade bridging into the async Telnyx control client.
+
+    These methods spin up a short-lived event loop per invocation because the
+    manager offloads to worker threads with no running loop. Calling them from
+    async code raises immediately with guidance rather than a cryptic
+    ``RuntimeError: asyncio.run() cannot be called from a running event loop``.
+    """
 
     def __init__(self, owner: TelnyxOutboundClient) -> None:
         self._owner = owner
 
     def create(self, **kwargs: Any) -> _TelnyxCreatedCall:
+        if _in_running_loop():
+            raise RuntimeError(
+                "TelnyxOutboundClient.calls is the sync facade for thread workers; "
+                "call owner.dial()/owner.hangup() directly from async code instead."
+            )
         return asyncio.run(self._owner._dial_translated(kwargs))
 
     def __call__(self, call_control_id: str) -> _TelnyxCallUpdater:
@@ -389,17 +422,44 @@ class _TelnyxCallsResource:
 
 
 class _TelnyxCallUpdater:
+    """Adapt ``calls(sid).update(...)`` onto the Telnyx Call Control surface.
+
+    Only the subset the manager actually invokes is supported. Any other
+    keyword raises immediately so Twilio-shaped callers get a clear signal
+    rather than a silent no-op or unintended hangup.
+    """
+
     def __init__(self, owner: TelnyxOutboundClient, call_control_id: str) -> None:
         self._owner = owner
         self._call_control_id = call_control_id
 
     def update(self, **kwargs: Any) -> dict[str, Any]:
-        status = kwargs.get("status")
+        if _in_running_loop():
+            raise RuntimeError(
+                "TelnyxOutboundClient.calls().update() is the sync facade for thread "
+                "workers; call owner.hangup() directly from async code instead."
+            )
+        status = kwargs.pop("status", None)
+        if kwargs:
+            unsupported = ", ".join(sorted(kwargs))
+            raise TypeError(
+                f"Telnyx calls().update() does not support: {unsupported}. "
+                f"Only status='completed' is translated to a hangup command."
+            )
         if status is not None and status != "completed":
             raise ValueError(
-                f"Telnyx adapter only supports completing calls; got status={status!r}"
+                f"Telnyx calls().update() only supports status='completed'; got {status!r}"
             )
         return asyncio.run(self._owner.hangup(self._call_control_id))
+
+
+def _in_running_loop() -> bool:
+    """Return True when called from within a running event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
 
 
 async def emit_telnyx_call_event(
@@ -460,13 +520,8 @@ class OutboundCallManager:
         client: OutboundCallClient | None = None,
     ) -> None:
         if client is None:
-            # Lazy-import twilio at instantiation time.
+            # Lazy-import twilio (and validate credentials) at instantiation time.
             client = TwilioRestOutboundClient(twilio_account_sid, twilio_auth_token)
-
-            if not twilio_account_sid or not twilio_auth_token:
-                raise ValueError(
-                    "twilio_account_sid and twilio_auth_token are required for OutboundCallManager"
-                )
 
         self._event_bus = event_bus
         self._session_id = session_id
@@ -518,6 +573,7 @@ class OutboundCallManager:
         self.dnc_list: DNCStore | None = None
         self.compliance_check: Callable[[str], bool] | None = None
         self.retry_strategy: Any | None = None
+        self._client_closed = False
 
     @property
     def state(self) -> OutboundCallManagerState:
@@ -557,6 +613,21 @@ class OutboundCallManager:
         self._active_call_sid = None
         self._owned_call_sids.clear()
         self._started = False
+
+    async def aclose(self) -> None:
+        """Close an injected client once when it exposes async cleanup.
+
+        Twilio's REST client is stateless for this manager and intentionally
+        remains a no-op. The hook is idempotent so repeated lifecycle calls
+        cannot close the same provider resource twice.
+        """
+        if self._client_closed or not callable(getattr(self._client, "close", None)):
+            return
+        self._client_closed = True
+        client = cast(_AsyncClosableOutboundClient, self._client)
+        result = client.close()
+        if inspect.isawaitable(result):
+            await result
 
     async def hangup_call(self, call_sid: str | None = None) -> None:
         """Hang up an active Twilio call without making ``stop()`` block on REST I/O."""

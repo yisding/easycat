@@ -134,8 +134,8 @@ def verify_telnyx_webhook_signature(
     Ed25519PublicKey = _ed25519_public_key_type()
 
     try:
-        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key))
-        provided_signature = base64.b64decode(signature.strip())
+        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key, validate=True))
+        provided_signature = base64.b64decode(signature.strip(), validate=True)
         key.verify(provided_signature, f"{timestamp}|".encode() + payload)
     except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return False
@@ -216,7 +216,7 @@ def decode_client_state(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, str) or not raw:
         return {}
     try:
-        decoded = json.loads(base64.b64decode(raw).decode("utf-8"))
+        decoded = json.loads(base64.b64decode(raw, validate=True).decode("utf-8"))
     except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return {}
     return decoded if isinstance(decoded, dict) else {}

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import unittest.mock
 from typing import Any
 
 import pytest
@@ -261,3 +263,161 @@ class TestCloseLifecycle:
         await client.close()
 
         assert client._session is None
+
+
+# ── Retry / backoff ────────────────────────────────────────────────
+
+
+class TestRetryBackoff:
+    async def test_429_retries_then_succeeds(self) -> None:
+        client, session = make_client(
+            [
+                _FakeResponse(status=429, body={"errors": [{"title": "rate limited"}]}),
+                _FakeResponse(body={"data": {"id": "CC9"}}),
+            ]
+        )
+        client._retry_backoff_s = 0.0
+
+        result = await client.answer("CC9", {"command_id": "cmd-1"})
+
+        assert result == {"data": {"id": "CC9"}}
+        assert len(session.calls) == 2
+
+    @pytest.mark.parametrize("status", [500, 502, 503, 504])
+    async def test_server_errors_are_retried(self, status: int) -> None:
+        client, session = make_client(
+            [
+                _FakeResponse(status=status),
+                _FakeResponse(body={}),
+            ]
+        )
+        client._retry_backoff_s = 0.0
+
+        await client.answer("CC9", {"command_id": "cmd-1"})
+
+        assert len(session.calls) == 2
+
+    async def test_non_retryable_error_raises_immediately(self) -> None:
+        client, session = make_client(
+            [
+                _FakeResponse(status=400, body={"errors": [{"title": "bad"}]}),
+                _FakeResponse(body={}),
+            ]
+        )
+
+        with pytest.raises(TelnyxApiError) as excinfo:
+            await client.answer("CC9", {})
+
+        assert excinfo.value.status == 400
+        assert len(session.calls) == 1
+
+    async def test_no_command_id_does_not_retry_transient_errors(self) -> None:
+        client, session = make_client([_FakeResponse(status=503), _FakeResponse(body={})])
+        client._retry_backoff_s = 0.0
+
+        with pytest.raises(TelnyxApiError) as excinfo:
+            await client.answer("CC9", {})
+
+        assert excinfo.value.status == 503
+        assert len(session.calls) == 1
+
+    async def test_exhausted_retries_raise_last_api_error(self) -> None:
+        client, session = make_client([_FakeResponse(status=503) for _ in range(3)])
+        client._max_retries = 2
+        client._retry_backoff_s = 0.0
+
+        with pytest.raises(TelnyxApiError) as excinfo:
+            await client.answer("CC9", {"command_id": "cmd-1"})
+
+        assert excinfo.value.status == 503
+        assert len(session.calls) == 3
+
+    async def test_connection_error_retries_then_raises_last(self) -> None:
+        client = TelnyxCallControlClient("key-123")
+        calls: list[int] = []
+
+        class _FailingSession(_RecordingSession):
+            def post(self, url: str, json: Any = None) -> _ResponseContext:
+                calls.append(1)
+                raise aiohttp.ClientConnectionError("connection reset")
+
+        session = _FailingSession()
+
+        async def ensure_session() -> _RecordingSession:
+            return session  # type: ignore[return-value]
+
+        client._ensure_session = ensure_session  # type: ignore[method-assign]
+        client._max_retries = 2
+        client._retry_backoff_s = 0.0
+
+        with pytest.raises(aiohttp.ClientConnectionError):
+            await client.answer("CC9", {"command_id": "cmd-1"})
+
+        assert len(calls) == 3
+
+    async def test_backoff_doubles_between_attempts_and_caps(self) -> None:
+        delays: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            delays.append(delay)
+
+        client = TelnyxCallControlClient("key-123", max_retries=4, retry_backoff_s=0.5)
+        responses = [_FakeResponse(status=503) for _ in range(5)]
+        session = _RecordingSession(responses)
+
+        async def ensure_session() -> _RecordingSession:
+            return session
+
+        client._ensure_session = ensure_session  # type: ignore[method-assign]
+
+        with (
+            unittest.mock.patch.object(asyncio, "sleep", fake_sleep),
+            pytest.raises(TelnyxApiError),
+        ):
+            await client.answer("CC9", {"command_id": "cmd-1"})
+
+        for i, delay in enumerate(delays):
+            expected_base = 0.5 * (2**i)
+            assert expected_base * 0.5 <= delay <= expected_base, (
+                f"attempt {i}: {delay} not in [{expected_base * 0.5}, {expected_base}]"
+            )
+
+    async def test_max_retries_zero_makes_single_attempt(self) -> None:
+        client, session = make_client([_FakeResponse(status=503)])
+        client._max_retries = 0
+
+        with pytest.raises(TelnyxApiError) as excinfo:
+            await client.answer("CC9", {})
+
+        assert excinfo.value.status == 503
+        assert len(session.calls) == 1
+
+    async def test_max_retries_one_makes_exactly_two_attempts(self) -> None:
+        client, session = make_client([_FakeResponse(status=500), _FakeResponse(status=500)])
+        client._max_retries = 1
+        client._retry_backoff_s = 0.0
+
+        with pytest.raises(TelnyxApiError):
+            await client.answer("CC9", {"command_id": "cmd-1"})
+
+        assert len(session.calls) == 2
+
+    @pytest.mark.parametrize(
+        ("max_retries", "backoff"),
+        [(-1, 0.5), (2, -0.1)],
+    )
+    def test_invalid_retry_parameters_raise_value_error(
+        self, max_retries: int, backoff: float
+    ) -> None:
+        with pytest.raises(ValueError):
+            TelnyxCallControlClient("key-123", max_retries=max_retries, retry_backoff_s=backoff)
+
+    async def test_constructor_retry_parameters_are_behavioral(self) -> None:
+        client, session = make_client([_FakeResponse(status=503), _FakeResponse(body={})])
+        client._max_retries = 1
+        client._retry_backoff_s = 0.0
+
+        result = await client.answer("CC9", {"command_id": "cmd-1"})
+
+        assert result == {}
+        assert len(session.calls) == 2

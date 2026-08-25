@@ -79,6 +79,7 @@ async def _handle_telnyx_webhook_request(
     web: Any,
     config: TelnyxVoiceServerConfig,
     stream_tokens: Any,
+    api_client: Any,
 ) -> Any:
     from easycat.telephony.telnyx import (
         parse_telnyx_webhook,
@@ -124,14 +125,15 @@ async def _handle_telnyx_webhook_request(
         return web.Response(status=400, text=str(exc))
 
     from easycat.telephony.telnyx import build_answer_payload
-    from easycat.telephony.telnyx_client import TelnyxApiError, TelnyxCallControlClient
+    from easycat.telephony.telnyx_client import TelnyxApiError
 
     answer_payload = build_answer_payload(
         stream_url=f"{config.stream_url}/?{STREAM_TOKEN_PARAMETER}={stream_token}",
         client_state={"call_control_id": call_control_id},
+        command_id=grant_key,
     )
-    assert config.telnyx_api_key is not None
-    client = TelnyxCallControlClient(config.telnyx_api_key)
+
+    client = api_client
     try:
         await client.answer(call_control_id, answer_payload)
     except TelnyxApiError as exc:
@@ -140,8 +142,6 @@ async def _handle_telnyx_webhook_request(
     except Exception:
         logger.warning("Telnyx answer command raised", exc_info=True)
         return web.Response(status=502, text="Telnyx answer failed")
-    finally:
-        await client.close()
     return web.Response(status=200)
 
 
@@ -254,7 +254,6 @@ async def _shutdown_telnyx_voice_app(
 ) -> None:
     """Drain media sessions even when the webhook listener cleanup fails."""
     listener_error: Exception | None = None
-    body_error: BaseException | None = None
 
     def record_listener_error(stage: str, exc: Exception) -> None:
         nonlocal listener_error
@@ -263,45 +262,40 @@ async def _shutdown_telnyx_voice_app(
         else:
             logger.warning("Telnyx %s also failed", stage)
 
+    async def _guarded_await(stage: str, coro: Any) -> None:
+        try:
+            await coro
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
+            record_listener_error(stage, exc)
+
+    # Set the drain fence before stopping the HTTP listener so accepted media
+    # connections cannot turn into new sessions during shutdown. A listener
+    # implementation can still reject ``close()``; that must not skip the
+    # independent HTTP cleanup or the runtime's session drain.
     try:
-        # Set the drain fence before stopping the HTTP listener so accepted
-        # media connections cannot turn into new sessions during shutdown. A
-        # listener implementation can still reject ``close()``; that must not
-        # skip the independent HTTP cleanup or the runtime's session drain.
-        try:
-            runtime.start_draining(media_server)
-        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-            record_listener_error("media listener close", exc)
-        try:
-            await site.stop()
-        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-            record_listener_error("HTTP site stop", exc)
-    except BaseException as exc:
-        # Cleanup below still owns the runner and live media sessions, but a
-        # cancellation (or another non-ordinary exception) from the shutdown
-        # body must remain the caller-visible outcome.
-        body_error = exc
-        raise
+        runtime.start_draining(media_server)
+    except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
+        record_listener_error("media listener close", exc)
+    if site is not None:
+        await _guarded_await("HTTP site stop", site.stop())
+
+    # Nest the remaining stages so a cancellation during either listener await
+    # still runs the session drain. ``CancelledError`` deliberately is not
+    # caught: once cleanup has been given its chance, it propagates to the
+    # caller with ordinary cancellation semantics.
+    try:
+        if runner is not None:
+            await _guarded_await("HTTP runner cleanup", runner.cleanup())
     finally:
-        # Nest the remaining stages so a cancellation during either listener
-        # await still runs the session drain. ``CancelledError`` deliberately
-        # is not caught: once cleanup has been given its chance, it propagates
-        # to the caller with ordinary cancellation semantics.
         try:
-            try:
-                await runner.cleanup()
-            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-                record_listener_error("HTTP runner cleanup", exc)
-        finally:
-            try:
-                await runtime.drain(
-                    media_server,
-                    drain_timeout_s=config.drain_timeout_s,
-                    force_timeout_s=config.force_shutdown_timeout_s,
-                )
-            except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
-                record_listener_error("media runtime drain", exc)
-        if body_error is None and listener_error is not None:
+            await runtime.drain(
+                media_server,
+                drain_timeout_s=config.drain_timeout_s,
+                force_timeout_s=config.force_shutdown_timeout_s,
+            )
+        except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
+            record_listener_error("media runtime drain", exc)
+        if listener_error is not None:
             raise listener_error
 
 
@@ -358,11 +352,14 @@ async def serve_telnyx_voice_app(
 
     from easycat.config import create_session
     from easycat.session_manager import SessionManager
+    from easycat.telephony.telnyx_client import TelnyxCallControlClient
     from easycat.transports.telnyx_media import TelnyxConnectionTransport
     from easycat.transports.telnyx_media import TelnyxTransportConfig as _TelnyxTransportConfig
 
     manager: SessionManager[int] = SessionManager()
     stream_tokens = StreamTokenStore(config.stream_token_secret)
+    assert config.telnyx_api_key is not None
+    api_client = TelnyxCallControlClient(config.telnyx_api_key)
 
     async def build_session(ws: ServerConnection) -> Session | None:
         transport = TelnyxConnectionTransport(
@@ -392,31 +389,35 @@ async def serve_telnyx_voice_app(
             web=web,
             config=config,
             stream_tokens=stream_tokens,
+            api_client=api_client,
         )
 
-    media_server = await websockets.serve(
-        runtime.handle,
-        config.host,
-        config.media_port,
-        compression=None,
-        max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
-    )
-
-    # Start the webhook HTTP listener; the helper closes the already-bound media
-    # listener if its own setup fails (e.g. http_port in use) so the port is not
-    # leaked before the steady-state try/finally below takes over teardown.
-    runner, site = await _start_webhook_http_listener(web, config, handle_webhook, media_server)
-    logger.info(
-        "Telnyx voice server ready: media ws://%s:%s, webhook http://%s:%s%s",
-        config.host,
-        config.media_port,
-        config.http_host,
-        config.http_port,
-        config.webhook_path,
-    )
-
     event = create_shutdown_event()
+    media_server: Any = None
+    runner: Any = None
+    site: Any = None
     try:
+        media_server = await websockets.serve(
+            runtime.handle,
+            config.host,
+            config.media_port,
+            compression=None,
+            max_size=MAX_WEBSOCKET_MESSAGE_BYTES,
+        )
+
+        runner, site = await _start_webhook_http_listener(
+            web, config, handle_webhook, media_server
+        )
+        logger.info(
+            "Telnyx voice server ready: media listener bound at %s:%s (WSS via public ingress), "
+            "webhook http://%s:%s%s",
+            config.host,
+            config.media_port,
+            config.http_host,
+            config.http_port,
+            config.webhook_path,
+        )
+
         await event.wait()
     finally:
         await _shutdown_telnyx_voice_app(
@@ -426,6 +427,7 @@ async def serve_telnyx_voice_app(
             runner=runner,
             config=config,
         )
+        await api_client.close()
 
 
 def run_telnyx_voice_app(

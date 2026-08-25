@@ -144,6 +144,10 @@ class TelnyxSessionActionExecutor(SessionActionExecutor):
 
     Transfer/DTMF/hangup map to the ``/actions/*`` command endpoints and SMS
     to ``POST /v2/messages`` — no TwiML redirect round-trip.
+
+    The lazily created client owns an aiohttp session; call :meth:`close`
+    when the executor is no longer needed (e.g., on session teardown) to
+    release the connector.
     """
 
     def __init__(self, config: TelnyxSessionActionConfig) -> None:
@@ -223,6 +227,13 @@ class TelnyxSessionActionExecutor(SessionActionExecutor):
             ) from exc
         self._client = TelnyxCallControlClient(self._config.api_key, base_url=TELNYX_API_BASE_URL)
         return self._client
+
+    async def close(self) -> None:
+        """Release the underlying HTTP session, if one was created."""
+        client = self._client
+        self._client = None
+        if client is not None and hasattr(client, "close"):
+            await client.close()
 
 
 def _call_control_id_from(session: Any) -> str | None:

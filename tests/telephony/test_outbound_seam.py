@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import types
+import unittest.mock
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -121,6 +122,86 @@ class TestInjectedClientPlacement:
         finally:
             manager.stop()
 
+
+class TestOutboundClientCleanupLifecycle:
+    async def test_manager_closes_built_telnyx_client_exactly_once(self) -> None:
+        from easycat.config import (
+            OutboundCallConfig,
+            TelephonyConfig,
+            _create_telephony_helpers,
+        )
+
+        result = _create_telephony_helpers(
+            EventBus(),
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(
+                    provider="telnyx",
+                    from_number="+15550000000",
+                    telnyx_api_key="key",
+                    telnyx_connection_id="conn",
+                ),
+            ),
+        )
+
+        manager = next(
+            helper for helper in result.helpers if isinstance(helper, OutboundCallManager)
+        )
+        client = manager._client
+        assert isinstance(client, TelnyxOutboundClient)
+        close_calls = 0
+        real_close = TelnyxOutboundClient.close
+
+        async def counting_close(self: TelnyxOutboundClient) -> None:
+            nonlocal close_calls
+            close_calls += 1
+            await real_close(self)
+
+        with unittest.mock.patch.object(
+            TelnyxOutboundClient,
+            "close",
+            counting_close,
+        ):
+            for helper in reversed(result.helpers):
+                helper.start()
+            for helper in reversed(result.helpers):
+                helper.stop()
+            await manager.aclose()
+            await manager.aclose()
+
+        assert close_calls == 1
+
+    async def test_repeated_aclose_is_safe_for_custom_client(self) -> None:
+        class _ClosableClient(_FakeOutboundClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.close_count = 0
+
+            async def close(self) -> None:
+                self.close_count += 1
+
+        client = _ClosableClient()
+        manager = OutboundCallManager(EventBus(), from_number="+1555", client=client)
+
+        await manager.aclose()
+        await manager.aclose()
+
+        assert client.close_count == 1
+
+    async def test_twilio_client_cleanup_is_unaffected(self) -> None:
+        with _stub_twilio_sdk():
+            manager = OutboundCallManager(
+                EventBus(),
+                from_number="+1555",
+                twilio_account_sid="AC123",
+                twilio_auth_token="token",
+            )
+
+            await manager.aclose()
+            await manager.aclose()
+
+            assert isinstance(manager._client, TwilioRestOutboundClient)
+
     def test_fake_satisfies_runtime_checkable_protocol(self) -> None:
         assert isinstance(_FakeOutboundClient(), OutboundCallClient)
         with _stub_twilio_sdk():
@@ -181,6 +262,42 @@ class TestTelnyxOutboundClientRouting:
         client.calls("CC7").update(status="completed")
 
         assert fake.hangups == ["CC7"]
+
+    def test_update_with_unsupported_kwarg_raises_type_error(self) -> None:
+        client = self._make_owner_client(_FakeTelnyxControl())
+
+        with pytest.raises(TypeError, match="does not support.*twiml"):
+            client.calls("CC7").update(twiml="<Response><Dial>+1555</Dial></Response>")
+
+    def test_update_with_non_completed_status_raises_value_error(self) -> None:
+        client = self._make_owner_client(_FakeTelnyxControl())
+
+        with pytest.raises(ValueError, match="only supports status='completed'"):
+            client.calls("CC7").update(status="canceled")
+
+    def test_update_without_kwargs_defaults_to_hangup(self) -> None:
+        fake = _FakeTelnyxControl()
+        client = self._make_owner_client(fake)
+
+        client.calls("CC7").update()
+
+        assert fake.hangups == ["CC7"]
+
+    @pytest.mark.asyncio
+    async def test_sync_create_from_async_context_raises_clear_error(self) -> None:
+        fake = _FakeTelnyxControl()
+        client = self._make_owner_client(fake)
+
+        with pytest.raises(RuntimeError, match="sync facade.*owner\\.dial"):
+            client.calls.create(to="+1", from_="+2")
+
+    @pytest.mark.asyncio
+    async def test_sync_update_from_async_context_raises_clear_error(self) -> None:
+        fake = _FakeTelnyxControl()
+        client = self._make_owner_client(fake)
+
+        with pytest.raises(RuntimeError, match="sync facade.*owner\\.hangup"):
+            client.calls("CC7").update(status="completed")
 
     def test_isinstance_outbound_call_client_protocol(self) -> None:
         assert isinstance(TelnyxOutboundClient("key", connection_id="c"), OutboundCallClient)
@@ -256,6 +373,38 @@ class TestDialPayloadTranslation:
     def test_empty_connection_id_rejected(self) -> None:
         with pytest.raises(ValueError, match="connection_id"):
             telnyx_dial_payload_from_create_kwargs({"to": "+1", "from_": "+2"}, connection_id="")
+
+    @pytest.mark.parametrize(
+        "native_mode",
+        ["premium", "detect", "detect_beep", "detect_words", "greeting_end", "disabled"],
+    )
+    def test_native_telnyx_amd_modes_pass_through(self, native_mode: str) -> None:
+        payload = telnyx_dial_payload_from_create_kwargs(
+            {"to": "+1", "from_": "+2", "machine_detection": native_mode},
+            connection_id="conn",
+        )
+
+        assert payload["answering_machine_detection"] == native_mode
+
+    @pytest.mark.parametrize(
+        "native_mode",
+        ["Premium", "DETECT_BEEP", "Detect_Words"],
+    )
+    def test_native_telnyx_amd_modes_are_case_insensitive(self, native_mode: str) -> None:
+        payload = telnyx_dial_payload_from_create_kwargs(
+            {"to": "+1", "from_": "+2", "machine_detection": native_mode},
+            connection_id="conn",
+        )
+
+        assert payload["answering_machine_detection"] == native_mode.lower()
+
+    def test_unknown_amd_mode_is_omitted(self) -> None:
+        payload = telnyx_dial_payload_from_create_kwargs(
+            {"to": "+1", "from_": "+2", "machine_detection": "not_a_real_mode"},
+            connection_id="conn",
+        )
+
+        assert "answering_machine_detection" not in payload
 
 
 class TestEmitTelnyxCallEvent:

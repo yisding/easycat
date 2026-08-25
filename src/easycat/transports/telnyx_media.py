@@ -319,7 +319,7 @@ def _decode_client_state(raw: Any) -> dict[str, str]:
     if not isinstance(raw, str) or not raw:
         return {}
     try:
-        decoded = json.loads(base64.b64decode(raw).decode("utf-8"))
+        decoded = json.loads(base64.b64decode(raw, validate=True).decode("utf-8"))
     except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
         return {}
     if not isinstance(decoded, dict):
@@ -390,8 +390,50 @@ def _parse_telnyx_int(value: Any) -> int | None:
     return None
 
 
+def _telnyx_sequence_number(
+    message: Mapping[str, Any],
+    nested: Mapping[str, Any] | None = None,
+) -> int | None:
+    """Return a frame's ``sequence_number``, top-level first.
+
+    Telnyx carries ``sequence_number`` beside ``event`` on the message itself
+    (like Twilio's ``sequenceNumber``); the nested payload is accepted as a
+    fallback so either placement drives gap detection.
+    """
+    sequence = _parse_telnyx_int(message.get("sequence_number"))
+    if sequence is None and nested is not None:
+        sequence = _parse_telnyx_int(nested.get("sequence_number"))
+    return sequence
+
+
+def _telnyx_stream_id(
+    message: Mapping[str, Any],
+    nested: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Return a frame's ``stream_id``, accepting either placement.
+
+    Telnyx sends ``stream_id`` as a sibling of ``event``; the nested payload
+    is checked as well so both shapes resolve to the same stream identity.
+    """
+    for source in (message, nested):
+        if source is None:
+            continue
+        value = source.get("stream_id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 class _TelnyxStreamDiagnostics:
-    """Sequence-gap detection across the negotiated stream."""
+    """Sequence-gap detection across the negotiated stream.
+
+    Gaps are reported as degraded events but audio is never re-requested or
+    buffered for replay. This is intentional: in real-time voice, stale media
+    is worthless by the time it could be recovered, and holding the pipeline
+    to resync would add latency that compounds with every subsequent gap.
+    Downstream consumers (session metrics, journaling) decide whether a gap
+    rate warrants operator attention.
+    """
 
     def __init__(self, emit_degraded: Callable[..., None]) -> None:
         self._emit_degraded = emit_degraded
@@ -400,12 +442,16 @@ class _TelnyxStreamDiagnostics:
     def reset(self) -> None:
         self._last_sequence_number = None
 
-    def start(self, start: Mapping[str, Any]) -> None:
+    def start(self, message: Mapping[str, Any], nested: Mapping[str, Any] | None = None) -> None:
         self.reset()
-        self._last_sequence_number = _parse_telnyx_int(start.get("sequence_number"))
+        self._last_sequence_number = _telnyx_sequence_number(message, nested)
 
-    def observe(self, payload: Mapping[str, Any]) -> None:
-        sequence = _parse_telnyx_int(payload.get("sequence_number"))
+    def observe(
+        self,
+        message: Mapping[str, Any],
+        nested: Mapping[str, Any] | None = None,
+    ) -> None:
+        sequence = _telnyx_sequence_number(message, nested)
         if sequence is None:
             return
         previous = self._last_sequence_number
@@ -474,7 +520,7 @@ def _is_active_telnyx_stream_event(
         logger.debug("Ignoring Telnyx %s before start", event_name)
         return False
     nested = msg.get(event_name)
-    stream_id = nested.get("stream_id") if isinstance(nested, dict) else None
+    stream_id = _telnyx_stream_id(msg, nested if isinstance(nested, dict) else None)
     if stream_id is not None and stream_id != active_stream_id:
         logger.debug(
             "Ignoring Telnyx %s for stream_id=%s while active stream_id=%s",
@@ -513,12 +559,18 @@ class _TelnyxOutboundCoalescer:
         self._buffer = bytearray()
 
     def append(self, data: bytes) -> list[bytes]:
-        """Append encoded audio; return any full frames ready to send."""
+        """Append encoded audio; return any frames ready to send.
+
+        Anything at or above the ~20 ms minimum ships immediately (capped at
+        ~100 ms per wire frame); holding out for a full max-sized frame would
+        add up to ~100 ms to the start of every utterance.
+        """
         self._buffer.extend(data)
         frames: list[bytes] = []
-        while len(self._buffer) >= self._max_flush_bytes:
-            frames.append(bytes(self._buffer[: self._max_flush_bytes]))
-            del self._buffer[: self._max_flush_bytes]
+        while len(self._buffer) >= self._min_flush_bytes:
+            size = min(len(self._buffer), self._max_flush_bytes)
+            frames.append(bytes(self._buffer[:size]))
+            del self._buffer[:size]
         return frames
 
     def flush(self) -> bytes | None:
@@ -777,7 +829,7 @@ class _TelnyxProtocolMixin:
         if not isinstance(start, dict):
             logger.debug("Ignoring Telnyx start with non-object payload")
             return None
-        stream_id = start.get("stream_id")
+        stream_id = _telnyx_stream_id(msg, start)
         call_control_id = start.get("call_control_id")
         if not isinstance(stream_id, str) or not stream_id:
             await self._reject_start(4003, "Missing stream_id")
@@ -832,7 +884,7 @@ class _TelnyxProtocolMixin:
         self._answered_at = time.monotonic()
         self._call_ended_emitted = False
         self._pending_marks = {}
-        self._diagnostics.start(start)
+        self._diagnostics.start(msg, start)
         identity, caller, called = _parse_telnyx_start_identity(
             start,
             call_control_id,
@@ -888,13 +940,13 @@ class _TelnyxProtocolMixin:
         media = _accepted_telnyx_media(msg, active_stream_id=self._stream_id)
         if media is None:
             return
-        self._diagnostics.observe(media)
+        self._diagnostics.observe(msg, media)
         payload_text = media.get("payload", "")
         if not isinstance(payload_text, str) or not payload_text:
             return
 
         try:
-            payload = base64.b64decode(payload_text)
+            payload = base64.b64decode(payload_text, validate=True)
         except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.warning("Ignoring Telnyx media frame with invalid base64 payload")
             self._emit_degraded(_DEGRADED_TELNYX_ERROR, "invalid base64 media payload")
@@ -916,7 +968,7 @@ class _TelnyxProtocolMixin:
         ):
             return
         nested = msg.get("stop")
-        self._diagnostics.observe(nested if isinstance(nested, dict) else {})
+        self._diagnostics.observe(msg, nested if isinstance(nested, dict) else None)
         logger.info("Telnyx stream stopped (stream_id=%s)", self._stream_id)
         tail = self._inbound_resampler.finish()
         if tail:
@@ -944,7 +996,7 @@ class _TelnyxProtocolMixin:
         if not isinstance(mark, dict):
             logger.debug("Ignoring Telnyx mark with non-object payload")
             return
-        self._diagnostics.observe(mark)
+        self._diagnostics.observe(msg, mark)
         mark_name = mark.get("name")
         if not isinstance(mark_name, str) or not mark_name:
             logger.debug("Ignoring Telnyx mark with invalid name")
@@ -1665,7 +1717,7 @@ class TelnyxConnectionTransport(_TelnyxProtocolMixin, AudioQueueMixin):
         if not isinstance(start, dict):
             logger.debug("Ignoring Telnyx start with non-object payload")
             return None
-        stream_id = start.get("stream_id")
+        stream_id = _telnyx_stream_id(msg, start)
         call_control_id = start.get("call_control_id")
         if not isinstance(stream_id, str) or not stream_id:
             logger.warning("Rejecting Telnyx start without stream_id")

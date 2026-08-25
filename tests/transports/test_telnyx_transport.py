@@ -278,6 +278,49 @@ async def test_sequence_gap_emits_degraded() -> None:
     assert any(e.reason == _DEGRADED_TELNYX_SEQUENCE_GAP for e in degraded)
 
 
+@pytest.mark.asyncio
+async def test_top_level_sequence_number_drives_gap_detection() -> None:
+    """Telnyx carries sequence_number beside ``event``, not inside the payload."""
+    bus, collected = make_telnyx_bus()
+    transport = TelnyxTransport(TelnyxTransportConfig(), event_bus=bus)
+    transport._ws = _DummyTelnyxWebSocket()
+    await transport._handle_message(
+        json.dumps(
+            {
+                "event": "start",
+                "sequence_number": "1",
+                "stream_id": "ST1",
+                "start": {
+                    "call_control_id": "CC1",
+                    "media_format": {"encoding": "L16", "sample_rate": 16000, "channels": 1},
+                },
+            }
+        )
+    )
+    # The start frame carried stream_id at the top level only, so the stream
+    # must still be admitted rather than closed with 4003.
+    assert transport._stream_id == "ST1"
+
+    for sequence in ("2", "9"):
+        await transport._handle_message(
+            json.dumps(
+                {
+                    "event": "media",
+                    "sequence_number": sequence,
+                    "stream_id": "ST1",
+                    "media": {
+                        "track": "inbound",
+                        "payload": base64.b64encode(_pcm_silence(20)).decode("ascii"),
+                    },
+                }
+            )
+        )
+    await drain(transport)
+
+    degraded = [e for e in collected.get(TransportDegraded, []) if not e.fatal]
+    assert any(e.reason == _DEGRADED_TELNYX_SEQUENCE_GAP for e in degraded)
+
+
 # ── DTMF ──────────────────────────────────────────────────────────
 
 

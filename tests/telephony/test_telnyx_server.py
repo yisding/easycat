@@ -20,8 +20,13 @@ import pytest
 
 pytest.importorskip("cryptography")
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+)
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    PublicFormat,
+)
 
 import easycat.telephony.telnyx_client as telnyx_client_module
 import easycat.telephony.telnyx_server as telnyx_server_module
@@ -38,7 +43,10 @@ from easycat.telephony.telnyx_server import (
 )
 from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 from easycat.voice_app import VoiceApp
-from tests.transports.test_telnyx_transport import _ScriptedTelnyxWebSocket, _start_msg
+from tests.transports.test_telnyx_transport import (
+    _ScriptedTelnyxWebSocket,
+    _start_msg,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -608,6 +616,10 @@ def test_signed_call_initiated_mints_token_and_answers(
     assert payload["send_silence_when_idle"] is True
     # client_state binds the call back to its control id.
     assert decode_client_state(payload["client_state"]) == {"call_control_id": "CC1"}
+    # command_id is the webhook delivery id so Telnyx deduplicates redeliveries.
+    assert payload["command_id"]
+    _, retry_payload = answered[1]
+    assert retry_payload["command_id"] == payload["command_id"]
     # The stream URL carries the one-time token on our public wss:// origin.
     parsed = urlsplit(payload["stream_url"])
     assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/") == "wss://example/media"
