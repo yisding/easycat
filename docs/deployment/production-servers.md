@@ -216,7 +216,7 @@ For public deployments, put the signaling server behind HTTPS so
 bundled client can read that token from its initial `#token=` fragment, removes
 it from the visible URL, and forwards it in the `Authorization` header. URL
 fragments are not included in HTTP requests, while direct `?token=` query
-authentication remains off unless `allow_query_token=True` is set explicitly.
+authentication remains off unless `allow_query_token=True` is configured directly on `WebRTCTransportConfig`; the environment helper has no opt-in.
 
 The server can use configured TURN credentials without returning TURN entries
 from `/config`: the browser receives STUN-only config while the server peer can

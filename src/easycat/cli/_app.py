@@ -580,8 +580,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run python docs/using-easycat/10-telephony/main.py",
             (
                 "uv sync "
-                "--extra openai --extra telephony --extra telephony-fastapi "
-                "--extra openai-agents --group dev"
+                "--extra openai --extra telephony --extra telnyx "
+                "--extra telephony-fastapi --extra openai-agents --group dev"
             ),
             "uv run easycat doctor --env-file .env --json",
             (
@@ -592,6 +592,20 @@ _DOCS_LINKS: list[_DocsLink] = [
                 "uv run --env-file .env uvicorn examples.telnyx_app:create_app "
                 "--factory --host 0.0.0.0"
             ),
+        ),
+    },
+    {
+        "label": "Telnyx Call Control setup",
+        "path": "docs/reference/telnyx-setup.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": (
+            "Configure Telnyx portal credentials, media streams, webhook signing, "
+            "and EasyCat environment variables."
+        ),
+        "commands": (
+            "uv sync --extra openai --extra telnyx --extra openai-agents --group dev",
+            "uv run python examples/telnyx_voice.py",
         ),
     },
     {

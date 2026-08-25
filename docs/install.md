@@ -84,6 +84,9 @@ For a lean local OpenAI voice install with the same main pieces:
 uv sync --extra local --extra openai --extra openai-agents --extra silero-vad --extra aec --group dev
 ```
 
+`quickstart` already includes `local`, `openai`, and `openai-agents`; this
+lean alternative makes the Silero VAD and AEC3 model dependencies explicit.
+
 ## Extras by capability
 
 Commands below are for this repository. In an application, use the equivalent

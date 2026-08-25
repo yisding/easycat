@@ -15,7 +15,8 @@ route discovery or run `uv run easycat explain json-schema`.
 ## Rules
 
 - The app-first entry point is `from easycat import VoiceApp`: one noun for a
-  voice product that runs across `local`/`browser`/`websocket`/`twilio` modes.
+  voice product that runs across `local`/`browser`/`websocket`/`twilio`/
+  `telnyx` modes.
 - The first-run path is `VoiceApp(agent=...).run("local")`.
 - `EasyConfig` plus `run` is the explicit-configuration path when an app needs
   provider, turn-taking, journal, or transport control. In applications that
@@ -228,7 +229,7 @@ depend on this surface:
   agents=None, mcp_servers=None, toolsets=None)`.
 - `RemoteResponsesAPIBridge` — constructor
   `RemoteResponsesAPIBridge(base_url, model, *, api_key=None, timeout=120.0,
-  metadata=None)`.
+  metadata=None, reasoning_effort=None)`.
 - `GenericWorkflowBridge` — constructor
   `GenericWorkflowBridge(workflow, *, display_name=None)`.
 - `LangChainBridge` — constructor `LangChainBridge(runnable, *,

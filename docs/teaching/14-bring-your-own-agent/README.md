@@ -79,13 +79,14 @@
 
 - **Added:** a hand-rolled `MyWorkflow` class with
   `on_user_turn(text, *, recorder, cancel_token)` (deep mode);
-  the `auto_adapt_agent()` → `BridgeAdapterShim` flow; the seven
-  `SessionAction` types and their executors; the four output
-  processors (`MarkdownStripProcessor`, `PhoneticReplacementProcessor`,
-  `PauseProcessor`, custom); `mcp_servers=[...]` config entry.
+  the `auto_adapt_agent()` → bridge flow; session-action wiring with
+  `SessionActions`, `EndCallAction`, and `CoreSessionActionExecutor`; the
+  three-item pronunciation chain (`MarkdownStripProcessor`,
+  `PhoneticReplacementProcessor`, and `PauseProcessor`).
+- **Also covered:** related configuration guidance for
+  `mcp_servers=[...]`, even though this checkpoint's script does not use it.
 - **Modified:** `EasyConfig(agent=...)` now points at a
-  hand-rolled workflow, not an `agents.Agent(...)` from a
-  framework.
+  hand-rolled workflow, not an `agents.Agent(...)` from a framework.
 - **Removed:** dependence on the OpenAI Agents SDK as an agent
   surface. (It still works — chapter 13 used it — but this
   chapter shows you don't need any framework at all.)
@@ -234,7 +235,7 @@
 -    if name == "twilio":
 -        # Requires `uv sync --extra telephony --group dev`. A live phone call connects
 -        # via Twilio Media Streams over WebSocket; see
--        # `examples/twilio_app.py` for the Flask app that wires this up.
+-        # `examples/twilio_app.py` for the FastAPI app that wires this up.
 -        from easycat.transports.twilio_media import TwilioTransportConfig
 -
 -        return TwilioTransportConfig()
@@ -535,23 +536,22 @@ workflow object.
                auto_adapt_agent()
                          │
              ┌───────────┼──────────────────────────┐
-             ▼           ▼                          ▼
+            ▼           ▼                          ▼
      OpenAIAgentsBridge  PydanticAIBridge   GenericWorkflowBridge
              │           │                          │
              └───────────┴──────────┬───────────────┘
                                     ▼
-                          BridgeAdapterShim
+                        ExternalAgentBridge
                                     │
                                     ▼
                               Session.run()
 ```
 
 Every `agent=` value the config accepts is routed through
-`auto_adapt_agent()`, which picks the right concrete bridge and
-wraps it in `BridgeAdapterShim`. The shim is the thing `Session`
-actually calls `run_streaming()` on. So the "Session orchestration"
-in chapters 2-13 has always been framework-agnostic; bridges are
-the seam.
+`auto_adapt_agent()`, which picks the right concrete bridge. EasyCat then wraps
+the result in `AgentRunner` unless wrapping is disabled, so Session can drive it
+through one bridge surface. So the "Session orchestration" in chapters 2-13 has
+always been framework-agnostic; bridges are the seam.
 
 ## The three things ch 14's script shows
 
@@ -799,7 +799,7 @@ EasyConfig(
 ```
 
 The validator accepts `stdio://`, `sse://`, `http://`, `https://`.
-`BridgeAdapterShim` forwards the list into `RecorderContext`, and
+EasyCat forwards the list into `RecorderContext`, and
 each bridge injects it into its framework's agent object
 (`agent.mcp_servers = [...]` before `run_streamed()`). Shallow-mode
 `GenericWorkflowBridge` logs a warning because it has no way to

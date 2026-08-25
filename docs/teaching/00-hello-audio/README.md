@@ -34,6 +34,9 @@
   The `local` extra bundles `sounddevice` (mic/speaker) and
   `numpy` (sample buffers). On Linux you may also need
   `libportaudio2` from your package manager.
+- Later chapters and cumulative checkpoint replay use provider/model extras;
+  follow each chapter's prerequisites or install the ladder-level
+  [prerequisites](../README.md#prerequisites) before continuing.
 - A working microphone and speakers.
 
 ## Run it

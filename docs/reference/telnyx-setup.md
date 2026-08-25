@@ -10,7 +10,8 @@ security model for running EasyCat against Telnyx Call Control v2.
 2. An EasyCat installation with the `telnyx` extra:
 
    ```bash
-   uv sync --extra telnyx --group dev
+   # This example also uses the OpenAI voice providers and agent bridge.
+   uv sync --extra openai --extra telnyx --extra openai-agents --group dev
    ```
 
 3. A public `wss://` endpoint that Telnyx can reach for media streams.
@@ -23,7 +24,9 @@ security model for running EasyCat against Telnyx Call Control v2.
    portal and create a new **Call Control** application.
 2. Set the webhook URL to `https://your-host:8000/telnyx` — this is where
    EasyCat receives `call.initiated` and other lifecycle deliveries.
-3. Note the **Connection ID** for outbound calls (`TELNYX_CONNECTION_ID`).
+3. Note the **Connection ID** for outbound calls. The `examples/telnyx_app.py`
+   demo reads it from `TELNYX_CONNECTION_ID`; library users configure it as
+   `OutboundCallConfig.telnyx_connection_id`.
 
 ### Copy credentials
 
@@ -41,7 +44,7 @@ security model for running EasyCat against Telnyx Call Control v2.
 | `TELNYX_API_KEY` | Yes | Call Control Bearer token for answering/dialing/hanging up. |
 | `TELNYX_PUBLIC_KEY` | Yes* | Ed25519 public key for webhook signature verification. |
 | `TELNYX_STREAM_TOKEN_SECRET` | No | Pins the stream-token signing key across restarts. |
-| `TELNYX_CONNECTION_ID` | Outbound only | Connection ID for outbound Dial commands. |
+| `TELNYX_CONNECTION_ID` | Example outbound only | Connection ID read by `examples/telnyx_app.py`; library code instead requires `OutboundCallConfig.telnyx_connection_id`. |
 | `TELNYX_START_TIMEOUT_S` | No | Seconds to wait for a valid `start` frame (default: `10`). |
 
 `TELNYX_WS_PORT` (default `8766`) and `TELNYX_MAX_SESSIONS` (default `64`) are

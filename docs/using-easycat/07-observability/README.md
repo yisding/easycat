@@ -36,8 +36,7 @@ variants and writes:
 .easycat/tutorial/ch07/candidate.bundle
 ```
 
-Each run prints its journal record count and turn count. On the current
-checkpoint, each bundle has 31 records across 2 turns.
+Each run prints its current journal record count and turn count.
 
 To record only one variant at a path you choose:
 
@@ -116,7 +115,7 @@ Replay the captured record stream with explicit safe settings:
 uv run easycat replay .easycat/tutorial/ch07/baseline.bundle --fidelity artifact --tool-policy deny --json
 ```
 
-This bundle reports 31 frames, the `agent` stage, artifact fidelity, and
+This bundle reports the `agent` stage, artifact fidelity, and
 `side_effecting: false`. Fast artifact replay masks nondeterministic timing
 fields so repeated analysis can be deterministic.
 
