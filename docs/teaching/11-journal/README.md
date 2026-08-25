@@ -73,8 +73,10 @@ checkpoint" rule bends here because the chapter's whole point is
 are checked in so you can work offline, on a plane, without API
 keys, without a mic — pick the constraint that fits.
 
-If you do want to scrub a *live* bundle: any chapter from 2 onward dumps
-one to its own generated `runs/` directory after you run it. Chapter 9's
+If you do want to scrub a *live* bundle: run a runnable chapter that
+exports a bundle; it writes one to that chapter's generated `runs/`
+directory after you run it. Set `OPENAI_API_KEY` and `DEEPGRAM_API_KEY`
+first. Chapter 9's
 variant C, `estimate.py`, is the most interesting — barge-in turns have
 the richest record set. Run that chapter first, then pass one of the
 generated `runs/*.bundle` files from

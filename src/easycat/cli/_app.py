@@ -580,8 +580,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run python docs/using-easycat/10-telephony/main.py",
             (
                 "uv sync "
-                "--extra openai --extra telephony --extra telephony-fastapi "
-                "--extra openai-agents --group dev"
+                "--extra openai --extra telephony --extra telnyx "
+                "--extra telephony-fastapi --extra openai-agents --group dev"
             ),
             "uv run easycat doctor --env-file .env --json",
             (
