@@ -1840,26 +1840,34 @@ class Session:
             self._heartbeat_task = None
             await self.transport.disconnect()
             await self._turn_manager.shutdown()
-            agent_close_error: Exception | None = None
+            runtime_close_error: Exception | None = None
             try:
                 await aclose_if_supported(self.agent)
             except Exception as exc:
-                agent_close_error = exc
+                runtime_close_error = exc
                 logger.warning("Error closing agent during stop", exc_info=True)
             try:
                 await self._close_action_executors()
             except Exception as exc:
-                if agent_close_error is None:
-                    agent_close_error = exc
-                logger.warning("Error closing action executors during stop", exc_info=True)
+                if runtime_close_error is not None:
+                    runtime_close_error = ExceptionGroup(
+                        "Session runtime resource cleanup failed",
+                        [runtime_close_error, exc],
+                    )
+                else:
+                    runtime_close_error = exc
+                logger.warning(
+                    "Error closing action executors during stop",
+                    exc_info=True,
+                )
             try:
                 await self._close_audio_providers(skip_stt=stt_provider_close_transferred)
             except Exception as provider_close_error:
-                if agent_close_error is not None:
-                    raise agent_close_error from provider_close_error
+                if runtime_close_error is not None:
+                    raise runtime_close_error from provider_close_error
                 raise
-            if agent_close_error is not None:
-                raise agent_close_error
+            if runtime_close_error is not None:
+                raise runtime_close_error
             if force:
                 await self._drain_force_runtime_signals(runtime_signals, deferred=True)
             self._turn_lifecycle.clear_identity()

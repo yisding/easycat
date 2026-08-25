@@ -409,3 +409,19 @@ async def test_first_executor_close_failure_still_closes_remaining_executors() -
 
     assert failing.close_count == 1
     assert healthy.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_both_agent_and_executor_close_failures_are_preserved() -> None:
+    failing = _RecordingExecutor(lambda name: None, close_error=RuntimeError("executor boom"))
+    session = Session(_full_config(agent=_FailingCloseAgent()))
+    session.register_action_executor(failing)
+
+    with pytest.raises(ExceptionGroup, match="runtime resource cleanup") as excinfo:
+        await session.stop()
+
+    assert [str(exc) for exc in excinfo.value.exceptions] == [
+        "agent close boom",
+        "executor boom",
+    ]
+    assert failing.close_count == 1
