@@ -49,6 +49,7 @@ from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 from easycat.transports._telephony_media import (
     StreamTokenValidator,
     TelephonyConnectionTransportBase,
+    decode_telephony_raw,
     emit_call_ended,
     enforce_media_bind_auth,
     parse_telephony_message,
@@ -560,13 +561,10 @@ class _TelnyxProtocolMixin:
         """Drive one Telnyx receive stream and perform guarded cleanup."""
         try:
             async for raw in ws:
-                if isinstance(raw, bytes):
-                    try:
-                        raw = raw.decode("utf-8")
-                    except UnicodeDecodeError:
-                        logger.warning("Ignoring non-UTF-8 Telnyx message")
-                        continue
-                await self._handle_message(raw)
+                decoded = decode_telephony_raw(raw, provider="Telnyx")
+                if decoded is None:
+                    continue
+                await self._handle_message(decoded)
         except websockets.exceptions.ConnectionClosed as exc:
             logger.info("Telnyx media stream disconnected")
             if isinstance(exc, websockets.exceptions.ConnectionClosedError):

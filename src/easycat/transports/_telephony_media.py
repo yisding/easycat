@@ -722,5 +722,12 @@ class TelephonyConnectionTransportBase(AudioQueueMixin):
 
 
 __all__ = [
+    "StreamTokenValidator",
     "TelephonyConnectionTransportBase",
+    "decode_telephony_raw",
+    "emit_call_ended",
+    "enforce_media_bind_auth",
+    "parse_telephony_message",
+    "parse_wire_int",
+    "run_stream_token_validation",
 ]
