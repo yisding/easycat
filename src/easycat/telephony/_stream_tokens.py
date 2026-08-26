@@ -59,9 +59,11 @@ class StreamTokenStore:
     ) -> str:
         """Return a signed token accepted by exactly one future ``consume``.
 
-        Reusing an idempotency key returns the original token until its TTL
-        expires, even if media preflight already consumed it. Providers can
-        retry the same webhook without receiving additional authorizations.
+        Reusing an idempotency key returns the outstanding token while it is
+        still unconsumed. Once the grant has been consumed, a retried webhook
+        mints a fresh single-use grant bound to the same claims, so the retry's
+        media connection is authorized without reviving the spent token:
+        previously consumed tokens are never accepted again.
         """
         self._prune_expired()
         normalized_claims = tuple(
@@ -72,7 +74,11 @@ class StreamTokenStore:
             if existing is not None:
                 if existing.claims != normalized_claims:
                     raise ValueError("idempotency_key cannot be reused with different claims")
-                return existing.token
+                nonce = existing.token.split(".", 1)[0]
+                if nonce in self._pending:
+                    # Still outstanding: retries reuse the same token so the
+                    # provider receives one stable authorization per webhook.
+                    return existing.token
 
         nonce = secrets.token_urlsafe(24)
         expires_at_ns = math.ceil((self._now() + self._ttl_s) * _STREAM_TOKEN_TIME_SCALE)
