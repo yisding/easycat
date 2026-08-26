@@ -1840,20 +1840,34 @@ class Session:
             self._heartbeat_task = None
             await self.transport.disconnect()
             await self._turn_manager.shutdown()
-            agent_close_error: Exception | None = None
+            runtime_close_error: Exception | None = None
             try:
                 await aclose_if_supported(self.agent)
             except Exception as exc:
-                agent_close_error = exc
+                runtime_close_error = exc
                 logger.warning("Error closing agent during stop", exc_info=True)
+            try:
+                await self._close_action_executors()
+            except Exception as exc:
+                if runtime_close_error is not None:
+                    runtime_close_error = ExceptionGroup(
+                        "Session runtime resource cleanup failed",
+                        [runtime_close_error, exc],
+                    )
+                else:
+                    runtime_close_error = exc
+                logger.warning(
+                    "Error closing action executors during stop",
+                    exc_info=True,
+                )
             try:
                 await self._close_audio_providers(skip_stt=stt_provider_close_transferred)
             except Exception as provider_close_error:
-                if agent_close_error is not None:
-                    raise agent_close_error from provider_close_error
+                if runtime_close_error is not None:
+                    raise runtime_close_error from provider_close_error
                 raise
-            if agent_close_error is not None:
-                raise agent_close_error
+            if runtime_close_error is not None:
+                raise runtime_close_error
             if force:
                 await self._drain_force_runtime_signals(runtime_signals, deferred=True)
             self._turn_lifecycle.clear_identity()
@@ -2271,6 +2285,28 @@ class Session:
                 helper.stop()
             except Exception:
                 logger.debug("Error stopping session helper", exc_info=True)
+
+    async def _close_action_executors(self) -> None:
+        """Release provider resources owned by optional action executors.
+
+        Every executor is attempted even when one fails; the first error is
+        raised after the loop so ``stop()`` can report it alongside the other
+        runtime close errors.
+        """
+        first_error: Exception | None = None
+        for executor in self._action_executors:
+            try:
+                await close_if_supported(executor)
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+                logger.warning(
+                    "Error closing session action executor %r",
+                    executor,
+                    exc_info=True,
+                )
+        if first_error is not None:
+            raise first_error
 
     async def _close_audio_providers(self, *, skip_stt: bool = False) -> None:
         """Release optional resources owned by audio providers."""

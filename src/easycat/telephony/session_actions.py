@@ -119,6 +119,10 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
             kwargs["status"] = status
         await asyncio.to_thread(client.calls(call_sid).update, **kwargs)
 
+    async def close(self) -> None:
+        """Release no shared resources; present for executor lifecycle parity."""
+        return
+
 
 def _apply_inter_digit_delay(digits: str, inter_digit_delay_ms: int) -> str:
     if inter_digit_delay_ms <= 0 or len(digits) <= 1:
