@@ -1030,6 +1030,7 @@ async def test_bridge_done_with_none_text_falls_back_to_accumulated_stream() -> 
 
     class NoneTextDoneBridge(_FakeBridge):
         async def invoke(self, turn_input, recorder, cancel_token=None):
+            """Stream the reply as deltas, then end with a textless done."""
             yield SimpleNamespace(kind="text_delta", text="streamed ")
             yield SimpleNamespace(kind="text_delta", text="reply")
             yield SimpleNamespace(kind="done", text=None)
@@ -1055,6 +1056,7 @@ async def test_bridge_done_without_any_streamed_text_commits_user_turn_only() ->
 
     class MissingTextDoneBridge(_FakeBridge):
         async def invoke(self, turn_input, recorder, cancel_token=None):
+            """End the turn with a done event that carries no text at all."""
             yield SimpleNamespace(kind="done")
 
     runner = AgentRunner(MissingTextDoneBridge())
