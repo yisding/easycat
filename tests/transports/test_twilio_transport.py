@@ -245,7 +245,8 @@ class TestTwilioStreamTokenStore:
 
         assert not store.consume(token)
 
-    def test_idempotent_claimed_grant_does_not_mint_on_webhook_retry(self) -> None:
+    def test_idempotent_webhook_retry_after_consumption_yields_fresh_grant(self) -> None:
+        """A retried webhook authorizes its media stream; spent tokens stay dead."""
         store = TwilioStreamTokenStore("secret")
         token = store.issue(idempotency_key="signed-request", claims={"CallSid": "CA1"})
         context = StreamTokenContext(
@@ -255,10 +256,33 @@ class TestTwilioStreamTokenStore:
             parameters={},
         )
 
+        # Unconsumed grant: retries return the same outstanding token.
         assert store.issue(idempotency_key="signed-request", claims={"CallSid": "CA1"}) == token
+
         assert store.consume_start(context)
-        assert store.issue(idempotency_key="signed-request", claims={"CallSid": "CA1"}) == token
+
+        # Consumed grant: the retried webhook mints a fresh single-use token
+        # bound to the same claims instead of returning the spent one.
+        retry_token = store.issue(idempotency_key="signed-request", claims={"CallSid": "CA1"})
+        assert retry_token != token
         assert not store.consume_start(context)
+        assert store.consume_start(
+            StreamTokenContext(
+                token=retry_token,
+                call_sid="CA1",
+                stream_sid="MZ2",
+                parameters={},
+            )
+        )
+        assert not store.consume_start(context)
+        assert not store.consume_start(
+            StreamTokenContext(
+                token=retry_token,
+                call_sid="CA1",
+                stream_sid="MZ2",
+                parameters={},
+            )
+        )
 
     def test_claimed_grant_rejects_different_call_sid(self) -> None:
         store = TwilioStreamTokenStore("secret")
