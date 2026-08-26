@@ -292,6 +292,10 @@ def test_ruff_hard_bans_the_zero_baseline_uncancel_api(tmp_path: Path) -> None:
             "-m",
             "ruff",
             "check",
+            # One-shot probe: keep ruff from dropping .ruff_cache into the
+            # repo root, which races with checkout-hygiene assertions
+            # elsewhere in the suite under xdist.
+            "--no-cache",
             "--config",
             str(REPO_ROOT / "pyproject.toml"),
             "--select",

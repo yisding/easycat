@@ -40,6 +40,9 @@ def complexity_violations() -> list[dict[str, object]]:
             "ruff",
             "check",
             "--isolated",
+            # One-shot probe: avoid writing .ruff_cache into the repo root,
+            # which would race with checkout-hygiene assertions elsewhere.
+            "--no-cache",
             "--select",
             ",".join(sorted(COMPLEXITY_CODES)),
             "--output-format",
