@@ -1025,17 +1025,44 @@ async def test_bridge_nonstring_event_text_does_not_commit_shadow_history() -> N
 
 
 @pytest.mark.asyncio
-async def test_bridge_text_event_without_text_is_rejected() -> None:
-    class MissingTextBridge(_FakeBridge):
+async def test_bridge_done_with_none_text_falls_back_to_accumulated_stream() -> None:
+    """``done.text = None`` after streamed deltas must not abort the turn."""
+
+    class NoneTextDoneBridge(_FakeBridge):
+        async def invoke(self, turn_input, recorder, cancel_token=None):
+            yield SimpleNamespace(kind="text_delta", text="streamed ")
+            yield SimpleNamespace(kind="text_delta", text="reply")
+            yield SimpleNamespace(kind="done", text=None)
+
+    runner = AgentRunner(NoneTextDoneBridge())
+
+    events = await _drain(runner, "hello")
+
+    assert [getattr(event, "kind", None) for event in events] == [
+        "text_delta",
+        "text_delta",
+        "done",
+    ]
+    assert runner.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "streamed reply"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bridge_done_without_any_streamed_text_commits_user_turn_only() -> None:
+    """A ``done`` event carrying no text at all still ends the turn cleanly."""
+
+    class MissingTextDoneBridge(_FakeBridge):
         async def invoke(self, turn_input, recorder, cancel_token=None):
             yield SimpleNamespace(kind="done")
 
-    runner = AgentRunner(MissingTextBridge())
+    runner = AgentRunner(MissingTextDoneBridge())
 
-    with pytest.raises(TypeError, match="agent bridge done event text must be str"):
-        await _drain(runner, "hello")
+    events = await _drain(runner, "hello")
 
-    assert runner.history == []
+    assert [getattr(event, "kind", None) for event in events] == ["done"]
+    assert runner.history == [{"role": "user", "content": "hello"}]
 
 
 @pytest.mark.asyncio

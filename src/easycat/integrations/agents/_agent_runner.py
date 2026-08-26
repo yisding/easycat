@@ -58,12 +58,18 @@ def _require_agent_text(value: Any, *, source: str) -> str:
 
 
 def _bridge_event_text(event: Any, kind: Any) -> str:
-    """Validate text only for text-bearing kinds; tool/handoff events from
-    duck-typed bridges may legitimately carry ``text=None``."""
+    """Validate text only for text-bearing kinds; duck-typed bridges may
+    legitimately carry ``text=None`` on tool/handoff events and on ``done``
+    events that already streamed their text via ``text_delta``."""
     if kind not in ("text_delta", "text_replace", "done"):
         return ""
+    value = getattr(event, "text", None)
+    if value is None and kind == "done":
+        # ``None`` on the terminal done event means "use the accumulated
+        # stream text"; the caller applies ``text or accumulated.text``.
+        return ""
     return _require_agent_text(
-        getattr(event, "text", None),
+        value,
         source=f"agent bridge {kind} event text",
     )
 
