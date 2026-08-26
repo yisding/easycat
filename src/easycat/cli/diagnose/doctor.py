@@ -272,6 +272,8 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:
     Doctor imports optional integrations and probes local file/network resources,
     so project dotenv files must not be allowed to rewrite process-wide knobs such
     as PATH, HOME, proxy, SSL, or cache variables before those checks run.
+    Variables already exported in the process environment win over file values,
+    matching standard dotenv precedence (file entries act as defaults only).
     """
     if not path.is_file():
         raise ValueError(f"{path} is not a file")
@@ -294,7 +296,7 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:
         key, value = parts[0].split("=", 1)
         if not _ENV_NAME_RE.match(key):
             raise ValueError(f"{path}:{line_number}: invalid env var name {key!r}")
-        if key in allowed_names:
+        if key in allowed_names and key not in os.environ:
             values[key] = value
     return values
 

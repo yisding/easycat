@@ -185,6 +185,41 @@ def test_doctor_env_file_loads_keys_and_restores_env(
     assert os.getenv("DEEPGRAM_API_KEY") is None
 
 
+def test_doctor_env_file_exported_variables_win_over_file_defaults(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    """A real exported credential must not be replaced by a `.env` placeholder."""
+    import sys
+
+    # Skip the optional local-mic probe so the run's exit code only
+    # reflects credential state on machines without PortAudio.
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "OPENAI_API_KEY=your-key\nDEEPGRAM_API_KEY=dg-from-file\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-exported")
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["env_openai"]["detail"] == "OPENAI_API_KEY set"
+    assert checks["env_openai"]["status"] == "ok"
+    # File-only keys still load.
+    assert checks["env_deepgram"]["status"] == "ok"
+    # The exported variable is left untouched; only file-loaded keys are
+    # restored.
+    assert os.getenv("OPENAI_API_KEY") == "sk-real-exported"
+    assert os.getenv("DEEPGRAM_API_KEY") is None
+
+
 def test_doctor_env_file_ignores_non_provider_variables(
     cli: CliRunner,
     monkeypatch: pytest.MonkeyPatch,

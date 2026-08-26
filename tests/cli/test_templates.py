@@ -979,11 +979,18 @@ def test_env_example_mentions_openai(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
-def test_env_example_renders_for_doctor_env_file(name: str, tmp_path: Path) -> None:
+def test_env_example_renders_for_doctor_env_file(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Generated env examples must stay parseable by ``easycat doctor --env-file``."""
     rendered = _render_env_example(name, InitConfig(template=name))
     env_file = tmp_path / f"{name}.env"
     env_file.write_text(rendered, encoding="utf-8")
+
+    # Exported provider variables win over file defaults, so scrub them to
+    # keep this direct parser probe deterministic.
+    for env_name in _env_names_in(rendered):
+        monkeypatch.delenv(env_name, raising=False)
 
     parsed = _parse_env_file(env_file, allowed_names=_env_names_in(rendered))
 
@@ -991,7 +998,9 @@ def test_env_example_renders_for_doctor_env_file(name: str, tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("name", sorted(_VOICE_TEMPLATE_PRESETS))
-def test_voice_env_example_renders_selected_provider_keys(name: str, tmp_path: Path) -> None:
+def test_voice_env_example_renders_selected_provider_keys(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cfg = InitConfig(
         template=name,
         stt="deepgram/flux",
@@ -1000,6 +1009,9 @@ def test_voice_env_example_renders_selected_provider_keys(name: str, tmp_path: P
     rendered = _render_env_example(name, cfg)
     env_file = tmp_path / f"{name}.env"
     env_file.write_text(rendered, encoding="utf-8")
+
+    for env_name in _env_names_in(rendered):
+        monkeypatch.delenv(env_name, raising=False)
 
     parsed = _parse_env_file(env_file, allowed_names=_env_names_in(rendered))
 
