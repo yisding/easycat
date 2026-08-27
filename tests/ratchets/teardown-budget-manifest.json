@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "update_rationale": "add telnyx voice app server",
+  "update_rationale": "telephony refactor: wait_for_start timeout site moved to shared TelephonyConnectionTransportBase",
   "counts": {
     "configurable": 29,
     "lifecycle_budget": 96,
     "not_teardown": 34,
-    "protocol_local": 48
+    "protocol_local": 47
   },
   "entries": [
     "config_default\t_bounded_queue.py\tBoundedAudioQueue.__init__\tdefault block_timeout\t0e52caa456688a04\t0\tnot_teardown\tBounds queue backpressure during ordinary audio delivery.",
@@ -44,8 +44,7 @@
     "config_default\ttelephony/voicemail.py\tSTTAMDFusionClassifier.__init__\tdefault stt_timeout_s\t0e52caa456688a04\t0\tprotocol_local\tBounds the STT-assisted AMD decision.",
     "config_default\ttransports/_base.py\tAudioQueueMixin.wait_for_client\tdefault timeout\t8f2cda988d9ca730\t0\tprotocol_local\tBounds transport client attachment.",
     "config_default\ttransports/_browser_events.py\tBrowserEventForwarder.__init__\tdefault send_timeout_s\tf77780c771074cf2\t0\tprotocol_local\tBounds an individual browser event send.",
-    "config_default\ttransports/telnyx_media.py\tTelnyxConnectionTransport.wait_for_start\tdefault timeout_s\t8f2cda988d9ca730\t0\tprotocol_local\tBounds the Telnyx media-start handshake.",
-    "config_default\ttransports/twilio_media.py\tTwilioConnectionTransport.wait_for_start\tdefault timeout_s\t8f2cda988d9ca730\t0\tprotocol_local\tBounds the Twilio media-start handshake.",
+    "config_default\ttransports/_telephony_media.py\tTelephonyConnectionTransportBase.wait_for_start\tdefault timeout_s\t8f2cda988d9ca730\t0\tprotocol_local\tBounds the telephony media-start handshake.",
     "config_default\ttransports/webtransport.py\tWebTransportConnectionTransport.wait_closed\tdefault timeout\t8f2cda988d9ca730\t0\tlifecycle_budget\tBounds waiting for transport closure.",
     "lifecycle_call\t_concurrency.py\treap\tcall asyncio.wait\t021501dcc478d52d\t0\tlifecycle_budget\tEnforces the reusable task-reaping deadline.",
     "lifecycle_call\tintegrations/agents/_agent_runner.py\tclose_stream_after_done\tcall asyncio.wait_for\t5955e4b81a5e0491\t0\tlifecycle_budget\tBounds stream drain after the agent reports completion.",
