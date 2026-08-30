@@ -77,6 +77,7 @@ class PeriodicHealthChecker:
         )
         self._task: asyncio.Task[None] | None = None
         self._running = False
+        self._emitting = False
         # Consecutive failures since the last healthy check.
         self._failure_streak = 0
         # True once the streak crossed the threshold; reset on recovery. Used
@@ -114,6 +115,11 @@ class PeriodicHealthChecker:
     async def stop(self) -> None:
         """Stop the periodic health check loop."""
         self._running = False
+        # If stop is called from within an Error emit (re-entrant), don't try to
+        # cancel the checker task — just let _run exit on its next loop check.
+        if self._emitting:
+            self._task = None
+            return
         task = self._task
         if task is None or task.done():
             self._task = None
@@ -191,17 +197,21 @@ class PeriodicHealthChecker:
         if self._unhealthy or self._failure_streak < self._failure_threshold:
             return
         self._unhealthy = True
+        self._emitting = True
         try:
-            await asyncio.wait_for(self._emit_error(reason), timeout=2.0)
-        except TimeoutError:
-            logger.warning("Health check Error emit timed out for %s", self._provider_name)
-        if self._on_unhealthy is not None:
             try:
-                await asyncio.wait_for(self._invoke_callback(self._on_unhealthy), timeout=2.0)
+                await asyncio.wait_for(self._emit_error(reason), timeout=2.0)
             except TimeoutError:
-                logger.warning(
-                    "Health check on_unhealthy callback timed out for %s", self._provider_name
-                )
+                logger.warning("Health check Error emit timed out for %s", self._provider_name)
+            if self._on_unhealthy is not None:
+                try:
+                    await asyncio.wait_for(self._invoke_callback(self._on_unhealthy), timeout=2.0)
+                except TimeoutError:
+                    logger.warning(
+                        "Health check on_unhealthy callback timed out for %s", self._provider_name
+                    )
+        finally:
+            self._emitting = False
 
     async def _emit_error(self, reason: str) -> None:
         """Emit an Error event on the unhealthy transition, if a bus is set."""
