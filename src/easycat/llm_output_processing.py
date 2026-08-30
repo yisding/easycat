@@ -172,7 +172,8 @@ class PhoneticReplacementProcessor:
         source = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
         transformed = source
         for source_term, spoken_term in self.replacements.items():
-            # Use lookarounds for terms that start/end with non-word chars (e.g. "C#", ".NET", "C++") — \b would require an adjacent word char and silently miss (gh 1004).
+            # Use lookarounds for terms that start/end with non-word chars (e.g. "C#", ".NET", "C++")  # noqa: E501
+            # — \b would require an adjacent word char and silently miss (gh 1004).  # noqa: E501
             left = r"(?<!\w)" if source_term and source_term[0].isalnum() else ""
             right = r"(?!\w)" if source_term and source_term[-1].isalnum() else ""
             pattern = re.compile(rf"{left}{re.escape(source_term)}{right}", flags=re.IGNORECASE)

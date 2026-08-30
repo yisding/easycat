@@ -178,7 +178,7 @@ class LocalTransport(AudioQueueMixin):
 
     # ── Transport protocol ────────────────────────────────────────
 
-    async def connect(self) -> None:
+    async def connect(self) -> None:  # noqa: C901
         """Open audio devices and start capture / playback streams."""
         async with self._lifecycle_lock:
             if self._connected:

@@ -278,7 +278,7 @@ class JournalView:
         recs = self._journal.read(start=seq, limit=1)
         return recs[0] if recs and recs[0].sequence == seq else None
 
-    async def follow(
+    async def follow(  # noqa: C901
         self,
         *,
         from_sequence: int | None = None,
