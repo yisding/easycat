@@ -58,6 +58,8 @@ class KrispVAD(_VADBase):
         chunk = self._source_frame_aligner.align(chunk)
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
+        if not chunk.data:
+            return
         if self._krisp_audio is None:
             self._krisp_audio = require_module("krisp_audio", purpose="Krisp VAD")
         speech_prob = self._krisp_audio.vad_process(

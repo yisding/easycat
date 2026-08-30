@@ -190,22 +190,13 @@ class FrozenJournalSnapshot:
         )
 
     def slice_by_stage(self, stage_name: str) -> list[JournalRecord]:
-        return copy.deepcopy(
-            [
-                r
-                for r in self._records
-                if getattr(r, "stage", None) == stage_name
-                or getattr(getattr(r, "data", {}), "get", lambda k: None)("stage") == stage_name
-                or (
-                    isinstance(getattr(r, "data", None), dict)
-                    and r.data.get("stage") == stage_name
-                )
-                or (
-                    isinstance(getattr(r, "data", None), dict)
-                    and r.data.get("observed_stage") == stage_name
-                )
-            ]
-        )
+        def _matches(record: JournalRecord) -> bool:
+            data = record.data
+            if not isinstance(data, dict):
+                return False
+            return stage_name in (data.get("stage"), data.get("observed_stage"))
+
+        return copy.deepcopy([r for r in self._records if _matches(r)])
 
     def close(self) -> None:
         pass

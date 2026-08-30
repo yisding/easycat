@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -57,6 +58,8 @@ class PeriodicHealthChecker:
     ) -> None:
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be >= 1")
+        if not math.isfinite(probe_timeout) or probe_timeout <= 0:
+            raise ValueError("probe_timeout must be finite and > 0")
         self._provider = provider
         self._interval = interval
         self._provider_name = provider_name
@@ -230,8 +233,16 @@ class PeriodicHealthChecker:
     async def _invoke_callback(self, callback: HealthCallback) -> None:
         """Invoke a sync or async health callback, swallowing errors."""
         try:
-            result = callback(self._provider_name)
-            if asyncio.iscoroutine(result):
-                await result
+            if asyncio.iscoroutinefunction(callback):
+                await callback(self._provider_name)  # type: ignore[arg-type]
+            else:
+                # Isolate sync callbacks off the event loop so a blocking
+                # implementation does not prevent the outer wait_for timeout
+                # from firing. Async callbacks remain direct-awaited and must
+                # be cancellation-cooperative (Python's wait_for waits for
+                # cancellation to complete).
+                result = await asyncio.to_thread(callback, self._provider_name)
+                if asyncio.iscoroutine(result):
+                    await result
         except Exception:
             logger.exception("Error in health check callback %s", callback)

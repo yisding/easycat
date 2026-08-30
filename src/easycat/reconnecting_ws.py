@@ -713,6 +713,11 @@ class ReconnectingWebSocket:
                 "configured; propagating ConnectionClosed for a clean restart.",
                 close_code,
             )
+            self._mark_reconnect_exhausted(
+                max(self._config.max_retries, 0),
+                "no on_reconnect callback",
+            )
+            self._ws = None
             raise exc
         if remaining_reconnects == 0:
             logger.error(

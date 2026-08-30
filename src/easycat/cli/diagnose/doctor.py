@@ -266,7 +266,9 @@ def _env_value_state(value: str | None) -> str:
     return "usable"
 
 
-def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  # noqa: C901, PLR0912
+def _parse_env_file(  # noqa: C901, PLR0912
+    path: Path, *, allowed_names: set[str]
+) -> dict[str, str]:
     """Parse provider credentials from a dotenv file.
 
     Doctor imports optional integrations and probes local file/network resources,
@@ -301,7 +303,14 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  
         in_single = False
         in_double = False
         comment_idx = None
+        escaped = False
         for idx, ch in enumerate(value_raw):
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\" and in_double:
+                escaped = True
+                continue
             if ch == "'" and not in_double:
                 in_single = not in_single
             elif ch == '"' and not in_single:

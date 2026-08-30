@@ -50,6 +50,9 @@ SESSION_SUPERSEDED_STOP_TIMEOUT_S: Final = 0.5
 # Bound transport audio cutoff during barge-in cleanup.
 SESSION_BARGE_IN_CUTOFF_TIMEOUT_S: Final = 0.4
 
+# Bound graceful prompt wait during session stop.
+SESSION_GRACEFUL_PROMPT_TIMEOUT_S: Final = 5.0
+
 # Briefly drain a superseded application prompt before abandoning its cleanup.
 SESSION_APPLICATION_PROMPT_CANCEL_DRAIN_TIMEOUT_S: Final = 0.1
 

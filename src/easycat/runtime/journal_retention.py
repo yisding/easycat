@@ -157,7 +157,7 @@ class _RetentionSweep:
                 break
 
     def _prune_oldest(self) -> bool:
-        """Pop and archive/remove the oldest prunable journal; True if pruned."""
+        """Pop and process the oldest prunable journal; True if progress made."""
         oldest = self._files.pop(0)
         fsize = self._sizes.pop(oldest, 0)
 
@@ -173,7 +173,7 @@ class _RetentionSweep:
             unavailable = True
         if unavailable:
             self._total_bytes -= fsize
-            return False
+            return True
         with journal_file_claim(oldest, blocking=False) as claimed:
             if not claimed:
                 # Another retention/crash sweep may be acting on this same
@@ -185,14 +185,14 @@ class _RetentionSweep:
                 return False
             if self._is_protected(oldest):
                 self._protected_count += 1
-                return False
+                return True
             try:
                 unavailable = oldest.is_symlink() or not oldest.exists()
             except OSError:
                 unavailable = True
             if unavailable:
                 self._total_bytes -= fsize
-                return False
+                return True
             if not self._archive_and_remove(oldest):
                 _restore()
                 return False
