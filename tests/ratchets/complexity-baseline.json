@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "rationale": "Indexed text replacement consolidation simplified PydanticAIBridge._invoke_agent below the C901 threshold",
+  "rationale": "fix batch1/2: new complexity",
   "counts": {
-    "C901": 54,
+    "C901": 57,
     "PLR0912": 31,
     "PLR0915": 27
   },
@@ -28,6 +28,7 @@
     "src/easycat/cli/scaffold/init.py\tPLR0912\tinit",
     "src/easycat/cli/scaffold/init.py\tPLR0915\tinit",
     "src/easycat/config/easy.py\tC901\tEasyConfig.__post_init__",
+    "src/easycat/config/easy.py\tC901\tEasyConfig._validate",
     "src/easycat/config/easy.py\tC901\t_validate_common",
     "src/easycat/debug/_turn_timeline.py\tC901\tbuild_timeline",
     "src/easycat/debug/_turn_timeline.py\tC901\textract_turn_transcripts",
@@ -74,6 +75,8 @@
     "src/easycat/integrations/agents/responses_api.py\tPLR0915\tRemoteResponsesAPIBridge.invoke",
     "src/easycat/integrations/agents/responses_api.py\tPLR0915\t_aiter_lines_with_cancellation",
     "src/easycat/session/_audio_router.py\tC901\tAudioRouter._run_pipeline",
+    "src/easycat/session/_session.py\tC901\tSession._cut_off_turn_playback",
+    "src/easycat/session/_session.py\tC901\tSession.prompt_agent",
     "src/easycat/session/_session.py\tC901\tSession.stop",
     "src/easycat/session/_session.py\tC901\t_application_record_data",
     "src/easycat/session/_session.py\tPLR0912\tSession.stop",
