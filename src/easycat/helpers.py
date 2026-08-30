@@ -92,7 +92,7 @@ def _feedback_enabled(
     stderr_isatty: bool | None = None,
 ) -> bool:
     """Resolve the ``run(..., feedback=...)`` policy to a boolean."""
-    if os.getenv("EASYCAT_QUIET"):
+    if is_truthy(os.getenv("EASYCAT_QUIET")):
         return False
     if feedback == "on":
         return True
@@ -207,7 +207,7 @@ def _prepare_configured_session(config: EasyConfig, *, feedback: FeedbackMode) -
         # standard NO_COLOR / CI conventions (see cli/_output.py) — so
         # silencing the banner never costs you the transcripts.
         banner_suppressed = bool(
-            os.getenv("EASYCAT_QUIET") or os.getenv("NO_COLOR") or os.getenv("CI") == "true"
+            is_truthy(os.getenv("EASYCAT_QUIET")) or is_truthy(os.getenv("NO_COLOR")) or is_truthy(os.getenv("CI"))
         )
         if not banner_suppressed:
             print(_wired_summary(config), file=sys.stderr)

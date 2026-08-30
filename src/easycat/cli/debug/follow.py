@@ -170,6 +170,12 @@ async def _follow_with_retry(
     """
     cursor: list[int | None] = [None]
     resume = from_sequence
+    # Capture initial cursor so a retry that fails before first yield still resumes correctly (gh 1045).
+    if resume is None:
+        try:
+            cursor[0] = view._journal.latest_sequence + 1  # type: ignore[attr-defined]
+        except Exception:
+            pass
     while True:
         try:
             await _stream_follow(
@@ -184,6 +190,15 @@ async def _follow_with_retry(
         except (FileNotFoundError, sqlite3.OperationalError):
             if cursor[0] is not None:
                 resume = cursor[0] + 1
+            elif resume is None:
+                # First attempt never reached view.follow's internal cursor computation; re-capture
+                try:
+                    # Use the initially captured value if available, else recompute but keep original
+                    if cursor[0] is None:
+                        cursor[0] = view._journal.latest_sequence + 1  # type: ignore[attr-defined]
+                        resume = cursor[0] + 1
+                except Exception:
+                    pass
             await asyncio.sleep(0.25)
 
 

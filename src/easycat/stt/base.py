@@ -632,6 +632,10 @@ class STTBase:
     def _validate_audio(self, chunk: AudioChunk) -> None:
         if chunk.format.encoding != "pcm":
             raise ValueError(f"Expected PCM encoding, got '{chunk.format.encoding}'")
+        if chunk.format.sample_width != 2:
+            raise ValueError(f"Expected 16-bit PCM (sample_width=2), got {chunk.format.sample_width}")
+        if chunk.format.channels <= 0:
+            raise ValueError(f"Expected positive channel count, got {chunk.format.channels}")
         if (
             self._expected_sample_rate is not None
             and chunk.format.sample_rate != self._expected_sample_rate

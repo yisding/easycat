@@ -781,7 +781,7 @@ class _TwilioProtocolMixin:
             return
 
         try:
-            mulaw_data = base64.b64decode(payload)
+            mulaw_data = base64.b64decode(payload, validate=True)
         except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
             logger.warning("Ignoring Twilio media frame with invalid base64 payload")
             return

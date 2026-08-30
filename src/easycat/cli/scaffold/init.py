@@ -8,6 +8,7 @@ coding-agent scaffolding).
 from __future__ import annotations
 
 import importlib.metadata
+import os
 import json
 import re
 import shlex
@@ -1052,7 +1053,7 @@ def _is_existing_non_dir(path: Path) -> bool:
     these up front — even with ``--force`` — so ``easycat init foo``
     raises a stable E101 instead of a raw ``FileExistsError``.
     """
-    return path.exists() and not path.is_dir()
+    return path.is_symlink() or (path.exists() and not path.is_dir())
 
 
 @cli_command
@@ -1162,6 +1163,14 @@ def init(
         cfg,
     )
 
+    raw_target = Path(name)
+    if os.path.lexists(raw_target):
+        # Broken or valid symlink/file must be rejected before resolve() follows it.
+        candidate = raw_target if raw_target.is_symlink() else raw_target.resolve()
+        if _is_existing_non_dir(raw_target) or (not force and _is_non_empty_dir(candidate)):
+            raise EASYCAT_E101(target=str(candidate))
+        if raw_target.is_symlink():
+            raise EASYCAT_E101(target=str(raw_target.resolve()))
     target = Path(name).resolve()
     if _is_existing_non_dir(target) or (not force and _is_non_empty_dir(target)):
         raise EASYCAT_E101(target=str(target))
@@ -1179,7 +1188,7 @@ def init(
     git_ok = False if no_git else _maybe_git_init(target)
 
     agent_py = target / "agent.py"
-    agent_lines = agent_py.read_text().count("\n") + 1 if agent_py.exists() else 0
+    agent_lines = agent_py.read_text(encoding="utf-8").count("\n") + 1 if agent_py.exists() else 0
 
     if json_output:
         emit_json(

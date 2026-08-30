@@ -363,6 +363,8 @@ class _StreamingLinearState:
         if not self._taps:
             return [float(sample) for sample in samples]
         combined = [*self._raw_history, *samples]
+        if not combined:
+            return []
         history_length = len(self._raw_history)
         if self._np is not None:
             convolved = self._np.convolve(
@@ -550,8 +552,10 @@ class PCM16StreamResampler:
         source_rate = _require_positive_int("source_rate", source_rate)
         prefix = b""
         if self._source_rate is not None and source_rate != self._source_rate:
+            carry = self._byte_carry
             prefix = self.finish()
-        if self._source_rate is None:
+            if carry:
+                self._byte_carry = carry
             self._source_rate = source_rate
             if source_rate != self._target_rate:
                 self._state = _streaming_state(source_rate, self._target_rate)

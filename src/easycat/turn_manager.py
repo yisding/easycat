@@ -744,7 +744,7 @@ class TurnManager:
                     "punctuated_silence_timeout" if punctuated_endpoint else "silence_timeout"
                 )
         except asyncio.CancelledError:
-            pass
+            raise
 
     async def _wait_for_fixed_endpoint(self) -> bool:
         """Wait for the fixed timeout and report whether punctuation shortened it."""

@@ -266,7 +266,7 @@ def _env_value_state(value: str | None) -> str:
     return "usable"
 
 
-def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:
+def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  # noqa: C901, PLR0912
     """Parse provider credentials from a dotenv file.
 
     Doctor imports optional integrations and probes local file/network resources,
@@ -283,19 +283,51 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        try:
-            parts = shlex.split(stripped, comments=True, posix=True)
-        except ValueError as exc:
-            raise ValueError(f"{path}:{line_number}: invalid .env syntax: {exc}") from exc
-        if not parts:
+        # Handle optional `export` prefix (allow `export FOO=bar`)
+        if stripped.startswith("export "):
+            stripped = stripped[len("export "):].lstrip()
+        elif stripped == "export":
             continue
-        if parts[0] == "export":
-            parts = parts[1:]
-        if len(parts) != 1 or "=" not in parts[0]:
+        if "=" not in stripped:
             raise ValueError(f"{path}:{line_number}: expected KEY=VALUE")
-        key, value = parts[0].split("=", 1)
+        key_part, value_part = stripped.split("=", 1)
+        key = key_part.strip()
         if not _ENV_NAME_RE.match(key):
             raise ValueError(f"{path}:{line_number}: invalid env var name {key!r}")
+        value_raw = value_part.strip()
+        # Strip inline comment only when `#` is preceded by whitespace (dotenv semantics, gh 1009)
+        # and not inside quotes.
+        # Remove trailing comment outside quotes.
+        in_single = False
+        in_double = False
+        comment_idx = None
+        for idx, ch in enumerate(value_raw):
+            if ch == "'" and not in_double:
+                in_single = not in_single
+            elif ch == '"' and not in_single:
+                in_double = not in_double
+            elif ch == "#" and not in_single and not in_double and (
+                idx == 0 or value_raw[idx - 1].isspace()
+            ):
+                comment_idx = idx
+                break
+        if comment_idx is not None:
+            value_raw = value_raw[:comment_idx].rstrip()
+        # Parse quoted value via shlex (posix) without comment handling
+        if value_raw and (value_raw[0] in ('"', "'")):
+            try:
+                parts = shlex.split(value_raw, posix=True)
+                value = parts[0] if parts else ""
+                # Re-parse more strictly: use shlex without comments to honour quotes and escapes
+                # shlex.split on a single token returns list with one element correctly
+                # For cases like '"a # b"' it preserves inner #
+                # So we keep that result
+            except ValueError as exc:
+                raise ValueError(f"{path}:{line_number}: invalid .env syntax: {exc}") from exc
+        else:
+            # Unquoted: value is up to comment boundary already stripped
+            value = value_raw
+            # Unescape? dotenv doesn't unescape unquoted, keep as is
         if key in allowed_names and key not in os.environ:
             values[key] = value
     return values
