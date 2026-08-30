@@ -70,10 +70,20 @@ class ReadonlySqliteJournal:
                 "SELECT * FROM journal WHERE stage = ? OR observed_stage = ? ORDER BY sequence",
                 [stage_name, stage_name],
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Legacy file without stage columns — fall back to full scan
-            return [r for r in self._query("SELECT * FROM journal ORDER BY sequence", []) if getattr(r, "stage", None) == stage_name or (isinstance(getattr(r, "data", None), dict) and (r.data.get("stage") == stage_name or r.data.get("observed_stage") == stage_name))]
-
+            return [
+                r
+                for r in self._query("SELECT * FROM journal ORDER BY sequence", [])
+                if getattr(r, "stage", None) == stage_name
+                or (
+                    isinstance(getattr(r, "data", None), dict)
+                    and (
+                        r.data.get("stage") == stage_name
+                        or r.data.get("observed_stage") == stage_name
+                    )
+                )
+            ]
 
     def close(self) -> None:
         pass
