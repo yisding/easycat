@@ -92,7 +92,7 @@ async def collect_stt_events(
 
         await provider.end_stream()  # type: ignore[union-attr]
         await collect_task
-    except BaseException:  # noqa: BLE001
+    except BaseException:
         collect_task.cancel()
         try:
             await collect_task
