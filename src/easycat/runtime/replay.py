@@ -613,7 +613,11 @@ class ReplayRunner:
         # Avoid mixing mono_ns and wall_ns clocks (gh 1014): skip pacing when source switches.
         current_source = _record_timing_source(record)
         prev_source = getattr(self, "_last_timing_source", None)
-        if prev_source is not None and current_source is not None and prev_source != current_source:
+        if (
+            prev_source is not None
+            and current_source is not None
+            and prev_source != current_source
+        ):
             self._last_timing_source = current_source  # type: ignore[attr-defined]
             return current_timing_ns
         self._last_timing_source = current_source  # type: ignore[attr-defined]

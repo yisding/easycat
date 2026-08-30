@@ -180,8 +180,14 @@ class FrozenJournalSnapshot:
                 for r in self._records
                 if getattr(r, "stage", None) == stage_name
                 or getattr(getattr(r, "data", {}), "get", lambda k: None)("stage") == stage_name
-                or (isinstance(getattr(r, "data", None), dict) and r.data.get("stage") == stage_name)
-                or (isinstance(getattr(r, "data", None), dict) and r.data.get("observed_stage") == stage_name)
+                or (
+                    isinstance(getattr(r, "data", None), dict)
+                    and r.data.get("stage") == stage_name
+                )
+                or (
+                    isinstance(getattr(r, "data", None), dict)
+                    and r.data.get("observed_stage") == stage_name
+                )
             ]
         )
 

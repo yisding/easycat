@@ -504,7 +504,7 @@ class AudioRouter:
             if not ownership_started.is_set():
                 # Heuristic: if start_owned_task succeeded and returned a task, assume
                 # scope adopted it and will handle finish. Only undo claim if no task.
-                task_exists = 'send_task' in locals() and locals()['send_task'] is not None
+                task_exists = "send_task" in locals() and locals()["send_task"] is not None
                 if not task_exists:
                     await self._finish_outbound_send(replayed_chunk=False)
             raise
@@ -1089,7 +1089,11 @@ class AudioRouter:
         if replayed_chunk:
             self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
             replay_pending_finished = self._replay_chunks_pending == 0
-        if self._replay_chunks_pending > 0 and self._outbound_queue.empty() and getattr(self, "_replay_enqueue_done", True):
+        if (
+            self._replay_chunks_pending > 0
+            and self._outbound_queue.empty()
+            and getattr(self, "_replay_enqueue_done", True)
+        ):
             # DROP_OLDEST can evict replay chunks before the drain sees
             # them; once the real queue empties, reconcile the tally.
             self._replay_chunks_pending = 0

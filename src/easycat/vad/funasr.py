@@ -156,7 +156,10 @@ class FunASROnnxVAD(_VADBase):
         chunk = self._source_frame_aligner.align(chunk)
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
-        if self._audio_resampler.source_rate is not None and chunk.format.sample_rate == _FUNASR_SAMPLE_RATE:
+        if (
+            self._audio_resampler.source_rate is not None
+            and chunk.format.sample_rate == _FUNASR_SAMPLE_RATE
+        ):
             self._audio_resampler.reset()
         target_rate = chunk.format.sample_rate
         if self._buffer_rate is not None and self._buffer_rate != target_rate:

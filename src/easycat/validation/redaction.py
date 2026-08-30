@@ -461,7 +461,9 @@ def _compile_sensitive_url_re(domains: tuple[str, ...]) -> re.Pattern[str]:
     if not alternatives:
         return re.compile(r"(?!x)x")
     return re.compile(
-        r"(?:https?|wss?|ws)://(?:[^/\s:@]+:[^/\s:@]+@)?[^\s\"')\]}]*(?:" + alternatives + r")[^\s\"')\]}]*",
+        r"(?:https?|wss?|ws)://(?:[^/\s:@]+:[^/\s:@]+@)?[^\s\"')\]}]*(?:"
+        + alternatives
+        + r")[^\s\"')\]}]*",
         re.IGNORECASE,
     )
 

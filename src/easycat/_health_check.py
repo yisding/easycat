@@ -122,9 +122,13 @@ class PeriodicHealthChecker:
     async def check_once(self) -> bool:
         """Run a single health check. Returns True if healthy."""
         try:
-            healthy = await asyncio.wait_for(self._provider.health_check(), timeout=self._probe_timeout)
+            healthy = await asyncio.wait_for(
+                self._provider.health_check(), timeout=self._probe_timeout
+            )
         except TimeoutError as exc:
-            await self._record_failure(f"health check timed out after {self._probe_timeout}s: {exc}")
+            await self._record_failure(
+                f"health check timed out after {self._probe_timeout}s: {exc}"
+            )
             return False
         except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             await self._record_failure(str(exc))
@@ -158,7 +162,9 @@ class PeriodicHealthChecker:
                 try:
                     await asyncio.wait_for(self._invoke_callback(self._on_recovered), timeout=2.0)
                 except TimeoutError:
-                    logger.warning("Health check on_recovered callback timed out for %s", self._provider_name)
+                    logger.warning(
+                        "Health check on_recovered callback timed out for %s", self._provider_name
+                    )
 
     async def _record_failure(self, reason: str) -> None:
         """Advance the failure streak and escalate on the unhealthy transition."""
@@ -183,7 +189,9 @@ class PeriodicHealthChecker:
             try:
                 await asyncio.wait_for(self._invoke_callback(self._on_unhealthy), timeout=2.0)
             except TimeoutError:
-                logger.warning("Health check on_unhealthy callback timed out for %s", self._provider_name)
+                logger.warning(
+                    "Health check on_unhealthy callback timed out for %s", self._provider_name
+                )
 
     async def _emit_error(self, reason: str) -> None:
         """Emit an Error event on the unhealthy transition, if a bus is set."""
