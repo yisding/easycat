@@ -275,7 +275,7 @@ class LocalTransport(AudioQueueMixin):
                     ),
                 )
                 self._output_stream.start()
-            except BaseException as startup_error:  # noqa: BLE001 - partial acquisition boundary
+            except BaseException as startup_error:
                 # ``_connected`` becomes true only after both devices start. We are
                 # still holding ``_lifecycle_lock`` here, so we must not call
                 # ``disconnect()`` (which reacquires the same lock) — that would
@@ -284,19 +284,19 @@ class LocalTransport(AudioQueueMixin):
                     if stream is not None:
                         try:
                             stream.stop()
-                        except Exception:
+                        except Exception:  # noqa: BLE001, S110
                             pass
                         try:
                             stream.close()
-                        except Exception:
+                        except Exception:  # noqa: BLE001, S110
                             pass
                 self._input_stream = None
                 self._output_stream = None
                 # Invalidate callbacks from this generation
                 self._stream_generation += 1
                 if isinstance(startup_error, asyncio.CancelledError):
-                    raise startup_error
-                raise startup_error
+                    raise
+                raise
             self._connected = True
 
     async def _raise_failed_connect_after_cleanup(

@@ -8,8 +8,8 @@ coding-agent scaffolding).
 from __future__ import annotations
 
 import importlib.metadata
-import os
 import json
+import os
 import re
 import shlex
 import subprocess

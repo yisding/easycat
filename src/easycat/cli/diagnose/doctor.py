@@ -322,7 +322,7 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  
                 parts = shlex.split(value_raw, posix=True)
                 if len(parts) != 1:
                     raise ValueError(
-                        f"{path}:{line_number}: invalid .env syntax: extra tokens after quoted value"
+                        f"{path}:{line_number}: invalid .env syntax: extra tokens after quoted value"  # noqa: E501
                     )
                 value = parts[0] if parts else ""
             except ValueError as exc:

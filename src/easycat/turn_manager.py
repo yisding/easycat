@@ -743,7 +743,7 @@ class TurnManager:
                 await self._complete_user_turn(
                     "punctuated_silence_timeout" if punctuated_endpoint else "silence_timeout"
                 )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError:  # noqa: TRY203
             raise
 
     async def _wait_for_fixed_endpoint(self) -> bool:

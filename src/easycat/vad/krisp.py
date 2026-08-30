@@ -73,7 +73,7 @@ class KrispVAD(_VADBase):
         super().reset()
         try:
             self._source_frame_aligner.reset()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
     def close(self) -> None:

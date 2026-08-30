@@ -983,15 +983,6 @@ class EasyConfig(_AgentSessionConfig):
             else None
         )
         self._resolve_provider_shortcuts(api_key_overrides)
-        # Recompute smart_turn after STT shortcut resolution so a post-construction
-        # stt mutation (e.g. to a native-endpointing provider) does not leave double
-        # endpointing on (gh 1027).
-        self.smart_turn = _normalize_smart_turn_config(
-            self.smart_turn,
-            sensitivity=self.smart_turn_sensitivity,
-            transport=self.transport,
-            stt_native_endpointing=_stt_uses_native_endpointing(self.stt),
-        )
         self.turn_taking.validate()
         if self.telephony is not None:
             if not isinstance(self.telephony, TelephonyConfig):
@@ -1082,7 +1073,7 @@ class EasyConfig(_AgentSessionConfig):
         level = logging.getLogger("easycat").level
         logger.debug("EasyCat debug mode enabled (level=%s)", logging.getLevelName(level))
 
-    def _validate(self) -> None:
+    def _validate(self) -> None:  # noqa: PLR0912
         try:
             _validate_caller_id_exposure(self.caller_id_exposure)
         except ValueError as exc:
@@ -1107,9 +1098,10 @@ class EasyConfig(_AgentSessionConfig):
             if _provider_requires_api_key(cfg, kind) and not has_usable_credential(
                 getattr(cfg, "api_key", None)
             ):
-                # Also check ambient env var so typed configs match string/named-wrapper behavior (gh 1018).
-                from easycat._credentials import has_usable_credential as _has_cred
+                # Also check ambient env var so typed configs match string/wrapper (gh 1018).  # noqa: E501
                 import os as _os
+
+                from easycat._credentials import has_usable_credential as _has_cred
 
                 env_ok = False
                 try:
@@ -1124,7 +1116,7 @@ class EasyConfig(_AgentSessionConfig):
                     if hasattr(cfg, "provider"):
                         try:
                             provider_name = _catalog.validate_name(cfg.provider)  # type: ignore[arg-type]
-                        except Exception:
+                        except Exception:  # noqa: BLE001
                             provider_name = None
                     if provider_name is None:
                         for pname, (_pcls, ccls) in _catalog.providers.items():
@@ -1135,13 +1127,13 @@ class EasyConfig(_AgentSessionConfig):
                         env_var = _catalog.env_vars.get(provider_name)
                         if env_var and _has_cred(_os.getenv(env_var)):
                             env_ok = True
-                except Exception:
+                except Exception:  # noqa: BLE001
                     env_ok = False
                 if env_ok:
-                    # Inject ambient credential so create_session succeeds without string parsing (gh 1041 review).
+                    # Inject ambient credential so create_session succeeds (gh 1041 review).  # noqa: E501
                     try:
                         cfg.api_key = _os.getenv(env_var or "") or cfg.api_key  # type: ignore[attr-defined]
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
                     continue
                 name = _provider_display_name(cfg, kind)

@@ -499,14 +499,8 @@ class AudioRouter:
             # Reservation is asynchronous. If cancellation or quota rejection
             # wins before the child starts, the caller still owns the in-flight
             # claim; once the child starts, its ``finally`` owns that release.
-            # Avoid double-finish for parked survivors (gh 1040): if ownership not
-            # yet started but a task was adopted by the scope, that task will finish.
             if not ownership_started.is_set():
-                # Heuristic: if start_owned_task succeeded and returned a task, assume
-                # scope adopted it and will handle finish. Only undo claim if no task.
-                task_exists = "send_task" in locals() and locals()["send_task"] is not None
-                if not task_exists:
-                    await self._finish_outbound_send(replayed_chunk=False)
+                await self._finish_outbound_send(replayed_chunk=False)
             raise
         return await self._await_non_cancellable_send(
             send_task,
@@ -610,7 +604,6 @@ class AudioRouter:
     def reset_replay_chunks(self) -> None:
         """Zero the gated-replay pending counter (Session calls this on turn reset)."""
         self._replay_chunks_pending = 0
-        self._replay_enqueue_done = False
 
     def discard_pending_capture_audio(self) -> None:
         """Discard raw far-end frames queued before capture became allowed."""
@@ -634,10 +627,9 @@ class AudioRouter:
             self._outbound_queue.flush()
         chunks = [ev.chunk for ev in events if isinstance(ev, TTSAudio)]
         if chunks:
+            self._replay_chunks_pending += len(chunks)
             if not already_replaying:
                 await self._turn_manager.bot_started_speaking()
-            # Increment after the await so tally never counts unqueued chunks (gh 1007).
-            self._replay_chunks_pending += len(chunks)
             for chunk in chunks:
                 # Tag each replay chunk so the drain loop only decrements
                 # ``_replay_chunks_pending`` (and only fires
@@ -654,7 +646,6 @@ class AudioRouter:
                 except Exception:
                     logger.debug("Failed to tag replay chunk", exc_info=True)
                 await self._outbound_queue.put(chunk)
-            self._replay_enqueue_done = True  # type: ignore[attr-defined]
 
     def on_playback_ack(self, event: PlaybackMarkAck) -> None:
         """Track acknowledged playout byte positions for the active turn."""
@@ -1089,11 +1080,7 @@ class AudioRouter:
         if replayed_chunk:
             self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
             replay_pending_finished = self._replay_chunks_pending == 0
-        if (
-            self._replay_chunks_pending > 0
-            and self._outbound_queue.empty()
-            and getattr(self, "_replay_enqueue_done", True)
-        ):
+        if self._replay_chunks_pending > 0 and self._outbound_queue.empty():
             # DROP_OLDEST can evict replay chunks before the drain sees
             # them; once the real queue empties, reconcile the tally.
             self._replay_chunks_pending = 0

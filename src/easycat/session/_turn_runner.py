@@ -1711,7 +1711,7 @@ class TurnRunner:
             # Final check that state is IDLE before admitting
             if self._turn_manager.state is not TurnManagerState.IDLE:
                 raise RuntimeError(
-                    f"Cannot start an application turn while turn manager is {self._turn_manager.state.value}"
+                    f"Cannot start an application turn while turn manager is {self._turn_manager.state.value}"  # noqa: E501
                 )
             token = CancelToken()
             turn_id = f"turn-{uuid4().hex[:12]}"

@@ -170,11 +170,11 @@ async def _follow_with_retry(
     """
     cursor: list[int | None] = [None]
     resume = from_sequence
-    # Capture initial cursor so a retry that fails before first yield still resumes correctly (gh 1045).
+    # Capture initial cursor so a retry that fails before first yield still resumes correctly (gh 1045).  # noqa: E501
     if resume is None:
         try:
             cursor[0] = view._journal.latest_sequence  # type: ignore[attr-defined]
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
     while True:
         try:
@@ -187,21 +187,23 @@ async def _follow_with_retry(
                 cursor=cursor,
             )
             return
-                except (FileNotFoundError, sqlite3.OperationalError):
+        except (FileNotFoundError, sqlite3.OperationalError):
             if cursor[0] is not None:
                 resume = cursor[0] + 1
             elif resume is None:
+                # First attempt never reached view.follow's internal cursor computation; re-capture
                 try:
+                    # Use initially captured value if available, else recompute (gh 1045).  # noqa: E501
                     if cursor[0] is None:
                         cursor[0] = view._journal.latest_sequence  # type: ignore[attr-defined]
                         resume = (cursor[0] or 0) + 1  # type: ignore[operator]
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
             await asyncio.sleep(0.25)
         except sqlite3.DatabaseError as exc:
             from easycat.errors import EasyCatError
 
-            raise EasyCatError(f"Not an easycat journal: {exc}") from exc
+            raise EasyCatError("EASYCAT_E104", "Not an easycat journal", details=str(exc)) from exc
 
 
 def _record_to_follow_dict(record: Any) -> dict[str, Any]:
