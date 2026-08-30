@@ -317,11 +317,9 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  
         if value_raw and (value_raw[0] in ('"', "'")):
             try:
                 parts = shlex.split(value_raw, posix=True)
+                if len(parts) != 1:
+                    raise ValueError(f"{path}:{line_number}: invalid .env syntax: extra tokens after quoted value")
                 value = parts[0] if parts else ""
-                # Re-parse more strictly: use shlex without comments to honour quotes and escapes
-                # shlex.split on a single token returns list with one element correctly
-                # For cases like '"a # b"' it preserves inner #
-                # So we keep that result
             except ValueError as exc:
                 raise ValueError(f"{path}:{line_number}: invalid .env syntax: {exc}") from exc
         else:
