@@ -286,7 +286,7 @@ class TestOutboundCallConfig:
     )
     def test_boolean_policy_rejects_wrong_type(self, field_name: str) -> None:
         with pytest.raises(ValueError, match=rf"{field_name} must be a boolean"):
-            OutboundCallConfig(**{field_name: "false"})  # type: ignore[arg-type]
+            OutboundCallConfig(from_number="+15555550100", **{field_name: "false"})  # type: ignore[arg-type]
 
     @pytest.mark.parametrize(
         ("field_name", "bad", "message"),
