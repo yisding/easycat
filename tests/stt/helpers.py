@@ -86,10 +86,18 @@ async def collect_stt_events(
 
     collect_task = asyncio.create_task(_collect())
 
-    for chunk in audio_chunks:
-        await provider.send_audio(chunk)  # type: ignore[union-attr]
+    try:
+        for chunk in audio_chunks:
+            await provider.send_audio(chunk)  # type: ignore[union-attr]
 
-    await provider.end_stream()  # type: ignore[union-attr]
-    await collect_task
+        await provider.end_stream()  # type: ignore[union-attr]
+        await collect_task
+    except BaseException:
+        collect_task.cancel()
+        try:
+            await collect_task
+        except BaseException:
+            pass
+        raise
 
     return collected
