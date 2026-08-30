@@ -1133,6 +1133,11 @@ class EasyConfig(_AgentSessionConfig):
                 except Exception:
                     env_ok = False
                 if env_ok:
+                    # Inject ambient credential so create_session succeeds without string parsing (gh 1041 review).
+                    try:
+                        cfg.api_key = _os.getenv(env_var) or cfg.api_key  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
                     continue
                 name = _provider_display_name(cfg, kind)
                 raise EasyConfigError(f"{name} requires an API key.")
