@@ -1144,7 +1144,7 @@ class EasyConfig(_AgentSessionConfig):
                 if env_ok:
                     # Inject ambient credential so create_session succeeds without string parsing (gh 1041 review).
                     try:
-                        cfg.api_key = _os.getenv(env_var) or cfg.api_key  # type: ignore[attr-defined]
+                        cfg.api_key = _os.getenv(env_var or "") or cfg.api_key  # type: ignore[attr-defined]
                     except Exception:
                         pass
                     continue
