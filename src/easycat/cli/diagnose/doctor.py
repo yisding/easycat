@@ -331,7 +331,8 @@ def _parse_env_file(  # noqa: C901, PLR0912
                 parts = shlex.split(value_raw, posix=True)
                 if len(parts) != 1:
                     raise ValueError(
-                        f"{path}:{line_number}: invalid .env syntax: extra tokens after quoted value"  # noqa: E501
+                        f"{path}:{line_number}: invalid .env syntax: "
+                        "extra tokens after quoted value"
                     )
                 value = parts[0] if parts else ""
             except ValueError as exc:

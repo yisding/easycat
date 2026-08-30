@@ -70,7 +70,7 @@ class ReadonlySqliteJournal:
                 "SELECT * FROM journal WHERE stage = ? OR observed_stage = ? ORDER BY sequence",
                 [stage_name, stage_name],
             )
-        except Exception:  # noqa: BLE001
+        except sqlite3.OperationalError:
             # Legacy file without stage columns — fall back to full scan
             return [
                 r

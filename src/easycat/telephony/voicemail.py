@@ -1049,7 +1049,7 @@ class STTAMDFusionClassifier:
                 await self._emit(winner)
             return
 
-        # Only one signal — use it if it's decisive, else wait. Also arm timeout (gh 997).  # noqa: E501
+        # With only AMD, wait for STT and use AMD after the timeout (gh 997).
         if self._amd_result is not None:
             if self._stt_result is None and not self._tasks.active(_STT_AMD_TIMEOUT_TASK):
                 # Start timeout to wait for STT.
