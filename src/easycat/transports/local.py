@@ -292,6 +292,9 @@ class LocalTransport(AudioQueueMixin):
                             pass
                 self._input_stream = None
                 self._output_stream = None
+                self._loop = None
+                self._connected = False
+                self._flush_queues()
                 # Invalidate callbacks from this generation
                 self._stream_generation += 1
                 if isinstance(startup_error, asyncio.CancelledError):
