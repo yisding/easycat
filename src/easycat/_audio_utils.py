@@ -553,6 +553,7 @@ class PCM16StreamResampler:
         prefix = b""
         if self._source_rate is not None and source_rate != self._source_rate:
             prefix = self.finish()
+        if self._source_rate is None:
             self._source_rate = source_rate
             if source_rate != self._target_rate:
                 self._state = _streaming_state(source_rate, self._target_rate)
