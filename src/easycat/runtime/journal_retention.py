@@ -140,7 +140,8 @@ class _RetentionSweep:
                 continue
             if mtime >= cutoff:
                 break
-            self._prune_oldest()
+            if not self._prune_oldest():
+                break
 
     def prune_to_caps(self, max_sessions: int, max_bytes: int) -> None:
         """Prune the oldest prunable journal until count and byte caps hold."""
@@ -152,7 +153,8 @@ class _RetentionSweep:
                 or self._total_bytes > max_bytes
             )
         ):
-            self._prune_oldest()
+            if not self._prune_oldest():
+                break
 
     def _prune_oldest(self) -> bool:
         """Pop and archive/remove the oldest prunable journal; True if pruned."""
@@ -183,7 +185,6 @@ class _RetentionSweep:
                 return False
             if self._is_protected(oldest):
                 self._protected_count += 1
-                _restore()
                 return False
             try:
                 unavailable = oldest.is_symlink() or not oldest.exists()
