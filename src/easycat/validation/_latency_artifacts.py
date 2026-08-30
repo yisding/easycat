@@ -127,7 +127,7 @@ def _sample_object(value: object, *, kind: str, index: int) -> dict[str, Any]:
 def append_reliability_sample(path: str | Path, sample: ReliabilitySample) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    # Use an atomic claim/write to avoid read-modify-write races when concurrent workers append (gh 1036).
+    # Use an atomic claim/write to avoid read-modify-write races (gh 1036).
     # Fallback to plain write if claim unavailable.
     from easycat.runtime.journal_retention import journal_file_claim
 
@@ -157,7 +157,7 @@ def append_reliability_sample(path: str | Path, sample: ReliabilitySample) -> No
                         pass
                 destination.write_text(encoded, encoding="utf-8")
                 return
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
     destination.write_text(encoded, encoding="utf-8")
 
