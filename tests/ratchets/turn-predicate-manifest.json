@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "fix batch1/2: new turn predicates",
+  "update_rationale": "fix batch1 final",
   "counts": {
     "categories": {
       "activity_state_predicate": 4,

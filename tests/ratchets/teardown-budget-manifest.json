@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "fix batch1/2: new teardown budgets",
+  "update_rationale": "fix batch1 final",
   "counts": {
     "configurable": 29,
     "lifecycle_budget": 96,

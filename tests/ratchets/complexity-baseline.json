@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "rationale": "fix batch1/2: new complexity",
+  "rationale": "fix batch1 final",
   "counts": {
     "C901": 57,
     "PLR0912": 31,
