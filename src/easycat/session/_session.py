@@ -1682,11 +1682,12 @@ class Session:
                 and not prompt_task.done()
             ):
                 # Application prompts are confirmed turn work. Graceful stop
-                # lets them finish. asyncio.wait keeps the prompt independent:
-                # a concurrent forced stop can cancel this graceful owner
-                # without propagating that cancellation into the prompt before
-                # the force path takes over.
-                await asyncio.wait({prompt_task})
+                # lets them finish with a bound wait so cancellation-resistant
+                # prompts do not hang teardown forever (gh 1025).
+                try:
+                    await asyncio.wait_for(asyncio.wait({prompt_task}), timeout=5.0)
+                except TimeoutError:
+                    pass
 
             turn = self._turn
             if turn and not prompt_is_current:

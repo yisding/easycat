@@ -620,6 +620,7 @@ class TurnRunner:
         current_tts_task = self._tts.active_turn_task
         if current_tts_task and not current_tts_task.done():
             current_tts_task.cancel()
+            # Keep old task alive until it completes to avoid concurrent runs (gh 1024)
         identity = self._turn.capture_identity()
         activity = self._turn_manager.capture_activity()
         turn_token = bind_turn(event.turn_id)
