@@ -634,7 +634,7 @@ class STTBase:
             raise ValueError(f"Expected PCM encoding, got '{chunk.format.encoding}'")
         if chunk.format.sample_width != 2:
             raise ValueError(
-                f"Expected 16-bit PCM (sample_width=2), got {chunk.format.sample_width}"
+                f"Expected PCM16 (sample_width=2), got {chunk.format.sample_width}"
             )
         if chunk.format.channels <= 0:
             raise ValueError(f"Expected positive channel count, got {chunk.format.channels}")
