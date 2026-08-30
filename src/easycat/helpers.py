@@ -6,6 +6,8 @@ import asyncio
 import logging
 import os
 import sys
+
+from easycat._env import is_truthy
 from typing import TYPE_CHECKING, Literal
 
 from easycat._signals import create_shutdown_event as _create_shutdown_event

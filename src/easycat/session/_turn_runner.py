@@ -1659,7 +1659,7 @@ class TurnRunner:
             if self._text_turn_cancel_token is token:
                 self._text_turn_cancel_token = None
 
-    async def prompt_agent(
+    async def prompt_agent(  # noqa: C901, PLR0912
         self,
         text: str,
         *,
