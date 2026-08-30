@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "fix batch2",
+  "update_rationale": "fix batch1/2 merged",
   "counts": {
     "configurable": 29,
     "lifecycle_budget": 99,

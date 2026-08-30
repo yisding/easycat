@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "rationale": "telephony refactor: move shared connection lifecycle machine verbatim into transports/_telephony_media.py (identical construct fingerprints)",
+  "rationale": "fix batch1 final lint and stt",
   "counts": {
     "cancelled_error_handler": 118,
     "epoch_field": 12,
@@ -127,7 +127,7 @@
     "cancelled_error_handler\ttransports/webtransport.py\t_await_with_hard_timeout\texcept asyncio.CancelledError\t5832ec4b5f38b855\t0",
     "cancelled_error_handler\ttts/_multi_context_ws.py\tMultiContextWSManager._await_close_finalizer\texcept asyncio.CancelledError\tb0da2e2cb972b5b9\t0",
     "cancelled_error_handler\ttts/_multi_context_ws.py\tMultiContextWSManager._reader_loop\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
-    "cancelled_error_handler\tturn_manager.py\tTurnManager._silence_timeout\texcept asyncio.CancelledError\t9228d861f8042ec7\t0",
+    "cancelled_error_handler\tturn_manager.py\tTurnManager._silence_timeout\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
     "epoch_field\t_turn_context.py\tTurnContext\tinteger field _generation_counter\t55cd5b40868efabb\t0",
     "epoch_field\tdebugger/server.py\t_DevDebuggerState.__init__\tinteger field _selection_epoch\t838dcc148809ac24\t0",
     "epoch_field\truntime/journal_sql.py\tSqliteJournal.__init__\tinteger field _batch_generation\tbfb6c74a45d3a3a7\t0",
