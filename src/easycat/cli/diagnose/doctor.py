@@ -285,7 +285,7 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  
             continue
         # Handle optional `export` prefix (allow `export FOO=bar`)
         if stripped.startswith("export "):
-            stripped = stripped[len("export "):].lstrip()
+            stripped = stripped[len("export ") :].lstrip()
         elif stripped == "export":
             continue
         if "=" not in stripped:
@@ -306,8 +306,11 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  
                 in_single = not in_single
             elif ch == '"' and not in_single:
                 in_double = not in_double
-            elif ch == "#" and not in_single and not in_double and (
-                idx == 0 or value_raw[idx - 1].isspace()
+            elif (
+                ch == "#"
+                and not in_single
+                and not in_double
+                and (idx == 0 or value_raw[idx - 1].isspace())
             ):
                 comment_idx = idx
                 break
@@ -318,7 +321,9 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  
             try:
                 parts = shlex.split(value_raw, posix=True)
                 if len(parts) != 1:
-                    raise ValueError(f"{path}:{line_number}: invalid .env syntax: extra tokens after quoted value")
+                    raise ValueError(
+                        f"{path}:{line_number}: invalid .env syntax: extra tokens after quoted value"
+                    )
                 value = parts[0] if parts else ""
             except ValueError as exc:
                 raise ValueError(f"{path}:{line_number}: invalid .env syntax: {exc}") from exc

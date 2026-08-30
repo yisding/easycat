@@ -53,7 +53,7 @@ class KrispVAD(_VADBase):
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process audio through Krisp VAD and yield events."""
         # Align frames and downmix to mono so stereo / split-frame input is handled correctly (gh 1029).
-        from easycat.audio_format import to_mono_chunk
+        from easycat._audio_utils import to_mono_chunk
 
         chunk = self._source_frame_aligner.align(chunk)
         if chunk.format.channels > 1:

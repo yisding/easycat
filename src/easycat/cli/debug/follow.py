@@ -196,7 +196,7 @@ async def _follow_with_retry(
                     # Use the initially captured value if available, else recompute but keep original
                     if cursor[0] is None:
                         cursor[0] = view._journal.latest_sequence  # type: ignore[attr-defined]
-                        resume = cursor[0] + 1
+                        resume = (cursor[0] or 0) + 1  # type: ignore[operator]
                 except Exception:
                     pass
             await asyncio.sleep(0.25)

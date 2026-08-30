@@ -77,7 +77,9 @@ class TenVAD(_VADBase):
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
         # Drop stale remainder and reset resampler on format switch (gh 1000, same as Silero).
-        if self._audio_resampler.source_rate is not None and chunk.format.sample_rate in (_TEN_SAMPLE_RATE,):
+        if self._audio_resampler.source_rate is not None and chunk.format.sample_rate in (
+            _TEN_SAMPLE_RATE,
+        ):
             # Native-rate segment: discard interpolator tail rather than mixing rates.
             self._audio_resampler.reset()
         target_rate = chunk.format.sample_rate

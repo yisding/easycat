@@ -213,7 +213,9 @@ class LocalTransport(AudioQueueMixin):
             frame_size = self._frame_samples
 
             # --- Input stream (mic) ---
-            def _input_callback(indata: Any, frames: int, time_info: object, status: object) -> None:
+            def _input_callback(
+                indata: Any, frames: int, time_info: object, status: object
+            ) -> None:
                 arr = indata
                 if hasattr(arr, "copy"):
                     arr = arr.copy()
@@ -273,7 +275,7 @@ class LocalTransport(AudioQueueMixin):
                     ),
                 )
                 self._output_stream.start()
-            except BaseException as startup_error:  # noqa: BLE001 - partial acquisition boundary
+            except BaseException as startup_error:
                 # ``_connected`` becomes true only after both devices start. We are
                 # still holding ``_lifecycle_lock`` here, so we must not call
                 # ``disconnect()`` (which reacquires the same lock) — that would

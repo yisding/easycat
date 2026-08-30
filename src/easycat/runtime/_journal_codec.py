@@ -195,7 +195,9 @@ def _encode_journal_row(
 ) -> tuple[Any, ...]:
     """Build the column-order value tuple for ``_JOURNAL_INSERT_SQL``."""
     if tags and any("," in tag for tag in tags):
-        raise ValueError(f"tag {next(tag for tag in tags if ',' in tag)!r} contains ',' — commas are not allowed in tags")
+        raise ValueError(
+            f"tag {next(tag for tag in tags if ',' in tag)!r} contains ',' — commas are not allowed in tags"
+        )
     error_children = (
         json.dumps([_error_info_to_dict(child) for child in error.children], default=str)
         if error is not None and error.children

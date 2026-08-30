@@ -597,9 +597,7 @@ class OutboundCallConfig:
                 "outbound.telnyx_connection_id is required when provider='telnyx'."
             )
         if self.provider == "telnyx" and not self.telnyx_api_key:
-            raise EasyConfigError(
-                "outbound.telnyx_api_key is required when provider='telnyx'."
-            )
+            raise EasyConfigError("outbound.telnyx_api_key is required when provider='telnyx'.")
         if self.retry_strategy is not None:
             from easycat.telephony.retry import RetryStrategyConfig
 
@@ -622,9 +620,7 @@ class OutboundCallConfig:
         ):
             _require_boolean(name, getattr(self, name))
         if not self.from_number or not self.from_number.strip():
-            raise EasyConfigError(
-                "outbound.from_number must be a non-empty E.164 number."
-            )
+            raise EasyConfigError("outbound.from_number must be a non-empty E.164 number.")
         _require_positive("classification_gate_timeout_s", self.classification_gate_timeout_s)
         _require_positive("max_call_duration_s", self.max_call_duration_s)
         _require_positive_integer("max_screening_turns", self.max_screening_turns)
@@ -1103,8 +1099,9 @@ class EasyConfig(_AgentSessionConfig):
                 getattr(cfg, "api_key", None)
             ):
                 # Also check ambient env var so typed configs match string/named-wrapper behavior (gh 1018).
-                from easycat._credentials import has_usable_credential as _has_cred
                 import os as _os
+
+                from easycat._credentials import has_usable_credential as _has_cred
 
                 env_ok = False
                 try:
@@ -1135,7 +1132,7 @@ class EasyConfig(_AgentSessionConfig):
                 if env_ok:
                     # Inject ambient credential so create_session succeeds without string parsing (gh 1041 review).
                     try:
-                        cfg.api_key = _os.getenv(env_var) or cfg.api_key  # type: ignore[attr-defined]
+                        cfg.api_key = _os.getenv(env_var or "") or cfg.api_key  # type: ignore[attr-defined]
                     except Exception:
                         pass
                     continue
