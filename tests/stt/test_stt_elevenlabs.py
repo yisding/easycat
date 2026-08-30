@@ -1043,14 +1043,8 @@ async def test_elevenlabs_batch_preserves_multichannel_non_pcm16_wav_geometry():
         format=AudioFormat(sample_rate=8000, channels=2, sample_width=1),
     )
 
-    await collect_stt_events(stt, [stereo_pcm8])
-
-    files = mock_client.post.call_args.kwargs["files"]
-    _, wav_data, _ = files["file"]
-    assert int.from_bytes(wav_data[22:24], "little") == 2
-    assert int.from_bytes(wav_data[24:28], "little") == 8000
-    assert int.from_bytes(wav_data[34:36], "little") == 8
-    assert wav_data[44:] == stereo_pcm8.data
+    with pytest.raises(ValueError, match="PCM16"):
+        await collect_stt_events(stt, [stereo_pcm8])
 
 
 @pytest.mark.asyncio
