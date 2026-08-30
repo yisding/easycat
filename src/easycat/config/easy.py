@@ -1137,7 +1137,8 @@ class EasyConfig(_AgentSessionConfig):
                         cfg.api_key = _os.getenv(env_var or "") or cfg.api_key  # type: ignore[attr-defined]
                     except Exception:  # noqa: BLE001, S110
                         pass
-                    continue
+                    if _has_cred(getattr(cfg, "api_key", None)):
+                        continue
                 name = _provider_display_name(cfg, kind)
                 raise EasyConfigError(f"{name} requires an API key.")
 
