@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+pytest.importorskip("aiohttp")
 pytest.importorskip("cryptography")
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
