@@ -173,7 +173,7 @@ async def _follow_with_retry(
     # Capture initial cursor so a retry that fails before first yield still resumes correctly (gh 1045).
     if resume is None:
         try:
-            cursor[0] = view._journal.latest_sequence + 1  # type: ignore[attr-defined]
+            cursor[0] = view._journal.latest_sequence  # type: ignore[attr-defined]
         except Exception:
             pass
     while True:
@@ -195,7 +195,7 @@ async def _follow_with_retry(
                 try:
                     # Use the initially captured value if available, else recompute but keep original
                     if cursor[0] is None:
-                        cursor[0] = view._journal.latest_sequence + 1  # type: ignore[attr-defined]
+                        cursor[0] = view._journal.latest_sequence  # type: ignore[attr-defined]
                         resume = cursor[0] + 1
                 except Exception:
                     pass
