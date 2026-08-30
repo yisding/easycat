@@ -115,6 +115,14 @@ class PeriodicHealthChecker:
         """Stop the periodic health check loop."""
         self._running = False
         task = self._task
+        # If stop is called from within the checker task itself (e.g., from an Error subscriber
+        # during _emit_error), don't try to cancel the current task — just mark as stopped
+        # and let the _run loop exit naturally.
+        import asyncio as _asyncio
+
+        if task is not None and task is _asyncio.current_task():
+            self._task = None
+            return
         await self._tasks.cancel_and_drain()
         if self._task is task:
             self._task = None
