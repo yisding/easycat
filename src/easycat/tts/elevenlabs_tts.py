@@ -556,7 +556,7 @@ class ElevenLabsTTS(_WSTTSBase):
             return [], True
         events: list[TTSEvent] = []
         if data.get("audio"):
-            audio_bytes = base64.b64decode(data["audio"])
+            audio_bytes = base64.b64decode(data["audio"], validate=True)
             if audio_bytes:
                 event = self._make_audio_event(
                     audio_bytes,

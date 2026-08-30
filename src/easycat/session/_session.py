@@ -1994,7 +1994,16 @@ class Session:
             except Exception:
                 logger.exception("Transport playback clear failed during barge-in")
         else:
-            await clear_audio_if_supported(self.transport)
+            try:
+                async with asyncio.timeout(_BARGE_IN_CUTOFF_TIMEOUT_S):
+                    await clear_audio_if_supported(self.transport)
+            except TimeoutError:
+                logger.warning(
+                    "Transport playback clear exceeded %.0f ms",
+                    _BARGE_IN_CUTOFF_TIMEOUT_S * 1000,
+                )
+            except Exception:
+                logger.exception("Transport playback clear failed")
 
         if cutoff_started is not None:
             observability.record_histogram(
@@ -2446,6 +2455,7 @@ class Session:
             await self.cancel_turn()
         if self._stopping:
             raise RuntimeError("Session is stopping")
+        was_active = self._observability_active
         self._mark_observability_active()
         try:
             with observability.span("easycat.session", {"easycat.surface": "agent_bridge"}):
@@ -2456,7 +2466,8 @@ class Session:
                     admit=lambda: not self._closed and not self._stopping,
                 )
         finally:
-            self._mark_observability_inactive()
+            if not was_active:
+                self._mark_observability_inactive()
 
     async def send_text(self, text: str) -> str:
         """Send text input and return the agent response.

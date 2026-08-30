@@ -286,7 +286,7 @@ class TestOutboundCallConfig:
     )
     def test_boolean_policy_rejects_wrong_type(self, field_name: str) -> None:
         with pytest.raises(ValueError, match=rf"{field_name} must be a boolean"):
-            OutboundCallConfig(**{field_name: "false"})  # type: ignore[arg-type]
+            OutboundCallConfig(from_number="+15555550100", **{field_name: "false"})  # type: ignore[arg-type]
 
     @pytest.mark.parametrize(
         ("field_name", "bad", "message"),
@@ -388,8 +388,15 @@ class TestTelephonyConfigExtension:
             TelephonyConfig(outbound=object())  # type: ignore[arg-type]
 
     def test_enable_outbound_flag(self) -> None:
-        cfg = TelephonyConfig(enable_outbound_call_manager=True)
+        cfg = TelephonyConfig(
+            enable_outbound_call_manager=True,
+            outbound=OutboundCallConfig(from_number="+15559876543"),
+        )
         assert cfg.enable_outbound_call_manager is True
+
+    def test_enable_outbound_requires_outbound_config(self) -> None:
+        with pytest.raises(ValueError, match="telephony.outbound is required"):
+            TelephonyConfig(enable_outbound_call_manager=True)
 
     def test_outbound_config_nested(self) -> None:
         outbound = OutboundCallConfig(from_number="+15559876543")

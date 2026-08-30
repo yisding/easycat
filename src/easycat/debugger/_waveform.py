@@ -126,6 +126,8 @@ def encode_peaks_png(
     """
     width = max(1, int(width))
     height = max(1, int(height))
+    if not peaks:
+        peaks = [(0, 0)]
     cols = len(peaks) or 1
     bg = (18, 22, 30)
     wave_rgb = (110, 168, 254)

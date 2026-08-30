@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "telephony refactor: wait_for_start timeout site moved to shared TelephonyConnectionTransportBase",
+  "update_rationale": "fix batch1 final",
   "counts": {
     "configurable": 29,
     "lifecycle_budget": 96,

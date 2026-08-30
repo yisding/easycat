@@ -864,7 +864,7 @@ def _report_load_error(path: Path, message: str, *, json_output: bool) -> NoRetu
 
 def _load_report_payload(path: Path, *, json_output: bool = False) -> dict[str, object]:
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except OSError as exc:
         _report_load_error(
             path,

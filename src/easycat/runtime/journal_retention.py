@@ -140,7 +140,8 @@ class _RetentionSweep:
                 continue
             if mtime >= cutoff:
                 break
-            self._prune_oldest()
+            if not self._prune_oldest():
+                break
 
     def prune_to_caps(self, max_sessions: int, max_bytes: int) -> None:
         """Prune the oldest prunable journal until count and byte caps hold."""
@@ -152,12 +153,17 @@ class _RetentionSweep:
                 or self._total_bytes > max_bytes
             )
         ):
-            self._prune_oldest()
+            if not self._prune_oldest():
+                break
 
     def _prune_oldest(self) -> bool:
         """Pop and archive/remove the oldest prunable journal; True if pruned."""
         oldest = self._files.pop(0)
         fsize = self._sizes.pop(oldest, 0)
+
+        def _restore() -> None:
+            self._files.insert(0, oldest)
+            self._sizes[oldest] = fsize
 
         # Guard file existence to avoid racing a concurrent crash-durability
         # sweep that may have already removed the file out from under us.
@@ -175,6 +181,7 @@ class _RetentionSweep:
                 # contention as one permanently protected session and
                 # deleting a different candidate to satisfy the stale caps.
                 self._claim_contended = True
+                _restore()
                 return False
             if self._is_protected(oldest):
                 self._protected_count += 1
@@ -187,6 +194,7 @@ class _RetentionSweep:
                 self._total_bytes -= fsize
                 return False
             if not self._archive_and_remove(oldest):
+                _restore()
                 return False
 
         self._total_bytes -= fsize

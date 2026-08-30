@@ -363,6 +363,8 @@ class _StreamingLinearState:
         if not self._taps:
             return [float(sample) for sample in samples]
         combined = [*self._raw_history, *samples]
+        if not combined:
+            return []
         history_length = len(self._raw_history)
         if self._np is not None:
             convolved = self._np.convolve(

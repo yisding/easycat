@@ -127,17 +127,39 @@ def _sample_object(value: object, *, kind: str, index: int) -> dict[str, Any]:
 def append_reliability_sample(path: str | Path, sample: ReliabilitySample) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # Use an atomic claim/write to avoid read-modify-write races (gh 1036).
+    # Fallback to plain write if claim unavailable.
+    from easycat.runtime.journal_retention import journal_file_claim
+
     if destination.exists():
         try:
-            payload = json.loads(destination.read_text())
-        except json.JSONDecodeError:
+            payload = json.loads(destination.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, ValueError, UnicodeDecodeError):
             payload = []
     else:
         payload = []
     if not isinstance(payload, list):
         payload = []
     payload.append(sample.to_dict())
-    destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    try:
+        with journal_file_claim(destination, blocking=True) as claimed:
+            if claimed:
+                # Re-read under lock to avoid lost update
+                if destination.exists():
+                    try:
+                        latest = json.loads(destination.read_text(encoding="utf-8"))
+                        if isinstance(latest, list) and len(latest) > len(payload) - 1:
+                            # Another writer appended while we waited — merge
+                            latest.append(sample.to_dict())
+                            encoded = json.dumps(latest, indent=2, sort_keys=True) + "\n"
+                    except (json.JSONDecodeError, OSError, ValueError, UnicodeDecodeError):
+                        pass
+                destination.write_text(encoded, encoding="utf-8")
+                return
+    except Exception:  # noqa: BLE001, S110
+        pass
+    destination.write_text(encoded, encoding="utf-8")
 
 
 def _summarize_reliability_samples(samples: list[ReliabilitySample]) -> dict[str, Any]:

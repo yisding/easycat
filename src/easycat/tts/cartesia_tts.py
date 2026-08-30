@@ -239,7 +239,7 @@ class CartesiaTTS(_WSTTSBase):
             events: list[TTSEvent] = []
             data_b64 = msg.get("data")
             if data_b64:
-                audio_bytes = base64.b64decode(data_b64)
+                audio_bytes = base64.b64decode(data_b64, validate=True)
                 if audio_bytes:
                     event = self._make_audio_event(
                         audio_bytes,

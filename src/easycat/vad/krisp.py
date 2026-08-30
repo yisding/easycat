@@ -23,9 +23,12 @@ class KrispVAD(_VADBase):
 
     def __init__(self, model_path: str | None = None) -> None:
         super().__init__()
+        from easycat._audio_utils import AudioFrameAligner
+
         self._session: Any = None
         self._model_path = model_path
         self._krisp_audio: Any = None
+        self._source_frame_aligner = AudioFrameAligner()
 
         self._initialize()
 
@@ -49,6 +52,12 @@ class KrispVAD(_VADBase):
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
         """Process audio through Krisp VAD and yield events."""
+        # Align frames and downmix to mono so stereo/split-frame input is handled (gh 1029).
+        from easycat._audio_utils import to_mono_chunk
+
+        chunk = self._source_frame_aligner.align(chunk)
+        if chunk.format.channels > 1:
+            chunk = to_mono_chunk(chunk)
         if self._krisp_audio is None:
             self._krisp_audio = require_module("krisp_audio", purpose="Krisp VAD")
         speech_prob = self._krisp_audio.vad_process(
@@ -62,6 +71,10 @@ class KrispVAD(_VADBase):
     def reset(self) -> None:
         """Reset VAD internal state."""
         super().reset()
+        try:
+            self._source_frame_aligner.reset()
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def close(self) -> None:
         """Release Krisp session resources."""

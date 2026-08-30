@@ -149,10 +149,15 @@ def _compare_condition(
         }
     delta_ms = current_observed - baseline_observed
     relative_delta = delta_ms / baseline_observed if baseline_observed > 0 else None
+    # When baseline is 0, relative_delta is undefined; treat absolute regression as
+    # sufficient to fail when baseline was 0 (gh 1030), otherwise require both.
     relative_regression = (
         relative_delta is not None and relative_delta >= thresholds.relative_regression
     )
     absolute_regression = delta_ms >= thresholds.absolute_regression_ms
+    if baseline_observed == 0 and absolute_regression:
+        # No baseline to compare relatively; absolute growth alone is regression.
+        relative_regression = True
 
     base_result = {
         "condition_id": condition_id,

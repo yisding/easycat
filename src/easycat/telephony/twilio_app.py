@@ -200,6 +200,8 @@ def twilio_app_settings_from_env(
             "TWILIO_STREAM_URL is required. Set it to the public wss:// URL Twilio should "
             "connect to."
         )
+    if not resolved_stream_url.lower().startswith("wss://"):
+        raise RuntimeError(f"TWILIO_STREAM_URL must use wss:// (got {resolved_stream_url!r})")
     resolved_auth_token = _settings_value(auth_token) or _settings_value(
         env.get("TWILIO_AUTH_TOKEN")
     )

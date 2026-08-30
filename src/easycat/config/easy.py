@@ -320,6 +320,8 @@ def _normalize_smart_turn_config(
         )
         config = SmartTurnConfig(enabled=enabled)
     elif isinstance(smart_turn, SmartTurnConfig):
+        if not smart_turn.enabled and sensitivity is not None:
+            raise EasyConfigError("smart_turn_sensitivity requires smart_turn=True.")
         config = smart_turn
     else:
         raise EasyConfigError("smart_turn must be a bool or SmartTurnConfig.")
@@ -594,6 +596,8 @@ class OutboundCallConfig:
             raise EasyConfigError(
                 "outbound.telnyx_connection_id is required when provider='telnyx'."
             )
+        if self.provider == "telnyx" and not self.telnyx_api_key:
+            raise EasyConfigError("outbound.telnyx_api_key is required when provider='telnyx'.")
         if self.retry_strategy is not None:
             from easycat.telephony.retry import RetryStrategyConfig
 
@@ -615,6 +619,8 @@ class OutboundCallConfig:
             "enable_retry_strategy",
         ):
             _require_boolean(name, getattr(self, name))
+        if not self.from_number or not self.from_number.strip():
+            raise EasyConfigError("outbound.from_number must be a non-empty E.164 number.")
         _require_positive("classification_gate_timeout_s", self.classification_gate_timeout_s)
         _require_positive("max_call_duration_s", self.max_call_duration_s)
         _require_positive_integer("max_screening_turns", self.max_screening_turns)
@@ -649,12 +655,23 @@ class TelephonyConfig:
             "enable_outbound_call_manager",
         ):
             _require_boolean(name, getattr(self, name))
+        if self.enable_outbound_call_manager and self.outbound is None:
+            raise EasyConfigError(
+                "telephony.outbound is required when enable_outbound_call_manager=True."
+            )
         if self.telnyx_actions is not None:
             from easycat.telephony.session_actions import TelnyxSessionActionConfig
 
             if not isinstance(self.telnyx_actions, TelnyxSessionActionConfig):
                 raise EasyConfigError(
                     "telephony.telnyx_actions must be a TelnyxSessionActionConfig instance."
+                )
+        if self.twilio_actions is not None:
+            from easycat.telephony.session_actions import TwilioSessionActionConfig
+
+            if not isinstance(self.twilio_actions, TwilioSessionActionConfig):
+                raise EasyConfigError(
+                    "telephony.twilio_actions must be a TwilioSessionActionConfig instance."
                 )
         if self.outbound is None:
             return
@@ -1056,7 +1073,7 @@ class EasyConfig(_AgentSessionConfig):
         level = logging.getLogger("easycat").level
         logger.debug("EasyCat debug mode enabled (level=%s)", logging.getLevelName(level))
 
-    def _validate(self) -> None:
+    def _validate(self) -> None:  # noqa: PLR0912
         try:
             _validate_caller_id_exposure(self.caller_id_exposure)
         except ValueError as exc:
@@ -1081,9 +1098,44 @@ class EasyConfig(_AgentSessionConfig):
             if _provider_requires_api_key(cfg, kind) and not has_usable_credential(
                 getattr(cfg, "api_key", None)
             ):
-                # Keep the per-provider display-name config error here —
-                # there is no (cfg, kind) -> env-var helper today, and the
-                # None-branch fix above captures ~all of the leverage.
+                # Also check ambient env var so typed configs match string/wrapper (gh 1018).  # noqa: E501
+                import os as _os
+
+                from easycat._credentials import has_usable_credential as _has_cred
+
+                env_ok = False
+                try:
+                    if kind == "STT":
+                        from easycat.stt.factory import _CATALOG as _catalog
+                    else:
+                        from easycat.tts.factory import _CATALOG as _catalog
+
+                    _catalog.discover()
+                    # Resolve provider name for this cfg type
+                    provider_name = None
+                    if hasattr(cfg, "provider"):
+                        try:
+                            provider_name = _catalog.validate_name(cfg.provider)  # type: ignore[arg-type]
+                        except Exception:  # noqa: BLE001
+                            provider_name = None
+                    if provider_name is None:
+                        for pname, (_pcls, ccls) in _catalog.providers.items():
+                            if ccls is type(cfg):
+                                provider_name = pname
+                                break
+                    if provider_name is not None:
+                        env_var = _catalog.env_vars.get(provider_name)
+                        if env_var and _has_cred(_os.getenv(env_var)):
+                            env_ok = True
+                except Exception:  # noqa: BLE001
+                    env_ok = False
+                if env_ok:
+                    # Inject ambient credential so create_session succeeds (gh 1041 review).  # noqa: E501
+                    try:
+                        cfg.api_key = _os.getenv(env_var or "") or cfg.api_key  # type: ignore[attr-defined]
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+                    continue
                 name = _provider_display_name(cfg, kind)
                 raise EasyConfigError(f"{name} requires an API key.")
 

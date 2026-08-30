@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
@@ -176,7 +177,7 @@ def _prepare_output_dir(
         )
         raise typer.Exit(1)
 
-    if output_path.exists():
+    if os.path.lexists(output_path):
         if not force:
             emit_command_error(
                 command,

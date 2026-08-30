@@ -172,7 +172,8 @@ class PhoneticReplacementProcessor:
         source = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
         transformed = source
         for source_term, spoken_term in self.replacements.items():
-            pattern = re.compile(rf"\b{re.escape(source_term)}\b", flags=re.IGNORECASE)
+            # Retain word boundaries for all terms, including punctuation like "C++" (gh 1004).
+            pattern = re.compile(rf"(?<!\w){re.escape(source_term)}(?!\w)", flags=re.IGNORECASE)
             transformed = pattern.sub(spoken_term, transformed)
 
         if transformed == source:

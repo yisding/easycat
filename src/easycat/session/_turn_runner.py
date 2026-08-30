@@ -1659,7 +1659,7 @@ class TurnRunner:
             if self._text_turn_cancel_token is token:
                 self._text_turn_cancel_token = None
 
-    async def prompt_agent(
+    async def prompt_agent(  # noqa: C901, PLR0912
         self,
         text: str,
         *,
@@ -1684,6 +1684,34 @@ class TurnRunner:
                 await self._cancel_turn()
                 if not admit():
                     raise RuntimeError("Session is stopping")
+                # Re-guard: _cancel_turn yields, so VAD may have raced to USER_SPEAKING (gh 1048).
+                if not activity.guard():
+                    activity = self._turn_manager.capture_activity()
+                    if activity.guard() and activity.value is not TurnManagerState.IDLE:
+                        await self._cancel_turn()
+                        if not admit():
+                            raise RuntimeError("Session is stopping")
+                        # Final guard - if still not IDLE, voice owns turn now
+                        if self._turn_manager.state is not TurnManagerState.IDLE:
+                            raise RuntimeError(
+                                "Cannot start an application turn while turn manager is "
+                                f"{self._turn_manager.state.value}"
+                            )
+                elif self._turn_manager.state is not TurnManagerState.IDLE:
+                    # Activity lease still valid but state changed - voice raced in
+                    activity = self._turn_manager.capture_activity()
+                    if activity.guard() and activity.value is not TurnManagerState.IDLE:
+                        await self._cancel_turn()
+                        if self._turn_manager.state is not TurnManagerState.IDLE:
+                            raise RuntimeError(
+                                "Cannot start an application turn while turn manager is "
+                                f"{self._turn_manager.state.value}"
+                            )
+            # Final check that state is IDLE before admitting
+            if self._turn_manager.state is not TurnManagerState.IDLE:
+                raise RuntimeError(
+                    f"Cannot start an application turn while turn manager is {self._turn_manager.state.value}"  # noqa: E501
+                )
             token = CancelToken()
             turn_id = f"turn-{uuid4().hex[:12]}"
             turn = TurnContext(turn_id=turn_id, cancel_token=token)

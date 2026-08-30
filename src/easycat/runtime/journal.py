@@ -278,7 +278,7 @@ class JournalView:
         recs = self._journal.read(start=seq, limit=1)
         return recs[0] if recs and recs[0].sequence == seq else None
 
-    async def follow(
+    async def follow(  # noqa: C901
         self,
         *,
         from_sequence: int | None = None,
@@ -321,22 +321,28 @@ class JournalView:
             # between the previous iteration's yield and this call.
             records = self._journal.read(start=cursor)
             # Real sequences start at 1 (the ring buffer's ``_seq`` and the
-            # SQLite counter both pre-increment from 0).  Only treat a jump as
-            # an eviction gap when ``cursor`` pointed at a sequence that could
-            # actually have existed (``cursor >= 1``).  ``from_sequence=0`` (the
-            # documented "replay full history then live-tail" cursor) points
-            # below the first real sequence, so the first record arriving at
-            # sequence 1 is not a gap — it is the real start of history.
-            if records and cursor >= 1 and records[0].sequence > cursor:
-                # The oldest record we wanted (sequence == cursor) was evicted
-                # before we could read it.  Surface the gap in-band.
-                gap = records[0].sequence - cursor
-                yield BufferOverflow(
-                    sequence=cursor,
-                    session_id=records[0].session_id,
-                    timing=records[0].timing,
-                    data={"dropped_from": "follow_gap", "gap": gap},
-                )
+            # SQLite counter both pre-increment from 0).  ``from_sequence=0`` is
+            # the documented "replay full history then live-tail" cursor — it
+            # points below the first real sequence, so first record at 1 is not
+            # a gap, but any first record >1 means history was evicted (gh 1046).
+            if records and records[0].sequence > cursor:
+                if cursor == 0:
+                    if records[0].sequence > 1:
+                        gap = records[0].sequence - 1
+                        yield BufferOverflow(
+                            sequence=1,
+                            session_id=records[0].session_id,
+                            timing=records[0].timing,
+                            data={"dropped_from": "follow_gap", "gap": gap},
+                        )
+                elif records[0].sequence > cursor:
+                    gap = records[0].sequence - cursor
+                    yield BufferOverflow(
+                        sequence=cursor,
+                        session_id=records[0].session_id,
+                        timing=records[0].timing,
+                        data={"dropped_from": "follow_gap", "gap": gap},
+                    )
             for rec in records:
                 yield rec
                 # Advance cursor past the yielded record so we never

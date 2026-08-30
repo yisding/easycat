@@ -1,14 +1,16 @@
 {
   "version": 1,
-  "update_rationale": "WS1.3b renames pause correlation around exact leases without changing synchronous turn predicates",
+  "update_rationale": "fix batch1 final",
   "counts": {
     "categories": {
+      "activity_state_predicate": 4,
       "null_object_predicate": 29,
       "phase_latch_predicate": 1,
       "token_cancellation_predicate": 13,
       "token_ownership_predicate": 3
     },
     "roles": {
+      "activity": 4,
       "cancellation": 13,
       "null_object": 29,
       "phase_latch": 1,
@@ -16,6 +18,10 @@
     }
   },
   "entries": [
+    "activity_state_predicate\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tself._turn_manager.state is not TurnManagerState.IDLE\t008c08c2412f86ee\t0\tactivity\tGuards an effect by the manager activity phase.",
+    "activity_state_predicate\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tself._turn_manager.state is not TurnManagerState.IDLE\t008c08c2412f86ee\t1\tactivity\tGuards an effect by the manager activity phase.",
+    "activity_state_predicate\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tself._turn_manager.state is not TurnManagerState.IDLE\t008c08c2412f86ee\t2\tactivity\tGuards an effect by the manager activity phase.",
+    "activity_state_predicate\tsession/_turn_runner.py\tTurnRunner.prompt_agent\tself._turn_manager.state is not TurnManagerState.IDLE\t008c08c2412f86ee\t3\tactivity\tGuards an effect by the manager activity phase.",
     "null_object_predicate\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit\tturn is None\t4836f5e5e96301c4\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_stt_committer.py\tSTTCommitter._start_segment_commit\tturn is self._no_turn\t0fc4c8154cbbf4c6\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",
     "null_object_predicate\tsession/_stt_committer.py\tSTTCommitter._take_next_pause\tturn is None\t4836f5e5e96301c4\t0\tnull_object\tDistinguishes absent or explicit no-turn payloads; not a liveness fence.",

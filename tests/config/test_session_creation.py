@@ -684,7 +684,7 @@ def test_create_session_rejects_replaced_outbound_before_resources(
         vad=_ProviderShapeVAD(),
         transport=_IdentitySinkTransport(),
         agent=_DummyAgent(),
-        telephony=TelephonyConfig(outbound=OutboundCallConfig()),
+        telephony=TelephonyConfig(outbound=OutboundCallConfig(from_number="+15555550100")),
     )
     config.telephony.outbound = _RaisingCopyOutbound()  # type: ignore[assignment]
     monkeypatch.setattr(
@@ -701,7 +701,7 @@ def test_create_session_rejects_replaced_outbound_before_resources(
 def test_create_session_revalidates_mutated_outbound_boolean_before_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    outbound = OutboundCallConfig()
+    outbound = OutboundCallConfig(from_number="+15555550100")
     config = EasyConfig(
         stt=_ProviderShapeSTT(),
         tts=_ProviderShapeTTS(),

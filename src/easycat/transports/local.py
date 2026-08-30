@@ -152,6 +152,7 @@ class LocalTransport(AudioQueueMixin):
         # or queue churn on the audio thread.
         self._aec_reference_enabled: bool = False
 
+        self._lifecycle_lock = asyncio.Lock()
         self._event_bus: EventBus | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         # Sounddevice callbacks run on dedicated audio threads and can already
@@ -177,107 +178,129 @@ class LocalTransport(AudioQueueMixin):
 
     # ── Transport protocol ────────────────────────────────────────
 
-    async def connect(self) -> None:
+    async def connect(self) -> None:  # noqa: C901, PLR0915
         """Open audio devices and start capture / playback streams."""
-        if self._connected:
-            return
-        if self._input_stream is not None or self._output_stream is not None:
-            raise RuntimeError(
-                "Local transport cleanup is incomplete; call disconnect() before reconnecting"
-            )
-
-        self._stream_generation += 1
-        stream_generation = self._stream_generation
-        self._reset_audio_queue()
-        self._out_queue = thread_queue.Queue(maxsize=self._config.max_pending_out_chunks)
-        self._aec_ref_queue = thread_queue.Queue(maxsize=self._AEC_REF_QUEUE_MAX)
-        # A fresh session starts with capture disarmed; the AudioRouter re-arms
-        # it on its first reference drain when AEC is wired.
-        self._aec_reference_enabled = False
-        self._primed = False
-        sd = require_module(
-            "sounddevice",
-            extra="local",
-            purpose="LocalTransport audio I/O",
-        )
-        np = require_module(
-            "numpy",
-            extra="local",
-            purpose="LocalTransport audio I/O",
-        )
-
-        loop = asyncio.get_running_loop()
-        self._loop = loop
-        frame_size = self._frame_samples
-
-        # --- Input stream (mic) ---
-        def _input_callback(indata: Any, frames: int, time_info: object, status: object) -> None:
-            arr = indata
-            if hasattr(arr, "copy"):
-                arr = arr.copy()
-            # Convert float32 [-1, 1] to int16.  Clip before the cast:
-            # sounddevice/PortAudio does not hard-clamp float32 capture, so an
-            # overdriven input can exceed 1.0, and numpy's int16 cast wraps
-            # (sign-flips) rather than saturating.  Mirror the resampler sites.
-            pcm = np.clip(arr * 32767.0, -32768, 32767).astype(np.int16).tobytes()
-            chunk = AudioChunk(data=pcm, format=self._audio_format)
-            # ``_enqueue_chunk`` is sync-safe and emits the canonical
-            # ``inbound_queue_full`` TransportDegraded event on overflow, so
-            # local mic drops surface in the journal like every other
-            # transport.  Schedule it onto the loop from the audio thread.
-            # ``call_soon_threadsafe`` takes no kwargs, so bind callback
-            # metadata via ``partial``.
-            #
-            # The sounddevice audio thread can fire one more callback after the
-            # loop has been torn down (e.g. an abrupt Ctrl-C that closes the
-            # loop before the input stream is stopped).  Scheduling onto a
-            # closed loop raises ``RuntimeError: Event loop is closed`` from the
-            # cffi callback; guard + swallow it so shutdown stays quiet.
-            if loop.is_closed():
+        async with self._lifecycle_lock:
+            if self._connected:
                 return
-            try:
-                loop.call_soon_threadsafe(
-                    partial(
-                        self._enqueue_input_chunk,
-                        chunk,
-                        stream_generation=stream_generation,
-                    )
+            if self._input_stream is not None or self._output_stream is not None:
+                raise RuntimeError(
+                    "Local transport cleanup is incomplete; call disconnect() before reconnecting"
                 )
-            except RuntimeError:
-                pass
 
-        try:
-            self._input_stream = sd.InputStream(
-                samplerate=self._audio_format.sample_rate,
-                channels=self._audio_format.channels,
-                dtype="float32",
-                blocksize=frame_size,
-                device=self._config.input_device,
-                callback=_input_callback,
+            self._stream_generation += 1
+            stream_generation = self._stream_generation
+            self._reset_audio_queue()
+            self._out_queue = thread_queue.Queue(maxsize=self._config.max_pending_out_chunks)
+            self._aec_ref_queue = thread_queue.Queue(maxsize=self._AEC_REF_QUEUE_MAX)
+            # A fresh session starts with capture disarmed; the AudioRouter re-arms
+            # it on its first reference drain when AEC is wired.
+            self._aec_reference_enabled = False
+            self._primed = False
+            sd = require_module(
+                "sounddevice",
+                extra="local",
+                purpose="LocalTransport audio I/O",
             )
-            self._input_stream.start()
+            np = require_module(
+                "numpy",
+                extra="local",
+                purpose="LocalTransport audio I/O",
+            )
 
-            # --- Output stream (speaker) ---
-            self._output_stream = sd.OutputStream(
-                samplerate=self._audio_format.sample_rate,
-                channels=self._audio_format.channels,
-                dtype="float32",
-                blocksize=frame_size,
-                device=self._config.output_device,
-                callback=partial(
-                    self._run_output_callback,
-                    np,
-                    stream_generation=stream_generation,
-                ),
-            )
-            self._output_stream.start()
-        except BaseException as startup_error:  # noqa: BLE001 - partial acquisition boundary
-            # ``_connected`` becomes true only after both devices start, so a
-            # failure here must unwind the handles directly rather than rely on
-            # the steady-state flag. This also makes callers that do not wrap
-            # ``connect()`` in an exit stack safe from partial acquisition.
-            await self._raise_failed_connect_after_cleanup(startup_error)
-        self._connected = True
+            loop = asyncio.get_running_loop()
+            self._loop = loop
+            frame_size = self._frame_samples
+
+            # --- Input stream (mic) ---
+            def _input_callback(
+                indata: Any, frames: int, time_info: object, status: object
+            ) -> None:
+                arr = indata
+                if hasattr(arr, "copy"):
+                    arr = arr.copy()
+                # Convert float32 [-1, 1] to int16.  Clip before the cast:
+                # sounddevice/PortAudio does not hard-clamp float32 capture, so an
+                # overdriven input can exceed 1.0, and numpy's int16 cast wraps
+                # (sign-flips) rather than saturating.  Mirror the resampler sites.
+                pcm = np.clip(arr * 32767.0, -32768, 32767).astype(np.int16).tobytes()
+                chunk = AudioChunk(data=pcm, format=self._audio_format)
+                # ``_enqueue_chunk`` is sync-safe and emits the canonical
+                # ``inbound_queue_full`` TransportDegraded event on overflow, so
+                # local mic drops surface in the journal like every other
+                # transport.  Schedule it onto the loop from the audio thread.
+                # ``call_soon_threadsafe`` takes no kwargs, so bind callback
+                # metadata via ``partial``.
+                #
+                # The sounddevice audio thread can fire one more callback after the
+                # loop has been torn down (e.g. an abrupt Ctrl-C that closes the
+                # loop before the input stream is stopped).  Scheduling onto a
+                # closed loop raises ``RuntimeError: Event loop is closed`` from the
+                # cffi callback; guard + swallow it so shutdown stays quiet.
+                if loop.is_closed():
+                    return
+                try:
+                    loop.call_soon_threadsafe(
+                        partial(
+                            self._enqueue_input_chunk,
+                            chunk,
+                            stream_generation=stream_generation,
+                        )
+                    )
+                except RuntimeError:
+                    pass
+
+            try:
+                self._input_stream = sd.InputStream(
+                    samplerate=self._audio_format.sample_rate,
+                    channels=self._audio_format.channels,
+                    dtype="float32",
+                    blocksize=frame_size,
+                    device=self._config.input_device,
+                    callback=_input_callback,
+                )
+                self._input_stream.start()
+
+                # --- Output stream (speaker) ---
+                self._output_stream = sd.OutputStream(
+                    samplerate=self._audio_format.sample_rate,
+                    channels=self._audio_format.channels,
+                    dtype="float32",
+                    blocksize=frame_size,
+                    device=self._config.output_device,
+                    callback=partial(
+                        self._run_output_callback,
+                        np,
+                        stream_generation=stream_generation,
+                    ),
+                )
+                self._output_stream.start()
+            except BaseException as startup_error:
+                # ``_connected`` becomes true only after both devices start. We are
+                # still holding ``_lifecycle_lock`` here, so we must not call
+                # ``disconnect()`` (which reacquires the same lock) — that would
+                # deadlock. Clean up partial streams directly without the lock.
+                for stream in (self._input_stream, self._output_stream):
+                    if stream is not None:
+                        try:
+                            stream.stop()
+                        except Exception:  # noqa: BLE001, S110
+                            pass
+                        try:
+                            stream.close()
+                        except Exception:  # noqa: BLE001, S110
+                            pass
+                self._input_stream = None
+                self._output_stream = None
+                self._loop = None
+                self._connected = False
+                self._flush_queues()
+                # Invalidate callbacks from this generation
+                self._stream_generation += 1
+                if isinstance(startup_error, asyncio.CancelledError):
+                    raise
+                raise
+            self._connected = True
 
     async def _raise_failed_connect_after_cleanup(
         self,
@@ -436,47 +459,48 @@ class LocalTransport(AudioQueueMixin):
 
     async def disconnect(self) -> None:
         """Close audio devices and release resources."""
-        if (
-            not self._connected
-            and self._input_stream is None
-            and self._output_stream is None
-            and self._loop is None
-        ):
-            return
+        async with self._lifecycle_lock:
+            if (
+                not self._connected
+                and self._input_stream is None
+                and self._output_stream is None
+                and self._loop is None
+            ):
+                return
 
-        # Invalidate callback closures before stopping either device.  A native
-        # callback may have already queued work onto the event loop; the
-        # generation check in that work then drops it instead of affecting a
-        # subsequent connection.
-        self._stream_generation += 1
-        cleanup_errors: list[Exception] = []
-        streams = (
-            ("input", self._input_stream),
-            ("output", self._output_stream),
-        )
-        for stream_name, stream in streams:
-            if stream is not None:
-                try:
-                    stream.stop()
-                except Exception:
-                    logger.debug("Error stopping audio stream", exc_info=True)
-                try:
-                    stream.close()
-                except Exception as exc:
-                    logger.debug("Error closing audio stream", exc_info=True)
-                    cleanup_errors.append(exc)
-                else:
-                    if stream_name == "input" and self._input_stream is stream:
-                        self._input_stream = None
-                    elif stream_name == "output" and self._output_stream is stream:
-                        self._output_stream = None
-        self._flush_queues()
-        self._enqueue_sentinel()
-        self._connected = False
-        self._loop = None
-        await self._drain_emit_tasks()
-        if cleanup_errors:
-            raise cleanup_errors[0]
+            # Invalidate callback closures before stopping either device.  A native
+            # callback may have already queued work onto the event loop; the
+            # generation check in that work then drops it instead of affecting a
+            # subsequent connection.
+            self._stream_generation += 1
+            cleanup_errors: list[Exception] = []
+            streams = (
+                ("input", self._input_stream),
+                ("output", self._output_stream),
+            )
+            for stream_name, stream in streams:
+                if stream is not None:
+                    try:
+                        stream.stop()
+                    except Exception:
+                        logger.debug("Error stopping audio stream", exc_info=True)
+                    try:
+                        stream.close()
+                    except Exception as exc:
+                        logger.debug("Error closing audio stream", exc_info=True)
+                        cleanup_errors.append(exc)
+                    else:
+                        if stream_name == "input" and self._input_stream is stream:
+                            self._input_stream = None
+                        elif stream_name == "output" and self._output_stream is stream:
+                            self._output_stream = None
+            self._flush_queues()
+            self._enqueue_sentinel()
+            self._connected = False
+            self._loop = None
+            await self._drain_emit_tasks()
+            if cleanup_errors:
+                raise cleanup_errors[0]
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Queue an audio chunk for speaker playback.

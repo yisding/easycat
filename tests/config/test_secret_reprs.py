@@ -102,6 +102,7 @@ def _public_config_factories() -> dict[str, Callable[[], Any]]:
         "LocalTransportConfig": LocalTransportConfig,
         "NoiseReducerConfig": NoiseReducerConfig,
         "OutboundCallConfig": lambda: OutboundCallConfig(
+            from_number="+15555550100",
             twilio_auth_token=_SENTINEL,
         ),
         "STTProviderConfig": lambda: STTProviderConfig(
@@ -116,6 +117,7 @@ def _public_config_factories() -> dict[str, Callable[[], Any]]:
         ),
         "TelephonyConfig": lambda: TelephonyConfig(
             outbound=OutboundCallConfig(
+                from_number="+15555550100",
                 twilio_auth_token=_SENTINEL,
             ),
             twilio_actions=TwilioSessionActionConfig(
@@ -313,6 +315,7 @@ def test_registered_provider_config_repr_omits_api_key(
             OutboundCallConfig,
             ("telnyx_api_key", "twilio_auth_token"),
             lambda: OutboundCallConfig(
+                from_number="+15555550100",
                 telnyx_api_key=_SENTINEL,
                 twilio_auth_token=_SENTINEL,
             ),
