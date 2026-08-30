@@ -987,6 +987,15 @@ class EasyConfig(_AgentSessionConfig):
             else None
         )
         self._resolve_provider_shortcuts(api_key_overrides)
+        # Recompute smart_turn after STT shortcut resolution so a post-construction
+        # stt mutation (e.g. to a native-endpointing provider) does not leave double
+        # endpointing on (gh 1027).
+        self.smart_turn = _normalize_smart_turn_config(
+            self.smart_turn,
+            sensitivity=self.smart_turn_sensitivity,
+            transport=self.transport,
+            stt_native_endpointing=_stt_uses_native_endpointing(self.stt),
+        )
         self.turn_taking.validate()
         if self.telephony is not None:
             if not isinstance(self.telephony, TelephonyConfig):

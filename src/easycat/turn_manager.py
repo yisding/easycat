@@ -469,7 +469,7 @@ class TurnManager:
         while (
             self._pre_roll_duration_ms > self._config.pre_roll_ms
             or len(self._pre_roll_buffer) > self._config.max_pre_roll_chunks
-        ) and self._pre_roll_buffer:
+        ) and len(self._pre_roll_buffer) > 1:
             removed = self._pre_roll_buffer.popleft()
             self._pre_roll_duration_ms -= removed.duration_ms
         if self._pre_roll_duration_ms < 0:
@@ -486,7 +486,7 @@ class TurnManager:
         while (
             self._turn_audio_duration_ms > self._config.max_turn_audio_ms
             or len(self._turn_audio) > self._config.max_turn_audio_chunks
-        ) and self._turn_audio:
+        ) and len(self._turn_audio) > 1:
             removed = self._turn_audio.popleft()
             self._turn_audio_duration_ms -= removed.duration_ms
         if self._turn_audio_duration_ms < 0:
@@ -998,11 +998,25 @@ class TurnManager:
                 continue
             for task in pending:
                 task.cancel()
-            # ``wait`` does not couple cancellation of shutdown() back into a
-            # detector task that already received its explicit cancellation.
-            # A cancellation-resistant detector therefore remains owned by
-            # the task set for a later shutdown retry.
-            await asyncio.wait(pending)
+            # Bound the join so cancellation-resistant detectors do not hang shutdown (gh 995).
+            # A detector that suppresses CancelledError remains owned for a later retry.
+            try:
+                await asyncio.wait_for(asyncio.wait(pending), timeout=1.0)
+            except TimeoutError:
+                # Leave still-running tasks owned for a later retry instead of hanging.
+                still_pending = tuple(t for t in pending if not t.done())
+                pending_done = tuple(t for t in pending if t.done())
+                self._silence_timer_tasks.difference_update(pending_done)
+                # Do not discard still-pending; will be retried on next loop iteration, but
+                # break to avoid infinite hang if detector never completes.
+                if still_pending:
+                    logger.warning(
+                        "TurnManager.shutdown: %d silence timer(s) resisted cancellation; "
+                        "leaving for later retry",
+                        len(still_pending),
+                    )
+                    break
+                continue
             self._silence_timer_tasks.difference_update(pending)
         if current is not None:
             self._silence_timer_tasks.discard(current)

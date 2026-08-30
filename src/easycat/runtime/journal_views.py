@@ -62,6 +62,13 @@ class ReadonlySqliteJournal:
         )
         return self._query(f"SELECT * FROM journal{where} ORDER BY sequence", params)
 
+    def slice_by_stage(self, stage_name: str) -> list[JournalRecord]:
+        # Indexed stage query avoids full scan for read-only postmortem views (gh 1026).
+        return self._query(
+            "SELECT * FROM journal WHERE stage = ? OR observed_stage = ? ORDER BY sequence",
+            [stage_name, stage_name],
+        )
+
     def close(self) -> None:
         pass
 
@@ -164,6 +171,18 @@ class FrozenJournalSnapshot:
                 name=name,
                 tags=tags,
             )
+        )
+
+    def slice_by_stage(self, stage_name: str) -> list[JournalRecord]:
+        return copy.deepcopy(
+            [
+                r
+                for r in self._records
+                if getattr(r, "stage", None) == stage_name
+                or getattr(getattr(r, "data", {}), "get", lambda k: None)("stage") == stage_name
+                or (isinstance(getattr(r, "data", None), dict) and r.data.get("stage") == stage_name)
+                or (isinstance(getattr(r, "data", None), dict) and r.data.get("observed_stage") == stage_name)
+            ]
         )
 
     def close(self) -> None:

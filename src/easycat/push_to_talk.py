@@ -48,19 +48,44 @@ class _SelectorLineReader:
         self._pending: deque[bool | Exception] = deque()
         self._ready = asyncio.Event()
         self._registered = False
+        self._buffer = bytearray()
         loop.add_reader(fd, self._on_readable)
         self._registered = True
 
     def _on_readable(self) -> None:
         try:
-            got_line = bool(self._stream.readline())
+            # Use os.read instead of buffered TextIOWrapper.readline to avoid
+            # swallowing type-ahead into Python's internal buffer (gh 1006).
+            import os
+
+            data = os.read(self._fd, 8192)
         except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self.close()
             self._publish(exc)
             return
-        if not got_line:
+        if not data:
             self.close()
-        self._publish(got_line)
+            # Flush any buffered partial line as a line
+            if self._buffer:
+                self._buffer.clear()
+                self._publish(True)
+            return
+        self._buffer.extend(data)
+        # Emit one buffered line per readability event, keep remaining for next read
+        while b"\n" in self._buffer:
+            nl_idx = self._buffer.index(b"\n")
+            # Consume up to and including newline
+            del self._buffer[: nl_idx + 1]
+            self._publish(True)
+            # Only publish one per callback to avoid recursion depth; remaining
+            # buffered lines will be drained on next read() or next readable event
+            if b"\n" in self._buffer:
+                # Re-arm: publish remaining buffered lines without waiting for fd readiness
+                # Loop will handle them on next read() via _pending
+                continue
+            break
+        # If buffer has data without newline but fd is not readable, we wait for next event
+        # The buffered data stays for next on_readable where more bytes arrive
 
     def _publish(self, result: bool | Exception) -> None:
         self._pending.append(result)

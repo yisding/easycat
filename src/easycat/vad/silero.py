@@ -270,10 +270,14 @@ class SileroVAD(_VADBase):
                 timestamp=chunk.timestamp,
             )
         elif self._audio_resampler.source_rate is not None:
-            # A native-rate chunk starts a new format segment. The VAD drops
-            # stale frame remainders on rate changes, so discard the old
-            # converter tail rather than mixing 16 kHz output with 8 kHz data.
-            self._audio_resampler.reset()
+            # A native-rate chunk starts a new format segment. Flush the old
+            # converter tail and feed it through VAD before resetting, instead
+            # of discarding ~32ms of audio (gh 1034).
+            tail = self._audio_resampler.finish()
+            if tail:
+                # Feed the resampled tail at the old rate's equivalent?
+                # The tail is already at target rate, so buffer it directly.
+                self._buffer += tail
         target_rate = chunk.format.sample_rate
 
         # A mid-stream 8k<->16k switch would concatenate old-rate remainder

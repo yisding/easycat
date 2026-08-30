@@ -1049,8 +1049,8 @@ class STTAMDFusionClassifier:
                 await self._emit(winner)
             return
 
-        # Only one signal — use it if it's decisive, else wait.
-        if self._amd_result is not None and self._amd_result != "unknown":
+        # Only one signal — use it if it's decisive, else wait. Also arm timeout for "unknown" (gh 997).
+        if self._amd_result is not None:
             if self._stt_result is None and not self._tasks.active(_STT_AMD_TIMEOUT_TASK):
                 # Start timeout to wait for STT.
                 self._start_timeout()

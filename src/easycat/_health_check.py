@@ -53,6 +53,7 @@ class PeriodicHealthChecker:
         failure_threshold: int = 1,
         on_unhealthy: HealthCallback | None = None,
         on_recovered: HealthCallback | None = None,
+        probe_timeout: float = 5.0,
     ) -> None:
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be >= 1")
@@ -63,6 +64,7 @@ class PeriodicHealthChecker:
         self._failure_threshold = failure_threshold
         self._on_unhealthy = on_unhealthy
         self._on_recovered = on_recovered
+        self._probe_timeout = probe_timeout
         self._tasks = RuntimeTaskScope(
             owner_label=f"{provider_name}-health-check",
             member_name=_HEALTH_CHECK_MEMBER,
@@ -120,7 +122,10 @@ class PeriodicHealthChecker:
     async def check_once(self) -> bool:
         """Run a single health check. Returns True if healthy."""
         try:
-            healthy = await self._provider.health_check()
+            healthy = await asyncio.wait_for(self._provider.health_check(), timeout=self._probe_timeout)
+        except TimeoutError as exc:
+            await self._record_failure(f"health check timed out after {self._probe_timeout}s: {exc}")
+            return False
         except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             await self._record_failure(str(exc))
             return False
@@ -150,7 +155,10 @@ class PeriodicHealthChecker:
             self._unhealthy = False
             logger.info("Health check recovered for %s", self._provider_name)
             if self._on_recovered is not None:
-                await self._invoke_callback(self._on_recovered)
+                try:
+                    await asyncio.wait_for(self._invoke_callback(self._on_recovered), timeout=2.0)
+                except TimeoutError:
+                    logger.warning("Health check on_recovered callback timed out for %s", self._provider_name)
 
     async def _record_failure(self, reason: str) -> None:
         """Advance the failure streak and escalate on the unhealthy transition."""
@@ -167,9 +175,15 @@ class PeriodicHealthChecker:
         if self._unhealthy or self._failure_streak < self._failure_threshold:
             return
         self._unhealthy = True
-        await self._emit_error(reason)
+        try:
+            await asyncio.wait_for(self._emit_error(reason), timeout=2.0)
+        except TimeoutError:
+            logger.warning("Health check Error emit timed out for %s", self._provider_name)
         if self._on_unhealthy is not None:
-            await self._invoke_callback(self._on_unhealthy)
+            try:
+                await asyncio.wait_for(self._invoke_callback(self._on_unhealthy), timeout=2.0)
+            except TimeoutError:
+                logger.warning("Health check on_unhealthy callback timed out for %s", self._provider_name)
 
     async def _emit_error(self, reason: str) -> None:
         """Emit an Error event on the unhealthy transition, if a bus is set."""
