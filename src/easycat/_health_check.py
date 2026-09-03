@@ -107,6 +107,14 @@ class PeriodicHealthChecker:
         # Resolve the running loop before constructing ``self._run()`` so an
         # accidental synchronous start cannot leave an unawaited coroutine.
         asyncio.get_running_loop()
+        survivor = self._task
+        if survivor is not None and not survivor.done():
+            # A re-entrant stop() (from inside the Error emit or the checker's
+            # own callback) left ``_run`` winding down but still executing.
+            # Re-arm that loop instead of racing a second probe loop against
+            # it; ``_run`` re-checks ``_running`` after every await.
+            self._running = True
+            return
         task = self._tasks.create_task(
             self._run(),
             task_name=f"{self._provider_name}-health-check",
@@ -120,8 +128,9 @@ class PeriodicHealthChecker:
         self._running = False
         # If stop is called from within an Error emit (re-entrant), don't try to
         # cancel the checker task — just let _run exit on its next loop check.
+        # Keep ``_task`` owned until it does so a re-entrant start() re-arms
+        # the survivor rather than registering a second probe loop.
         if self._emitting:
-            self._task = None
             return
         task = self._task
         if task is None or task.done():
@@ -132,7 +141,6 @@ class PeriodicHealthChecker:
         except RuntimeError:
             current = None
         if current is task:
-            self._task = None
             return
         await self._tasks.cancel_and_drain()
         if self._task is task:
@@ -169,7 +177,10 @@ class PeriodicHealthChecker:
         except Exception:
             logger.exception("Periodic health check loop failed for %s", self._provider_name)
         finally:
-            self._running = False
+            # Only the loop that still owns ``_task`` may clear the running
+            # flag; a successor started after this one was cancelled owns it.
+            if self._task is asyncio.current_task():
+                self._running = False
 
     async def _record_success(self) -> None:
         """Reset the failure streak and fire recovery hooks on transition."""

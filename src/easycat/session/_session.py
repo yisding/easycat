@@ -1684,14 +1684,23 @@ class Session:
             ):
                 # Application prompts are confirmed turn work. Graceful stop
                 # lets them finish with a bound wait so cancellation-resistant
-                # prompts do not hang teardown forever (gh 1025).
+                # prompts do not hang teardown forever (gh 1025). asyncio.wait
+                # keeps the prompt independent of this graceful owner; once
+                # the bound expires the prompt is cancelled under the same
+                # bounded drain as the force path, so it cannot keep running
+                # against a transport and providers that are being closed.
                 try:
                     await asyncio.wait_for(
                         asyncio.wait({prompt_task}),
                         timeout=SESSION_GRACEFUL_PROMPT_TIMEOUT_S,
                     )
                 except TimeoutError:
-                    pass
+                    logger.warning(
+                        "Graceful Session.stop() prompt wait exceeded %.1fs; "
+                        "cancelling the application prompt before teardown",
+                        SESSION_GRACEFUL_PROMPT_TIMEOUT_S,
+                    )
+                    await self._turn_runner.cancel_application_prompt()
 
             turn = self._turn
             if turn and not prompt_is_current:

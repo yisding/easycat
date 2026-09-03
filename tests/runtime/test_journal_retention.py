@@ -466,6 +466,110 @@ def test_retention_stops_when_another_sweep_holds_oldest_claim(
     assert newest.exists()
 
 
+def _two_candidate_sweep(tmp_path):
+    """Seed two stale journals and return (sweep, oldest, newest)."""
+    oldest = _seed_journal(tmp_path, "oldest")
+    newest = _seed_journal(tmp_path, "newest")
+    _backdate(oldest, age_days=2)
+    _backdate(newest, age_days=1)
+    sweep = journal_retention_module._RetentionSweep(tmp_path, [oldest, newest], "delete")
+    return sweep, oldest, newest
+
+
+def test_cap_pass_continues_past_candidate_that_vanished_before_claim(tmp_path) -> None:
+    sweep, oldest, newest = _two_candidate_sweep(tmp_path)
+    total = sweep._total_bytes
+    oldest_bytes = sweep._sizes[oldest]
+    newest_bytes = sweep._sizes[newest]
+    oldest.unlink()
+
+    sweep.prune_to_caps(max_sessions=0, max_bytes=10**9)
+
+    assert sweep.removed == 1
+    assert not newest.exists()
+    assert sweep._total_bytes == total - oldest_bytes - newest_bytes
+    assert sweep._protected_count == 0
+
+
+def test_cap_pass_continues_past_candidate_that_vanished_after_claim(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sweep, oldest, newest = _two_candidate_sweep(tmp_path)
+    total = sweep._total_bytes
+    oldest_bytes = sweep._sizes[oldest]
+    newest_bytes = sweep._sizes[newest]
+    original_claim = journal_retention_module.journal_file_claim
+
+    @contextmanager
+    def unlink_under_claim(path, *, blocking):
+        with original_claim(path, blocking=blocking) as claimed:
+            if path == oldest and claimed:
+                oldest.unlink()
+            yield claimed
+
+    monkeypatch.setattr(journal_retention_module, "journal_file_claim", unlink_under_claim)
+
+    sweep.prune_to_caps(max_sessions=0, max_bytes=10**9)
+
+    assert sweep.removed == 1
+    assert not newest.exists()
+    assert sweep._total_bytes == total - oldest_bytes - newest_bytes
+    assert sweep._protected_count == 0
+
+
+def test_cap_pass_keeps_bytes_for_candidate_that_became_protected_after_claim(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sweep, oldest, newest = _two_candidate_sweep(tmp_path)
+    total = sweep._total_bytes
+    newest_bytes = sweep._sizes[newest]
+    original_claim = journal_retention_module.journal_file_claim
+
+    @contextmanager
+    def go_live_under_claim(path, *, blocking):
+        with original_claim(path, blocking=blocking) as claimed:
+            if path == oldest and claimed:
+                _mark_live_pid(oldest, os.getpid())
+            yield claimed
+
+    monkeypatch.setattr(journal_retention_module, "journal_file_claim", go_live_under_claim)
+
+    sweep.prune_to_caps(max_sessions=0, max_bytes=10**9)
+
+    # The newly live journal is skipped but still occupies space; pruning
+    # continues to the next candidate instead of stalling.
+    assert sweep.removed == 1
+    assert oldest.exists()
+    assert not newest.exists()
+    assert sweep._protected_count == 1
+    assert sweep._total_bytes == total - newest_bytes
+
+
+def test_age_pass_continues_past_candidate_that_vanished_after_claim(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sweep, oldest, newest = _two_candidate_sweep(tmp_path)
+    original_claim = journal_retention_module.journal_file_claim
+
+    @contextmanager
+    def unlink_under_claim(path, *, blocking):
+        with original_claim(path, blocking=blocking) as claimed:
+            if path == oldest and claimed:
+                oldest.unlink()
+            yield claimed
+
+    monkeypatch.setattr(journal_retention_module, "journal_file_claim", unlink_under_claim)
+
+    sweep.prune_older_than(time.time())
+
+    assert sweep.removed == 1
+    assert not newest.exists()
+    assert sweep._total_bytes == 0
+
+
 def test_journal_claim_lock_namespace_is_bounded(tmp_path) -> None:
     journals = tmp_path / "journals"
     journals.mkdir()

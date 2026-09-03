@@ -183,15 +183,18 @@ class _RetentionSweep:
                 self._claim_contended = True
                 _restore()
                 return False
-            if self._is_protected(oldest):
-                self._protected_count += 1
-                return True
+            # Recheck existence before liveness: a file that vanished under a
+            # concurrent sweep is unreadable, and the liveness probe would
+            # otherwise report it as protected and keep counting its bytes.
             try:
                 unavailable = oldest.is_symlink() or not oldest.exists()
             except OSError:
                 unavailable = True
             if unavailable:
                 self._total_bytes -= fsize
+                return True
+            if self._is_protected(oldest):
+                self._protected_count += 1
                 return True
             if not self._archive_and_remove(oldest):
                 _restore()

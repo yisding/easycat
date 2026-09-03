@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import logging
+import sqlite3
 import threading
 from typing import Protocol
 
@@ -688,6 +689,107 @@ class TestReadonlySqliteFollow:
             assert "audio=4096B" in line
         finally:
             writer.close()
+
+
+class TestReadonlyStageSlices:
+    """``slice_by_stage`` on the postmortem read-only journal implementations."""
+
+    @staticmethod
+    def _seed(tmp_path):
+        from easycat.runtime import SqliteJournal
+
+        writer = SqliteJournal("stage-sess", data_dir=str(tmp_path))
+        try:
+            writer.append(
+                kind=JournalRecordKind.EVENT,
+                name="direct",
+                session_id="stage-sess",
+                data={"stage": "stt"},
+            )
+            writer.append(
+                kind=JournalRecordKind.CONTROL,
+                name="observed",
+                session_id="stage-sess",
+                data={"stage": "agent", "observed_stage": "stt"},
+            )
+            writer.append(
+                kind=JournalRecordKind.EVENT,
+                name="other",
+                session_id="stage-sess",
+                data={"stage": "tts"},
+            )
+            writer.append(kind=JournalRecordKind.EVENT, name="bare", session_id="stage-sess")
+        finally:
+            writer.close()
+        return tmp_path / "journals" / "stage-sess.sqlite"
+
+    def test_readonly_sqlite_uses_indexed_stage_columns(self, tmp_path):
+        from easycat.runtime.journal_views import ReadonlySqliteJournal
+
+        db_path = self._seed(tmp_path)
+        view = ReadonlySqliteJournal(db_path)
+
+        assert [r.name for r in view.slice_by_stage("stt")] == ["direct", "observed"]
+        assert [r.name for r in view.slice_by_stage("agent")] == ["observed"]
+        assert [r.name for r in view.slice_by_stage("tts")] == ["other"]
+        assert view.slice_by_stage("missing") == []
+
+    def test_readonly_sqlite_falls_back_to_scan_for_legacy_schema(self, tmp_path):
+        from easycat.runtime.journal_views import ReadonlySqliteJournal
+
+        db_path = self._seed(tmp_path)
+        # Strip the derived stage columns to mimic a journal written before
+        # they existed; the read-only view cannot ALTER the file to add them.
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("DROP INDEX IF EXISTS idx_journal_stage")
+            conn.execute("DROP INDEX IF EXISTS idx_journal_observed_stage")
+            conn.execute("ALTER TABLE journal DROP COLUMN stage")
+            conn.execute("ALTER TABLE journal DROP COLUMN observed_stage")
+            conn.commit()
+        finally:
+            conn.close()
+        view = ReadonlySqliteJournal(db_path)
+
+        assert [r.name for r in view.slice_by_stage("stt")] == ["direct", "observed"]
+        assert [r.name for r in view.slice_by_stage("agent")] == ["observed"]
+        assert view.slice_by_stage("missing") == []
+
+    def test_readonly_sqlite_propagates_unrelated_operational_errors(self, tmp_path, monkeypatch):
+        from easycat.runtime.journal_views import ReadonlySqliteJournal
+
+        db_path = self._seed(tmp_path)
+        view = ReadonlySqliteJournal(db_path)
+
+        def locked(sql, params):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(view, "_query", locked)
+
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            view.slice_by_stage("stt")
+
+    def test_frozen_snapshot_matches_stage_and_observed_stage(self):
+        from easycat.runtime.journal_views import FrozenJournalSnapshot
+
+        def _rec(seq: int, name: str, data: object) -> JournalRecord:
+            return JournalRecord(sequence=seq, session_id="s", name=name, data=data)  # type: ignore[arg-type]
+
+        snapshot = FrozenJournalSnapshot(
+            [
+                _rec(1, "direct", {"stage": "stt"}),
+                _rec(2, "observed", {"stage": "agent", "observed_stage": "stt"}),
+                _rec(3, "other", {"stage": "tts"}),
+                _rec(4, "not-a-dict", ["stt"]),
+            ]
+        )
+
+        assert [r.name for r in snapshot.slice_by_stage("stt")] == ["direct", "observed"]
+        assert [r.name for r in snapshot.slice_by_stage("agent")] == ["observed"]
+        assert snapshot.slice_by_stage("missing") == []
+        # Results are copies; mutating them cannot alter the frozen snapshot.
+        snapshot.slice_by_stage("stt")[0].data["stage"] = "tts"
+        assert [r.name for r in snapshot.slice_by_stage("stt")] == ["direct", "observed"]
 
 
 class TestCreateJournal:

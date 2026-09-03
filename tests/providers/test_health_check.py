@@ -268,6 +268,54 @@ class TestPeriodicHealthChecker:
 
         assert checker.is_running is False
 
+    async def test_reentrant_stop_then_start_reuses_probe_loop(self):
+        """stop()+start() from inside the Error emit must not spawn a 2nd loop."""
+        event_bus = EventBus()
+        restarted = asyncio.Event()
+        checker: PeriodicHealthChecker
+
+        class CountingUnhealthyProvider:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.probed_after_restart = asyncio.Event()
+
+            async def health_check(self) -> bool:
+                self.calls += 1
+                if restarted.is_set():
+                    self.probed_after_restart.set()
+                return False
+
+        async def stop_then_start(_event: Error) -> None:
+            await checker.stop()
+            checker.start()
+            restarted.set()
+
+        event_bus.subscribe(Error, stop_then_start)
+        provider = CountingUnhealthyProvider()
+        checker = PeriodicHealthChecker(
+            provider,
+            interval=0,
+            provider_name="restarting",
+            event_bus=event_bus,
+        )
+        checker.start()
+        original = checker._task
+        assert original is not None
+
+        await asyncio.wait_for(restarted.wait(), timeout=0.5)
+
+        # The winding-down loop was re-armed rather than replaced.
+        assert checker.is_running is True
+        assert checker._task is original
+        assert not original.done()
+        await asyncio.wait_for(provider.probed_after_restart.wait(), timeout=0.5)
+        assert len(checker._tasks.tasks()) == 1
+
+        await checker.stop()
+        assert original.done()
+        assert checker._task is None
+        assert checker.is_running is False
+
     async def test_periodic_loop_logs_strict_error_handler_failure(
         self,
         caplog: pytest.LogCaptureFixture,

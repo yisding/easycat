@@ -70,19 +70,17 @@ class ReadonlySqliteJournal:
                 "SELECT * FROM journal WHERE stage = ? OR observed_stage = ? ORDER BY sequence",
                 [stage_name, stage_name],
             )
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
+            if "no such column" not in str(exc):
+                # Locked/corrupt files are real failures; only the legacy
+                # schema gap is recoverable by scanning.
+                raise
             # Legacy file without stage columns — fall back to full scan
             return [
                 r
                 for r in self._query("SELECT * FROM journal ORDER BY sequence", [])
-                if getattr(r, "stage", None) == stage_name
-                or (
-                    isinstance(getattr(r, "data", None), dict)
-                    and (
-                        r.data.get("stage") == stage_name
-                        or r.data.get("observed_stage") == stage_name
-                    )
-                )
+                if isinstance(r.data, dict)
+                and stage_name in (r.data.get("stage"), r.data.get("observed_stage"))
             ]
 
     def close(self) -> None:
