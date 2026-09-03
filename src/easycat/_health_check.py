@@ -16,6 +16,7 @@ permanently stale provider does not spam the event bus.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import math
 from collections.abc import Callable, Coroutine
@@ -31,6 +32,17 @@ _HEALTH_CHECK_MEMBER = "provider_health_check"
 # Sync or async, takes the provider name. Mirrors ReconnectingWebSocket's
 # callback style so owners can hook recovery the same way as on_give_up.
 HealthCallback = Callable[[str], Coroutine[Any, Any, None]] | Callable[[str], None]
+
+# Set to the checker instance for the duration of its unhealthy-transition
+# dispatch (Error emit + on_unhealthy). A context var rather than a plain
+# attribute because ``asyncio.wait_for`` wraps its awaitable in a child task on
+# Python 3.11, so a subscriber that re-enters ``stop()`` no longer runs in the
+# checker task and cannot be recognised by ``current_task()`` alone. Child tasks
+# inherit a copy of the creating context, so the guard follows the dispatch
+# while staying invisible to unrelated tasks calling ``stop()`` concurrently.
+_dispatching: contextvars.ContextVar[object | None] = contextvars.ContextVar(
+    "easycat_health_check_dispatching", default=None
+)
 
 
 class PeriodicHealthChecker:
@@ -80,7 +92,6 @@ class PeriodicHealthChecker:
         )
         self._task: asyncio.Task[None] | None = None
         self._running = False
-        self._emitting = False
         # Consecutive failures since the last healthy check.
         self._failure_streak = 0
         # True once the streak crossed the threshold; reset on recovery. Used
@@ -126,11 +137,14 @@ class PeriodicHealthChecker:
     async def stop(self) -> None:
         """Stop the periodic health check loop."""
         self._running = False
-        # If stop is called from within an Error emit (re-entrant), don't try to
-        # cancel the checker task — just let _run exit on its next loop check.
-        # Keep ``_task`` owned until it does so a re-entrant start() re-arms
-        # the survivor rather than registering a second probe loop.
-        if self._emitting:
+        # If stop is called from within this checker's own unhealthy dispatch
+        # (re-entrant), don't try to cancel the checker task — just let _run
+        # exit on its next loop check. Keep ``_task`` owned until it does so a
+        # re-entrant start() re-arms the survivor rather than registering a
+        # second probe loop. An unrelated task calling stop() concurrently does
+        # not see the guard and still cancels and drains, so Session teardown
+        # never returns while callback dispatch is in flight.
+        if _dispatching.get() is self:
             return
         task = self._task
         if task is None or task.done():
@@ -211,7 +225,7 @@ class PeriodicHealthChecker:
         if self._unhealthy or self._failure_streak < self._failure_threshold:
             return
         self._unhealthy = True
-        self._emitting = True
+        token = _dispatching.set(self)
         try:
             try:
                 await asyncio.wait_for(self._emit_error(reason), timeout=2.0)
@@ -225,7 +239,7 @@ class PeriodicHealthChecker:
                         "Health check on_unhealthy callback timed out for %s", self._provider_name
                     )
         finally:
-            self._emitting = False
+            _dispatching.reset(token)
 
     async def _emit_error(self, reason: str) -> None:
         """Emit an Error event on the unhealthy transition, if a bus is set."""

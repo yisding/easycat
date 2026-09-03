@@ -773,7 +773,12 @@ class TestReadonlyStageSlices:
         from easycat.runtime.journal_views import FrozenJournalSnapshot
 
         def _rec(seq: int, name: str, data: object) -> JournalRecord:
-            return JournalRecord(sequence=seq, session_id="s", name=name, data=data)  # type: ignore[arg-type]
+            return JournalRecord(
+                sequence=seq,
+                session_id="s",
+                name=name,
+                data=data,  # type: ignore[arg-type]
+            )
 
         snapshot = FrozenJournalSnapshot(
             [

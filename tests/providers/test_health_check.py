@@ -316,6 +316,38 @@ class TestPeriodicHealthChecker:
         assert checker._task is None
         assert checker.is_running is False
 
+    async def test_external_stop_drains_checker_during_unhealthy_dispatch(self):
+        """A concurrent stop() must not return while callback dispatch runs."""
+        dispatching = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_on_unhealthy(_name: str) -> None:
+            dispatching.set()
+            await release.wait()
+
+        checker = PeriodicHealthChecker(
+            UnhealthyProvider(),
+            interval=0,
+            provider_name="draining",
+            on_unhealthy=slow_on_unhealthy,
+        )
+        checker.start()
+        task = checker._task
+        assert task is not None
+        await asyncio.wait_for(dispatching.wait(), timeout=0.5)
+
+        # The dispatch is parked in the callback; an unrelated task's stop()
+        # must cancel and drain rather than returning with the loop alive.
+        stopping = asyncio.create_task(checker.stop())
+        try:
+            await asyncio.wait_for(stopping, timeout=0.5)
+        finally:
+            release.set()
+
+        assert task.done()
+        assert checker._task is None
+        assert checker.is_running is False
+
     async def test_periodic_loop_logs_strict_error_handler_failure(
         self,
         caplog: pytest.LogCaptureFixture,
