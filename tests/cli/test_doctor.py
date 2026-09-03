@@ -284,6 +284,22 @@ def test_doctor_env_file_rejects_invalid_lines(
     assert "KEY=VALUE" in result.stderr
 
 
+def test_doctor_env_file_reports_extra_tokens_once(
+    cli: CliRunner,
+    tmp_path: Path,
+    empty_env: None,
+) -> None:
+    """The location prefix must appear once, not doubled by a re-wrap."""
+    env_file = tmp_path / ".env"
+    env_file.write_text('OPENAI_API_KEY="a" "b"\n', encoding="utf-8")
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file)])
+
+    assert result.exit_code == 2
+    assert "extra tokens after quoted value" in result.stderr
+    assert result.stderr.count("invalid .env syntax") == 1
+
+
 def test_doctor_env_file_rejects_invalid_lines_json_envelope(
     cli: CliRunner,
     tmp_path: Path,

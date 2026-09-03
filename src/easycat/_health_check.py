@@ -149,6 +149,11 @@ class PeriodicHealthChecker:
         task = self._task
         if task is None or task.done():
             self._task = None
+            # The loop already exited, but a checker used without
+            # set_runtime_scope() owns a lazily created standalone root that
+            # only cancel_and_drain() closes. Drain anyway (a no-op when the
+            # scope holds nothing) so stop() never leaks that root.
+            await self._tasks.cancel_and_drain()
             return
         try:
             current = asyncio.current_task()
@@ -256,18 +261,18 @@ class PeriodicHealthChecker:
         )
 
     async def _invoke_callback(self, callback: HealthCallback) -> None:
-        """Invoke a sync or async health callback, swallowing errors."""
+        """Invoke a sync or async health callback, swallowing errors.
+
+        Sync callbacks run on the event loop, matching every other callback
+        contract in the package (``ReconnectingWebSocket.on_reconnect`` and
+        friends): they may touch loop-affine state, and a callback that blocks
+        the loop is the caller's bug rather than something a timeout can
+        rescue. The surrounding ``wait_for`` bounds the awaitable paths, which
+        is what #1041 asked for.
+        """
         try:
-            if asyncio.iscoroutinefunction(callback):
-                await callback(self._provider_name)  # type: ignore[arg-type]
-            else:
-                # Isolate sync callbacks off the event loop so a blocking
-                # implementation does not prevent the outer wait_for timeout
-                # from firing. Async callbacks remain direct-awaited and must
-                # be cancellation-cooperative (Python's wait_for waits for
-                # cancellation to complete).
-                result = await asyncio.to_thread(callback, self._provider_name)
-                if asyncio.iscoroutine(result):
-                    await result
+            result = callback(self._provider_name)
+            if asyncio.iscoroutine(result):
+                await result
         except Exception:
             logger.exception("Error in health check callback %s", callback)

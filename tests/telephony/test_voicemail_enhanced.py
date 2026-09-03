@@ -377,6 +377,58 @@ class TestEnhancedVoicemailIntegration:
             classifier.stop()
 
     @pytest.mark.asyncio
+    async def test_unknown_amd_emits_after_the_stt_wait_window(self) -> None:
+        """An indecisive AMD result still bounds the wait and emits (gh 997)."""
+        bus = EventBus()
+        results: list[VoicemailDetected] = []
+        classifier = STTAMDFusionClassifier(bus, prefer_stt=True, stt_timeout_s=0.01)
+        classifier.start()
+        bus.subscribe(VoicemailDetected, results.append)
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="unknown"))
+            await asyncio.sleep(0.05)
+            fused = [event for event in results if event.source == "fusion"]
+            assert [event.result for event in fused] == ["unknown"]
+        finally:
+            classifier.stop()
+
+    @pytest.mark.asyncio
+    async def test_late_stt_still_classifies_after_unknown_amd_timeout(self) -> None:
+        """The indecisive timeout emission must not latch out a late STT final."""
+        bus = EventBus()
+        results: list[VoicemailDetected] = []
+        classifier = STTAMDFusionClassifier(bus, prefer_stt=True, stt_timeout_s=0.01)
+        classifier.start()
+        bus.subscribe(VoicemailDetected, results.append)
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="unknown"))
+            await asyncio.sleep(0.05)
+            await bus.emit(STTFinal(text="Hi you've reached John, leave a message"))
+            fused = [event for event in results if event.source == "fusion"]
+            assert [event.result for event in fused] == ["unknown", "machine"]
+        finally:
+            classifier.stop()
+
+    @pytest.mark.asyncio
+    async def test_unknown_amd_loses_to_decisive_stt_regardless_of_preference(self) -> None:
+        """prefer_stt=False must not let 'unknown' beat a decisive STT result."""
+        bus = EventBus()
+        results: list[VoicemailDetected] = []
+        classifier = STTAMDFusionClassifier(bus, prefer_stt=False, stt_timeout_s=5.0)
+        classifier.start()
+        bus.subscribe(VoicemailDetected, results.append)
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="unknown"))
+            await bus.emit(STTFinal(text="Hi you've reached John, leave a message"))
+            fused = [event for event in results if event.source == "fusion"]
+            assert [event.result for event in fused] == ["machine"]
+        finally:
+            classifier.stop()
+
+    @pytest.mark.asyncio
     async def test_stt_classification_agrees_with_amd(self) -> None:
         """When both agree on 'machine', single result."""
         bus = EventBus()

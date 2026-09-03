@@ -713,10 +713,14 @@ class ReconnectingWebSocket:
                 "configured; propagating ConnectionClosed for a clean restart.",
                 close_code,
             )
-            self._mark_reconnect_exhausted(
-                max(self._config.max_retries, 0),
-                "no on_reconnect callback",
-            )
+            if not isinstance(exc, websockets.exceptions.ConnectionClosedOK):
+                # Only an abnormal mid-stream death is a terminal failure worth
+                # reporting (gh 994). A graceful peer close reaches this branch
+                # too, via ``_normal_close_exception``; flagging that as an
+                # abnormal death would make every clean stream end surface a
+                # spurious EASYCAT_E305. No reconnect was attempted either way,
+                # so the attempt count is 0.
+                self._mark_reconnect_exhausted(0, "no on_reconnect callback")
             self._ws = None
             raise exc
         if remaining_reconnects == 0:

@@ -348,6 +348,40 @@ class TestPeriodicHealthChecker:
         assert checker._task is None
         assert checker.is_running is False
 
+    async def test_sync_callback_runs_on_the_event_loop(self):
+        """Sync health callbacks keep the package-wide on-loop contract."""
+        seen: list[object] = []
+
+        def on_unhealthy(_name: str) -> None:
+            seen.append(asyncio.get_running_loop())
+
+        checker = PeriodicHealthChecker(
+            UnhealthyProvider(),
+            provider_name="sync-callback",
+            on_unhealthy=on_unhealthy,
+        )
+        assert await checker.check_once() is False
+        assert seen == [asyncio.get_running_loop()]
+
+    async def test_stop_releases_standalone_scope_after_loop_exits(self):
+        """A self-exited loop must not leak its lazily created standalone root."""
+        checker = PeriodicHealthChecker(
+            HealthyProvider(),
+            interval=0,
+            provider_name="standalone",
+        )
+        checker.start()
+        task = checker._task
+        assert task is not None
+        assert checker._tasks.owns_root is True
+
+        checker._running = False
+        await asyncio.wait_for(task, timeout=0.5)
+
+        await checker.stop()
+        assert checker._task is None
+        assert checker._tasks.owns_root is False
+
     async def test_periodic_loop_logs_strict_error_handler_failure(
         self,
         caplog: pytest.LogCaptureFixture,
