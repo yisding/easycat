@@ -686,6 +686,13 @@ class STTCommitter:
                 turn=turn,
                 timeout=timeout,
             )
+        # Re-check: task may have completed between wait timeout and handler entry (gh 1039).
+        if task.done():
+            return await self._finish_owned_provider_operation(
+                task,
+                turn=turn,
+                timeout=timeout,
+            )
         return await self._handle_provider_operation_timeout(
             task,
             name=name,

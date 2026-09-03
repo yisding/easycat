@@ -487,6 +487,28 @@ class TestReplayRunner:
         assert len(result.frames) == 3
         assert delays == [0.125, 0.05]
 
+    def test_timing_wall_skips_delay_across_clock_source_switch(self, tmp_path):
+        """A mono_ns→wall_ns (or back) transition is not a real recorded gap."""
+        records = [
+            {"sequence": 1, "kind": "event", "name": "a", "timing": {"mono_ns": 1_000_000_000}},
+            {"sequence": 2, "kind": "event", "name": "b", "timing": {"mono_ns": 1_125_000_000}},
+            # Crash-dump projection: only a wall clock, epoch-scale and far
+            # ahead of the monotonic values above.
+            {"sequence": 3, "kind": "event", "name": "c", "wall_ns": 1_700_000_000_000_000_000},
+            {"sequence": 4, "kind": "event", "name": "d", "wall_ns": 1_700_000_000_050_000_000},
+            {"sequence": 5, "kind": "event", "name": "e", "timing": {"mono_ns": 9_000_000_000}},
+            {"sequence": 6, "kind": "event", "name": "f", "timing": {"mono_ns": 9_075_000_000}},
+        ]
+        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
+        delays = []
+
+        result = ReplayRunner(bundle, _spec(timing="wall"), sleep=delays.append).run()
+
+        assert len(result.frames) == 6
+        # Same-source neighbours keep their bounded delay; the two source
+        # switches (2→3 and 4→5) contribute no sleep at all.
+        assert delays == [0.125, 0.05, 0.075]
+
     def test_timing_wall_caps_untrusted_recorded_gap(self, tmp_path):
         records = [
             {

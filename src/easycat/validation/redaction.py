@@ -92,7 +92,7 @@ _SECRET_KEY_RE = re.compile(
 _CAMEL_ACRONYM_BOUNDARY_RE = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
 _CAMEL_WORD_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
-_URL_RE = re.compile(r"(?:https?|wss?|ws)://[^\s\"')\]}]+")
+_URL_RE = re.compile(r"(?:https?|wss?|ws)://[^\s\"')\]}]+", re.IGNORECASE)
 _URL_USERINFO_SECRET_RE = re.compile(r"(?i)((?:https?|wss?|ws)://[^/\s:@]+:)[^/\s@]+(@)")
 _URL_QUERY_SECRET_RE = re.compile(
     r"(?i)([?&](?:"

@@ -121,6 +121,7 @@ from easycat.teardown_budgets import (
 )
 from easycat.teardown_budgets import (
     SESSION_FORCE_START_LOCK_TIMEOUT_S,
+    SESSION_GRACEFUL_PROMPT_TIMEOUT_S,
     SESSION_SUPERSEDED_STOP_TIMEOUT_S,
 )
 from easycat.turn_manager import TurnManager, TurnManagerState
@@ -1682,11 +1683,24 @@ class Session:
                 and not prompt_task.done()
             ):
                 # Application prompts are confirmed turn work. Graceful stop
-                # lets them finish. asyncio.wait keeps the prompt independent:
-                # a concurrent forced stop can cancel this graceful owner
-                # without propagating that cancellation into the prompt before
-                # the force path takes over.
-                await asyncio.wait({prompt_task})
+                # lets them finish with a bound wait so cancellation-resistant
+                # prompts do not hang teardown forever (gh 1025). asyncio.wait
+                # keeps the prompt independent of this graceful owner; once
+                # the bound expires the prompt is cancelled under the same
+                # bounded drain as the force path, so it cannot keep running
+                # against a transport and providers that are being closed.
+                try:
+                    await asyncio.wait_for(
+                        asyncio.wait({prompt_task}),
+                        timeout=SESSION_GRACEFUL_PROMPT_TIMEOUT_S,
+                    )
+                except TimeoutError:
+                    logger.warning(
+                        "Graceful Session.stop() prompt wait exceeded %.1fs; "
+                        "cancelling the application prompt before teardown",
+                        SESSION_GRACEFUL_PROMPT_TIMEOUT_S,
+                    )
+                    await self._turn_runner.cancel_application_prompt()
 
             turn = self._turn
             if turn and not prompt_is_current:
@@ -1982,28 +1996,7 @@ class Session:
         tts_task = self._tts_scheduler.request_turn_cancel()
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
-        if barge_in:
-            try:
-                async with asyncio.timeout(_BARGE_IN_CUTOFF_TIMEOUT_S):
-                    await clear_audio_if_supported(self.transport)
-            except TimeoutError:
-                logger.warning(
-                    "Transport playback clear exceeded %.0f ms during barge-in",
-                    _BARGE_IN_CUTOFF_TIMEOUT_S * 1000,
-                )
-            except Exception:
-                logger.exception("Transport playback clear failed during barge-in")
-        else:
-            try:
-                async with asyncio.timeout(_BARGE_IN_CUTOFF_TIMEOUT_S):
-                    await clear_audio_if_supported(self.transport)
-            except TimeoutError:
-                logger.warning(
-                    "Transport playback clear exceeded %.0f ms",
-                    _BARGE_IN_CUTOFF_TIMEOUT_S * 1000,
-                )
-            except Exception:
-                logger.exception("Transport playback clear failed")
+        await self._clear_transport_playback(barge_in=barge_in)
 
         if cutoff_started is not None:
             observability.record_histogram(
@@ -2012,6 +2005,21 @@ class Session:
                 attributes={"easycat.surface": "vad"},
             )
         return manager_token, tts_task, prompt_cleanup
+
+    async def _clear_transport_playback(self, *, barge_in: bool) -> None:
+        """Clear transport playback under a bounded wait."""
+        context = " during barge-in" if barge_in else ""
+        try:
+            async with asyncio.timeout(_BARGE_IN_CUTOFF_TIMEOUT_S):
+                await clear_audio_if_supported(self.transport)
+        except TimeoutError:
+            logger.warning(
+                "Transport playback clear exceeded %.0f ms%s",
+                _BARGE_IN_CUTOFF_TIMEOUT_S * 1000,
+                context,
+            )
+        except Exception:
+            logger.exception("Transport playback clear failed%s", context)
 
     async def _notify_barge_in(self, turn: TurnContext | None) -> None:
         turn_id = turn.id if turn is not None else None

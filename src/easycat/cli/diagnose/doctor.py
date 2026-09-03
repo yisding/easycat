@@ -266,7 +266,9 @@ def _env_value_state(value: str | None) -> str:
     return "usable"
 
 
-def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  # noqa: C901, PLR0912
+def _parse_env_file(  # noqa: C901, PLR0912
+    path: Path, *, allowed_names: set[str]
+) -> dict[str, str]:
     """Parse provider credentials from a dotenv file.
 
     Doctor imports optional integrations and probes local file/network resources,
@@ -301,7 +303,14 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  
         in_single = False
         in_double = False
         comment_idx = None
+        escaped = False
         for idx, ch in enumerate(value_raw):
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\" and in_double:
+                escaped = True
+                continue
             if ch == "'" and not in_double:
                 in_single = not in_single
             elif ch == '"' and not in_single:
@@ -320,13 +329,15 @@ def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:  
         if value_raw and (value_raw[0] in ('"', "'")):
             try:
                 parts = shlex.split(value_raw, posix=True)
-                if len(parts) != 1:
-                    raise ValueError(
-                        f"{path}:{line_number}: invalid .env syntax: extra tokens after quoted value"  # noqa: E501
-                    )
-                value = parts[0] if parts else ""
             except ValueError as exc:
                 raise ValueError(f"{path}:{line_number}: invalid .env syntax: {exc}") from exc
+            # Raised outside the except above: a prefixed message caught by it
+            # would be re-wrapped and reported with a duplicated location.
+            if len(parts) != 1:
+                raise ValueError(
+                    f"{path}:{line_number}: invalid .env syntax: extra tokens after quoted value"
+                )
+            value = parts[0]
         else:
             # Unquoted: value is up to comment boundary already stripped
             value = value_raw

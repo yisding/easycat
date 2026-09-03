@@ -620,6 +620,7 @@ class TurnRunner:
         current_tts_task = self._tts.active_turn_task
         if current_tts_task and not current_tts_task.done():
             current_tts_task.cancel()
+            # Keep old task alive until it completes to avoid concurrent runs (gh 1024)
         identity = self._turn.capture_identity()
         activity = self._turn_manager.capture_activity()
         turn_token = bind_turn(event.turn_id)
@@ -1710,7 +1711,8 @@ class TurnRunner:
             # Final check that state is IDLE before admitting
             if self._turn_manager.state is not TurnManagerState.IDLE:
                 raise RuntimeError(
-                    f"Cannot start an application turn while turn manager is {self._turn_manager.state.value}"  # noqa: E501
+                    "Cannot start an application turn while turn manager is "
+                    f"{self._turn_manager.state.value}"
                 )
             token = CancelToken()
             turn_id = f"turn-{uuid4().hex[:12]}"

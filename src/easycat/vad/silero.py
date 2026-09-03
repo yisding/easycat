@@ -247,7 +247,7 @@ class SileroVAD(_VADBase):
             raise RuntimeError(f"onnx loader failed: {exc}") from exc
         self._backend = "onnx"
 
-    async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
+    async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:  # noqa: C901, PLR0912
         """Process an audio chunk and yield VAD events.
 
         The chunk must be mono PCM16; the byte stream is decoded as a flat
@@ -270,10 +270,35 @@ class SileroVAD(_VADBase):
                 timestamp=chunk.timestamp,
             )
         elif self._audio_resampler.source_rate is not None:
-            # A native-rate chunk starts a new format segment. The VAD drops
-            # stale frame remainders on rate changes, so discard the old
-            # converter tail rather than mixing 16 kHz output with 8 kHz data.
-            self._audio_resampler.reset()
+            # A native-rate chunk starts a new format segment. Flush the old
+            # converter tail and feed it through VAD before resetting, instead
+            # of discarding ~32ms of audio (gh 1034).
+            tail = self._audio_resampler.finish()
+            if tail:
+                if self._buffer_rate == _SILERO_DEFAULT_RATE and chunk.format.sample_rate == 8000:
+                    # Tail is 16 kHz while next chunk is 8 kHz — flush 16 kHz
+                    # frames before discarding partial remainder, otherwise
+                    # appending tail then clearing for rate switch drops it.
+                    self._buffer += tail
+                    frame_samples_old = _SILERO_FRAME_SAMPLES_AT[_SILERO_DEFAULT_RATE]
+                    frame_bytes_old = frame_samples_old * 2
+                    while len(self._buffer) >= frame_bytes_old:
+                        frame_data = self._buffer[:frame_bytes_old]
+                        self._buffer = self._buffer[frame_bytes_old:]
+                        float_samples = (
+                            np.frombuffer(frame_data, dtype="<i2").astype(np.float32) / 32768.0
+                        )
+                        speech_prob = self._model.predict(float_samples, _SILERO_DEFAULT_RATE)
+                        audio_time_s = self._advance_audio_time(
+                            frame_samples_old / _SILERO_DEFAULT_RATE
+                        )
+                        for event in self._evaluate_speech(speech_prob, audio_time_s):
+                            yield event
+                        if len(self._buffer) >= frame_bytes_old:
+                            await asyncio.sleep(0)
+                    self._buffer = b""
+                else:
+                    self._buffer += tail
         target_rate = chunk.format.sample_rate
 
         # A mid-stream 8k<->16k switch would concatenate old-rate remainder

@@ -948,6 +948,8 @@ class SqliteJournal(_SqlJournalBase):
             self._clean_close_marked = False
         self._pending_records += 1
         if post_finalize:
+            # Schedule deadline so the single post-finalize record becomes visible (gh 1035).
+            self._schedule_batch_commit_locked()
             return
         if (
             name in self._commit_boundary_names

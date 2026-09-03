@@ -1034,7 +1034,7 @@ async def test_elevenlabs_batch_sends_wav():
 
 
 @pytest.mark.asyncio
-async def test_elevenlabs_batch_preserves_multichannel_non_pcm16_wav_geometry():
+async def test_elevenlabs_batch_rejects_multichannel_non_pcm16_audio():
     mock_client = _make_mock_http_client("test")
     config = ElevenLabsSTTConfig(api_key="test-key", mode="batch", http_client=mock_client)
     stt = ElevenLabsSTT(config)

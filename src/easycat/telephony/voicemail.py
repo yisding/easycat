@@ -1043,14 +1043,18 @@ class STTAMDFusionClassifier:
             # Agreement — easy.
             if self._amd_result == self._stt_result:
                 await self._emit(self._amd_result)
+            elif self._amd_result == "unknown":
+                # A signal that could not classify never wins over one that
+                # could, whatever the configured preference.
+                await self._emit(self._stt_result)
             else:
                 # Disagreement — use preference.
                 winner = self._stt_result if self._prefer_stt else self._amd_result
                 await self._emit(winner)
             return
 
-        # Only one signal — use it if it's decisive, else wait.
-        if self._amd_result is not None and self._amd_result != "unknown":
+        # With only AMD, wait for STT and use AMD after the timeout (gh 997).
+        if self._amd_result is not None:
             if self._stt_result is None and not self._tasks.active(_STT_AMD_TIMEOUT_TASK):
                 # Start timeout to wait for STT.
                 self._start_timeout()
@@ -1060,10 +1064,11 @@ class STTAMDFusionClassifier:
             # STT classified before AMD arrived — emit immediately.
             await self._emit(self._stt_result)
 
-    async def _emit(self, result: VoicemailResult) -> None:
+    async def _emit(self, result: VoicemailResult, *, latch: bool = True) -> None:
         if self._emitted:
             return
-        self._emitted = True
+        if latch:
+            self._emitted = True
         self._cancel_timeout()
         await self._event_bus.emit(
             VoicemailDetected(result=result, source="fusion", call_sid=self._call_sid)
@@ -1090,7 +1095,13 @@ class STTAMDFusionClassifier:
         """Timeout waiting for STT — use AMD result alone."""
         try:
             await asyncio.sleep(self._stt_timeout_s)
-            if not self._emitted and self._amd_result is not None:
-                await self._emit(self._amd_result)
+            if self._emitted or self._amd_result is None:
+                return
+            # An "unknown" AMD verdict bounds the wait but is not actionable:
+            # both VoicemailPolicyHandler and OutboundCallStateMachine only act
+            # on human/machine. Publish it without latching so a decisive STT
+            # final arriving after the window can still fuse; a decisive AMD
+            # result keeps the single-emission contract.
+            await self._emit(self._amd_result, latch=self._amd_result != "unknown")
         except asyncio.CancelledError:
             pass

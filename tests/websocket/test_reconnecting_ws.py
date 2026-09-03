@@ -436,6 +436,54 @@ class TestReconnectingWebSocket:
         assert ws.reconnect_attempts_exhausted == 0
         assert ws.reconnect_exhaustion_reason == "successful reconnect cycle budget"
 
+    async def test_no_reconnect_hook_graceful_close_is_not_an_abnormal_death(self):
+        """A clean peer close must not surface as a terminal reconnect failure."""
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=3),
+        )
+        connection = FakeWSConnection()
+        connection.close_code = 1000
+        ws._ws = connection
+
+        with pytest.raises(websockets.exceptions.ConnectionClosedOK):
+            async for _message in ws.recv_iter():
+                pass
+
+        # The stale socket is still released so a later send() fast-fails...
+        assert ws._ws is None
+        # ...but nothing here justifies an EASYCAT_E305 for consumers that
+        # read died_abnormally off a clean end-of-stream.
+        assert ws.died_abnormally is False
+        assert ws.reconnect_attempts_exhausted is None
+
+    async def test_no_reconnect_hook_abnormal_drop_marks_abnormal_death(self):
+        """A mid-stream drop without a hook is a terminal death (gh 994)."""
+        close_frame = websockets.frames.Close(1006, "abnormal")
+
+        class DroppingConnection(FakeWSConnection):
+            async def _aiter(self):
+                yield "msg1"
+                raise websockets.exceptions.ConnectionClosed(close_frame, None)
+
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=ReconnectConfig(max_retries=3),
+        )
+        ws._ws = DroppingConnection()
+
+        messages: list[str | bytes] = []
+        with pytest.raises(websockets.exceptions.ConnectionClosed):
+            async for message in ws.recv_iter():
+                messages.append(message)
+
+        assert messages == ["msg1"]
+        assert ws._ws is None
+        assert ws.died_abnormally is True
+        # No reconnect was attempted, so the reported attempt count is 0.
+        assert ws.reconnect_attempts_exhausted == 0
+        assert ws.reconnect_exhaustion_reason == "no on_reconnect callback"
+
     async def test_disconnect_callback_can_close_without_reconnecting(self):
         connect_fn = AsyncMock()
         close_frame = websockets.frames.Close(1006, "abnormal")

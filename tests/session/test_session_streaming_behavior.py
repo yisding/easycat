@@ -614,6 +614,41 @@ async def test_force_stop_escalates_hung_concurrent_graceful_stop():
 
 
 @pytest.mark.asyncio
+async def test_graceful_stop_cancels_prompt_after_bounded_wait_before_teardown(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import easycat.session._session as session_module
+
+    monkeypatch.setattr(session_module, "SESSION_GRACEFUL_PROMPT_TIMEOUT_S", 0.05)
+    bridge = _CancellationResistantPromptBridge()
+    session = _prompt_session(bridge)
+    transport = session.transport
+    prompt_cancelled_before_disconnect: list[bool] = []
+    original_disconnect = transport.disconnect
+
+    async def recording_disconnect() -> None:
+        prompt_cancelled_before_disconnect.append(bridge.cancelled.is_set())
+        await original_disconnect()
+
+    monkeypatch.setattr(transport, "disconnect", recording_disconnect)
+    prompt = asyncio.create_task(session.prompt_agent("Slow work.", role="user", speak=False))
+    await asyncio.wait_for(bridge.started.wait(), timeout=1)
+
+    try:
+        await asyncio.wait_for(session.stop(), timeout=1)
+
+        assert session._closed
+        assert bridge.cancelled.is_set()
+        # Cancellation-resistant cleanup is still parked with its caller, but
+        # cancellation was requested before the transport went away.
+        assert not bridge.finished.is_set()
+        assert prompt_cancelled_before_disconnect == [True]
+    finally:
+        bridge.release_cleanup.set()
+        await asyncio.gather(prompt, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_reset_state_bounded_drains_active_application_prompt():
     bridge = _CancellationResistantPromptBridge()
     session = _prompt_session(bridge)

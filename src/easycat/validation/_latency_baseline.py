@@ -155,7 +155,7 @@ def _compare_condition(
         relative_delta is not None and relative_delta >= thresholds.relative_regression
     )
     absolute_regression = delta_ms >= thresholds.absolute_regression_ms
-    if baseline_observed == 0 and absolute_regression:
+    if baseline_observed == 0 and delta_ms > 0 and absolute_regression:
         # No baseline to compare relatively; absolute growth alone is regression.
         relative_regression = True
 

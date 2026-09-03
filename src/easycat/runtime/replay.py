@@ -525,6 +525,7 @@ class ReplayRunner:
         self._stage_replayers = dict(stage_replayers or {})
         self._tool_executor = tool_executor
         self._sleep = sleep
+        self._last_timing_source: str | None = None
 
     def run(self) -> ReplayResult:
         """Produce a :class:`ReplayResult` for the configured bundle+spec."""
@@ -610,6 +611,16 @@ class ReplayRunner:
         current_timing_ns = _record_timing_ns(record)
         if current_timing_ns is None:
             return previous_timing_ns
+        current_source = _record_timing_source(record)
+        prev_source = self._last_timing_source
+        if (
+            prev_source is not None
+            and current_source is not None
+            and prev_source != current_source
+        ):
+            self._last_timing_source = current_source
+            return current_timing_ns
+        self._last_timing_source = current_source
         if previous_timing_ns is not None and current_timing_ns > previous_timing_ns:
             delay_ns = min(current_timing_ns - previous_timing_ns, _MAX_WALL_REPLAY_DELAY_NS)
             self._sleep(delay_ns / 1_000_000_000)
@@ -863,20 +874,32 @@ def _infer_stage(record: dict[str, Any]) -> str:
     return ""
 
 
-def _record_timing_ns(record: dict[str, Any]) -> int | None:
-    """Return a record's monotonic/wall timestamp for wall-paced replay."""
+def _record_timing_entry(record: dict[str, Any]) -> tuple[str, int] | None:
+    """Return the (clock key, timestamp) that supplies this record's timing."""
     timing = record.get("timing")
     if isinstance(timing, dict):
         for key in ("mono_ns", "wall_ns"):
             value = timing.get(key)
             if isinstance(value, int) and not isinstance(value, bool):
-                return value
+                return key, value
     # Crash-dump projections may flatten the timestamp.
     for key in ("mono_ns", "wall_ns"):
         value = record.get(key)
         if isinstance(value, int) and not isinstance(value, bool):
-            return value
+            return key, value
     return None
+
+
+def _record_timing_ns(record: dict[str, Any]) -> int | None:
+    """Return a record's monotonic/wall timestamp for wall-paced replay."""
+    entry = _record_timing_entry(record)
+    return None if entry is None else entry[1]
+
+
+def _record_timing_source(record: dict[str, Any]) -> str | None:
+    """Return which clock source supplied the timing for this record."""
+    entry = _record_timing_entry(record)
+    return None if entry is None else entry[0]
 
 
 def _is_tool_phase(record: dict[str, Any]) -> bool:

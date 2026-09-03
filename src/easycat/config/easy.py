@@ -1098,7 +1098,8 @@ class EasyConfig(_AgentSessionConfig):
             if _provider_requires_api_key(cfg, kind) and not has_usable_credential(
                 getattr(cfg, "api_key", None)
             ):
-                # Also check ambient env var so typed configs match string/wrapper (gh 1018).  # noqa: E501
+                # Also check ambient env var so typed configs match
+                # string/wrapper (gh 1018).
                 import os as _os
 
                 from easycat._credentials import has_usable_credential as _has_cred
@@ -1130,12 +1131,14 @@ class EasyConfig(_AgentSessionConfig):
                 except Exception:  # noqa: BLE001
                     env_ok = False
                 if env_ok:
-                    # Inject ambient credential so create_session succeeds (gh 1041 review).  # noqa: E501
+                    # Inject ambient credential so create_session
+                    # succeeds (gh 1041 review).
                     try:
                         cfg.api_key = _os.getenv(env_var or "") or cfg.api_key  # type: ignore[attr-defined]
                     except Exception:  # noqa: BLE001, S110
                         pass
-                    continue
+                    if _has_cred(getattr(cfg, "api_key", None)):
+                        continue
                 name = _provider_display_name(cfg, kind)
                 raise EasyConfigError(f"{name} requires an API key.")
 

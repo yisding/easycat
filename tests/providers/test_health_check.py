@@ -268,6 +268,120 @@ class TestPeriodicHealthChecker:
 
         assert checker.is_running is False
 
+    async def test_reentrant_stop_then_start_reuses_probe_loop(self):
+        """stop()+start() from inside the Error emit must not spawn a 2nd loop."""
+        event_bus = EventBus()
+        restarted = asyncio.Event()
+        checker: PeriodicHealthChecker
+
+        class CountingUnhealthyProvider:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.probed_after_restart = asyncio.Event()
+
+            async def health_check(self) -> bool:
+                self.calls += 1
+                if restarted.is_set():
+                    self.probed_after_restart.set()
+                return False
+
+        async def stop_then_start(_event: Error) -> None:
+            await checker.stop()
+            checker.start()
+            restarted.set()
+
+        event_bus.subscribe(Error, stop_then_start)
+        provider = CountingUnhealthyProvider()
+        checker = PeriodicHealthChecker(
+            provider,
+            interval=0,
+            provider_name="restarting",
+            event_bus=event_bus,
+        )
+        checker.start()
+        original = checker._task
+        assert original is not None
+
+        await asyncio.wait_for(restarted.wait(), timeout=0.5)
+
+        # The winding-down loop was re-armed rather than replaced.
+        assert checker.is_running is True
+        assert checker._task is original
+        assert not original.done()
+        await asyncio.wait_for(provider.probed_after_restart.wait(), timeout=0.5)
+        assert len(checker._tasks.tasks()) == 1
+
+        await checker.stop()
+        assert original.done()
+        assert checker._task is None
+        assert checker.is_running is False
+
+    async def test_external_stop_drains_checker_during_unhealthy_dispatch(self):
+        """A concurrent stop() must not return while callback dispatch runs."""
+        dispatching = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_on_unhealthy(_name: str) -> None:
+            dispatching.set()
+            await release.wait()
+
+        checker = PeriodicHealthChecker(
+            UnhealthyProvider(),
+            interval=0,
+            provider_name="draining",
+            on_unhealthy=slow_on_unhealthy,
+        )
+        checker.start()
+        task = checker._task
+        assert task is not None
+        await asyncio.wait_for(dispatching.wait(), timeout=0.5)
+
+        # The dispatch is parked in the callback; an unrelated task's stop()
+        # must cancel and drain rather than returning with the loop alive.
+        stopping = asyncio.create_task(checker.stop())
+        try:
+            await asyncio.wait_for(stopping, timeout=0.5)
+        finally:
+            release.set()
+
+        assert task.done()
+        assert checker._task is None
+        assert checker.is_running is False
+
+    async def test_sync_callback_runs_on_the_event_loop(self):
+        """Sync health callbacks keep the package-wide on-loop contract."""
+        seen: list[object] = []
+
+        def on_unhealthy(_name: str) -> None:
+            seen.append(asyncio.get_running_loop())
+
+        checker = PeriodicHealthChecker(
+            UnhealthyProvider(),
+            provider_name="sync-callback",
+            on_unhealthy=on_unhealthy,
+        )
+        assert await checker.check_once() is False
+        assert seen == [asyncio.get_running_loop()]
+
+    async def test_stop_releases_standalone_scope_after_loop_exits(self):
+        """A self-exited loop must not leak its lazily created standalone root."""
+        checker = PeriodicHealthChecker(
+            HealthyProvider(),
+            interval=0,
+            provider_name="standalone",
+        )
+        checker.start()
+        task = checker._task
+        assert task is not None
+        assert checker._tasks.owns_root is True
+
+        checker._running = False
+        await asyncio.wait_for(task, timeout=0.5)
+
+        await checker.stop()
+        assert checker._task is None
+        assert checker._tasks.owns_root is False
+
     async def test_periodic_loop_logs_strict_error_handler_failure(
         self,
         caplog: pytest.LogCaptureFixture,

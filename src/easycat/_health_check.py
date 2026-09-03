@@ -16,7 +16,9 @@ permanently stale provider does not spam the event bus.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
+import math
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -30,6 +32,17 @@ _HEALTH_CHECK_MEMBER = "provider_health_check"
 # Sync or async, takes the provider name. Mirrors ReconnectingWebSocket's
 # callback style so owners can hook recovery the same way as on_give_up.
 HealthCallback = Callable[[str], Coroutine[Any, Any, None]] | Callable[[str], None]
+
+# Set to the checker instance for the duration of its unhealthy-transition
+# dispatch (Error emit + on_unhealthy). A context var rather than a plain
+# attribute because ``asyncio.wait_for`` wraps its awaitable in a child task on
+# Python 3.11, so a subscriber that re-enters ``stop()`` no longer runs in the
+# checker task and cannot be recognised by ``current_task()`` alone. Child tasks
+# inherit a copy of the creating context, so the guard follows the dispatch
+# while staying invisible to unrelated tasks calling ``stop()`` concurrently.
+_dispatching: contextvars.ContextVar[object | None] = contextvars.ContextVar(
+    "easycat_health_check_dispatching", default=None
+)
 
 
 class PeriodicHealthChecker:
@@ -53,9 +66,12 @@ class PeriodicHealthChecker:
         failure_threshold: int = 1,
         on_unhealthy: HealthCallback | None = None,
         on_recovered: HealthCallback | None = None,
+        probe_timeout: float = 5.0,
     ) -> None:
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be >= 1")
+        if not math.isfinite(probe_timeout) or probe_timeout <= 0:
+            raise ValueError("probe_timeout must be finite and > 0")
         self._provider = provider
         self._interval = interval
         self._provider_name = provider_name
@@ -63,6 +79,7 @@ class PeriodicHealthChecker:
         self._failure_threshold = failure_threshold
         self._on_unhealthy = on_unhealthy
         self._on_recovered = on_recovered
+        self._probe_timeout = probe_timeout
         self._tasks = RuntimeTaskScope(
             owner_label=f"{provider_name}-health-check",
             member_name=_HEALTH_CHECK_MEMBER,
@@ -101,6 +118,14 @@ class PeriodicHealthChecker:
         # Resolve the running loop before constructing ``self._run()`` so an
         # accidental synchronous start cannot leave an unawaited coroutine.
         asyncio.get_running_loop()
+        survivor = self._task
+        if survivor is not None and not survivor.done():
+            # A re-entrant stop() (from inside the Error emit or the checker's
+            # own callback) left ``_run`` winding down but still executing.
+            # Re-arm that loop instead of racing a second probe loop against
+            # it; ``_run`` re-checks ``_running`` after every await.
+            self._running = True
+            return
         task = self._tasks.create_task(
             self._run(),
             task_name=f"{self._provider_name}-health-check",
@@ -112,7 +137,30 @@ class PeriodicHealthChecker:
     async def stop(self) -> None:
         """Stop the periodic health check loop."""
         self._running = False
+        # If stop is called from within this checker's own unhealthy dispatch
+        # (re-entrant), don't try to cancel the checker task — just let _run
+        # exit on its next loop check. Keep ``_task`` owned until it does so a
+        # re-entrant start() re-arms the survivor rather than registering a
+        # second probe loop. An unrelated task calling stop() concurrently does
+        # not see the guard and still cancels and drains, so Session teardown
+        # never returns while callback dispatch is in flight.
+        if _dispatching.get() is self:
+            return
         task = self._task
+        if task is None or task.done():
+            self._task = None
+            # The loop already exited, but a checker used without
+            # set_runtime_scope() owns a lazily created standalone root that
+            # only cancel_and_drain() closes. Drain anyway (a no-op when the
+            # scope holds nothing) so stop() never leaks that root.
+            await self._tasks.cancel_and_drain()
+            return
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if current is task:
+            return
         await self._tasks.cancel_and_drain()
         if self._task is task:
             self._task = None
@@ -120,7 +168,14 @@ class PeriodicHealthChecker:
     async def check_once(self) -> bool:
         """Run a single health check. Returns True if healthy."""
         try:
-            healthy = await self._provider.health_check()
+            healthy = await asyncio.wait_for(
+                self._provider.health_check(), timeout=self._probe_timeout
+            )
+        except TimeoutError as exc:
+            await self._record_failure(
+                f"health check timed out after {self._probe_timeout}s: {exc}"
+            )
+            return False
         except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             await self._record_failure(str(exc))
             return False
@@ -141,7 +196,10 @@ class PeriodicHealthChecker:
         except Exception:
             logger.exception("Periodic health check loop failed for %s", self._provider_name)
         finally:
-            self._running = False
+            # Only the loop that still owns ``_task`` may clear the running
+            # flag; a successor started after this one was cancelled owns it.
+            if self._task is asyncio.current_task():
+                self._running = False
 
     async def _record_success(self) -> None:
         """Reset the failure streak and fire recovery hooks on transition."""
@@ -150,7 +208,12 @@ class PeriodicHealthChecker:
             self._unhealthy = False
             logger.info("Health check recovered for %s", self._provider_name)
             if self._on_recovered is not None:
-                await self._invoke_callback(self._on_recovered)
+                try:
+                    await asyncio.wait_for(self._invoke_callback(self._on_recovered), timeout=2.0)
+                except TimeoutError:
+                    logger.warning(
+                        "Health check on_recovered callback timed out for %s", self._provider_name
+                    )
 
     async def _record_failure(self, reason: str) -> None:
         """Advance the failure streak and escalate on the unhealthy transition."""
@@ -167,9 +230,21 @@ class PeriodicHealthChecker:
         if self._unhealthy or self._failure_streak < self._failure_threshold:
             return
         self._unhealthy = True
-        await self._emit_error(reason)
-        if self._on_unhealthy is not None:
-            await self._invoke_callback(self._on_unhealthy)
+        token = _dispatching.set(self)
+        try:
+            try:
+                await asyncio.wait_for(self._emit_error(reason), timeout=2.0)
+            except TimeoutError:
+                logger.warning("Health check Error emit timed out for %s", self._provider_name)
+            if self._on_unhealthy is not None:
+                try:
+                    await asyncio.wait_for(self._invoke_callback(self._on_unhealthy), timeout=2.0)
+                except TimeoutError:
+                    logger.warning(
+                        "Health check on_unhealthy callback timed out for %s", self._provider_name
+                    )
+        finally:
+            _dispatching.reset(token)
 
     async def _emit_error(self, reason: str) -> None:
         """Emit an Error event on the unhealthy transition, if a bus is set."""
@@ -186,7 +261,15 @@ class PeriodicHealthChecker:
         )
 
     async def _invoke_callback(self, callback: HealthCallback) -> None:
-        """Invoke a sync or async health callback, swallowing errors."""
+        """Invoke a sync or async health callback, swallowing errors.
+
+        Sync callbacks run on the event loop, matching every other callback
+        contract in the package (``ReconnectingWebSocket.on_reconnect`` and
+        friends): they may touch loop-affine state, and a callback that blocks
+        the loop is the caller's bug rather than something a timeout can
+        rescue. The surrounding ``wait_for`` bounds the awaitable paths, which
+        is what #1041 asked for.
+        """
         try:
             result = callback(self._provider_name)
             if asyncio.iscoroutine(result):

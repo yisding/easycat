@@ -200,6 +200,10 @@ async def _follow_with_retry(
                 except Exception:  # noqa: BLE001, S110
                     pass
             await asyncio.sleep(0.25)
+        except sqlite3.DatabaseError as exc:
+            from easycat.errors import EasyCatError
+
+            raise EasyCatError("EASYCAT_E104", "Not an easycat journal", details=str(exc)) from exc
 
 
 def _record_to_follow_dict(record: Any) -> dict[str, Any]:

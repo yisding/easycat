@@ -45,6 +45,7 @@ updates:
         update-types: ["version-update:semver-major"]
   # Keep the SHA-pinned GitHub Actions current. Dependabot bumps the pin and
   # rewrites the trailing `# vX.Y.Z` comment, so pins never silently rot.
+  # Note: github-actions ecosystem supports only default-days for cooldown.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -60,9 +61,6 @@ updates:
       include: "scope"
     cooldown:
       default-days: 7
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 3
     groups:
       github-actions-minor-patch:
         patterns:
@@ -77,6 +75,7 @@ updates:
           - "major"
   # Keep immutable Docker base-image digests current without making builds
   # depend on whatever a mutable tag happens to resolve to on that day.
+  # Note: docker ecosystem supports only default-days for cooldown.
   - package-ecosystem: "docker"
     directory: "/docker"
     schedule:
@@ -92,9 +91,6 @@ updates:
       include: "scope"
     cooldown:
       default-days: 7
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 3
     groups:
       docker-minor-patch:
         patterns:

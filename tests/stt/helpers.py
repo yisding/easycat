@@ -98,6 +98,10 @@ async def collect_stt_events(
             await collect_task
         except BaseException:  # noqa: BLE001, S110
             pass
+        try:
+            await provider.close()  # type: ignore[union-attr]
+        except BaseException:  # noqa: BLE001, S110
+            pass
         raise
 
     return collected
