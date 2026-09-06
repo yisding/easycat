@@ -15,6 +15,11 @@ carry a stated sequencing constraint — honour it.
 Nothing in `../archive/` or `../critique/` is a queue. Where an item originated
 there, the origin is cited so the rationale can be read, not re-executed.
 
+2026-09-05 addition: [§8](#8-next-level-developer-experience) sequences the next
+developer-experience milestone against source at `2c597601`. Sections 1–7
+retain their original evidence date; re-verify their claims before starting
+work. This addition does not reclassify old findings as still open.
+
 ---
 
 ## 1. Security and privacy, now
@@ -299,6 +304,21 @@ Recorded so nobody rebuilds these from an archived document.
 | **M13's dev-debugger mode.** Do not rebuild it. | It shipped independently on `main` as `2d159801`, not via the closed neo branch. See [../archive/neo-milestone-ledger.md](../archive/neo-milestone-ledger.md). |
 
 ---
+
+## 8. Next-level developer experience
+
+Follow [the 2026-09-05 delivery plan](2026-09-05-next-level-developer-experience.md)
+for the next product and maintainability milestone. It owns the new DX1–DX7
+slices: shared configuration resolution, selected-app diagnostics, tests of the
+generated application, narrower session interfaces, portable failure-to-test
+workflows, the external provider journey, and contributor feedback.
+
+Start with DX1–DX3. The plan supplies source evidence, dependencies, PR
+boundaries, acceptance criteria, compatibility constraints, and focused checks.
+Its references to sections 1–6 and the bug-resistant program schedule existing
+work under its original owner; they do not replace those specifications or
+bypass their structural prerequisites. Keep this entry as the intake route
+and update delivery status in the linked plan.
 
 ## Where the rest went
 
