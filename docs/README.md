@@ -74,7 +74,9 @@ them. Multi-word audience filters accept hyphens or underscores, so
 - Testing agents and running evals: climb the
   [testing and evals ladder](testing-and-evals.md) — bundle fixtures,
   offline text turns through `easycat.debug.testing` (`run_text_turn`,
-  `assert_latency`, `assert_llm_judge`), teaching chapter 12 metrics, then
+  `run_text_turns` for a multi-turn scenario, `run_scripted_audio_turn`
+  for one scripted pass through the audio pipeline, `assert_latency`,
+  `assert_llm_judge`), teaching chapter 12 metrics, then
   live audio with `uv run easycat validate latency --smoke`. Scaffolded
   projects ship an offline `tests/test_agent.py` to start from.
 - Automating the CLI: use [llms.txt](../llms.txt) for machine-readable docs

@@ -79,24 +79,15 @@ def plan(
     tuples lives in ``docs/cli.md``; the human renderer's own line is pinned by
     ``tests/cli/test_plan.py::test_plan_human_output_prints_missing_backends``.
     """
-    from easycat.errors import EASYCAT_E602
-    from easycat.planning import build_provider_plan, plan_to_dict
-    from easycat.project import load_manifest
+    # Manifest load errors (E601/E602) and an unresolvable selection both raise
+    # EasyCatError -> handled by the cli_command wrapper. The load/plan/coded-
+    # error mapping is shared with ``easycat doctor`` (and, later, the server) so
+    # one manifest typo cannot report three different faces.
+    from easycat.planning import plan_to_dict
+    from easycat.planning.selection import load_selected_profile, plan_selected_profile
 
-    # Manifest load errors (E601/E602) raise EasyCatError -> handled by the
-    # cli_command wrapper. An unknown profile raises E602 too.
-    project_manifest = load_manifest(manifest)
-    voice_profile = project_manifest.profile(profile)
-    try:
-        provider_plan = build_provider_plan(voice_profile, profile=profile)
-    except (ValueError, KeyError) as exc:
-        # The planner RAISES a bare ValueError on an unknown provider/backend
-        # shortcut (e.g. ``vad = "silro"``) to keep planner-vs-create_session
-        # parity. A KeyError can surface from a registry lookup for a profile
-        # selecting a not-fully-wired provider. Surface either as the coded
-        # manifest error so the CLI prints a clean diagnosis instead of a raw
-        # traceback (the same shape the readiness probe degrades to).
-        raise EASYCAT_E602(path=f"[voice.{profile}]", problem=str(exc)) from exc
+    _manifest, voice_profile = load_selected_profile(manifest, profile=profile)
+    provider_plan = plan_selected_profile(voice_profile, profile=profile)
 
     if json_output:
         # ``plan_to_dict`` is the one plan -> JSON projection; the server's
