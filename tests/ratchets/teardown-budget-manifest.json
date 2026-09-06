@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "update_rationale": "gh 1067: the off-Linux process-birth identity bounds its ps invocation",
+  "update_rationale": "dx3-1: run_scripted_audio_turn's agent-reply wait joins the inventory",
   "counts": {
     "configurable": 29,
     "lifecycle_budget": 102,
-    "not_teardown": 35,
+    "not_teardown": 36,
     "protocol_local": 47
   },
   "entries": [
@@ -13,6 +13,7 @@
     "config_default\t_health_check.py\tPeriodicHealthChecker.__init__\tdefault probe_timeout\t0e52caa456688a04\t0\tlifecycle_budget\tBounds health check probe timeout for session lifecycle.",
     "config_default\t_tts_synthesizer.py\tTTSSynthesizer.__init__\tdefault timeout_config\t8f2cda988d9ca730\t0\tnot_teardown\tCarries synthesis latency policy rather than teardown policy.",
     "config_default\tcli/diagnose/doctor.py\tcheck_provider_reachability\tdefault timeout\t447490a807e628a6\t0\tnot_teardown\tBounds an operator reachability probe.",
+    "config_default\tdebug/testing.py\trun_scripted_audio_turn\tdefault timeout_s\t28d2586e9ed257f4\t0\tnot_teardown\tBounds a scripted offline test turn's wait for the agent reply, not teardown.",
     "config_default\tintegrations/agents/responses_api.py\tRemoteResponsesAPIBridge.__init__\tdefault timeout\t2621fbcf62fbbb7a\t0\tnot_teardown\tConfigures remote response and event latency.",
     "config_default\truntime/scope.py\tRuntimeScope.close\tdefault supersede_timeout\t8f2cda988d9ca730\t0\tconfigurable\tExposes the graceful-close supersession wait to the lifecycle caller.",
     "config_default\tserver/transports.py\tCapacityGate.drain\tdefault force_timeout_s\t8f2cda988d9ca730\t0\tconfigurable\tExposes the server force-drain budget to callers.",

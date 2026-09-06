@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import zipfile
@@ -15,6 +16,7 @@ from easycat.debug.bundle import FORMAT_VERSION, RunBundle
 from easycat.debug.testing import (
     JUDGE_RUBRIC,
     TurnResult,
+    _latency_ms,
     _openai_judge,
     assert_exact_match,
     assert_latency,
@@ -27,7 +29,9 @@ from easycat.debug.testing import (
     find_record,
     iter_records,
     load_bundle,
+    run_scripted_audio_turn,
     run_text_turn,
+    run_text_turns,
     turn_records,
 )
 
@@ -250,6 +254,156 @@ async def test_run_text_turn_rejects_session_without_journal():
     async with session:
         with pytest.raises(RuntimeError, match='debug="light"'):
             await run_text_turn(session, "hi")
+
+
+# ── run_text_turns / run_scripted_audio_turn ─────────────────────
+
+
+class _FailingAgent:
+    """Agent whose tool dependency is down."""
+
+    async def run(self, text: str) -> str:
+        raise RuntimeError("tool 'current_time' is unavailable")
+
+
+class _NeverRepliesAgent:
+    """Agent that never produces a reply, so the audio helper must time out."""
+
+    async def run(self, text: str) -> str:
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")  # pragma: no cover - defensive
+
+
+def _session_ids(result: TurnResult) -> set[str]:
+    return {r["session_id"] for r in result.records() if r.get("session_id")}
+
+
+async def test_run_text_turns_runs_every_turn_on_one_session():
+    first, second = await run_text_turns(_EchoAgent(), ["one", "two"])
+
+    assert first.response == "echo: one"
+    assert second.response == "echo: two"
+    assert first.turn_id != second.turn_id
+    assert _session_ids(first) == _session_ids(second) != set()
+    assert not turn_records(first, second.turn_id)
+    assert_turn_completed(first, first.turn_id)
+    assert_turn_completed(second, second.turn_id)
+
+
+async def test_run_text_turns_with_caller_owned_session_keeps_it_open():
+    session = create_text_session(agent=_EchoAgent(), debug="light")
+    async with session:
+        await run_text_turns(session, ["a", "b"])
+        # The helper never stops a session it does not own.
+        third = await run_text_turn(session, "c")
+
+    assert third.response == "echo: c"
+
+
+async def test_run_text_turns_rejects_a_bare_string():
+    with pytest.raises(TypeError, match="sequence of inputs"):
+        await run_text_turns(_EchoAgent(), "hi")
+
+
+async def test_run_text_turns_rejects_empty_inputs(monkeypatch: pytest.MonkeyPatch):
+    def _boom(config_or_agent):  # pragma: no cover - must never be reached
+        raise AssertionError("run_text_turns() built a session for zero work")
+
+    monkeypatch.setattr("easycat.debug.testing._build_text_session", _boom)
+
+    with pytest.raises(ValueError, match="at least one"):
+        await run_text_turns(_EchoAgent(), [])
+
+
+async def test_run_text_turns_propagates_agent_failure_and_still_stops_the_session():
+    with pytest.raises(RuntimeError, match="unavailable"):
+        await run_text_turns(_FailingAgent(), ["what time is it?"])
+
+    # The failed run left nothing behind that blocks a fresh one.
+    recovered = await run_text_turns(_EchoAgent(), ["again"])
+    assert recovered[0].response == "echo: again"
+
+
+async def test_run_text_turns_leaves_no_owned_tasks_behind():
+    before = asyncio.all_tasks()
+
+    await run_text_turns(_EchoAgent(), ["one", "two"])
+    assert asyncio.all_tasks() - before == set()
+
+    with pytest.raises(RuntimeError):
+        await run_text_turns(_FailingAgent(), ["boom"])
+    assert asyncio.all_tasks() - before == set()
+
+
+async def test_run_text_turns_results_accept_assert_latency():
+    results = await run_text_turns(_EchoAgent(), ["one", "two"])
+
+    assert_latency(results, max_ms=5000.0, percentile="p95")
+
+
+async def test_run_scripted_audio_turn_drives_the_full_pipeline():
+    result = await run_scripted_audio_turn(_EchoAgent(), transcript="hello")
+
+    names = {r.get("name") for r in result.records()}
+    assert {"vad_start_speaking", "stt_final", "agent_final", "tts_audio"} <= names
+    assert_exact_match(result, expected="echo: hello")
+    metric = find_record(result, name="turn_total_latency_ms")
+    assert metric is not None
+    assert result.latency_ms == float(metric["data"]["value"])
+
+
+async def test_run_scripted_audio_turn_leaves_no_owned_tasks_behind():
+    before = asyncio.all_tasks()
+
+    await run_scripted_audio_turn(_EchoAgent(), transcript="hello")
+
+    assert asyncio.all_tasks() - before == set()
+
+
+async def test_run_scripted_audio_turn_fallback_latency_times_the_turn_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wall-clock fallback must not bill session setup, drain or teardown.
+
+    A run whose journal carries no latency metric (an agent that replies but
+    whose TTS emits nothing) would otherwise report the whole session lifetime
+    as the turn latency, which then feeds a user's ``assert_latency``.
+    """
+    from easycat.debug import testing as testing_module
+
+    seen: list[float] = []
+
+    def _capture(records: object, *, fallback: float) -> float:
+        seen.append(fallback)
+        return fallback
+
+    monkeypatch.setattr(testing_module, "_latency_ms", _capture)
+
+    result = await run_scripted_audio_turn(_EchoAgent(), transcript="hello", drain_s=1.0)
+
+    assert seen, "the fallback path never ran"
+    assert seen[0] < 900.0, f"the 1 s drain leaked into the fallback latency: {seen[0]}"
+    assert result.latency_ms == seen[0]
+
+
+async def test_run_scripted_audio_turn_times_out_with_a_named_failure():
+    with pytest.raises(AssertionError, match="no agent reply"):
+        await run_scripted_audio_turn(_NeverRepliesAgent(), timeout_s=0.2)
+
+
+def test_latency_ms_prefers_the_text_metric_over_the_voice_metric():
+    # Name priority, not record order: the voice metric comes first in the
+    # record list and must still lose to the text metric.
+    records = [
+        {"name": "turn_total_latency_ms", "data": {"value": 99.0}},
+        {"name": "text_turn_latency_ms", "data": {"value": 7.0}},
+    ]
+
+    assert _latency_ms(records, fallback=123.0) == 7.0
+
+
+def test_latency_ms_falls_back_when_no_metric_record_is_present():
+    assert _latency_ms([], fallback=123.0) == 123.0
 
 
 # ── assert_latency ───────────────────────────────────────────────
