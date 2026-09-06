@@ -174,6 +174,7 @@ class PhoneticReplacementProcessor:
         for source_term, spoken_term in self.replacements.items():
             # Retain word boundaries for all terms, including punctuation like "C++" (gh 1004).
             pattern = re.compile(rf"(?<!\w){re.escape(source_term)}(?!\w)", flags=re.IGNORECASE)
+
             # The spoken term is substituted through a callable so ``re`` never
             # reads it as a replacement *template*.  Passing it directly made a
             # backslash in a pronunciation — natural in this domain, for unit
@@ -183,7 +184,10 @@ class PhoneticReplacementProcessor:
             # ``PatternError`` that ``apply_output_processors`` fails open on,
             # silently dropping this processor for the rest of the session
             # (gh 1101).
-            transformed = pattern.sub(lambda _match, spoken=spoken_term: spoken, transformed)
+            def _literal_replacement(_match: re.Match[str], spoken: str = spoken_term) -> str:
+                return spoken
+
+            transformed = pattern.sub(_literal_replacement, transformed)
 
         if transformed == source:
             return payload
