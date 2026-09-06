@@ -79,18 +79,6 @@ class RoleBackend:
     extra: str | None = None
     required_env: str | None = None
     capabilities: frozenset[str] = field(default_factory=frozenset)
-    # The importable module this backend needs even when it has NO pip extra; the
-    # planner reports a selected backend whose probe is absent as an unbuildable
-    # gap (``missing_backends``) rather than a missing extra. This mirrors the
-    # concept ``ProviderCatalog.probe_modules`` already exposes for registered
-    # providers. A backend that DOES declare an ``extra`` keeps the ordinary
-    # missing-extra path (its probe comes from :func:`probe_module_for_extra`), so
-    # this field is only read when ``extra is None``. ``None`` means the backend
-    # needs no import at all — see
-    # ``tests/planning/test_transport_registry.py::
-    # test_every_backend_without_an_extra_declares_a_probe_or_needs_none``, which
-    # lists the entries that legitimately need none.
-    probe_module: str | None = None
     # For TRANSPORT backends only: the AEC default the MANIFEST path resolves for
     # this transport — i.e. what ``ProjectManifest.to_easyconfig`` (and thus
     # ``create_session``) ends up with, which is the transport's preset value, NOT
@@ -101,6 +89,20 @@ class RoleBackend:
     # ``test_transport_aec_defaults_match_manifest_resolved_easyconfig`` so it
     # cannot silently drift from the preset. Ignored for non-transport roles.
     default_echo_cancellation_enabled: bool = False
+    # The importable module this backend needs even when it has NO pip extra; the
+    # planner reports a selected backend whose probe is absent as an unbuildable
+    # gap (``missing_backends``) rather than a missing extra. This mirrors the
+    # concept ``ProviderCatalog.probe_modules`` already exposes for registered
+    # providers. A backend that DOES declare an ``extra`` keeps the ordinary
+    # missing-extra path (its probe comes from :func:`probe_module_for_extra`), so
+    # this field is only read when ``extra is None``. ``None`` means the backend
+    # needs no import at all — see
+    # ``tests/planning/test_transport_registry.py::
+    # test_every_backend_without_an_extra_declares_a_probe_or_needs_none``, which
+    # lists the entries that legitimately need none. APPENDED last on purpose:
+    # ``RoleBackend`` is exported from ``easycat.planning.__all__``, so field
+    # ORDER is a compatibility surface for out-of-tree positional construction.
+    probe_module: str | None = None
 
 
 # ── TRANSPORT ────────────────────────────────────────────────────────

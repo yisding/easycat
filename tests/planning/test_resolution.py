@@ -12,6 +12,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
 
 import pytest
 
@@ -21,6 +24,7 @@ from easycat.planning import build_provider_plan
 from easycat.planning._resolution import (
     ProbeEnvironment,
     RoleDecision,
+    _backend_gap,
     resolve_from_easyconfig,
 )
 from easycat.planning.provider_plan import _plan_with_probe
@@ -70,6 +74,38 @@ class _InjectedVAD:
     async def process(self, _chunk: object):
         if False:  # pragma: no cover - shape-only async generator
             yield None
+
+
+_CATALOG_TABLES = (
+    "providers",
+    "env_vars",
+    "extras",
+    "api_domains",
+    "probe_modules",
+    "capabilities",
+    "capability_resolvers",
+    "config_to_provider",
+)
+
+
+@contextmanager
+def _rolled_back_catalog(catalog: Any) -> Iterator[None]:
+    """Register into a live provider catalog, then put every table back.
+
+    ``register_*_provider`` mutates the process-wide catalog, so a row that
+    registers a third-party provider has to restore it or the registration leaks
+    into every later test in the session.
+    """
+    saved = {name: dict(getattr(catalog, name)) for name in _CATALOG_TABLES}
+    discovered = catalog._discovered
+    try:
+        yield
+    finally:
+        for name, entries in saved.items():
+            table = getattr(catalog, name)
+            table.clear()
+            table.update(entries)
+        object.__setattr__(catalog, "_discovered", discovered)
 
 
 def _config(**overrides: object) -> EasyConfig:
@@ -463,6 +499,87 @@ def test_present_probe_module_is_not_a_gap() -> None:
     assert resolved.roles["vad"].probe_module == "krisp_audio"
 
 
+def test_a_registered_backend_without_an_extra_reports_its_missing_probe_module() -> None:
+    """``docs/extending/vad.md`` promises this for a REGISTERED backend too.
+
+    The built-in tables are not the only source of an extra-less backend: a
+    third-party provider registered with ``extra=None, probe_module=...`` is the
+    same shape as Krisp, and the doc paragraph next to ``register_vad_provider``
+    tells extension authors the planner reports it. The catalog has always stored
+    the value (``ProviderCatalog.probe_modules``); ``_decide_catalog_role`` /
+    ``_decide_catalog_string`` carry it onto the decision so the gap loop can see
+    it.
+    """
+    from easycat.vad.factory import _CATALOG as vad_catalog
+    from easycat.vad.factory import register_vad_provider
+
+    class _AcmeVADConfig:
+        pass
+
+    class _AcmeVAD:
+        def configure(self, **_kwargs: object) -> None: ...
+
+        async def process(self, _chunk: object):
+            if False:  # pragma: no cover - shape-only async generator
+                yield None
+
+    env = {"OPENAI_API_KEY": "sk-resolution-test"}
+    with _rolled_back_catalog(vad_catalog):
+        register_vad_provider(
+            "acmevad",
+            _AcmeVAD,
+            _AcmeVADConfig,
+            extra=None,
+            probe_module="acme_vad_sdk",
+            capabilities=frozenset({"endpointing"}),
+        )
+        absent = resolve_from_easyconfig(
+            _config(vad=_AcmeVADConfig()),
+            probe=ProbeEnvironment.fake(env=env, unavailable=["acme_vad_sdk"], default=True),
+        )
+        present = resolve_from_easyconfig(
+            _config(vad=_AcmeVADConfig()),
+            probe=ProbeEnvironment.fake(env=env, available=["acme_vad_sdk"], default=True),
+        )
+
+    assert absent.roles["vad"].provider == "acmevad"
+    assert absent.roles["vad"].probe_module == "acme_vad_sdk"
+    assert absent.missing_backends == ("vad:acmevad",)
+    # There is no extra to install, so the operator fix cannot be expressed as
+    # one — which is exactly why ``missing_backends`` exists.
+    assert absent.missing_extras == ()
+    assert present.missing_backends == ()
+
+
+def test_every_builtin_catalog_provider_declares_an_extra() -> None:
+    """Carrying the catalog probe onto the decision changes NO built-in verdict.
+
+    The catalog-side twin of
+    ``test_transport_registry.py::test_every_backend_without_an_extra_declares_a
+    _probe_or_needs_none``: every built-in stt/tts provider spec declares an
+    install extra and no probe module, so ``_backend_gap`` exits on its extra
+    guard for all of them and the new ``missing_backends`` class can only be
+    reached by Krisp or by a third-party registration. Reads ``catalog.specs``
+    (the static built-in table) rather than the discovered providers, so an
+    installed third-party plugin cannot turn this red on a contributor's machine.
+    """
+    from easycat.planning._resolution import _catalogs
+
+    probing = [
+        f"{kind}:{name}"
+        for kind, catalog in _catalogs().items()
+        for name, spec in catalog.specs.items()
+        if not spec.extra or spec.probe_module is not None
+    ]
+    assert not probing, (
+        "These built-in providers no longer resolve through the missing-EXTRA "
+        "path alone, so they can now reach missing_backends: "
+        + ", ".join(sorted(probing))
+        + ". That may be correct — confirm the new verdict is what "
+        "create_session does, then update this guard."
+    )
+
+
 def test_a_backend_declaring_an_extra_never_becomes_a_backend_gap() -> None:
     """An extra-bearing backend keeps the missing-EXTRA path, unchanged.
 
@@ -491,6 +608,12 @@ def test_degrading_backend_is_never_a_backend_gap() -> None:
     ``fallback_policy="passthrough"`` returns a no-op reducer instead of raising
     when nothing is installed, so ``/health/ready`` must stay ready however many
     probes are absent.
+
+    Resolver-level companion to
+    :func:`test_backend_gap_skips_a_degrading_backend_whose_probe_is_absent`: the
+    ``auto`` chain declares the ``rnnoise`` extra, so it exits :func:`_backend_gap`
+    on the extra guard and this row covers the missing-EXTRA degrade path, not the
+    ``degrades_to_passthrough`` guard itself.
     """
     from easycat.noise_reduction import NoiseReducerConfig
 
@@ -507,6 +630,41 @@ def test_degrading_backend_is_never_a_backend_gap() -> None:
     assert resolved.missing_backends == ()
     assert resolved.missing_extras == ()
     assert any("degraded" in warning for warning in resolved.warnings)
+
+
+def _decision(**overrides: Any) -> RoleDecision:
+    """A hand-built decision for the gap predicates, defaulted to the Krisp shape."""
+    fields: dict[str, Any] = {
+        "role": "noise_reducer",
+        "provider": "krisp",
+        "model": None,
+        "config_type": "NoiseReducerConfig",
+        "extra": None,
+        "required_env": None,
+        "capabilities": frozenset({"noise_reduction", "commercial"}),
+        "probe_module": "krisp_audio",
+    }
+    fields.update(overrides)
+    return RoleDecision(**fields)
+
+
+def test_backend_gap_skips_a_degrading_backend_whose_probe_is_absent() -> None:
+    """The ``degrades_to_passthrough`` guard, exercised where it is reachable.
+
+    No backend today carries BOTH an absent probe and the degrade tag — the two
+    extra-less probes are the Krisp entries and the tag is only added to the auto
+    chains, which declare extras — so no config can drive :func:`_backend_gap`
+    past the extra guard into this branch. Calling the predicate directly is the
+    only way to pin it, and without the pairing assertion below the guard could be
+    deleted with every end-to-end row still green.
+    """
+    probe = ProbeEnvironment.fake(unavailable=["krisp_audio"], default=True)
+
+    blocking = _decision()
+    degrading = _decision(capabilities=blocking.capabilities | {"degrades_to_passthrough"})
+
+    assert _backend_gap(blocking, probe) is True
+    assert _backend_gap(degrading, probe) is False
 
 
 def test_a_disabled_role_never_contributes_a_backend_gap(
@@ -548,9 +706,40 @@ def test_injected_stt_and_tts_report_unknown_capabilities() -> None:
         assert decision.config_type == expected
         assert decision.extra is None
         assert decision.required_env is None
+        assert decision.model is None, role
     # No credential is invented for an object that needs none, so an injected
     # pipeline is not blocked by an env var it never reads.
     assert "OPENAI_API_KEY" not in resolved.missing_env
+
+
+def test_an_injected_stt_or_tts_still_reports_the_model_it_exposes() -> None:
+    """The D3 fix changes ``capabilities`` and NOTHING else on the selection.
+
+    Before the fix an injected stt/tts fell through the catalog walk, which read
+    ``model`` off the object (honouring a ``MODEL_FIELD`` override). Routing it to
+    ``_injected_decision`` must not drop that: ``model`` is projected into
+    ``easycat plan --json`` and printed by the human renderer, and
+    ``tests/planning/_recording.py::assert_preview_matches_construction`` asserts
+    the plan's model equals the constructed spec's for EVERY row — an invariant
+    that becomes unsatisfiable for an injected provider the moment the planner
+    hard-codes ``None``.
+    """
+
+    class _ModelledSTT(_InjectedSTT):
+        model = "acme-asr-3"
+
+    class _ModelledTTS(_InjectedTTS):
+        MODEL_FIELD = "voice_model"
+        voice_model = "acme-tts-2"
+
+    resolved = resolve_from_easyconfig(
+        _config(stt=_ModelledSTT(), tts=_ModelledTTS()),
+        probe=ProbeEnvironment.fake(default=True),
+    )
+    assert resolved.roles["stt"].model == "acme-asr-3"
+    assert resolved.roles["tts"].model == "acme-tts-2"
+    assert resolved.roles["stt"].capabilities == frozenset({"injected"})
+    assert resolved.roles["tts"].capabilities == frozenset({"injected"})
 
 
 def test_injected_stt_does_not_claim_native_endpointing() -> None:
@@ -568,13 +757,58 @@ def test_injected_stt_does_not_claim_native_endpointing() -> None:
     assert resolved.enable_vad is True
 
 
-def test_a_registered_config_instance_still_reports_its_catalog_capabilities() -> None:
-    """The injected branch must not swallow a REGISTERED third-party config.
+def test_a_registered_stt_config_instance_still_reports_its_catalog_capabilities() -> None:
+    """The injected early return must not swallow a REGISTERED third-party CONFIG.
 
-    ``catalog.is_config_instance`` is checked first for vad/noise/aec, and an stt
-    config is not a live provider, so declared capabilities survive.
+    This is the control for ``_decide_catalog_role``'s new first branch, so it has
+    to run on a role that branch actually guards: ``_is_injected_provider``
+    answers ``False`` unconditionally for every role but stt/tts, which makes a
+    ``vad`` row unable to fail for the regression it would be named after. A
+    config instance is not a live provider under the STRICT predicate, so the
+    catalog walk still runs and the declared capabilities survive.
+    """
+    from easycat.stt.factory import _CATALOG as stt_catalog
+    from easycat.stt.factory import register_stt_provider
+
+    class _AcmeSTTConfig:
+        pass
+
+    class _AcmeSTT:
+        async def start_stream(self) -> None: ...
+
+        async def send_audio(self, _chunk: object) -> None: ...
+
+        async def commit_segment(self) -> None: ...
+
+        async def end_stream(self) -> None: ...
+
+        async def events(self):
+            if False:  # pragma: no cover - shape-only async generator
+                yield None
+
+    with _rolled_back_catalog(stt_catalog):
+        register_stt_provider(
+            "acmestt", _AcmeSTT, _AcmeSTTConfig, capabilities=frozenset({"offline"})
+        )
+        resolved = resolve_from_easyconfig(
+            _config(stt=_AcmeSTTConfig(), vad=_InjectedVAD()),
+            probe=ProbeEnvironment.fake(default=True),
+        )
+
+    assert resolved.roles["stt"].provider == "acmestt"
+    assert resolved.roles["stt"].config_type == "_AcmeSTTConfig"
+    assert resolved.roles["stt"].capabilities == frozenset({"offline"})
+
+
+def test_a_registered_vad_config_instance_still_reports_its_catalog_capabilities() -> None:
+    """The vad sibling: ``catalog.is_config_instance`` wins over the shape check.
+
+    ``_decide_vad`` asks the catalog BEFORE ``has_provider_shape``, so a
+    registered config never reaches ``_injected_decision``. (This row does not
+    cover ``_decide_catalog_role``'s stt/tts early return — see the test above.)
     """
     from easycat.vad.factory import _CATALOG as vad_catalog
+    from easycat.vad.factory import register_vad_provider
 
     class _EnergyVADConfig:
         pass
@@ -586,33 +820,13 @@ def test_a_registered_config_instance_still_reports_its_catalog_capabilities() -
             if False:  # pragma: no cover - shape-only async generator
                 yield None
 
-    tables = (
-        "providers",
-        "env_vars",
-        "extras",
-        "api_domains",
-        "probe_modules",
-        "capabilities",
-        "capability_resolvers",
-        "config_to_provider",
-    )
-    saved = {name: dict(getattr(vad_catalog, name)) for name in tables}
-    discovered = vad_catalog._discovered
-    try:
-        from easycat.vad.factory import register_vad_provider
-
+    with _rolled_back_catalog(vad_catalog):
         register_vad_provider(
             "energy", _EnergyVAD, _EnergyVADConfig, capabilities=frozenset({"offline"})
         )
         resolved = resolve_from_easyconfig(
             _config(vad=_EnergyVADConfig()), probe=ProbeEnvironment.fake(default=True)
         )
-    finally:
-        for name, entries in saved.items():
-            table = getattr(vad_catalog, name)
-            table.clear()
-            table.update(entries)
-        object.__setattr__(vad_catalog, "_discovered", discovered)
 
     assert resolved.roles["vad"].provider == "energy"
     assert resolved.roles["vad"].capabilities == frozenset({"offline"})

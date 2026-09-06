@@ -202,18 +202,38 @@ _EXTRA_LESS_BACKENDS_NEEDING_NO_PROBE: dict[tuple[str, str], str] = {
 }
 
 
-def test_every_backend_without_an_extra_declares_a_probe_or_needs_none() -> None:
-    # The D2 guard. ``VAD_BACKENDS["krisp"]`` reported READY on every machine
-    # without the commercial SDK for exactly this reason: no extra to probe and
-    # no probe module either. This test makes the next extra-less backend a
-    # deliberate decision rather than a silent repeat.
-    tables: dict[str, dict[str, RoleBackend]] = {
+def _backend_tables() -> dict[str, dict[str, RoleBackend]]:
+    """Every backend object the planner can actually reach, keyed by role.
+
+    ``TRANSPORT_BACKENDS_BY_CONFIG_TYPE`` is not a view over ``TRANSPORT_BACKENDS``:
+    ``_decide_transport`` resolves an ``EasyConfig.transport`` through it, and it
+    carries an entry (``WebTransportTransportConfig``) that has no manifest
+    shortcut and so appears in no other table. Its shortcut-backed entries are the
+    SAME objects as ``TRANSPORT_BACKENDS``', so they are deduplicated by identity
+    and only the shortcut-less ones land under ``transport_config`` — otherwise
+    every allow-list entry would need a config-type twin.
+    """
+    by_shortcut = {id(backend) for backend in TRANSPORT_BACKENDS.values()}
+    return {
         "transport": TRANSPORT_BACKENDS,
+        "transport_config": {
+            config_type: backend
+            for config_type, backend in TRANSPORT_BACKENDS_BY_CONFIG_TYPE.items()
+            if id(backend) not in by_shortcut
+        },
         "vad": VAD_BACKENDS,
         "noise_reducer": NOISE_REDUCER_BACKENDS,
         "echo_canceller": ECHO_CANCELLER_BACKENDS,
         "agent": AGENT_BACKENDS,
     }
+
+
+def test_every_backend_without_an_extra_declares_a_probe_or_needs_none() -> None:
+    # The D2 guard. ``VAD_BACKENDS["krisp"]`` reported READY on every machine
+    # without the commercial SDK for exactly this reason: no extra to probe and
+    # no probe module either. This test makes the next extra-less backend a
+    # deliberate decision rather than a silent repeat.
+    tables = _backend_tables()
     undeclared: list[str] = []
     for role, table in tables.items():
         for name, backend in table.items():
@@ -245,15 +265,11 @@ def test_a_backend_declaring_an_extra_needs_no_probe_module() -> None:
     # ``probe_module`` is only read when ``extra is None`` (an extra resolves its
     # own probe through ``probe_module_for_extra``), so the two must not both be
     # set — that would be two sources of truth for one backend.
-    for table in (
-        TRANSPORT_BACKENDS,
-        VAD_BACKENDS,
-        NOISE_REDUCER_BACKENDS,
-        ECHO_CANCELLER_BACKENDS,
-        AGENT_BACKENDS,
-    ):
+    for role, table in _backend_tables().items():
         for name, backend in table.items():
-            assert not (backend.extra is not None and backend.probe_module is not None), name
+            assert not (backend.extra is not None and backend.probe_module is not None), (
+                f"{role}:{name}"
+            )
 
 
 def test_builtin_backend_roles_are_the_five() -> None:

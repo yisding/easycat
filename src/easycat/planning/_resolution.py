@@ -252,13 +252,33 @@ def _is_injected_provider(role: Role, spec: Any) -> bool:
     return False
 
 
+def _spec_model(spec: Any) -> Any:
+    """Read the model off a config instance or a live provider object.
+
+    Honours the config class's ``MODEL_FIELD`` override, exactly as the catalog
+    walk in :func:`_decide_catalog_role` always has — an injected stt/tts object
+    reports the same model it reported before it was routed to
+    :func:`_injected_decision`, so the plan's ``model`` field is unchanged by the
+    capability fix.
+    """
+    return getattr(spec, getattr(type(spec), "MODEL_FIELD", "model"), None)
+
+
 def _decide_catalog_role(role: Role, spec: Any, *, catalog: Any) -> RoleDecision:
     """Resolve a provider role from the catalog WITHOUT instantiating it.
 
     ``spec`` is the value on the config: a shortcut string, a concrete config
     instance, a LIVE provider object, or ``None``. The provider name,
-    config-type, extra, and required env are read straight from the catalog
-    metadata.
+    config-type, extra, required env and probe module are read straight from the
+    catalog metadata.
+
+    The ``probe_module`` matters for a REGISTERED third-party provider that
+    declares an SDK but NO pip extra: ``docs/extending/vad.md`` promises the
+    planner reports such a backend missing, and only carrying the catalog's value
+    onto the decision makes that true. Every built-in catalog provider declares an
+    extra, so this changes no built-in verdict; a provider that declares BOTH
+    keeps the ordinary missing-extra path (:func:`_backend_gap` reads the probe
+    only when ``extra is None``).
 
     A live injected stt/tts provider is routed to :func:`_injected_decision`
     FIRST, so it is described as an opaque live object (``{"injected"}``) rather
@@ -273,7 +293,7 @@ def _decide_catalog_role(role: Role, spec: Any, *, catalog: Any) -> RoleDecision
     """
     catalog.discover()
     if _is_injected_provider(role, spec):
-        return _injected_decision(role, spec)
+        return _injected_decision(role, spec, model=_spec_model(spec))
     if isinstance(spec, str):
         provider, model = split_shortcut(spec)
         provider = catalog.validate_name(provider)
@@ -288,7 +308,7 @@ def _decide_catalog_role(role: Role, spec: Any, *, catalog: Any) -> RoleDecision
             (name for name, (_p, cfg) in catalog.providers.items() if cfg is config_cls),
             config_cls.__name__,
         )
-        model = getattr(spec, getattr(config_cls, "MODEL_FIELD", "model"), None)
+        model = _spec_model(spec)
         config_type = config_cls.__name__
 
     extra = catalog.extras.get(provider) or None
@@ -301,6 +321,7 @@ def _decide_catalog_role(role: Role, spec: Any, *, catalog: Any) -> RoleDecision
         extra=extra,
         required_env=required_env,
         capabilities=catalog.capabilities_for(provider, config=spec, model=model),
+        probe_module=catalog.probe_modules.get(provider),
         spec=spec,
     )
 
@@ -314,6 +335,10 @@ def _decide_catalog_string(
     ``EasyConfig``'s "default to OpenAI when unset" behavior). The provider name,
     config-type, extra, and required env come from the catalog metadata — no
     ``parse_string`` call, so no env read and no ``EASYCAT_E203``.
+
+    The catalog's declared ``probe_module`` rides along, so a REGISTERED
+    third-party provider that ships no pip extra is reported as an unbuildable
+    backend on this path too (see :func:`_decide_catalog_role`).
     """
     catalog.discover()
     if spec is None:
@@ -330,6 +355,7 @@ def _decide_catalog_string(
         extra=catalog.extras.get(provider) or None,
         required_env=catalog.env_vars.get(provider),
         capabilities=catalog.capabilities_for(provider, model=model),
+        probe_module=catalog.probe_modules.get(provider),
         spec=spec,
     )
 
@@ -358,7 +384,7 @@ def _backend_decision(
     )
 
 
-def _injected_decision(role: Role, provider: Any) -> RoleDecision:
+def _injected_decision(role: Role, provider: Any, *, model: str | None = None) -> RoleDecision:
     """Describe a live injected provider without pretending it is a built-in.
 
     ``capabilities={"injected"}`` is the ONE representation of "a live object
@@ -378,12 +404,20 @@ def _injected_decision(role: Role, provider: Any) -> RoleDecision:
     ``config/_factory.py`` instead and uses the strict predicate
     (:func:`_is_injected_provider`), because that is what construction applies
     there.
+
+    ``model`` stays ``None`` for the vad/noise/aec callers (those roles have never
+    reported one) and is passed by the stt/tts caller, which reads the same
+    attribute the catalog walk read before the D3 fix routed an injected object
+    here — so the D3 fix changes ``capabilities`` and nothing else, and the
+    preview-vs-construction model invariant
+    (``tests/planning/_recording.py::assert_preview_matches_construction``) keeps
+    holding for an injected provider that exposes one.
     """
     provider_type = type(provider).__name__
     return RoleDecision(
         role=role,
         provider=provider_type,
-        model=None,
+        model=model,
         config_type=provider_type,
         extra=None,
         required_env=None,
@@ -726,6 +760,17 @@ def _backend_gap(decision: RoleDecision, probe: ProbeEnvironment) -> bool:
     if decision.extra is not None or decision.probe_module is None:
         return False
     if "degrades_to_passthrough" in decision.capabilities:
+        # Deliberately SILENT, unlike the missing-extra path, which downgrades the
+        # same situation to a ``*_missing_degraded`` warning in :func:`_finalize`.
+        # No backend carries both a ``probe_module`` and this tag today (the only
+        # extra-less probes are the two Krisp entries, and the tag is only added
+        # to the auto chains, which declare extras), so a warning string here
+        # would name a state nothing can reach and no test could pin end to end.
+        # Pinned directly instead, by
+        # ``tests/planning/test_resolution.py::
+        # test_backend_gap_skips_a_degrading_backend_whose_probe_is_absent``. If a
+        # degrading extra-less backend is ever added, mirror the extra path here
+        # rather than leaving the operator with no signal at all.
         return False
     return not probe.module_available(decision.probe_module)
 

@@ -23,18 +23,6 @@ from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_json, json_envelope, stdout_console
 
 
-def _selection_to_dict(selection: Any) -> dict[str, Any]:
-    """Alias for :func:`easycat.planning.selection_to_dict`.
-
-    The projection itself lives next to ``ProviderSelection`` so the CLI and the
-    server's ``/plan`` payload cannot drift apart. Kept as a module-level name
-    because in-tree and out-of-tree callers reference it.
-    """
-    from easycat.planning import selection_to_dict
-
-    return selection_to_dict(selection)
-
-
 def _render_human(plan: Any) -> None:
     stdout_console.print(f"[bold]Provider plan[/] (profile: {plan.profile})")
     for role, selection in plan.selected.items():
@@ -84,6 +72,12 @@ def plan(
     Reports the selected provider per role plus any missing env vars / missing
     extras / missing backends / incompatible-combo warnings — without
     instantiating providers.
+
+    Source documentation only: ``easycat plan --help`` prints the one-line
+    ``_COMMAND_TEXT["plan"].help`` string that ``cli/_app.py`` registers the
+    command with, not this docstring. The operator-facing description of the gap
+    tuples lives in ``docs/cli.md``; the human renderer's own line is pinned by
+    ``tests/cli/test_plan.py::test_plan_human_output_prints_missing_backends``.
     """
     from easycat.errors import EASYCAT_E602
     from easycat.planning import build_provider_plan, plan_to_dict

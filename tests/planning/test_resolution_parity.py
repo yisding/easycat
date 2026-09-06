@@ -70,6 +70,12 @@ class _Agent:
 
 
 class _DuckSTT:
+    # A live provider that exposes a model, so ``assert_preview_matches_construction``
+    # invariant 2 (plan model == the constructed spec's model) actually EXERCISES
+    # the injected stt/tts path. Without it the invariant is vacuous for every
+    # injected row and the planner could hard-code ``model=None`` unnoticed.
+    model = "duck-asr-1"
+
     async def start_stream(self) -> None:
         pass
 
@@ -88,6 +94,8 @@ class _DuckSTT:
 
 
 class _DuckTTS:
+    model = "duck-tts-1"
+
     async def synthesize(self, _text: str):
         if False:
             yield None
@@ -548,6 +556,9 @@ def _custom_stt_capability_check(
     assert plan.selected["stt"].config_type == "_DuckSTT"
     assert plan.selected["stt"].extra is None
     assert plan.selected["stt"].required_env is None
+    # ``model`` included: routing the injected object to ``_injected_decision``
+    # must not drop what the catalog walk used to read off it.
+    assert plan.selected["stt"].model == _DuckSTT.model
 
 
 def _custom_transport_instance(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:

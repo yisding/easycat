@@ -326,13 +326,11 @@ def test_selection_to_dict_is_the_projection_both_json_surfaces_use() -> None:
     """``easycat plan --json`` and the server's ``/plan`` payload cannot drift.
 
     Both surfaces reach this projection through
-    :func:`easycat.planning.plan_to_dict`, and ``cli.plan._selection_to_dict`` is
-    a thin alias kept for in-tree and out-of-tree callers. The server assertions
-    in ``tests/server/test_plan_endpoint.py`` need aiohttp, so this
-    credential-free row is what actually executes the shared projection and pins
-    its key set on a dev-group-only machine.
+    :func:`easycat.planning.plan_to_dict`, which is where the per-role dict is
+    built. The server assertions in ``tests/server/test_plan_endpoint.py`` need
+    aiohttp, so this credential-free row is what actually executes the shared
+    projection and pins its key set on a dev-group-only machine.
     """
-    from easycat.cli.plan import _selection_to_dict
     from easycat.planning import selection_to_dict
 
     config = EasyConfig(
@@ -347,7 +345,6 @@ def test_selection_to_dict_is_the_projection_both_json_surfaces_use() -> None:
     for selection in plan.selected.values():
         payload = selection_to_dict(selection)
         assert set(payload) == _SELECTION_PAYLOAD_KEYS
-        assert _selection_to_dict(selection) == payload
         # JSON-ready: ``capabilities`` is a sorted list, never a frozenset.
         assert payload["capabilities"] == sorted(selection.capabilities)
 
