@@ -925,6 +925,7 @@ class EasyConfig(_AgentSessionConfig):
         # before string resolution left the string form with smart-turn (and a
         # Silero VAD) on, diverging from the typed form.
         self._smart_turn_default: SmartTurnConfig | None = None
+        self._smart_turn_default_snapshot: SmartTurnConfig | None = None
         self._renormalize_smart_turn()
 
         # Catalog membership (not an isinstance against the built-in
@@ -987,6 +988,23 @@ class EasyConfig(_AgentSessionConfig):
             self.telephony.validate()
         self._validate()
 
+    def _smart_turn_is_untouched_default(self) -> bool:
+        """Whether ``smart_turn`` still holds exactly the value this class chose.
+
+        Identity alone is not enough: ``SmartTurnConfig`` is a mutable
+        dataclass and editing it in place (``cfg.smart_turn.enabled = False``,
+        ``cfg.smart_turn.threshold = 0.8``) is a supported style that keeps the
+        same object.  Comparing against a snapshot taken when the default was
+        synthesized distinguishes "never touched" from "edited in place", so an
+        in-place override is not silently rebuilt away.
+        """
+        default = self._smart_turn_default
+        return (
+            default is not None
+            and self.smart_turn is default
+            and default == self._smart_turn_default_snapshot
+        )
+
     def _renormalize_smart_turn(self) -> None:
         """Re-resolve smart-turn against the current ``stt`` and ``transport``.
 
@@ -1002,12 +1020,12 @@ class EasyConfig(_AgentSessionConfig):
         provider's, and the turn double-endpoints (duplicate ``STTFinal``,
         stalled classification gate).  gh 1027.
 
-        Tracking the synthesized default by identity keeps an explicit
-        ``smart_turn=`` — passed at construction or assigned afterwards —
-        authoritative; only an untouched default is re-derived.
+        Only an *untouched* default is re-derived, so any explicit choice —
+        passed at construction, reassigned afterwards, or edited in place —
+        stays authoritative.
         """
         raw: SmartTurnConfig | bool | None = self.smart_turn
-        if raw is self._smart_turn_default:
+        if self._smart_turn_is_untouched_default():
             raw = None
         resolved = _normalize_smart_turn_config(
             raw,
@@ -1016,7 +1034,12 @@ class EasyConfig(_AgentSessionConfig):
             stt_native_endpointing=_stt_uses_native_endpointing(self.stt),
         )
         self.smart_turn = resolved
-        self._smart_turn_default = resolved if raw is None else None
+        if raw is None:
+            self._smart_turn_default = resolved
+            self._smart_turn_default_snapshot = replace(resolved)
+        else:
+            self._smart_turn_default = None
+            self._smart_turn_default_snapshot = None
 
     def _warn_if_vad_pre_roll_is_too_short(self) -> None:
         """Surface VAD/pre-roll combinations that can clip utterance onset."""

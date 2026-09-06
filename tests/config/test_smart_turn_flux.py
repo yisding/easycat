@@ -462,6 +462,60 @@ def test_explicit_smart_turn_survives_a_late_stt_mutation(
     assert session._auto_turn_from_stt_final is False
 
 
+def test_in_place_smart_turn_threshold_edit_survives_the_recompute(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """``cfg.smart_turn.threshold = ...`` is a supported style and must win.
+
+    The synthesized default is tracked by identity *and* value: an in-place
+    edit keeps the same object, so identity alone would misread it as
+    untouched and rebuild the original default over the user's choice.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
+
+    config = EasyConfig(
+        stt="openai/gpt-4o-transcribe",
+        tts=OpenAITTSConfig(api_key="test-key"),
+        openai_api_key="test-key",
+        agent=_DummyAgent(),
+    )
+    assert config.smart_turn.threshold == 0.5
+
+    config.smart_turn.threshold = 0.8
+    config.stt = "deepgram/flux-general-en"
+    config._validate_for_session()
+
+    assert config.smart_turn.threshold == 0.8
+    # The edit also makes the whole object explicit, so the Flux default
+    # (disabled) no longer overrides it.
+    assert config.smart_turn.enabled is True
+
+
+def test_in_place_smart_turn_disable_survives_the_recompute():
+    """An in-place ``enabled = False`` must not be rebuilt back to the default.
+
+    Starting from Flux (default off) and mutating to a plain STT means the
+    re-derived default would be *on*, so this only passes if the in-place edit
+    is recognized as an explicit choice.
+    """
+    config = EasyConfig(
+        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        openai_api_key="test-key",
+        agent=_DummyAgent(),
+    )
+    assert config.smart_turn.enabled is False
+
+    # Same value as the default, but now an explicit user assignment.
+    config.smart_turn.enabled = False
+    config.smart_turn.threshold = 0.9
+    config.stt = "openai/gpt-4o-transcribe"
+    config._validate_for_session()
+
+    assert config.smart_turn.enabled is False
+    assert config.smart_turn.threshold == 0.9
+
+
 def test_smart_turn_assigned_after_construction_is_normalized():
     """A late ``cfg.smart_turn = True`` resolves to a ``SmartTurnConfig``.
 
