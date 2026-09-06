@@ -131,6 +131,10 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
 - `smart_turn` — `SmartTurnConfig` or bool enabling semantic endpoint
   detection. When unset, it defaults on for local-microphone transports and
   off for server, browser, and telephony transports.
+  When the STT provider declares `native_endpointing` and nothing overrides it
+  (smart turn, push-to-talk, or the voicemail detector), turns come from STT
+  FINAL events and no VAD stage is built. `easycat plan` and `/health/ready`
+  report that role as `off`, so its install extra is not a blocking gap.
 - `smart_turn_sensitivity` — beginner-facing 0–1 shortcut; higher values end
   turns on lower completion probabilities. When `smart_turn` is unset, supplying
   sensitivity enables smart turn; combining it with explicit

@@ -189,6 +189,18 @@ def test_unknown_vad_shortcut_raises_not_silent_auto_fallback() -> None:
         )
 
 
+def test_unknown_vad_backend_still_raises_when_the_stage_is_skipped() -> None:
+    # The VAD role is reported ``off`` for a native-endpointing STT, but the
+    # backend is RESOLVED before it is disabled: an unresolvable profile must
+    # stay unresolvable regardless of who owns endpointing, or ``easycat plan``
+    # would print a clean plan for a manifest ``to_easyconfig`` rejects.
+    with pytest.raises(ValueError, match="Unknown VAD backend 'not-a-backend'"):
+        build_provider_plan(
+            _profile(transport="websocket", stt="deepgram/flux-general-en", vad="not-a-backend"),
+            environ={"OPENAI_API_KEY": "x", "DEEPGRAM_API_KEY": "y"},
+        )
+
+
 def test_twilio_combo_emits_warning_not_blocking() -> None:
     plan = build_provider_plan(
         _profile(transport="twilio", stt="openai", tts="openai"),

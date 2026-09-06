@@ -143,7 +143,24 @@ def _project_selection(decision: RoleDecision) -> ProviderSelection:
 
     ``RoleDecision.spec`` — which may hold a credential-bearing config or the
     caller's live provider object — is deliberately NOT copied across.
+
+    A role the session builds NOTHING for is reported ``provider="off"`` with no
+    model, no extra, no required env var and ``capabilities={"disabled"}``,
+    whatever the resolver decided underneath. That is the shape a disabled
+    ``noise_reducer`` has shipped with since M6b; the ``vad`` role reuses it when
+    the STT owns endpointing, so a VAD extra is not a blocking gap for a
+    deployment ``create_session`` never asks for a VAD.
     """
+    if not decision.enabled:
+        return ProviderSelection(
+            role=decision.role,
+            provider="off",
+            model=None,
+            config_type=decision.config_type,
+            extra=None,
+            required_env=None,
+            capabilities=frozenset({"disabled"}),
+        )
     return ProviderSelection(
         role=decision.role,
         provider=decision.provider,
