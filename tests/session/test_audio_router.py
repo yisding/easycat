@@ -15,6 +15,8 @@ from easycat.cancel import CancelToken
 from easycat.events import (
     AudioIn,
     AudioOut,
+    BotStartedSpeaking,
+    BotStoppedSpeaking,
     Error,
     EventBus,
     PlaybackMarkAck,
@@ -871,6 +873,50 @@ async def test_gated_replay_overflow_reconciles_pending_count_after_drain():
 
     assert len(transport.sent) == 3
     assert queue.empty()
+    assert router._replay_chunks_pending == 0
+    assert state["tm"].state == TurnManagerState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_gated_replay_tally_survives_a_send_completing_mid_enqueue():
+    """A concurrent send completion must not zero the tally mid-enqueue (gh 1007).
+
+    ``gated_replay`` claims the tally for the whole batch before it awaits
+    ``bot_started_speaking()``, whose ``BotStartedSpeaking`` emit suspends —
+    and the chunks are only queued afterwards.  A ``_finish_outbound_send``
+    landing in that window (drain-loop ``finally``, or the inline first-frame
+    release used for greeting/hold audio) used to observe "tally > 0 and queue
+    empty", reconcile the tally to zero, and fire ``bot_stopped_speaking``.
+    The turn manager then sat in IDLE while replay audio was still to play, so
+    caller speech during replay took the new-turn path instead of barge-in.
+    """
+    router, state = _make_router()
+    observed: dict = {}
+
+    async def _finish_a_send_during_the_emit(_event: BotStartedSpeaking) -> None:
+        observed["tally"] = router._replay_chunks_pending
+        observed["queue_empty"] = state["queue"].empty()
+        await router._finish_outbound_send(replayed_chunk=False)
+
+    state["bus"].subscribe(BotStartedSpeaking, _finish_a_send_during_the_emit)
+    # An outbound chunk is already in flight when the replay starts.
+    router._claim_outbound_send()
+
+    events = [TTSAudio(chunk=_make_chunk(byte_value=i + 1)) for i in range(3)]
+    await router.gated_replay(events)
+
+    # The window really was exercised: tally claimed, nothing queued yet.
+    assert observed == {"tally": 3, "queue_empty": True}
+    # ...and it left the replay accounting intact.
+    assert router._replay_chunks_pending == 3
+    assert state["queue"].qsize() == 3
+    assert state["tm"].state == TurnManagerState.BOT_SPEAKING
+    assert not [evt for evt in state["emitted"] if isinstance(evt, BotStoppedSpeaking)]
+
+    # The replay still completes normally once the chunks drain.
+    state["running"] = False
+    await router._drain_outbound_audio()
+
     assert router._replay_chunks_pending == 0
     assert state["tm"].state == TurnManagerState.IDLE
 
