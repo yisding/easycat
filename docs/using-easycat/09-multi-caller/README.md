@@ -212,6 +212,37 @@ Sticky routing or an external control plane is needed when multiple worker
 processes must address a specific live session: each process owns its own
 in-memory registry and capacity gate.
 
+## WebTransport for HTTP/3 clients
+
+Everything above serves WebSocket and WebRTC. There is a third listener for
+clients that want HTTP/3 + QUIC streaming semantics:
+
+```bash
+uv sync --extra webtransport --group dev
+uv run python examples/webtransport_server.py --cert cert.pem --key key.pem
+```
+
+`run_webtransport_config_server()` is the same shape as
+`run_websocket_config_server()` — one fresh session per accepted connection,
+built by your config factory — so the per-connection factory rule and the
+capacity/auth ordering you just learned carry over unchanged. Two differences
+matter in practice:
+
+- **It needs a certificate.** WebTransport is TLS-only over UDP/443, so there
+  is no `http://localhost` shortcut; the example generates a self-signed pair
+  and the browser needs to be told to trust it.
+- **Browsers cannot set the CONNECT header.** `WebTransportTransportConfig`
+  binds `127.0.0.1` by default and rejects a public bind without
+  `auth_token`; because a browser cannot send `Authorization: Bearer` on an
+  HTTP/3 CONNECT, browser deployments must opt into `allow_query_token=True`
+  and connect to `https://host/easycat?token=<token>`. Treat those URLs as
+  secrets.
+
+Reach for it only where certificate, HTTP/3, QUIC, and load-balancer support
+are explicit end to end. The operator-facing detail — ingress requirements,
+the aioquic version preflight, and the query-token tradeoff — is in
+[the production server guide's WebTransport section](../../deployment/production-servers.md#webtransport-servers).
+
 ## Which server surface should you choose?
 
 | Need | Surface |
@@ -220,7 +251,7 @@ in-memory registry and capacity gate.
 | Focused WebSocket multi-session server | `run_websocket_config_server(...)` |
 | Async WebSocket server inside your supervisor | `serve_websocket_config_sessions(...)` |
 | Unified WebSocket + WebRTC process policy | `VoiceServer.from_app(...)` |
-| HTTP/3 + QUIC clients | WebTransport server helper |
+| HTTP/3 + QUIC clients | `run_webtransport_config_server(...)` ([above](#webtransport-for-http3-clients)) |
 | Phone calls and webhooks | Twilio app factory in chapter 10 |
 
 The per-connection factory rule is the same for every row that serves multiple
