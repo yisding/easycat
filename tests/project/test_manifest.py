@@ -548,7 +548,7 @@ def test_profile_defects_name_the_telnyx_token_var() -> None:
 
 
 def test_to_easyconfig_defect_precedence_is_unchanged() -> None:
-    """U-9: the token defect must not pre-empt the vad / agent raises."""
+    """U-9: the token defect must not preempt the vad / agent raises."""
     # (a) a bad vad shortcut still wins over the missing token.
     both = _phone_manifest(vad="silro")
     with pytest.raises(EasyCatError) as vad_raised:

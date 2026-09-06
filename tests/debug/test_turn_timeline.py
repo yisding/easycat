@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from easycat.debug._turn_timeline import extract_turn_transcripts
+from easycat.debug._turn_timeline import _delta_ms, extract_turn_transcripts
 
 
 def _delta_record(seq: int, data: dict) -> dict:
@@ -38,3 +38,29 @@ def test_transcript_fallback_keeps_flat_deltas_as_appends():
 
     assert entry["agent"] == "hello back"
     assert entry["agent_seq"] == 1
+
+
+# ── Milestone deltas (gh 1106) ────────────────────────────────────
+
+
+def test_delta_ms_measures_a_forward_span():
+    assert _delta_ms(0, 100_000_000) == 100.0
+    assert _delta_ms(5, 5) == 0.0
+
+
+def test_delta_ms_reports_a_backward_wall_step_as_unmeasurable():
+    """A negative delta is ``None``, not a negative latency (gh 1106).
+
+    A backward wall-clock step between two records of the same turn (an NTP
+    correction, a suspend/resume) used to produce a negative milestone, which
+    ``LatencyPercentileStats.from_values`` rejects with a ``ValueError`` — and
+    ``@cli_command`` only maps ``EasyCatError``, so one bad turn aborted the
+    whole ``easycat latency`` summary with a raw traceback.
+    """
+    assert _delta_ms(100_000_000, 0) is None
+    assert _delta_ms(2, 1) is None
+
+
+def test_delta_ms_passes_through_missing_endpoints():
+    assert _delta_ms(None, 5) is None
+    assert _delta_ms(5, None) is None

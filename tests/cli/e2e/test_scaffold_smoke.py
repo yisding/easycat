@@ -5,8 +5,8 @@ For each template:
 * Assert the generated Python files pass ``py_compile`` AND ``ruff``.
 * Assert the generated ``pyproject.toml`` *resolves* with ``uv lock``
   (the pre-launch ``[tool.uv.sources]`` block points at this checkout).
-* Run the generated offline test suite (``tests/test_agent.py``) with
-  pytest — key-free, against this repo's installed ``easycat``.
+* Run the generated offline test suite (``tests/``) with pytest —
+  key-free, against this repo's installed ``easycat``.
 
 A full ``uv sync`` round-trip stays out of the guard path on purpose —
 it would download numpy/onnxruntime wheels on every run.  Resolution is
@@ -17,6 +17,7 @@ See ``TEST_PLANS.md`` §17.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import py_compile
@@ -49,13 +50,15 @@ def _scaffold_project(
     template: str,
     *,
     easycat_source: Path | None = None,
+    agent_name: str = "SmokeBot",
+    agent_instructions: str = "Answer smoke-test questions.",
 ) -> Path:
     config = json.dumps(
         {
             "schema_version": 1,
             "template": template,
-            "agent_name": "SmokeBot",
-            "agent_instructions": "Answer smoke-test questions.",
+            "agent_name": agent_name,
+            "agent_instructions": agent_instructions,
         }
     )
     project = tmp_path / f"demo-{template}"
@@ -79,6 +82,72 @@ def _generated_python_files(project: Path) -> list[Path]:
     files = sorted([*project.glob("*.py"), *project.glob("tests/*.py")])
     assert files, f"{project} did not generate any Python files"
     return files
+
+
+# ``uv run pytest`` executes the console script, which — unlike
+# ``python -m pytest`` — does NOT prepend the cwd to ``sys.path``.  There is
+# deliberately no fallback: swapping in ``[sys.executable, "-m", "pytest"]``
+# would silently turn the test below into a duplicate of the module-form one.
+def _console_pytest() -> Path | None:
+    runner = Path(sys.executable).parent / "pytest"
+    return runner if runner.is_file() else None
+
+
+_NETGUARD_DIR = REPO_ROOT / "tests" / "_netguard"
+_NETGUARD_MARKER = "easycat test guard: outbound network blocked"
+
+
+def _netguard_env(**extra: str) -> dict[str, str]:
+    """Environment whose child processes cannot open a non-loopback socket."""
+    return {**os.environ, "PYTHONPATH": str(_NETGUARD_DIR), **extra}
+
+
+def _assert_netguard_is_loaded(env: dict[str, str]) -> None:
+    """Canary: ``sitecustomize`` is silently skipped under ``-I``/``-S``.
+
+    Without this the offline test below passes identically when nothing is
+    blocked at all, i.e. it stops testing the condition it exists for.
+    """
+    blocked = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            # The connect timeout matters only when the guard did NOT load:
+            # this must then fail fast, not stall the whole lane on a SYN to
+            # a host a network-blackholing runner never answers for.
+            "import socket; socket.create_connection(('example.com', 443), timeout=2)",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+        check=False,
+    )
+    assert blocked.returncode != 0, "the outbound-network guard did not load"
+    assert _NETGUARD_MARKER in blocked.stderr, blocked.stderr
+
+    # Second half: the guard is selective, not a blanket socket break — the
+    # same environment must still allow loopback, or pytest plugins and local
+    # servers would break and the run would fail for the wrong reason.
+    loopback = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import socket\n"
+                "server = socket.socket()\n"
+                "server.bind(('127.0.0.1', 0))\n"
+                "server.listen(1)\n"
+                "socket.create_connection(server.getsockname(), timeout=2).close()\n"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+        check=False,
+    )
+    assert loopback.returncode == 0, loopback.stderr
 
 
 @pytest.mark.parametrize("template", sorted(available_templates()))
@@ -157,17 +226,18 @@ def test_scaffold_dependencies_resolve_with_uv_lock(
 def test_scaffold_offline_test_suite_passes(cli: CliRunner, tmp_path: Path, template: str) -> None:
     """``pytest`` must pass inside a freshly generated project, offline.
 
-    Runs the scaffold's ``tests/test_agent.py`` with this repo's
+    Runs the scaffold's whole ``tests/`` directory with this repo's
     interpreter (which has ``easycat`` + ``pytest`` installed) so the
     smoke test needs no ``uv sync`` round-trip, no API keys, and no
-    network — the stub agent drives EasyCat's real text-turn pipeline.
+    network — a scripted stand-in for the model drives EasyCat's real
+    turn pipelines while the project's own tools run for real.
     """
     project = _scaffold_project(cli, tmp_path, template)
     assert (project / "tests" / "test_agent.py").is_file()
     assert (project / "AGENTS.md").is_file()
 
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/test_agent.py", "-q", "-p", "no:cacheprovider"],
+        [sys.executable, "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"],
         cwd=project,
         capture_output=True,
         text=True,
@@ -177,6 +247,157 @@ def test_scaffold_offline_test_suite_passes(cli: CliRunner, tmp_path: Path, temp
     assert proc.returncode == 0, (
         f"pytest failed inside scaffolded {template} project:\n{proc.stdout}\n{proc.stderr}"
     )
+
+
+def test_scaffold_offline_tests_run_without_cwd_on_sys_path(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """The documented ``uv run pytest`` must work, not just ``python -m pytest``.
+
+    The console script is the entire point of this test: it does not prepend
+    the cwd to ``sys.path``, so only the generated
+    ``[tool.pytest.ini_options] pythonpath = ["."]`` makes ``import agent`` /
+    ``import tools`` resolve.  Swapping the runner for ``python -m pytest``
+    silently voids the test.
+    """
+    runner = _console_pytest()
+    if runner is None:
+        pytest.skip("console-script pytest not available; this test exists to exercise it")
+
+    project = _scaffold_project(cli, tmp_path, "openai-agents")
+
+    proc = subprocess.run(
+        [str(runner), "tests", "-q", "-p", "no:cacheprovider"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OPENAI_API_KEY": ""},
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        f"console-script pytest failed in the scaffolded project:\n{proc.stdout}\n{proc.stderr}"
+    )
+
+
+def test_scaffold_offline_tests_pass_with_hostile_agent_text(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """A user's own quotes, backslashes and dollar signs are legitimate text.
+
+    ``string.Template`` never re-scans a substituted value, so ``$USD`` renders
+    fine; the generated suite must therefore check the constants against the
+    *placeholders*, not against a bare ``"$"``, or the user's very first
+    ``uv run pytest`` fails on their own agent description.
+    """
+    project = _scaffold_project(
+        cli,
+        tmp_path,
+        "openai-agents",
+        agent_name='Billing "Bot" \\ $9',
+        agent_instructions="Quote prices in $USD and explain fees.",
+    )
+    assert "$USD" in (project / "agent.py").read_text(encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OPENAI_API_KEY": ""},
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        f"a dollar sign in the agent text failed the generated tests:\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+
+
+def test_scaffold_offline_tests_pass_with_ambient_credentials_and_no_network(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """Offline half of A2: ambient credentials present, provider traffic blocked."""
+    credential = "sk-ambient-credential"
+    env = _netguard_env(OPENAI_API_KEY=credential, DEEPGRAM_API_KEY="dg-ambient")
+    _assert_netguard_is_loaded(env)
+
+    project = _scaffold_project(cli, tmp_path, "openai-agents")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        f"generated tests need network or a key:\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert credential not in proc.stdout
+    assert credential not in proc.stderr
+
+
+def test_scaffold_offline_tests_fail_when_tool_behavior_breaks(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """A3: breaking a tested tool behaviour must fail the generated tests."""
+    project = _scaffold_project(cli, tmp_path, "openai-agents")
+    tools = project / "tools.py"
+    source = tools.read_text(encoding="utf-8")
+    seed = 'strftime("%H:%M")'
+    assert seed in source, f"stale seed: {seed} is no longer in the generated tools.py"
+    tools.write_text(source.replace(seed, 'strftime("%H hours")'), encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OPENAI_API_KEY": ""},
+        check=False,
+    )
+    assert proc.returncode != 0, "a broken tool did not fail the generated tests"
+    assert "test_current_time_tool_speaks_hh_mm" in proc.stdout
+    assert "test_two_turns_share_one_session" in proc.stdout
+
+
+def test_scaffold_app_wiring_tests_skip_cleanly_without_the_agent_sdk(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """Without ``agents`` installed the wiring test skips — it never errors.
+
+    Guards the collection path: a contributor must not "fix" the skip by
+    breaking the import, and the reason a user sees must stay actionable.
+    """
+    if importlib.util.find_spec("agents") is not None:
+        pytest.skip("the agent SDK is installed; this test describes a bare environment")
+
+    project = _scaffold_project(cli, tmp_path, "openai-agents")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests",
+            "-q",
+            "-rs",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "no:randomly",
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OPENAI_API_KEY": ""},
+        check=False,
+    )
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    # ``-rs`` prints ``file:line: reason`` and never a test name, so the
+    # reason string is the only anchor available in a skip report.
+    assert "1 skipped" in proc.stdout
+    assert "run `uv sync` to install the agent SDK" in proc.stdout
 
 
 def test_provider_scaffold_named_vad_conformance_suite_passes(

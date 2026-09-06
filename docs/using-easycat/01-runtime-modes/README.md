@@ -72,6 +72,12 @@ resolution.
 | `create_session(config)` | Uses exactly the config's resolved agent | Uses exactly the config's resolved provider descriptors | Uses exactly the config's resolved VAD/turn policy | Returns one unstarted caller-owned session | Validates configuration; creates clients but does not start streaming | No automatic terminal feedback and no media flow until `start()` |
 | `easycat console` | Built-in offline echo unless `--live` is explicit | Not applicable in offline mode | Not applicable | Text REPL, or scripted audio pipeline for `--voice-demo`; real mic/speaker for `--live` voice mode | No key offline; live mode requires its selected provider key | Offline by default; `--voice-demo` runs one scripted audio turn and writes a replayable bundle, while `--live` is the explicit network/billable boundary |
 
+The VAD column names concepts this chapter does not teach: `VADConfig`
+backends, Smart Turn, and "native endpointing" are
+[chapter 3](../03-conversation-controls/)'s subject. Read those cells as "the
+turn-taking defaults differ per mode" for now; chapter 3 explains each knob and
+when to change it.
+
 Inspect the common path before startup:
 
 ```python

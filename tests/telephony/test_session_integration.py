@@ -6,6 +6,8 @@ the helpers respond to events within the session lifecycle.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from easycat.config import OutboundCallConfig, TelephonyConfig
@@ -386,3 +388,95 @@ class TestOutboundCallFlow:
             assert actions[0].digits == "2"
         finally:
             nav.stop()
+
+
+class TestInboundCallIsNotAdoptedByOutboundMachine:
+    """gh 1098: an inbound call must not be adopted by the outbound machine.
+
+    The inbound media transports emit ``CallAnswered`` "for a consistent
+    inbound + outbound lifecycle", and ``_matches_active_call`` accepted any
+    SID while ``_call_sid`` was empty — which it always is on a fresh inbound
+    session. The machine then closed its classification gate and started both
+    timers for a call it never placed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_inbound_answered_does_not_close_the_classification_gate(self) -> None:
+        """~30 s of withheld bot audio: nothing resolves an inbound classification.
+
+        AMD and fusion events are outbound-only and
+        ``_handle_classifying_stt_final`` defers to fusion, so the machine sat
+        in CLASSIFYING for the whole ``detection_timeout_s`` and the caller
+        heard silence until the UNKNOWN timeout flushed the buffer.
+        """
+        from easycat.audio_format import AudioChunk, AudioFormat
+        from easycat.events import TTSAudio
+
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus,
+            classification_timeout_s=60,
+            classification_gate=True,
+            classification_gate_timeout_s=5.0,
+        )
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA-inbound", direction="inbound"))
+
+            assert sm.state == OutboundCallState.INITIATING
+            assert not sm.gate.is_buffering
+
+            chunk = AudioChunk(
+                data=b"\x00" * 100,
+                format=AudioFormat(sample_rate=16000, channels=1, sample_width=2),
+            )
+            await bus.emit(TTSAudio(chunk=chunk))
+
+            assert len(sm.gate.buffer) == 0, "inbound bot audio must not be withheld"
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_inbound_answered_starts_no_max_duration_timer(self) -> None:
+        """No bogus terminal record for a live inbound call.
+
+        ``_max_duration_coro`` fired at ``max_call_duration_s``: the owned-call
+        hangup is a no-op for a call the manager does not own, but the machine
+        still transitioned to ENDED and emitted
+        ``CallEnded(disposition="max_duration")`` for a live inbound SID.
+        """
+        bus = EventBus()
+        ended: list[CallEnded] = []
+        bus.subscribe(CallEnded, ended.append)
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60, max_call_duration_s=0.05)
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA-inbound", direction="inbound"))
+            await asyncio.sleep(0.2)
+
+            assert sm.state == OutboundCallState.INITIATING
+            assert ended == [], "a live inbound call must not be journaled as ended"
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_outbound_answered_still_classifies(self) -> None:
+        """The outbound path is unaffected, with or without an explicit direction."""
+        for direction in ("outbound", None):
+            bus = EventBus()
+            sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+            sm.start()
+            try:
+                await bus.emit(CallAnswered(call_sid="CA-out", direction=direction))
+                assert sm.state == OutboundCallState.CLASSIFYING, direction
+            finally:
+                sm.stop()
+
+    def test_inbound_transports_mark_their_call_answered_inbound(self) -> None:
+        """Structural lock: both inbound media transports must set the marker."""
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2] / "src" / "easycat" / "transports"
+        for name in ("twilio_media.py", "telnyx_media.py"):
+            source = (root / name).read_text(encoding="utf-8")
+            assert 'direction="inbound"' in source, name

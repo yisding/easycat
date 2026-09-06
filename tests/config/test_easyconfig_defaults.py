@@ -41,6 +41,28 @@ def test_easycat_config_openai_defaults():
     assert isinstance(config.tts, OpenAITTSConfig)
 
 
+def test_openai_defaults_match_the_planner_default_provider_names():
+    """DX1-1, decision E: pins the default-provider duplication before DX1-2
+    introduces the shared constants — ``easy.py``'s ``__post_init__`` default
+    classes must name the same providers ``build_provider_plan`` assumes for
+    an unset stt/tts (``provider_plan.py:564,567``).
+    """
+    from easycat.planning import build_provider_plan
+    from easycat.project.schema import VoiceProfile
+    from easycat.stt.factory import _CATALOG as stt_catalog
+    from easycat.tts.factory import _CATALOG as tts_catalog
+
+    config = EasyConfig(openai_api_key="test-key")
+    assert type(config.stt) is stt_catalog.providers["openai-realtime"][1]
+    assert type(config.tts) is tts_catalog.providers["openai"][1]
+
+    plan = build_provider_plan(
+        VoiceProfile(name="default", transport="local"), environ={"OPENAI_API_KEY": "test-key"}
+    )
+    assert plan.selected["stt"].config_type == type(config.stt).__name__
+    assert plan.selected["tts"].config_type == type(config.tts).__name__
+
+
 def test_easycat_config_defaults_debug_to_light():
     # The default is the in-memory ``"light"`` journal so per-frame capture
     # stays off the disk and off the live audio loop. ``"full"`` is the

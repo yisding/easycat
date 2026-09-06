@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
@@ -530,3 +531,123 @@ async def test_streaming_agent_path_stops_session_after_end_call_action() -> Non
     await session._turn_runner.run_streaming_agent("hello", CancelToken())
 
     session.stop.assert_awaited_once()
+
+
+# ── Cancellation fencing (gh 1099) ────────────────────────────────
+
+
+class _SlowExecutor(SessionActionExecutor):
+    """Suspends inside ``execute`` so a cancellation can land mid-drain."""
+
+    def __init__(self) -> None:
+        self.executed: list[SessionAction] = []
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    def supports(self, action: SessionAction) -> bool:
+        return True
+
+    async def execute(self, session: Any, action: SessionAction) -> SessionActionResult:
+        self.executed.append(action)
+        self.entered.set()
+        await self.release.wait()
+        return SessionActionResult(handled=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_drain_leaves_the_remainder_queued() -> None:
+    """Cancellation mid-drain must not silently discard the rest (gh 1099).
+
+    ``_drain_session_actions`` popped every action into a local list up front,
+    so a cancellation during any executor's ``await`` lost the ones that had
+    not run: no execution, no ``SessionActionFailed``, no journal record. Two
+    queued actions collapsed to one.
+    """
+    actions = SessionActions()
+    actions.request("first")
+    actions.request("second")
+    executor = _SlowExecutor()
+    session = Session(_config(session_actions=actions, action_executors=[executor]))
+
+    drain = asyncio.create_task(session._drain_session_actions())
+    await asyncio.wait_for(executor.entered.wait(), timeout=1)
+
+    drain.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await drain
+
+    # The first action ran; the second is still queued rather than vanished.
+    assert [a.name for a in executor.executed] == ["first"]  # type: ignore[attr-defined]
+    assert actions.has_pending is True
+    executor.release.set()
+
+
+@pytest.mark.asyncio
+async def test_fence_drops_queued_actions_with_a_failure_record() -> None:
+    """A cancelled turn's actions are dropped visibly, not orphaned (gh 1099).
+
+    They were only ever drained by ``finalize_speaking_turn``, so an
+    ``end_call`` requested during turn A fired after some later unrelated turn
+    finalized — or never.
+    """
+    actions = SessionActions()
+    actions.end_call(reason="user said goodbye")
+    actions.request("send_receipt")
+    session = Session(_config(session_actions=actions, action_executors=[RecordingExecutor()]))
+    failed: list[SessionActionFailed] = []
+    session.event_bus.subscribe(SessionActionFailed, failed.append)
+
+    await session._fence_session_actions("turn cancelled")
+
+    assert actions.has_pending is False
+    assert [event.action.type for event in failed] == ["end_call", "custom"]
+    assert all("turn cancelled" in (event.error or "") for event in failed)
+
+
+@pytest.mark.asyncio
+async def test_fence_clears_a_stranded_no_interrupt_guard() -> None:
+    """A stranded guard must not suppress barge-in for the rest of the call.
+
+    While an orphaned ``no_interrupt=True`` action sat in the queue,
+    ``CancelOrchestrator.for_barge_in`` returned ``False`` on *every* barge-in,
+    and nothing cleared it unless some later turn finalized (gh 1099).
+    """
+    actions = SessionActions()
+    actions.end_call(reason="goodbye", no_interrupt=True)
+    session = Session(_config(session_actions=actions, action_executors=[RecordingExecutor()]))
+    assert actions.no_interrupt is True
+
+    await session._fence_session_actions("turn cancelled")
+
+    assert actions.no_interrupt is False
+    assert actions.has_pending is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_turn_fences_queued_actions() -> None:
+    """The cancellation path itself must fence, not just the helper."""
+    actions = SessionActions()
+    actions.end_call(reason="goodbye", no_interrupt=True)
+    session = Session(_config(session_actions=actions, action_executors=[RecordingExecutor()]))
+    failed: list[SessionActionFailed] = []
+    session.event_bus.subscribe(SessionActionFailed, failed.append)
+    session._turn = TurnContext("t-cancelled", CancelToken())
+
+    await session.cancel_turn()
+
+    assert actions.has_pending is False
+    assert actions.no_interrupt is False
+    assert [event.action.type for event in failed] == ["end_call"]
+
+
+@pytest.mark.asyncio
+async def test_reset_state_fences_queued_actions() -> None:
+    actions = SessionActions()
+    actions.request("stale", no_interrupt=True)
+    session = Session(_config(session_actions=actions, action_executors=[RecordingExecutor()]))
+    session._turn = TurnContext("t-reset", CancelToken())
+
+    await session.reset_state()
+
+    assert actions.has_pending is False
+    assert actions.no_interrupt is False

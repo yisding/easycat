@@ -25,7 +25,10 @@ Coding agent? Use [AGENTS.md](AGENTS.md) for repository coding rules; use
 `uv run easycat explain json-schema`; `uv run easycat docs --json` emits the
 full route map. After editing the docs route map, regenerate the machine docs
 with `uv run python scripts/regen_llms_txt.py` (`--check` verifies them in
-CI).
+CI). After adding or editing an `EASYCAT_Exxx` code in
+[`src/easycat/errors.py`](src/easycat/errors.py), regenerate the error-code
+reference with `uv run python scripts/regen_error_codes.py` (`--check` and
+`just guard-docs` both verify it).
 For local audio or provider work, set the relevant environment variables and
 run `uv run easycat doctor` before debugging tests or examples. Use
 `uv run easycat doctor --env-file .env` when those keys live in a project
@@ -348,7 +351,11 @@ The same module also covers live text turns and evals (see the
 [testing and evals ladder](docs/testing-and-evals.md)):
 `run_text_turn` drives one real agent-bridge turn through `send_text` with
 Noop audio stages and returns a `TurnResult` — a `RecordSource` the
-assertion helpers above accept directly; `assert_latency` budgets turn
+assertion helpers above accept directly; `run_text_turns` runs a whole
+scenario against one session and returns one `TurnResult` per input;
+`run_scripted_audio_turn` drives one turn through the real audio pipeline
+with scripted stub I/O (no microphone, key or network — it checks pipeline
+wiring, not speech quality); `assert_latency` budgets turn
 latency with the validation percentile code; `assert_llm_judge` (with
 `extract_transcript` and the default `JUDGE_RUBRIC`) scores conversational
 quality, taking `judge=` for offline CI.

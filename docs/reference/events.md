@@ -134,8 +134,12 @@ unrelated event type. Keep the returned subscription and call its idempotent
 - `CallInitiated` — EasyCat placed an outbound call; carries the call id and
   destination/source numbers.
 - `CallRinging` — the outbound call entered the remote-ringing state.
-- `CallAnswered` — an outbound call was answered (by a human, machine, or
-  screener); triggers the configured greeting.
+- `CallAnswered` — a call was answered (by a human, machine, or screener);
+  triggers the configured greeting. `direction` says which side placed it: the
+  inbound media transports emit this event too, so consumers that only apply to
+  calls this session placed — the outbound call-state machine and its
+  classification gate — check for `direction="inbound"` and skip. It defaults to
+  `None` ("unspecified"), which those consumers treat as outbound.
 - `CallScreening` — a platform or carrier call screener was detected.
 - `ScreeningResponse` — the screening detector requested the configured
   static or agent-generated response.

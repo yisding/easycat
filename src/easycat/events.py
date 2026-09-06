@@ -365,10 +365,21 @@ class CallRinging(Event):
 
 @dataclass(frozen=True)
 class CallAnswered(Event):
-    """Call was answered (by human, machine, or screener)."""
+    """Call was answered (by human, machine, or screener).
+
+    ``direction`` says which side placed the call.  The inbound media
+    transports emit this event too, "for a consistent inbound + outbound
+    lifecycle", so consumers that only apply to calls *this* session placed —
+    :class:`~easycat.telephony.call_state.OutboundCallStateMachine` and its
+    classification gate — need to tell the two apart.  It is optional and
+    defaults to ``None`` ("unspecified"), which those consumers treat as
+    outbound for compatibility with hand-driven flows; an out-of-tree inbound
+    transport should set ``direction="inbound"`` (gh 1098).
+    """
 
     call_sid: str
     answered_by: str | None = None
+    direction: Literal["inbound", "outbound"] | None = None
 
 
 @dataclass(frozen=True)

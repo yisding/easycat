@@ -316,6 +316,21 @@ class SessionActions:
                 self._no_interrupt = False
             return actions
 
+    def pop_next(self) -> SessionAction | None:
+        """Remove and return the oldest queued action, or ``None`` if empty.
+
+        Draining one action at a time keeps the rest *in the queue* while each
+        executor runs.  Popping the whole queue into a local list first meant a
+        cancellation mid-execution silently discarded every action that had not
+        run yet — no execution, no ``SessionActionFailed``, no journal record
+        (gh 1099).  The interrupt guard is untouched: it stays active for the
+        whole drain, exactly as ``drain(preserve_no_interrupt=True)`` does.
+        """
+        with self._lock:
+            if not self._queue:
+                return None
+            return self._queue.popleft()
+
     def clear_no_interrupt(self) -> None:
         """Clear any drained-action interrupt guard.
 

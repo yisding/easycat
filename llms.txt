@@ -43,6 +43,7 @@ Source: https://github.com/yisding/easycat
 - [Developer textbook](https://github.com/yisding/easycat/tree/main/docs/development) — for maintainers: Work through the chapter-by-chapter source, test, decision, and change-recipe tour for new maintainers.
 - [Session graduation](https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md) — for app builders: Graduate from the EasyConfig quickstart to the production Session API: lifecycle, events, text turns, session actions, and replayable debug bundles.
 - [Testing and evals](https://github.com/yisding/easycat/blob/main/docs/testing-and-evals.md) — for app builders: Climb the eval ladder: bundle fixtures, offline text turns, latency budgets and LLM-as-judge, then live audio validation.
+- [Error code reference](https://github.com/yisding/easycat/blob/main/docs/reference/error-codes.md) — for app builders: Look up any EASYCAT_Exxx code with its cause, fix, and related codes.
 - [Events reference](https://github.com/yisding/easycat/blob/main/docs/reference/events.md) — for app builders: Look up every public session event type and when it is emitted.
 - [Journal records reference](https://github.com/yisding/easycat/blob/main/docs/reference/journal-records.md) — for app builders: Look up stable built-in journal record names, kinds, and data-key contracts.
 - [EasyConfig reference](https://github.com/yisding/easycat/blob/main/docs/reference/easyconfig.md) — for app builders: Look up every EasyConfig construction field.

@@ -197,6 +197,21 @@ def test_bearer_token_matches_is_constant_time_safe_for_non_ascii() -> None:
     assert not bearer_token_matches("Bearer secret", "secrét")
 
 
+def test_bearer_token_matches_fails_closed_on_an_unconfigured_token() -> None:
+    """An empty expected token must reject everything (gh 1105).
+
+    ``TwilioAppSettings.call_api_token`` is ``""`` when
+    ``TWILIO_CALL_API_TOKEN`` is unset, and a bare ``Authorization: Bearer``
+    header compared equal to it — so an unconfigured deployment authenticated
+    any such request. The sibling ``validate_twilio_webhook_signature`` already
+    fails closed on an empty auth token.
+    """
+    assert not bearer_token_matches("Bearer ", "")
+    assert not bearer_token_matches("Bearer anything", "")
+    assert not bearer_token_matches("", "")
+    assert not bearer_token_matches(None, "")
+
+
 def test_twilio_app_settings_treats_whitespace_env_values_as_missing() -> None:
     settings = twilio_app_settings_from_env(
         environ={

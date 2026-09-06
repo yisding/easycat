@@ -84,13 +84,25 @@ def _select_mode(*, voice_demo: bool, live: bool = False) -> ConsoleMode:
 
 
 def _find_exported_bundle(record_dir: Path, *, since: float) -> Path | None:
-    """Return the newest debug bundle exported after ``since``."""
+    """Return the newest debug bundle exported after ``since``.
+
+    Entries that no longer resolve are skipped: a dangling ``*.zip`` symlink in
+    the recordings directory would otherwise replace the "Saved debug bundle"
+    payoff with a traceback after an otherwise successful run (gh 1107).
+    """
     if not record_dir.is_dir():
         return None
-    candidates = [path for path in record_dir.glob("*.zip") if path.stat().st_mtime >= since]
+    candidates: list[tuple[float, Path]] = []
+    for path in record_dir.glob("*.zip"):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime >= since:
+            candidates.append((mtime, path))
     if not candidates:
         return None
-    return max(candidates, key=lambda path: path.stat().st_mtime)
+    return max(candidates)[1]
 
 
 def _print_journal_summary(session: Session) -> None:
@@ -168,22 +180,13 @@ async def _run_text_mode(mode: ConsoleMode, record_dir: Path) -> None:
 
 async def _run_voice_demo(record_dir: Path) -> None:
     """One scripted no-key turn through the full audio pipeline."""
-    from easycat import EasyConfig, TurnManagerConfig, create_session
+    from easycat import create_session
     from easycat.events import AgentFinal, STTFinal
-    from easycat.stubs import scripted_turn_providers
+    from easycat.stubs import scripted_turn_config
 
-    providers = scripted_turn_providers(
+    config = scripted_turn_config(
         transcript="Hello, EasyCat!",
         reply=lambda text: f"You said: {text} That was one scripted turn — no API keys.",
-    )
-    config = EasyConfig.mic(
-        transport=providers.transport,
-        vad=providers.vad,
-        stt=providers.stt,
-        agent=providers.agent,
-        tts=providers.tts,
-        turn_taking=TurnManagerConfig(end_of_turn_silence_ms=1),
-        debug="light",
         record_to=record_dir,
     )
     session = create_session(config)

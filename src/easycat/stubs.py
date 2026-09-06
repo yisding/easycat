@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
@@ -17,6 +19,9 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.tts.input import TTSInput, coerce_tts_input
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, annotation only
+    from easycat.config import EasyConfig
 
 _NOOP_VERSION = {
     "provider": "noop",
@@ -311,6 +316,41 @@ def scripted_turn_providers(
     )
 
 
+def scripted_turn_config(
+    *,
+    agent: object = None,
+    transcript: str = "hello",
+    reply: str | Callable[[str], str] | None = None,
+    debug: Literal["off", "light", "full"] = "light",
+    record_to: str | Path | None = None,
+) -> EasyConfig:
+    """Build an ``EasyConfig`` that drives one scripted, key-free audio turn.
+
+    Wires :func:`scripted_turn_providers` into ``EasyConfig.mic(...)`` so the
+    transport → VAD → STT → agent → TTS pipeline really runs with no
+    microphone, no API key, no provider extra and no network.  Pass *agent* to
+    substitute your own agent object for the scripted echo agent.
+
+    The audio is synthetic: this exercises pipeline wiring, not speech quality.
+    """
+    # Imported in the body on purpose: a module-level import would invert the
+    # existing ``easycat.config`` → ``easycat.stubs`` edge.
+    from easycat.config import EasyConfig
+    from easycat.turn_manager import TurnManagerConfig
+
+    providers = scripted_turn_providers(transcript=transcript, reply=reply)
+    return EasyConfig.mic(
+        transport=providers.transport,
+        vad=providers.vad,
+        stt=providers.stt,
+        agent=agent if agent is not None else providers.agent,
+        tts=providers.tts,
+        turn_taking=TurnManagerConfig(end_of_turn_silence_ms=1),
+        debug=debug,
+        record_to=record_to,
+    )
+
+
 __all__ = [
     "NoopAgent",
     "NoopSTT",
@@ -323,6 +363,7 @@ __all__ = [
     "ScriptedTransport",
     "ScriptedTurnProviders",
     "ScriptedVAD",
+    "scripted_turn_config",
     "scripted_turn_providers",
     "silent_pcm16_chunk",
 ]

@@ -19,6 +19,7 @@ from easycat.planning.transport_registry import (
     NOISE_REDUCER_BACKENDS,
     NON_CATALOG_ROLES,
     TRANSPORT_BACKENDS,
+    TRANSPORT_BACKENDS_BY_CONFIG_TYPE,
     VAD_BACKENDS,
     probe_module_for_extra,
 )
@@ -159,6 +160,28 @@ def test_transport_aec_defaults_match_manifest_resolved_easyconfig(
         config = manifest.to_easyconfig("default", resolve_agent=False)
         resolved = bool(config.echo_cancellation and config.echo_cancellation.enabled)
         assert resolved == backend.default_echo_cancellation_enabled, shortcut
+
+
+def test_transport_factory_dispatch_and_registry_agree() -> None:
+    # DX1-1, duplicate G (§7.1 of the DX1 design): closes the "transport
+    # config-type -> backend metadata" duplication between
+    # ``_factory._transport_factories()`` and this module's declarative table
+    # WITHOUT merging them — a key-set consistency check instead. Verified at
+    # this baseline: ``_transport_factories()`` imports all six transport
+    # modules successfully with ZERO extras installed, so this test needs no
+    # importorskip gate.
+    from easycat.config import _factory
+
+    factory_config_types = {
+        config_type.__name__ for config_type in _factory._transport_factories()
+    }
+    registry_config_types = set(TRANSPORT_BACKENDS_BY_CONFIG_TYPE)
+    missing_from_registry = sorted(factory_config_types - registry_config_types)
+    missing_from_factory = sorted(registry_config_types - factory_config_types)
+    assert factory_config_types == registry_config_types, (
+        f"missing from the registry: {missing_from_registry}; "
+        f"missing from the factory dispatch: {missing_from_factory}"
+    )
 
 
 def test_builtin_backend_roles_are_the_five() -> None:

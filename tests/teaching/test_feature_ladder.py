@@ -18,11 +18,13 @@ from tests.teaching import _script_runner as script_runner
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FEATURE_LADDER = REPO_ROOT / "docs" / "using-easycat"
-AVAILABLE_ROW_RE = re.compile(
+# The ladder table has no Status column: every rung is published, so the column
+# only ever read "Available" (gh 1071). The row shape is still pinned so the
+# table cannot drift from the chapter folders.
+CHAPTER_ROW_RE = re.compile(
     r"^\| (?P<number>\d+) "
     r"\| \[`(?P<name>[^`]+)`\]\(\./(?P<link>[^)]+)/\) "
-    r"\| (?P<features>[^|]+) "
-    r"\| Available \|$",
+    r"\| (?P<features>[^|]+) \|$",
     flags=re.MULTILINE,
 )
 API_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9_]*_API_KEY\b")
@@ -50,9 +52,9 @@ def _required_env_vars(tree: ast.AST) -> set[str]:
     return required
 
 
-def test_feature_ladder_available_rows_match_published_chapters() -> None:
+def test_feature_ladder_rows_match_published_chapters() -> None:
     readme = (FEATURE_LADDER / "README.md").read_text(encoding="utf-8")
-    rows = [match.groupdict() for match in AVAILABLE_ROW_RE.finditer(readme)]
+    rows = [match.groupdict() for match in CHAPTER_ROW_RE.finditer(readme)]
     chapter_dirs = [path.name for path in _chapter_dirs()]
 
     assert [row["link"] for row in rows] == chapter_dirs
