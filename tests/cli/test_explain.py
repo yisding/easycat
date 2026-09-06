@@ -104,6 +104,75 @@ def _doctor_keys_from_cli(
     return set(payload) - {"schema_version", "command", "status"}
 
 
+#: Every ``reason`` token the ``json-schema`` catalog documents for a
+#: ``easycat plan --json`` issue. The anchor below proves each one is a real
+#: ``SetupIssue.reason`` a code path emits, not catalog prose.
+_DOCUMENTED_PLAN_REASONS = frozenset(
+    {
+        "missing_env",
+        "missing_extra",
+        "unset_reference",
+        "incomplete_selection",
+        "unresolvable_profile",
+    }
+)
+
+
+def _plan_json(cli: CliRunner, manifest: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
+    """``easycat plan --json`` with extras pinned so the lane is deterministic."""
+    from easycat.planning import provider_plan
+
+    with monkeypatch.context() as patched:
+        patched.setattr(provider_plan, "_module_available", lambda module: module != "twilio")
+        patched.setenv("OPENAI_API_KEY", "sk-stub")
+        for var in ("DEEPGRAM_API_KEY", "PLAN_TOK"):
+            patched.delenv(var, raising=False)
+        result = cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload: dict = json.loads(result.stdout)
+    assert payload["command"] == "plan"
+    return payload
+
+
+def _plan_keys_and_reasons_from_cli(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[set[str], set[str]]:
+    """Real ``plan --json`` top-level keys, and every reason a code path emits.
+
+    The drift anchor for the catalog's ``plan`` entry, mirroring
+    :func:`_doctor_keys_from_cli`: without it the whole eight-key/five-reason
+    block can be deleted with this lane still green. Two manifests plus the
+    unresolvable-profile constructor cover all five documented reasons, so a
+    token that stops being emitted — or one invented in prose — fails here.
+    """
+    from easycat.planning.selection import selection_issue
+
+    root = tmp_path / "plan-json-schema"
+    root.mkdir(parents=True, exist_ok=True)
+    referenced = root / "referenced.toml"
+    referenced.write_text(
+        '[project]\nname = "schema"\n\n[voice.default]\n'
+        'transport = "twilio"\nstt = "deepgram"\ntoken = "bearer-env:PLAN_TOK"\n',
+        encoding="utf-8",
+    )
+    defective = root / "defective.toml"
+    defective.write_text(
+        '[project]\nname = "schema"\n\n[voice.default]\ntransport = "twilio"\n',
+        encoding="utf-8",
+    )
+
+    payload = _plan_json(cli, referenced, monkeypatch)
+    reasons = {issue["reason"] for issue in payload["issues"]}
+    reasons |= {issue["reason"] for issue in _plan_json(cli, defective, monkeypatch)["issues"]}
+    reasons.add(selection_issue(ValueError("Unknown VAD backend"), profile="default").reason)
+
+    assert reasons == set(_DOCUMENTED_PLAN_REASONS)
+    return set(payload) - {"schema_version", "command", "status"}, reasons
+
+
 def _make_bundle(path: Path) -> None:
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
@@ -495,6 +564,14 @@ def test_explain_meta_json_schema_documents_error_fix(
     for key in _doctor_keys_from_cli(cli, tmp_path, monkeypatch):
         assert f"`{key}`" in result.stdout
     assert "easycat doctor --json" in result.stdout
+    plan_keys, plan_reasons = _plan_keys_and_reasons_from_cli(cli, tmp_path, monkeypatch)
+    for key in plan_keys:
+        assert f"`{key}`" in result.stdout
+    for reason in plan_reasons:
+        assert f"`{reason}`" in result.stdout
+    assert "easycat plan --json" in result.stdout
+    assert "`blocking` or `warning`" in stdout
+    assert "`GET /plan` returns the same keys plus" in stdout
     assert "`name`, `status`, and `detail`" in stdout
     assert "`code` and `fix` when the check fails" in stdout
     for key in _validate_report_keys_from_cli(cli, tmp_path):

@@ -393,6 +393,59 @@ metric/attribute catalog and the PII-safety allow-list, and docker.md's
 ["Scraping metrics"](docker.md#scraping-metrics) for the container-specific
 walkthrough.
 
+### Readiness and plan endpoints
+
+`/health` and `/health/ready` are **unauthenticated** so a probe can reach them,
+and they stay deliberately content-free: they report *that* a selection is
+blocked, never which secret is missing. `/health/ready`'s `reasons` carry only
+check names (`plan_has_blocking_errors`, `manifest_not_loaded`, `draining`,
+`at_capacity`, `route_stack_not_ready`), and `/health` reflects the same verdict
+as `checks.providers.status = "degraded"`. Neither body names a variable, an
+extra, or a manifest path.
+
+The blocking reasons behind that verdict use one `key:value` grammar —
+`missing_env:<VAR>`, `missing_extra:<extra>`, and the sibling
+`incomplete_selection:[voice.<name>]` token, which names a manifest path and
+never a value. They are what `ProviderPlan.blocking_errors()` returns, and they
+reach an operator through the authenticated `/plan` body's `blocking_errors`
+(and through `easycat plan --json`), not through the probe endpoints.
+
+`/plan` sits next to them behind the same bearer auth as `/metrics`,
+`/manifest`, and `/capabilities`, and reports *which* issue. It returns the
+seven keys `easycat plan --json` emits — `profile`, `selected`, `missing_env`,
+`missing_extras`, `warnings`, `blocking_errors`, `has_blocking_errors` — plus
+`manifest_loaded` and an additive `issues` array. Each issue carries `code`
+(`EASYCAT_E203`, `EASYCAT_E202`, `EASYCAT_E604`, `EASYCAT_E602`, `EASYCAT_E104`),
+a content-free `reason` (`missing_env`, `missing_extra`, `unset_reference`,
+`incomplete_selection`, `unresolvable_profile`), a `severity` of `blocking` or
+`warning`, and any of `field`, `role`, `detail`, and `fix`. No secret-shaped
+manifest value can reach the body. The only issue whose text interpolates the
+manifest — `incomplete_selection` — is passed through the redactor; every other
+`detail`/`fix` is verbatim error-registry text over planner catalog metadata
+(env-var names, install extras, role names) and is left byte-identical to what
+`easycat doctor` prints for the same code, so a copy-pasteable fix stays
+copy-pasteable. An `unset_reference`'s variable name is safe to echo because
+`bearer-env:` parsing rejects a reference that is not a well-formed env-var
+name or that matches the shared secret detector.
+When the profile cannot be resolved at all, `blocking_errors[0]` keeps its
+`plan_unresolvable: ` prefix and the coded message follows it;
+`/capabilities` keeps its `profile`/`roles`/`all_capabilities` shape and adds
+the same `issues` entry instead of dropping the reason. On `/plan` the `issues`
+key is always present (an empty array when nothing is wrong); on
+`/capabilities` it appears **only** when the profile cannot be resolved, so read
+it there with a default (`body.get("issues", [])`).
+
+`/health/ready` is **red when the selected profile is statically incomplete**,
+not only when a credential or extra is missing: a phone (`twilio`/`telnyx`)
+profile with no `token`, or a profile whose own `[voice.<name>] token`
+reference points at an unset variable, cannot serve a single call — both raise
+per connection — so readiness reports that up front rather than accepting
+traffic and failing on the first call. An unset `[server] auth` variable is
+**not** in that set: `VoiceServer.from_manifest` already refuses to construct
+the server, so such a process never reaches `/health/ready` at all. It is
+reported as a `warning`-severity issue on `/plan` and by `easycat doctor`
+instead.
+
 ## Operations checklist
 
 - **Ingress:** terminate TLS/WSS at a reverse proxy or load balancer; forward

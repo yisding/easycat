@@ -326,3 +326,79 @@ async def test_factory_only_keeps_m4_skipped_placeholders(
             assert resp.status == 200
     finally:
         await server.stop()
+
+
+# ── DX2 PR2: HTTP twins of the aiohttp-free assertions ────────────────
+#
+# Each of these has an aiohttp-free counterpart in
+# ``tests/server/test_plan_route_auth.py`` (V-1 and A-1..A-7), which is where
+# the load-bearing verdicts are proven. These add only what needs a live
+# socket: the status code and the wire body.
+
+
+def _write_phone_manifest(tmp_path: Path) -> Path:
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text(
+        "[project]\n"
+        'name = "plan-endpoint-phone"\n'
+        "\n"
+        "[server]\n"
+        'host = "127.0.0.1"\n'
+        "port = 0\n"
+        'auth = "bearer-env:EASYCAT_SERVE_TOKEN"\n'
+        "\n"
+        "[voice.default]\n"
+        'transport = "twilio"\n'
+        'stt = "openai/realtime"\n'
+        'tts = "openai"\n',
+        encoding="utf-8",
+    )
+    return manifest
+
+
+@pytest.mark.integration_socket
+async def test_ready_503_when_phone_profile_has_no_token(
+    client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """V-1b: the HTTP twin of V-1 — a false-READY phone profile now 503s."""
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    # Extras faked present so the 503 proves the missing token, not an extra.
+    monkeypatch.setattr("easycat.planning.provider_plan._module_available", lambda _module: True)
+    server = VoiceServer.from_manifest(_write_phone_manifest(tmp_path))
+    server.config.port = 0
+    await server.start()
+    try:
+        async with client.get(f"{_base_url(server)}/health/ready") as resp:
+            assert resp.status == 503
+            body = await resp.json()
+        assert "plan_has_blocking_errors" in body["reasons"]
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
+async def test_plan_route_payload_carries_role_attributed_issues(
+    client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """V-2: ``/plan`` returns the coded array; ``blocking_errors`` is unchanged."""
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    monkeypatch.setattr("easycat.planning.provider_plan._module_available", lambda _module: True)
+    server = VoiceServer.from_manifest(_write_manifest(tmp_path, stt="deepgram"))
+    server.config.port = 0
+    await server.start()
+    try:
+        async with client.get(
+            f"{_base_url(server)}/plan", headers={"Authorization": "Bearer tok"}
+        ) as resp:
+            assert resp.status == 200
+            body = await resp.json()
+    finally:
+        await server.stop()
+
+    assert body["blocking_errors"] == ["missing_env:DEEPGRAM_API_KEY"]
+    issue = next(i for i in body["issues"] if i["field"] == "DEEPGRAM_API_KEY")
+    assert issue["role"] == "stt"
+    assert issue["code"] == "EASYCAT_E203"

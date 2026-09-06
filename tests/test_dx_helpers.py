@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 
 import pytest
 
@@ -106,6 +107,68 @@ def test_require_env_missing_value_gives_actionable_hint(monkeypatch: pytest.Mon
     assert "uv run easycat doctor" in message
     assert "uv run --env-file .env ..." in message
     assert "uv run easycat doctor --env-file .env" in message
+
+
+@pytest.mark.parametrize(
+    ("var", "expected"),
+    [("OPENAI_API_KEY", "EASYCAT_E203"), ("TWILIO_STREAM_URL", "EASYCAT_E210")],
+)
+def test_require_env_carries_the_shared_code_without_clobbering_the_exit_payload(
+    var: str, expected: str, monkeypatch: pytest.MonkeyPatch
+):
+    """E-4: the code is attached BESIDE the exit payload, never over it.
+
+    ``SystemExit.code`` is the payload the interpreter prints and exits with, so
+    ``errors._attach_error_code`` (which assigns ``.code``) must never be used
+    here. ``str(exc)`` reads from ``args`` and therefore cannot detect that
+    regression — the ``exc.code`` assertions below are the ones that can.
+    """
+    monkeypatch.delenv(var, raising=False)
+
+    with pytest.raises(SystemExit) as excinfo:
+        require_env(var)
+
+    exc = excinfo.value
+    assert type(exc) is SystemExit
+    assert exc.easycat_code == expected  # type: ignore[attr-defined]
+    assert exc.easycat_context["var"] == var  # type: ignore[attr-defined]
+    assert f"{expected}:" in " ".join(getattr(exc, "__notes__", ()))
+    # The exit payload is still the actionable message, not the code.
+    assert exc.code == exc.args[0]
+    assert isinstance(exc.code, str)
+    assert "is required." in exc.code
+    message = str(exc)
+    assert f"{var} is required." in message
+    assert f"export {var}=..." in message
+    assert "uv run easycat doctor" in message
+    assert "uv run --env-file .env ..." in message
+    assert "uv run easycat doctor --env-file .env" in message
+
+
+def test_require_env_uncaught_prints_the_hint_and_exits_one():
+    """E-6: what a scaffolded phone server's operator sees is unchanged.
+
+    The only assertion in the suite that exercises the interpreter's own
+    ``SystemExit`` printing path, which is where a clobbered ``.code`` would
+    replace the hint with the bare error code.
+    """
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    env.pop("OPENAI_API_KEY", None)
+    result = subprocess.run(
+        [sys.executable, "-c", "from easycat import require_env; require_env('OPENAI_API_KEY')"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "OPENAI_API_KEY is required." in result.stderr
+    assert "export OPENAI_API_KEY=" in result.stderr
+    assert result.stderr.strip() != "EASYCAT_E203"
 
 
 async def test_create_shutdown_event_wires_signal_handlers(monkeypatch: pytest.MonkeyPatch):

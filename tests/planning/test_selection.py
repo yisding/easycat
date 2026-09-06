@@ -88,8 +88,8 @@ def test_manifest_plan_drops_a_satisfied_reference() -> None:
     assert plan.defects == ()
 
 
-def test_manifest_plan_defects_do_not_block_yet() -> None:
-    """PR1 is behavior-preserving for readiness; PR2 owns ``blocking_errors``."""
+def test_blocking_manifest_defects_reach_blocking_errors() -> None:
+    """V-1's unit half: a phone profile with no token cannot report READY."""
     manifest = parse_manifest(
         {"project": {"name": "sel"}, "voice": {"default": {"transport": "twilio"}}}
     )
@@ -99,7 +99,71 @@ def test_manifest_plan_defects_do_not_block_yet() -> None:
     )
 
     assert plan.defects
-    assert all(not reason.startswith("incomplete") for reason in plan.blocking_errors())
+    assert "incomplete_selection:[voice.default]" in plan.blocking_errors()
+    assert plan.has_blocking_errors is True
+
+
+def test_manifest_defect_issues_are_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """U-11: every ``issues[]`` string reaching ``/plan`` goes through the redactor.
+
+    ``SetupIssue.from_error`` structurally cannot redact (``errors.py`` is a
+    stdlib-only leaf), so ``build_manifest_plan`` must. Pinned against a defect
+    whose message quotes a manifest value, which is the shape a future defect
+    rule would add.
+    """
+    from easycat.errors import EASYCAT_E602
+    from easycat.project.manifest import ProjectManifest
+
+    secret = "sk-live-secret-token-abcdef1234567890"
+    manifest = parse_manifest(
+        {"project": {"name": "sel"}, "voice": {"default": {"transport": "websocket"}}}
+    )
+    monkeypatch.setattr(
+        ProjectManifest,
+        "profile_defects",
+        lambda _self, _profile="default": (
+            EASYCAT_E602(path="easycat.toml", problem=f"token {secret!r} is literal", fix=secret),
+        ),
+    )
+
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+
+    (defect,) = plan.defects
+    assert secret not in defect.detail
+    assert secret not in defect.fix
+    assert "[REDACTED_SECRET]" in defect.detail
+    assert "[REDACTED_SECRET]" in defect.fix
+
+
+def test_unset_reference_issue_keeps_the_registry_text_verbatim() -> None:
+    """An ``unset_reference`` issue is catalog text, so the redactor must not touch it.
+
+    ``redact_value``'s key/value rule matches ``TOKEN=``/``SECRET=``/``KEY=``
+    case-insensitively and consumes to the next separator, so scrubbing
+    ``EASYCAT_E604``'s ``export {var}=...`` fix rewrites the placeholder — and
+    the closing backtick and paren — into ``[REDACTED_SECRET],``. That both
+    breaks the copy-pasteable command and makes ``easycat plan`` disagree with
+    ``easycat doctor`` about the identical cause. The var name here is chosen to
+    match that rule; ``parse_auth_reference`` guarantees it cannot be a secret.
+    """
+    from easycat.errors import EASYCAT_E604
+
+    manifest = parse_manifest(
+        {
+            "project": {"name": "sel"},
+            "voice": {"default": {"transport": "twilio", "token": "bearer-env:TW_STREAM_TOKEN"}},
+        }
+    )
+
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+
+    (defect,) = plan.defects
+    expected = EASYCAT_E604(reference="bearer-env:TW_STREAM_TOKEN", var="TW_STREAM_TOKEN")
+    assert defect.reason == "unset_reference"
+    assert defect.detail == expected.message
+    assert defect.fix == expected.rendered_fix()
+    assert "REDACTED" not in defect.fix
+    assert "`export TW_STREAM_TOKEN=...`" in defect.fix
 
 
 def test_plan_issues_attribute_gaps_to_pipeline_roles(

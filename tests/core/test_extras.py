@@ -110,3 +110,56 @@ def test_sounddevice_load_error_names_portaudio_system_package(monkeypatch) -> N
     assert "sudo apt-get install libportaudio2" in message
     assert "brew install portaudio" in message
     assert "uv add 'easycat[local]'" not in message
+
+
+# ── DX2 PR2: startup names the same code as plan and doctor ───────────
+
+
+def test_require_module_missing_extra_carries_e202(monkeypatch) -> None:
+    """E-7: a missing selected extra raises the code doctor already reports.
+
+    The exception TYPE and its message are unchanged — only ``code``/``context``
+    and a note are attached — so every ``except ImportError`` in the tree and in
+    user code keeps working while ``easycat plan --json``'s ``issues``,
+    ``easycat doctor``'s ``extra_webrtc`` row, and the startup raise all name
+    ``EASYCAT_E202``.
+    """
+    monkeypatch.setattr("easycat._extras.importlib.util.find_spec", lambda _name: None)
+
+    with pytest.raises(ImportError) as exc_info:
+        require_module("easycat_missing_aiortc_probe", extra="webrtc", purpose="WebRTC transport")
+
+    assert type(exc_info.value) is ImportError
+    assert exc_info.value.code == "EASYCAT_E202"
+    assert exc_info.value.context["extra"] == "webrtc"
+    assert "EASYCAT_E202" in " ".join(getattr(exc_info.value, "__notes__", ()))
+    _assert_extra_hint(str(exc_info.value), "webrtc")
+
+
+def test_require_module_without_an_extra_is_not_coded(monkeypatch) -> None:
+    """No extra is named, so there is nothing to install and nothing to code."""
+    monkeypatch.setattr("easycat._extras.importlib.util.find_spec", lambda _name: None)
+
+    with pytest.raises(ImportError) as exc_info:
+        require_module("easycat_missing_uncoded_probe")
+
+    assert not hasattr(exc_info.value, "code")
+
+
+def test_sounddevice_load_error_is_not_tagged_as_a_missing_extra(monkeypatch) -> None:
+    """The ``local`` extra IS installed; doctor reports this as EASYCAT_E209."""
+    monkeypatch.setattr(
+        "easycat._extras.importlib.util.find_spec",
+        lambda name: types.SimpleNamespace(name=name),
+    )
+
+    def raise_portaudio_error(_name: str) -> None:
+        raise OSError("PortAudio library not found")
+
+    monkeypatch.setattr("easycat._extras.importlib.import_module", raise_portaudio_error)
+
+    with pytest.raises(ImportError) as exc_info:
+        require_module("sounddevice", extra="local", purpose="LocalTransport audio I/O")
+
+    assert not hasattr(exc_info.value, "code")
+    assert "sudo apt-get install libportaudio2" in str(exc_info.value)

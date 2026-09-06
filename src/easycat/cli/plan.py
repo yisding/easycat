@@ -14,27 +14,36 @@ load/usage errors (``EASYCAT_E601`` / ``EASYCAT_E602``) flow through
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import typer
+from rich.markup import escape
 
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_json, json_envelope, stdout_console
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from easycat.errors import SetupIssue
+
 
 def _selection_to_dict(selection: Any) -> dict[str, Any]:
-    return {
-        "role": selection.role,
-        "provider": selection.provider,
-        "model": selection.model,
-        "config_type": selection.config_type,
-        "extra": selection.extra,
-        "required_env": selection.required_env,
-        "capabilities": sorted(selection.capabilities),
-    }
+    """The ``ProviderSelection`` -> JSON projection this command emits.
+
+    A thin alias for :func:`easycat.planning.selection.selection_to_dict`, which
+    is now the single owner of the shape (the server's ``/plan`` body calls the
+    same function). Kept on this module because it is the name that identifies
+    "what ``easycat plan --json`` puts on the wire", and the planner's purity
+    guard reads it from here. Imported lazily so ``easycat.cli.plan`` keeps
+    costing nothing beyond Typer at CLI import time.
+    """
+    from easycat.planning.selection import selection_to_dict
+
+    return selection_to_dict(selection)
 
 
-def _render_human(plan: Any) -> None:
+def _render_human(plan: Any, issues: Sequence[SetupIssue]) -> None:
     stdout_console.print(f"[bold]Provider plan[/] (profile: {plan.profile})")
     for role, selection in plan.selected.items():
         extra = f" extra={selection.extra}" if selection.extra else ""
@@ -52,6 +61,24 @@ def _render_human(plan: Any) -> None:
         stdout_console.print(f"  [yellow]warnings:[/] {', '.join(plan.warnings)}")
     status = "blocked" if plan.has_blocking_errors else "ready"
     stdout_console.print(f"  [bold]status:[/] {status}")
+    # One coded row per blocking issue, in doctor's layout: the same code,
+    # field, role, and fix ``easycat doctor --manifest`` prints and ``/plan``
+    # returns, so one cause reads the same on every surface.
+    for issue in issues:
+        if issue.severity != "blocking":
+            continue
+        role = issue.role or "-"
+        # ``escape`` on EVERY interpolation, like doctor's renderer: a field is
+        # ``[voice.<profile>]`` and a fix quotes ``uv add 'easycat[webrtc]'``,
+        # both of which Rich would otherwise eat as style tags — printing a
+        # copy-pasteable command that installs the wrong thing, or raising
+        # ``MarkupError`` on a lone ``[/]``-shaped substring.
+        stdout_console.print(
+            f"  [red]{escape(issue.code)}[/] {escape(issue.field)} "
+            f"({escape(role)}): {escape(issue.detail)}"
+        )
+        if issue.fix:
+            stdout_console.print(f"    Fix: {escape(issue.fix)}")
 
 
 @cli_command
@@ -79,31 +106,35 @@ def plan(
     """
     # Manifest load errors (E601/E602) and an unresolvable selection both raise
     # EasyCatError -> handled by the cli_command wrapper. The load/plan/coded-
-    # error mapping is shared with ``easycat doctor`` (and, later, the server) so
-    # one manifest typo cannot report three different faces.
-    from easycat.planning.selection import load_selected_profile, plan_selected_profile
+    # error mapping is shared with ``easycat doctor`` and ``VoiceServer`` so one
+    # manifest typo cannot report three different faces.
+    from easycat.planning.selection import (
+        build_manifest_plan,
+        load_selected_profile,
+        plan_body,
+        plan_issues,
+    )
 
-    _manifest, voice_profile = load_selected_profile(manifest, profile=profile)
-    provider_plan = plan_selected_profile(voice_profile, profile=profile)
+    project_manifest, voice_profile = load_selected_profile(manifest, profile=profile)
+    # ``build_manifest_plan`` (not ``plan_selected_profile``) so the manifest's
+    # own defects — a phone profile with no token, an unset ``bearer-env:``
+    # reference — reach ``easycat plan`` too, with the scoped severity that
+    # keeps a ``[server] auth`` gap reportable but not blocking.
+    provider_plan = build_manifest_plan(
+        project_manifest, profile=profile, voice_profile=voice_profile
+    )
+    issues = plan_issues(provider_plan)
 
     if json_output:
         emit_json(
             json_envelope(
                 "plan",
-                profile=provider_plan.profile,
-                selected={
-                    role: _selection_to_dict(selection)
-                    for role, selection in provider_plan.selected.items()
-                },
-                missing_env=list(provider_plan.missing_env),
-                missing_extras=list(provider_plan.missing_extras),
-                warnings=list(provider_plan.warnings),
-                blocking_errors=list(provider_plan.blocking_errors()),
-                has_blocking_errors=provider_plan.has_blocking_errors,
+                **plan_body(provider_plan),
+                issues=[issue.as_dict() for issue in issues],
             )
         )
         return
-    _render_human(provider_plan)
+    _render_human(provider_plan, issues)
 
 
 __all__ = ["plan"]
