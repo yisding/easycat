@@ -226,6 +226,12 @@ flowchart TD
   **after** the decision. Detector latency is not subtracted, and semantic
   incompleteness takes precedence over punctuation.
 
+Smart turn is [`smart_turn.py`](../../src/easycat/smart_turn.py) running a
+bundled ONNX model,
+[`models/smart-turn-v3.2-cpu.onnx`](../../src/easycat/models/), so the semantic
+endpoint decision is local and adds no network hop — which is why treating its
+latency as part of the pause budget above matters.
+
 TurnManager advances a dedicated pause epoch before publishing
 `VADStopSpeaking`. Its silence timer and the STT segment future carry leases
 captured from that epoch. A delayed final from an earlier pause therefore

@@ -277,6 +277,26 @@ atomic final rename and reject overwriting unless explicitly requested.
 explicit process-level opt-in with one shared hook registry, not a default
 global side effect.
 
+### Reviewer annotations live beside the bundle
+
+A reviewer triaging a captured call wants to record a verdict — pass/fail, a
+failure type, a 1-5 score, a note. The journal behind a served bundle is opened
+`mode=ro`, so appending the verdict there would be a silent no-op; writing it
+into the journal anyway would make the record lie about what the session
+observed.
+
+[`debug/annotations.py`](../../src/easycat/debug/annotations.py) therefore keeps
+verdicts in a JSON **sidecar** at `<bundle>.annotations.json`, a flat
+`{turn_id: record}` map so both the debugger SPA and `easycat bundles show` can
+hydrate a per-turn verdict in O(1). Writes are read-modify-write under a file
+lock with an atomic temp-file rename, mirroring `debug/export.py`, so a crash
+mid-write cannot corrupt an existing sidecar. The module also owns the
+failure-type taxonomy (`FAILURE_TYPES`); the SPA hard-codes the same strings and
+a parity test keeps the two in lockstep.
+
+The rule this encodes: **evidence is immutable, judgement is not.** Anything a
+human decides after the fact belongs beside the bundle, never inside it.
+
 ## 6.9 Replay
 
 [`runtime/replay.py`](../../src/easycat/runtime/replay.py) defines one replay
@@ -325,6 +345,9 @@ and bundle model:
 - `easycat journal grep/follow/promote`
 - `easycat diff`
 - `easycat debugger serve`
+
+`easycat plan` is the odd one out: it projects nothing from a journal, because
+it runs *before* a session exists. See §5.5.
 
 The debugger server is in [`debugger/`](../../src/easycat/debugger). Its leaf
 modules separate source adapters, record filtering, audio coercion, and AEC
