@@ -545,6 +545,17 @@ class _TwilioProtocolMixin:
         self._mark_counter = 0
         self._inbound_resampler = PCM16StreamResampler(self._audio_format.sample_rate)
 
+    def _owns_connection(self, ws: ServerConnection) -> bool:
+        """Whether *ws* may still tear down the single connection slot.
+
+        True when *ws* is the active connection, or when the slot is empty (a
+        send-path error already released it and no replacement has claimed it).
+        Callers must re-evaluate this after every ``await`` that can suspend
+        across a reconnect (gh 1103).
+        """
+        current = self._current_ws()
+        return current is ws or current is None
+
     def _current_ws(self) -> ServerConnection | None:
         """Return the active Twilio WebSocket connection (or ``None``)."""
         raise NotImplementedError
@@ -614,23 +625,37 @@ class _TwilioProtocolMixin:
         (``_current_ws() is None``). A newer client owning the slot is left
         untouched — the prerequisite #19 reconnect-race guard, kept in the
         single shared copy.
+
+        The guard is re-evaluated *after* the awaited ``CallEnded`` emit, not
+        only before it.  That emit awaits real subscribers — the journal sink,
+        and application ``CallEnded`` handlers that may do network I/O — so a
+        carrier reconnect can complete its ``start`` frame during the
+        suspension and legitimately claim the slot.  Tearing down
+        unconditionally on resume then wiped the *replacement* connection's
+        state and enqueued a sentinel against it: every later media frame was
+        dropped, ``send_audio`` returned ``False``, its ``receive_audio()``
+        ended on a phantom sentinel, and no error was logged.  ``websocket.py``
+        is immune only because it re-checks at execution time; this does the
+        same (gh 1103).
         """
-        if self._current_ws() is ws or self._current_ws() is None:
-            await self._emit_call_ended_once()
-            tail = self._inbound_resampler.finish()
-            if tail:
-                self._enqueue_chunk(
-                    AudioChunk(data=tail, format=self._audio_format),
-                    context="Twilio",
-                )
-            self._reset_connection_state()
-            self._client_connected.clear()
-            self._stream_sid = None
-            self._call_sid = None
-            self._answered_at = None
-            self._diagnostics.reset()
-            self._enqueue_sentinel()
-        # else: a newer client owns the connection -> leave it alone.
+        if not self._owns_connection(ws):
+            return  # A newer client owns the connection -> leave it alone.
+        await self._emit_call_ended_once()
+        if not self._owns_connection(ws):
+            return  # A replacement claimed the slot during the emit.
+        tail = self._inbound_resampler.finish()
+        if tail:
+            self._enqueue_chunk(
+                AudioChunk(data=tail, format=self._audio_format),
+                context="Twilio",
+            )
+        self._reset_connection_state()
+        self._client_connected.clear()
+        self._stream_sid = None
+        self._call_sid = None
+        self._answered_at = None
+        self._diagnostics.reset()
+        self._enqueue_sentinel()
 
     async def _handle_message(self, raw: str) -> None:
         """Route a Twilio JSON message to the appropriate handler."""
@@ -990,9 +1015,14 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
             # ``wait_for_client`` stop reporting a peer once the socket drops.
             # The ``_handle_connection`` finally also performs this cleanup, so
             # this is belt-and-suspenders for symmetry across socket transports.
-            self._ws = None
-            self._stream_sid = None
-            self._client_connected.clear()
+            #
+            # Re-checked after the emit: it awaits real subscribers, so a
+            # reconnect can claim the slot during that suspension and this
+            # clear would otherwise destroy the replacement's state (gh 1103).
+            if self._owns_connection(ws):
+                self._ws = None
+                self._stream_sid = None
+                self._client_connected.clear()
             return False
 
     # ── Mark support ──────────────────────────────────────────────
@@ -1026,9 +1056,11 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
             # ``CallEnded`` before releasing the slot to a replacement
             # connection (see the reconnect-race note there).
             await self._emit_call_ended_once()
-            self._ws = None
-            self._stream_sid = None
-            self._client_connected.clear()
+            # Ownership re-check after the awaited emit; see ``send_audio``.
+            if self._owns_connection(ws):
+                self._ws = None
+                self._stream_sid = None
+                self._client_connected.clear()
             raise RuntimeError("Cannot send Twilio mark: Twilio disconnected") from None
         return name
 
