@@ -83,6 +83,9 @@ from easycat.teardown_budgets import (
 from easycat.teardown_budgets import (
     SESSION_STT_REJECTION_CLEANUP_JOIN_TIMEOUT_S as _STT_REJECTION_CLEANUP_JOIN_S,
 )
+from easycat.teardown_budgets import (
+    SESSION_TURN_ENDED_PREDECESSOR_DRAIN_TIMEOUT_S as _TURN_ENDED_PREDECESSOR_DRAIN_S,
+)
 from easycat.timeouts import (
     AgentTimeoutError,
     TimeoutConfig,
@@ -617,15 +620,20 @@ class TurnRunner:
             return
         self._stt.cancel_scheduled()
         self._stt.cancel_inflight()
-        current_tts_task = self._tts.active_turn_task
-        if current_tts_task and not current_tts_task.done():
-            current_tts_task.cancel()
-            # Keep old task alive until it completes to avoid concurrent runs (gh 1024)
+        # Hand the cancelled predecessor to the successor so it can drain it
+        # before running the agent: this handler is synchronous and cannot
+        # await, and cancelling alone does not stop a cancellation-resistant
+        # task (gh 1024).
+        predecessor = self._tts.active_turn_task
+        if predecessor is not None and predecessor.done():
+            predecessor = None
+        if predecessor is not None:
+            predecessor.cancel()
         identity = self._turn.capture_identity()
         activity = self._turn_manager.capture_activity()
         turn_token = bind_turn(event.turn_id)
         try:
-            turn_ended = self.on_turn_ended(event, identity, activity)
+            turn_ended = self.on_turn_ended(event, identity, activity, predecessor=predecessor)
             if self._journal_enabled:
                 new_task = self._runtime_scope.create_journaled_task(
                     turn_ended,
@@ -645,10 +653,14 @@ class TurnRunner:
         event: TurnEnded,
         identity: Lease[TurnContext | None],
         activity: Lease[TurnManagerState],
+        *,
+        predecessor: asyncio.Task[None] | None = None,
     ) -> None:
         """Handle TurnEnded from TurnManager: finalize STT and run agent/TTS."""
         turn_token = bind_turn(event.turn_id)
         try:
+            if predecessor is not None:
+                await self._drain_superseded_turn_task(predecessor)
             if not identity.guard() or not self._activity_is_current(
                 activity, TurnManagerState.PROCESSING
             ):
@@ -667,6 +679,33 @@ class TurnRunner:
             reset_turn(turn_token)
 
     # ── Pipeline ───────────────────────────────────────────────────
+
+    async def _drain_superseded_turn_task(self, task: asyncio.Task[None]) -> None:
+        """Wait out a cancelled ``on_turn_ended`` before starting the next one.
+
+        ``schedule_turn_ended`` cancels the previous end-of-turn task, but it
+        is a synchronous event handler and cannot await the unwind, and it
+        then overwrote ``active_turn_task`` with the new handle.  A
+        cancellation-resistant predecessor — a slow agent inside its timeout
+        window, or a ``RuntimeScope`` parked survivor — therefore kept running
+        while its successor called ``bridge.invoke`` with a different
+        transcript and turn id.  ``STTCommitter.requires_successor_handoff``
+        guards STT stream overlap, but nothing guarded agent overlap, and a
+        simple ``Agent`` must never see concurrent ``run()`` calls (gh 1024).
+
+        The wait is bounded: a predecessor that ignores cancellation past the
+        budget is logged rather than allowed to stall the live turn
+        indefinitely.
+        """
+        if task.done() or task is asyncio.current_task():
+            return
+        done, _pending = await asyncio.wait({task}, timeout=_TURN_ENDED_PREDECESSOR_DRAIN_S)
+        if task not in done:
+            logger.warning(
+                "Superseded on_turn_ended task did not unwind within %.1fs; "
+                "the new turn proceeds and agent calls may overlap",
+                _TURN_ENDED_PREDECESSOR_DRAIN_S,
+            )
 
     async def handle_end_of_speech(
         self,

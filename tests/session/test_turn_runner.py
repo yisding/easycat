@@ -658,6 +658,88 @@ async def test_successor_turn_drains_scoped_segment_commit_before_starting() -> 
 
 
 @pytest.mark.asyncio
+async def test_superseded_turn_ended_drains_before_the_successor_runs() -> None:
+    """A cancellation-resistant ``on_turn_ended`` must not overlap its successor.
+
+    ``schedule_turn_ended`` cancels the previous end-of-turn task, but it is a
+    synchronous handler: it cannot await the unwind, and it then replaced
+    ``active_turn_task`` with the new handle. A predecessor that survives the
+    cancel therefore kept running while its successor drove another agent turn
+    (gh 1024).
+    """
+    session = Session(_config())
+    runner = session._turn_runner
+    order: list[str] = []
+    release = asyncio.Event()
+
+    async def _stubborn_predecessor() -> None:
+        order.append("old:start")
+        try:
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                # Cancellation-resistant: finish the unwind on its own terms.
+                await asyncio.shield(release.wait())
+        finally:
+            order.append("old:done")
+
+    predecessor = session._runtime_scope.create_task("on_turn_ended", _stubborn_predecessor())
+    session._tts_scheduler.active_turn_task = predecessor
+    await asyncio.sleep(0)
+    assert order == ["old:start"]
+
+    runner.schedule_turn_ended(TurnEnded(turn_id="t-successor"))
+    successor = session._tts_scheduler.active_turn_task
+    assert successor is not None and successor is not predecessor
+
+    await asyncio.sleep(0.05)
+    assert predecessor.cancelling() or not predecessor.done()
+    # The successor is parked on the drain, so nothing ran past it.
+    assert not successor.done()
+    assert order == ["old:start"]
+
+    release.set()
+    await asyncio.wait_for(successor, timeout=2)
+
+    assert order == ["old:start", "old:done"]
+    assert predecessor.done()
+
+
+@pytest.mark.asyncio
+async def test_superseded_turn_ended_drain_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A predecessor that never unwinds must not stall the live turn forever."""
+    monkeypatch.setattr("easycat.session._turn_runner._TURN_ENDED_PREDECESSOR_DRAIN_S", 0.02)
+    session = Session(_config())
+    runner = session._turn_runner
+    never_released = asyncio.Event()
+
+    async def _uncancellable_predecessor() -> None:
+        while not never_released.is_set():
+            try:
+                await asyncio.shield(asyncio.sleep(0.01))
+            except asyncio.CancelledError:
+                continue
+
+    predecessor = session._runtime_scope.create_task("on_turn_ended", _uncancellable_predecessor())
+    session._tts_scheduler.active_turn_task = predecessor
+    await asyncio.sleep(0)
+
+    with caplog.at_level(logging.WARNING, logger="easycat.session._turn_runner"):
+        runner.schedule_turn_ended(TurnEnded(turn_id="t-successor"))
+        successor = session._tts_scheduler.active_turn_task
+        assert successor is not None
+        await asyncio.wait_for(successor, timeout=2)
+
+    assert "did not unwind" in caplog.text
+    never_released.set()
+    predecessor.cancel()
+    await asyncio.gather(predecessor, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_successor_turn_bounds_cancellation_resistant_segment_commit() -> None:
     cleanup_started = asyncio.Event()
     release_cleanup = asyncio.Event()
