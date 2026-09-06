@@ -216,7 +216,7 @@ def test_init_text_chat_non_interactive(
     assert (project / ".gitignore").exists()
     # Substitution landed.
     agent_py = (project / "agent.py").read_text()
-    assert 'name="Support"' in agent_py
+    assert 'AGENT_NAME = "Support"' in agent_py
     assert "Help the user with billing." in agent_py
     assert "$AGENT_NAME" not in agent_py
     pyproject = (project / "pyproject.toml").read_text()
@@ -273,7 +273,7 @@ def test_init_force_overwrites_existing(
         ["init", "demo", "--config", config, "--no-git", "--force"],
     )
     assert result.exit_code == 0, result.stderr
-    assert 'name="Forced"' in (target / "agent.py").read_text()
+    assert 'AGENT_NAME = "Forced"' in (target / "agent.py").read_text()
     # leftover.txt is not removed — init writes into the dir; it does not
     # wipe it.  That's intentional and matches the plan.
     assert (target / "leftover.txt").exists()
@@ -361,7 +361,7 @@ def test_init_webrtc_browser_template(
     project = tmp_path / "demo"
     agent_py = (project / "agent.py").read_text()
     assert "EasyConfig.browser(" in agent_py
-    assert 'name="BrowserBot"' in agent_py
+    assert 'AGENT_NAME = "BrowserBot"' in agent_py
     assert "Help people test browser audio." in agent_py
     pyproject = (project / "pyproject.toml").read_text()
     assert "openai-agents,webrtc" in pyproject
@@ -415,7 +415,7 @@ def test_init_twilio_phone_template(
     assert (project / "server.py").exists()
     agent_py = (project / "agent.py").read_text()
     assert "def make_agent" in agent_py
-    assert 'name="PhoneBot"' in agent_py
+    assert 'AGENT_NAME = "PhoneBot"' in agent_py
     assert "Take concise phone messages." in agent_py
     server_py = (project / "server.py").read_text()
     assert "TwilioConnectionTransport" in server_py
@@ -468,7 +468,7 @@ def test_init_telnyx_phone_template(
     assert (project / "server.py").exists()
     agent_py = (project / "agent.py").read_text()
     assert "def make_agent" in agent_py
-    assert 'name="PhoneBot"' in agent_py
+    assert 'AGENT_NAME = "PhoneBot"' in agent_py
     assert "Take concise phone messages." in agent_py
     server_py = (project / "server.py").read_text()
     assert "TelnyxConnectionTransport" in server_py

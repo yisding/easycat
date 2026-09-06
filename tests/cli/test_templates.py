@@ -64,38 +64,71 @@ from tests._release_artifacts import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ``agent.py`` line budget per template (counts *all* lines including blanks).
+# Every template ships the importable make_agent()/make_app()/make_config()
+# shape with app-protecting generated tests (DX3).
 _LINE_BUDGETS: dict[str, int] = {
     "openai-agents": 23,
-    "provider": 12,
-    "provider-stt": 12,
-    "provider-tts": 12,
-    "pydantic-ai": 17,
-    "pydantic-ai-workflow": 20,
-    "text-chat": 17,
-    "twilio-phone": 15,
-    "telnyx-phone": 15,
-    "webrtc-browser": 14,
+    "provider": 25,
+    "provider-stt": 25,
+    "provider-tts": 25,
+    "pydantic-ai": 25,
+    "pydantic-ai-workflow": 45,
+    "text-chat": 25,
+    "twilio-phone": 13,
+    "telnyx-phone": 13,
+    "webrtc-browser": 25,
 }
 
-# Templates already migrated to the importable make_agent()/make_app() shape
-# with app-protecting generated tests.
-# PR2 deletes this; every guard below then parametrizes over sorted(_LINE_BUDGETS),
-# and ``test_template_ships_offline_agent_tests``'s ``if``/``else`` collapses to
-# the migrated branch, dropping the ``StubAgent`` assertion with it.
-_MIGRATED_TEMPLATES: frozenset[str] = frozenset({"openai-agents"})
+# Templates whose SDK-free logic lives in a separate tools.py — the static
+# mutation guard and the offline-test guard both need to know which templates
+# ship one, since ``import tools`` is only meaningful where tools.py exists.
+_TOOLS_MODULE_TEMPLATES: frozenset[str] = frozenset(
+    {
+        "openai-agents",
+        "pydantic-ai",
+        "pydantic-ai-workflow",
+        "twilio-phone",
+        "telnyx-phone",
+        "webrtc-browser",
+    }
+)
+
+# The generated test's primary factory import per template — the static
+# mutation guard (T4) requires each template's test to import at least this
+# name, so renaming or deleting it fails the guard with no SDK installed.
+_PRIMARY_FACTORY: dict[str, str] = {
+    "openai-agents": "make_agent",
+    "pydantic-ai": "make_agent",
+    "pydantic-ai-workflow": "make_workflow",
+    "text-chat": "make_agent",
+    "twilio-phone": "make_agent",
+    "telnyx-phone": "make_agent",
+    "webrtc-browser": "make_agent",
+    "provider": "make_agent",
+    "provider-stt": "make_agent",
+    "provider-tts": "make_agent",
+}
 
 # Line budgets for the SDK-free support modules the migrated templates ship.
 _SUPPORT_FILE_BUDGETS: dict[str, dict[str, int]] = {
     "openai-agents": {"tools.py": 10},
+    "pydantic-ai": {"tools.py": 8},
+    "pydantic-ai-workflow": {"tools.py": 8},
+    "twilio-phone": {"tools.py": 6},
+    "telnyx-phone": {"tools.py": 6},
+    "webrtc-browser": {"tools.py": 6},
 }
 
 _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
     "openai-agents": ("tools.py",),
+    "pydantic-ai": ("tools.py",),
+    "pydantic-ai-workflow": ("tools.py",),
     "provider": ("custom_vad.py", "test_custom_vad.py"),
     "provider-stt": ("custom_stt.py", "test_custom_stt.py"),
     "provider-tts": ("custom_tts.py", "test_custom_tts.py"),
-    "twilio-phone": ("server.py",),
-    "telnyx-phone": ("server.py",),
+    "twilio-phone": ("server.py", "tools.py"),
+    "telnyx-phone": ("server.py", "tools.py"),
+    "webrtc-browser": ("tools.py",),
 }
 
 # Per-template dev dependency groups; the provider package skeleton ships a
@@ -611,27 +644,43 @@ def _template_code_env_vars(name: str) -> tuple[set[str], set[str]]:
     return required, referenced
 
 
-def _uses_run_easyconfig_preset(source: str, preset: str) -> bool:
+def _builds_easyconfig_preset_and_runs_it(source: str, preset: str) -> bool:
+    """The module builds ``EasyConfig.<preset>(...)`` and runs it under ``__main__``.
+
+    Replaces the old ``_uses_run_easyconfig_preset`` (which required
+    ``run(EasyConfig.<preset>(...))`` as one expression): the factory shape
+    builds the config in ``make_config()`` and calls ``run(make_config())``
+    under the ``__main__`` guard instead, so the preset call and the ``run``
+    call are no longer the same expression.
+    """
     tree = ast.parse(source)
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Name) or node.func.id != "run":
-            continue
-        if not node.args:
-            continue
-        first_arg = node.args[0]
-        if (
-            isinstance(first_arg, ast.Call)
-            and isinstance(first_arg.func, ast.Attribute)
-            and first_arg.func.attr == preset
-            and isinstance(first_arg.func.value, ast.Name)
-            and first_arg.func.value.id == "EasyConfig"
-        ):
-            return True
+    builds_preset = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == preset
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "EasyConfig"
+        for node in ast.walk(tree)
+    )
+    if not builds_preset:
+        return False
 
-    return False
+    guarded: set[int] = set()
+    for node in ast.walk(tree):
+        if not _is_main_guard(node):
+            continue
+        assert isinstance(node, ast.If)
+        for child in node.body:
+            guarded.update(id(inner) for inner in ast.walk(child))
+
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "run"
+        and id(node) in guarded
+        for node in ast.walk(tree)
+    )
 
 
 def _is_main_guard(node: ast.AST) -> bool:
@@ -983,8 +1032,8 @@ def test_provider_templates_route_authors_to_provider_docs() -> None:
 def test_voice_templates_use_canonical_preset_shape(name: str) -> None:
     preset = _VOICE_TEMPLATE_PRESETS[name]
     agent = (_template_dir(name) / "agent.py").read_text(encoding="utf-8")
-    assert _uses_run_easyconfig_preset(agent, preset), (
-        f"{name}/agent.py must call run(EasyConfig.{preset}(...))"
+    assert _builds_easyconfig_preset_and_runs_it(agent, preset), (
+        f"{name}/agent.py must build EasyConfig.{preset}(...) and run it under __main__"
     )
 
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
@@ -1017,8 +1066,8 @@ def test_openai_agents_debug_guidance_requires_record_to_for_bundles() -> None:
 
 def test_text_chat_readme_points_voice_upgrade_to_mic_preset() -> None:
     readme = (_template_dir("text-chat") / "README.md").read_text(encoding="utf-8")
-    assert "EasyConfig.mic(agent=agent)" in readme
-    assert "EasyConfig(agent=agent)" not in readme
+    assert "EasyConfig.mic(agent=make_agent())" in readme
+    assert "EasyConfig(agent=make_agent())" not in readme
     assert "uv run easycat init my-voice-agent --template openai-agents" in readme
     assert "`easycat init my-voice-agent --template openai-agents`" not in readme
 
@@ -1033,26 +1082,31 @@ def test_text_chat_template_keeps_first_code_readable() -> None:
 
     assert '"""Text-mode EasyCat agent for prompt iteration."""' in agent
     assert "import asyncio" in agent
-    assert 'agent = Agent(name="$AGENT_NAME", instructions="$AGENT_INSTRUCTIONS")' in agent
-    assert "create_text_session(agent=agent)" in agent
+    assert "def make_agent() -> Agent:" in agent
+    assert "create_text_session(agent=make_agent())" in agent
     assert "create_text_session(agent=Agent(" not in agent
-    assert "asyncio.run(main())" in agent
+    assert "asyncio.run(chat())" in agent
+    assert 'if __name__ == "__main__":' in agent
 
 
 def test_pydantic_templates_keep_first_code_readable() -> None:
     single_agent = (_template_dir("pydantic-ai") / "agent.py").read_text(encoding="utf-8")
     workflow = (_template_dir("pydantic-ai-workflow") / "agent.py").read_text(encoding="utf-8")
-
-    assert "from datetime import datetime" in single_agent
-    assert "def current_time" in single_agent
-    assert single_agent.index("from datetime import datetime") < single_agent.index(
-        "def current_time"
+    workflow_tools = (_template_dir("pydantic-ai-workflow") / "tools.py").read_text(
+        encoding="utf-8"
     )
-    assert "\n\n@agent.tool_plain\n" in single_agent
-    assert "from datetime import datetime" not in single_agent.split("def current_time", 1)[1]
+
+    assert "from tools import current_time" in single_agent
+    assert "tools=[current_time]" in single_agent
+    assert "\n\n@agent.tool_plain\n" not in single_agent
+
     assert "\n\nclass SupportWorkflow:\n" in workflow
-    assert workflow.index("TECH_TERMS") < workflow.index("class SupportWorkflow")
-    assert 'key = "technical" if any(word in text.lower() for word in TECH_TERMS)' in workflow
+    assert workflow.index("pick_specialist") < workflow.index("class SupportWorkflow")
+    assert "key = pick_specialist(text)" in workflow
+    # The router — the interesting, SDK-free logic — and the terms it keys
+    # on live in tools.py, not in the module that imports pydantic_ai.
+    assert "TECH_TERMS" not in workflow
+    assert workflow_tools.index("TECH_TERMS") < workflow_tools.index("def pick_specialist")
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
@@ -1382,12 +1436,12 @@ def test_template_readme_explains_local_source_block(name: str) -> None:
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_ships_offline_agent_tests(name: str) -> None:
-    """Every scaffold ships a key-free test exercising the real turn pipeline.
+    """Every scaffold ships a key-free test exercising the real app and pipeline.
 
     Placeholders, not dollar signs, are what must never survive into a
-    generated project: a migrated template's test rejects a constant shaped
-    like an unrendered ``$PLACEHOLDER``, so a literal ``$`` in a user's own
-    agent name or instructions stays legitimate.
+    generated project: the test rejects a constant shaped like an unrendered
+    ``$PLACEHOLDER``, so a literal ``$`` in a user's own agent name or
+    instructions stays legitimate.
     """
     source = (_template_dir(name) / "tests" / "test_agent.py").read_text(encoding="utf-8")
 
@@ -1398,20 +1452,18 @@ def test_template_ships_offline_agent_tests(name: str) -> None:
     assert "assert_latency" in source
     # Key-free by construction: a scripted stand-in, never a live LLM client.
     assert "OPENAI_API_KEY" not in source
-    if name in _MIGRATED_TEMPLATES:
-        # The generated test exercises the real app, not a private stub of it.
-        assert "StubAgent" not in source
+    # The generated test exercises the real app, not a private stub of it.
+    assert "StubAgent" not in source
+    assert "from agent import" in source
+    assert "importorskip" in source
+    if name in _TOOLS_MODULE_TEMPLATES:
         assert "import tools" in source
-        assert "from agent import" in source
-        assert "importorskip" in source
-        # The rendered constants are checked against the *shape* of an
-        # unrendered placeholder, never against a bare ``"$"``: a dollar sign
-        # in a user's own agent name or instructions is legitimate text and
-        # must not fail their very first ``uv run pytest``.
-        assert r"\$[A-Z_]+" in source
-        assert '"$" not in' not in source
-    else:
-        assert "StubAgent" in source
+    # The rendered constants are checked against the *shape* of an
+    # unrendered placeholder, never against a bare ``"$"``: a dollar sign
+    # in a user's own agent name or instructions is legitimate text and
+    # must not fail their very first ``uv run pytest``.
+    assert r"\$[A-Z_]+" in source
+    assert '"$" not in' not in source
     # No placeholders — the same file works in every rendered project.
     for placeholder in ("$AGENT_NAME", "$AGENT_INSTRUCTIONS", "$PROJECT_NAME"):
         assert placeholder not in source
@@ -1488,8 +1540,33 @@ def test_telnyx_phone_template_authenticates_public_entrypoints() -> None:
 
 _STUB_BOUNDARY_PHRASE = "says nothing about live model quality"
 
+# The three provider* templates keep a module-level ``register()`` call in
+# ``agent.py`` (§3.3): it only mutates a provider registry, opens nothing, and
+# the package's entry point (``custom_*:register``) must keep targeting a
+# module-level callable. This is the one named exception to "no call at
+# module scope" the import-safety guard below allows, and only for that one
+# call, in those three templates.
+_ALLOWED_MODULE_SCOPE_CALL: dict[str, str] = {
+    "provider": "register",
+    "provider-stt": "register",
+    "provider-tts": "register",
+}
 
-@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+
+def _is_allowed_module_scope_call(node: ast.AST, name: str) -> bool:
+    allowed = _ALLOWED_MODULE_SCOPE_CALL.get(name)
+    return (
+        allowed is not None
+        and isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == allowed
+        and not node.value.args
+        and not node.value.keywords
+    )
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_entry_points_are_import_safe(name: str) -> None:
     """Importing a generated entry point must start no audio and no server."""
     cfg = InitConfig(
@@ -1516,12 +1593,14 @@ def test_template_entry_points_are_import_safe(name: str) -> None:
                     f"{name}/{filename} calls something at module scope"
                 )
                 continue
+            if _is_allowed_module_scope_call(node, name):
+                continue
             assert _is_main_guard(node), (
                 f"{name}/{filename} runs {ast.dump(node)[:60]}… at import time"
             )
 
 
-@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_tests_import_only_symbols_the_app_defines(name: str) -> None:
     """Renaming or deleting a tested app symbol must fail here, SDK or not."""
     template = _template_dir(name)
@@ -1537,10 +1616,10 @@ def test_template_tests_import_only_symbols_the_app_defines(name: str) -> None:
     assert imported <= defined, (
         f"{name} test imports undefined names: {sorted(imported - defined)}"
     )
-    assert {"make_agent"} <= imported
+    assert {_PRIMARY_FACTORY[name]} <= imported
 
 
-@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_offline_tests_cover_text_and_audio(name: str) -> None:
     """A text-only pass may never stand in for audio-pipeline coverage."""
     source = (_template_dir(name) / "tests" / "test_agent.py").read_text(encoding="utf-8")
@@ -1549,7 +1628,7 @@ def test_template_offline_tests_cover_text_and_audio(name: str) -> None:
     assert "run_scripted_audio_turn(" in source
 
 
-@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_offline_tests_name_their_stub_boundary(name: str) -> None:
     """The stub boundary is stated in both the generated test and AGENTS.md."""
     template = _template_dir(name)
@@ -1564,7 +1643,7 @@ def test_template_offline_tests_name_their_stub_boundary(name: str) -> None:
     assert "ScriptedReasoning" in agents_md
 
 
-@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_pytest_config_puts_the_project_on_sys_path(name: str) -> None:
     """``uv run pytest`` uses the console script, which never prepends the cwd."""
     cfg = InitConfig(
@@ -1662,25 +1741,68 @@ def test_rendered_templates_never_keep_a_dangling_separator(name: str, extra: st
         ast.parse(rendered, filename=str(py_file))
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {},
-        {"stt": "deepgram/flux"},
-        {"tts": "openai"},
-        {"mcp_servers": ["http://localhost:8931/mcp"]},
-    ],
-    ids=["defaults", "stt", "tts", "mcp"],
+# T11 only proves something for templates whose CLI-supplied stt=/tts=/
+# mcp_servers= flags actually reach a rendered VoiceApp(...)/EasyConfig(...)
+# call: text-chat has no audio config at all, and the three provider*
+# templates hard-code a *custom* provider string (``vad="energy"`` etc.) that
+# ``EasyConfig.mic`` cannot resolve without that package's own ``register()``
+# — that value-level guarantee is what their own generated test proves
+# instead (``test_register_makes_the_custom_*_selectable``).
+_CONFIG_BUILDER_FILE: dict[str, str] = {
+    "twilio-phone": "server.py",
+    "telnyx-phone": "server.py",
+}
+_T11_TEMPLATES: frozenset[str] = frozenset(_LINE_BUDGETS) - {
+    "text-chat",
+    "provider",
+    "provider-stt",
+    "provider-tts",
+}
+# Keywords that build a provider/config object rather than naming a provider
+# string (so ``ast.literal_eval`` must never be asked to evaluate them), plus
+# ``provider``, which selects the *transport* preset (``EasyConfig.phone``)
+# rather than an stt/tts backend and so has no place in an ``EasyConfig.mic``
+# call.
+_CONFIG_BUILDER_EXCLUDED_KWARGS: frozenset[str] = frozenset(
+    {"agent", "transport", "telephony", "provider"}
 )
-@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+
+
+def _config_builder_call(tree: ast.Module) -> ast.Call | None:
+    """Find the ``VoiceApp(...)`` or ``EasyConfig(...)``/``EasyConfig.<preset>(...)`` call."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in {"VoiceApp", "EasyConfig"}:
+            return node
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "EasyConfig"
+        ):
+            return node
+    return None
+
+
+def _t11_cases() -> list[tuple[str, dict[str, object]]]:
+    cases: list[tuple[str, dict[str, object]]] = [(name, {}) for name in sorted(_T11_TEMPLATES)]
+    for name in sorted(_T11_TEMPLATES):
+        if _TEMPLATE_SPECS[name].supports_audio_config:
+            cases.append((name, {"stt": "deepgram/flux"}))
+            cases.append((name, {"tts": "openai"}))
+            cases.append((name, {"mcp_servers": ["http://localhost:8931/mcp"]}))
+    return cases
+
+
+@pytest.mark.parametrize(("name", "overrides"), _t11_cases())
 def test_rendered_app_kwargs_resolve_to_real_providers(
     name: str, overrides: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The kwargs the renderer emits must name providers that really resolve.
 
-    ``VoiceApp(...)`` validates field *names* only, so this is the value-level
-    half: it parses (never imports) the rendered app and feeds the literal
-    kwargs to ``EasyConfig.mic`` plus the provider planner.
+    ``VoiceApp(...)``/``EasyConfig(...)`` validate field *names* only, so this
+    is the value-level half: it parses (never imports) the rendered app and
+    feeds the literal kwargs to ``EasyConfig.mic`` plus the provider planner.
     """
     from easycat.config import EasyConfig
     from easycat.planning.provider_plan import build_provider_plan
@@ -1701,21 +1823,15 @@ def test_rendered_app_kwargs_resolve_to_real_providers(
         **overrides,  # type: ignore[arg-type]
     )
     mapping = _substitutions(cfg, project_name="demo")
-    rendered = _render_text(
-        (_template_dir(name) / "agent.py").read_text(encoding="utf-8"), mapping
-    )
+    filename = _CONFIG_BUILDER_FILE.get(name, "agent.py")
+    rendered = _render_text((_template_dir(name) / filename).read_text(encoding="utf-8"), mapping)
 
-    call = next(
-        node
-        for node in ast.walk(ast.parse(rendered))
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "VoiceApp"
-    )
+    call = _config_builder_call(ast.parse(rendered))
+    assert call is not None, f"{name}/{filename} builds no VoiceApp/EasyConfig call"
     kwargs = {
         kw.arg: ast.literal_eval(kw.value)
         for kw in call.keywords
-        if kw.arg is not None and kw.arg != "agent"
+        if kw.arg is not None and kw.arg not in _CONFIG_BUILDER_EXCLUDED_KWARGS
     }
 
     config = EasyConfig.mic(agent=NoopAgent(), **kwargs)

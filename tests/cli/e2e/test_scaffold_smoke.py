@@ -249,8 +249,9 @@ def test_scaffold_offline_test_suite_passes(cli: CliRunner, tmp_path: Path, temp
     )
 
 
+@pytest.mark.parametrize("template", sorted(available_templates()))
 def test_scaffold_offline_tests_run_without_cwd_on_sys_path(
-    cli: CliRunner, tmp_path: Path
+    cli: CliRunner, tmp_path: Path, template: str
 ) -> None:
     """The documented ``uv run pytest`` must work, not just ``python -m pytest``.
 
@@ -264,7 +265,7 @@ def test_scaffold_offline_tests_run_without_cwd_on_sys_path(
     if runner is None:
         pytest.skip("console-script pytest not available; this test exists to exercise it")
 
-    project = _scaffold_project(cli, tmp_path, "openai-agents")
+    project = _scaffold_project(cli, tmp_path, template)
 
     proc = subprocess.run(
         [str(runner), "tests", "-q", "-p", "no:cacheprovider"],
@@ -312,15 +313,16 @@ def test_scaffold_offline_tests_pass_with_hostile_agent_text(
     )
 
 
+@pytest.mark.parametrize("template", sorted(available_templates()))
 def test_scaffold_offline_tests_pass_with_ambient_credentials_and_no_network(
-    cli: CliRunner, tmp_path: Path
+    cli: CliRunner, tmp_path: Path, template: str
 ) -> None:
     """Offline half of A2: ambient credentials present, provider traffic blocked."""
     credential = "sk-ambient-credential"
     env = _netguard_env(OPENAI_API_KEY=credential, DEEPGRAM_API_KEY="dg-ambient")
     _assert_netguard_is_loaded(env)
 
-    project = _scaffold_project(cli, tmp_path, "openai-agents")
+    project = _scaffold_project(cli, tmp_path, template)
 
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"],
@@ -359,6 +361,29 @@ def test_scaffold_offline_tests_fail_when_tool_behavior_breaks(
     assert proc.returncode != 0, "a broken tool did not fail the generated tests"
     assert "test_current_time_tool_speaks_hh_mm" in proc.stdout
     assert "test_two_turns_share_one_session" in proc.stdout
+
+
+def test_scaffold_offline_tests_fail_when_routing_behavior_breaks(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """A3, for a non-tool decision: breaking the router must fail the tests."""
+    project = _scaffold_project(cli, tmp_path, "pydantic-ai-workflow")
+    tools = project / "tools.py"
+    source = tools.read_text(encoding="utf-8")
+    seed = 'return "technical" if any(word in text.lower() for word in TECH_TERMS) else "billing"'
+    assert seed in source, f"stale seed: {seed!r} is no longer in the generated tools.py"
+    tools.write_text(source.replace(seed, 'return "billing"'), encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OPENAI_API_KEY": ""},
+        check=False,
+    )
+    assert proc.returncode != 0, "a broken router did not fail the generated tests"
+    assert "test_pick_specialist_routes_by_keyword" in proc.stdout
 
 
 def test_scaffold_app_wiring_tests_skip_cleanly_without_the_agent_sdk(
