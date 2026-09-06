@@ -58,8 +58,8 @@ def test_docs_toolchain_uses_the_shared_uv_lockfile() -> None:
     assert docs_group == [
         "mkdocs==1.6.1",
         "mkdocs-material==9.7.7",
-        "pygments==2.20.0",
-        "pymdown-extensions==11.0.1",
+        "pygments==2.21.0",
+        "pymdown-extensions==11.0.2",
     ]
     assert "astral-sh/setup-uv@" in workflow
     assert (
