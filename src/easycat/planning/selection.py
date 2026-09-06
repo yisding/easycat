@@ -196,8 +196,16 @@ def build_manifest_plan(
     return replace(plan, defects=tuple(defects))
 
 
-def _degraded_extra_roles(plan: ProviderPlan) -> list[tuple[str, str]]:
-    """``(role, extra)`` pairs recovered from the planner's degraded warnings."""
+def degraded_extra_roles(plan: ProviderPlan) -> list[tuple[str, str]]:
+    """``(role, extra)`` pairs recovered from the planner's degraded warnings.
+
+    THE ONLY parser of ``build_provider_plan``'s
+    ``f"{role}_extra_{extra}_missing_degraded"`` token. Every surface that needs
+    the pairs — :func:`plan_issues` here, ``doctor``'s ``SelectedApp``
+    derivation — calls this, so the token grammar has exactly one owner and a
+    change to its shape cannot leave one reader silently reporting "no degraded
+    extras".
+    """
     pairs: list[tuple[str, str]] = []
     for warning in plan.warnings:
         if not warning.endswith(_DEGRADED_SUFFIX):
@@ -220,7 +228,7 @@ def plan_issues(plan: ProviderPlan) -> tuple[SetupIssue, ...]:
     """
     missing_env = set(plan.missing_env)
     missing_extras = set(plan.missing_extras)
-    degraded = dict(_degraded_extra_roles(plan))
+    degraded = dict(degraded_extra_roles(plan))
 
     issues: list[SetupIssue] = []
     seen: set[tuple[str, str]] = set()
@@ -289,6 +297,7 @@ def plan_issues(plan: ProviderPlan) -> tuple[SetupIssue, ...]:
 
 __all__ = [
     "build_manifest_plan",
+    "degraded_extra_roles",
     "load_selected_profile",
     "plan_issues",
     "plan_selected_profile",

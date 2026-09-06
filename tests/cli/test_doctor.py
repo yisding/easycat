@@ -15,7 +15,8 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from easycat.cli._app import app
+from easycat.cli._app import _COMMAND_TEXT, app
+from easycat.cli.diagnose import _requirements as requirements_module
 from easycat.cli.diagnose import doctor as doctor_module
 from easycat.cli.diagnose._requirements import (
     RoleRequirement,
@@ -24,7 +25,7 @@ from easycat.cli.diagnose._requirements import (
     install_fix,
     selected_app_from_manifest,
 )
-from easycat.errors import EASYCAT_E202, REGISTRY
+from easycat.errors import EASYCAT_E202, REGISTRY, SetupIssue
 from easycat.planning import provider_plan
 from easycat.planning.selection import build_manifest_plan
 from easycat.project import load_manifest
@@ -1455,6 +1456,29 @@ _SELECTED_APP_CASES: tuple[tuple[str, str, str, dict[str, str], tuple[str, ...],
         },
     ),
     (
+        "phone-token-placeholder",
+        'transport = "twilio"\ntoken = "bearer-env:TW_TOK"',
+        "",
+        {"OPENAI_API_KEY": "sk-stub", "TW_TOK": "changeme"},
+        (),
+        {
+            "exit_code": 1,
+            "rows": {
+                "env_tw_tok": {
+                    "status": "fail",
+                    # E604 is what STARTUP raises for an UNSET reference var;
+                    # ``changeme`` is set, so ``EnvReference.resolve`` accepts
+                    # it and doctor must not name a code startup cannot produce.
+                    "code": "EASYCAT_E210",
+                    "field": "TW_TOK",
+                    "requirement": "required",
+                }
+            },
+            "detail_contains": {"env_tw_tok": "looks like a placeholder"},
+            "forbidden_codes": ["EASYCAT_E604"],
+        },
+    ),
+    (
         "phone-token-set",
         'transport = "twilio"\ntoken = "bearer-env:TW_TOK"',
         "",
@@ -1744,10 +1768,39 @@ def test_doctor_merges_scaffold_and_profile_requirements(
 
     payload = json.loads(result.stdout)
     checks = _checks(payload)
-    assert payload["selection"]["source"] == "scaffold+manifest"
+    selection = payload["selection"]
+    assert selection["source"] == "scaffold+manifest"
     assert checks["env_twilio_ws_port"]["code"] == "EASYCAT_E210"
     assert checks["env_deepgram"]["code"] == "EASYCAT_E203"
     assert checks["env_deepgram"]["role"] == "stt"
+
+    # The ``selection`` object is a wire contract of its own, not just a
+    # ``source`` tag: pin every field DX2 §1.3.7 specifies.
+    assert selection["profile"] == "default"
+    assert selection["manifest_path"] == str(manifest)
+    assert selection["template"] == "twilio-phone"
+    assert selection["required_env"] == [
+        "DEEPGRAM_API_KEY",
+        "OPENAI_API_KEY",
+        "TW_TOK",
+        "TWILIO_WS_PORT",
+    ]
+    assert selection["optional_env"] == []
+    roles = {role["role"]: role for role in selection["roles"]}
+    assert roles["stt"] == {
+        "role": "stt",
+        "provider": "deepgram",
+        "required_env": "DEEPGRAM_API_KEY",
+        "extra": "deepgram",
+        "capabilities": [],
+    }
+    assert roles["transport"] == {
+        "role": "transport",
+        "provider": "twilio",
+        "required_env": None,
+        "extra": "telephony",
+        "capabilities": ["8khz", "mulaw", "telephony"],
+    }
 
 
 def test_doctor_env_file_carries_manifest_reference_vars(
@@ -1767,6 +1820,18 @@ def test_doctor_env_file_carries_manifest_reference_vars(
     )
     env_file = tmp_path / ".env"
     env_file.write_text("SRV_TOK=from-file\nOPENAI_API_KEY=sk-from-file\n", encoding="utf-8")
+    # Nothing doctor PRINTS today depends on which environment snapshot the
+    # planner got (``check_env_vars`` reads the live environment inside
+    # ``_temporary_env``), so record the kwarg directly: this is the only
+    # assertion that fails if the snapshot moves back outside ``_temporary_env``.
+    recorded: dict[str, str] = {}
+    real_derivation = requirements_module.selected_app_from_manifest
+
+    def _recording_derivation(*args: object, environ: dict[str, str], **kwargs: object):
+        recorded.update(environ)
+        return real_derivation(*args, environ=environ, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(requirements_module, "selected_app_from_manifest", _recording_derivation)
 
     result = cli.invoke(
         app,
@@ -1777,6 +1842,150 @@ def test_doctor_env_file_carries_manifest_reference_vars(
     assert checks["env_srv_tok"]["status"] == "ok"
     assert checks["env_openai"]["status"] == "ok"
     assert result.exit_code == 0, result.stdout
+    assert recorded["SRV_TOK"] == "from-file"
+    assert recorded["OPENAI_API_KEY"] == "sk-from-file"
+
+
+def test_doctor_profile_flag_alone_discovers_the_manifest(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    """``--profile`` without ``--manifest`` uses the standard discovery order."""
+    monkeypatch.chdir(tmp_path)
+    _stub_sufficient_disk_space(monkeypatch)
+    _pin_extras(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    _write_manifest(tmp_path, 'transport = "webrtc"')
+
+    result = cli.invoke(app, ["doctor", "--profile", "default", "--json"])
+
+    payload = json.loads(result.stdout)
+    assert payload["selection"]["source"] == "manifest"
+    assert payload["selection"]["profile"] == "default"
+    assert payload["selection"]["manifest_path"] == str(tmp_path / "easycat.toml")
+
+
+def test_doctor_profile_flag_alone_reports_e601_when_nothing_is_found(
+    cli: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, empty_env: None
+) -> None:
+    """The other half of the activation rule: discovery failure is still coded."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("EASYCAT_MANIFEST", raising=False)
+
+    result = cli.invoke(app, ["doctor", "--profile", "default", "--json"])
+
+    assert result.exit_code != 0
+    assert json.loads(result.stdout)["code"] == "EASYCAT_E601"
+
+
+_CLI_DOC = Path(__file__).resolve().parents[2] / "docs" / "cli.md"
+
+
+def _documented_walkthrough_manifest() -> str:
+    """The ``easycat.toml`` heredoc from docs/cli.md's first-run walkthrough."""
+    text = _CLI_DOC.read_text(encoding="utf-8")
+    start = text.index("cat > easycat.toml <<'TOML'")
+    body = text[text.index("\n", start) + 1 :]
+    return body[: body.index("\nTOML\n") + 1]
+
+
+def test_documented_first_run_walkthrough_manifest_is_diagnosable(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    """docs/cli.md's walkthrough must actually reach the codes it advertises.
+
+    ``easycat init`` scaffolds an application, not a manifest, so the doc has to
+    write one; if that block is dropped or malformed the sequence aborts with
+    ``EASYCAT_E601`` instead of the E203 -> E202 -> green path it promises.
+    """
+    monkeypatch.chdir(tmp_path)
+    _stub_sufficient_disk_space(monkeypatch)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text(_documented_walkthrough_manifest(), encoding="utf-8")
+
+    _pin_extras(monkeypatch, "aiortc")
+    step_3 = json.loads(cli.invoke(app, ["doctor", "--manifest", "easycat.toml", "--json"]).stdout)
+    assert step_3["checks"], step_3
+    assert {row["code"] for row in step_3["checks"] if row["status"] == "fail"} == {
+        "EASYCAT_E203",
+        "EASYCAT_E202",
+    }
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    step_5 = json.loads(cli.invoke(app, ["doctor", "--manifest", "easycat.toml", "--json"]).stdout)
+    step_5_codes = {row["code"] for row in step_5["checks"] if row["status"] == "fail"}
+    assert step_5_codes == {"EASYCAT_E202"}
+
+    _pin_extras(monkeypatch)
+    step_7 = cli.invoke(app, ["doctor", "--manifest", "easycat.toml", "--json"])
+    assert step_7.exit_code == 0, step_7.stdout
+
+
+@pytest.mark.parametrize("run_from", ["manifest-dir", "elsewhere"])
+def test_doctor_extra_fix_respects_the_manifest_project_dependency_pin(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+    run_from: str,
+) -> None:
+    """The install fix classifies the MANIFEST's project, not the process CWD."""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "app"\ndependencies = ["easycat[openai]"]\n\n'
+        '[tool.uv.sources]\neasycat = { git = "https://x.invalid/e.git", rev = "abc" }\n',
+        encoding="utf-8",
+    )
+    manifest = _write_manifest(project, 'transport = "webrtc"')
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(project if run_from == "manifest-dir" else elsewhere)
+    _stub_sufficient_disk_space(monkeypatch)
+    _pin_extras(monkeypatch, "aiortc")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+
+    result = cli.invoke(app, ["doctor", "--manifest", str(manifest), "--json"])
+
+    row = _checks(json.loads(result.stdout))["extra_webrtc"]
+    assert row["code"] == "EASYCAT_E202"
+    assert "pyproject.toml" in row["fix"]
+    assert "uv sync" in row["fix"]
+    assert "uv add" not in row["fix"]
+
+
+_EXTRA_ROW_APP = SelectedApp(
+    source="manifest",
+    roles=(
+        RoleRequirement(
+            role="transport",
+            provider="webrtc",
+            extra="webrtc",
+            capabilities=frozenset({"browser"}),
+        ),
+    ),
+)
+_DEFECT_ROW_APP = SelectedApp(
+    source="manifest",
+    issues=(
+        SetupIssue(
+            reason="incomplete_selection",
+            field="[voice.default]",
+            code="EASYCAT_E602",
+            detail="twilio needs a token",
+            role="transport",
+        ),
+    ),
+)
 
 
 @pytest.mark.parametrize(
@@ -1789,6 +1998,8 @@ def test_doctor_env_file_carries_manifest_reference_vars(
         (lambda: doctor_module.check_microphone(), "hardware"),
         (lambda: doctor_module.check_journal_writable(), "filesystem"),
         (lambda: doctor_module.check_disk_space(), "filesystem"),
+        (lambda: doctor_module.check_selected_extras(_EXTRA_ROW_APP)[0], "static"),
+        (lambda: doctor_module.check_selection_defects(_DEFECT_ROW_APP)[0], "static"),
     ],
 )
 def test_doctor_rows_declare_their_probe_class(factory, expected: str) -> None:
@@ -1852,8 +2063,13 @@ def test_doctor_help_states_the_probe_boundary(cli: CliRunner) -> None:
     assert "configured credentials" in help_text
     assert "network liveness" in help_text
 
-    top = cli.invoke(app, ["--help"])
+    # A wide terminal so Rich does not ellipsize the Commands table before the
+    # assertion can read the row.
+    top = cli.invoke(app, ["--help"], env={"COLUMNS": "200"})
     top_text = " ".join(top.stdout.split())
+    short_help = _COMMAND_TEXT["doctor"].short_help
+    assert short_help is not None
+    assert f"doctor {short_help}" in top_text
     assert "never imported or run" not in top_text
 
 
@@ -2063,20 +2279,33 @@ def test_doctor_reports_one_row_per_unset_reference_var(
         assert len([row for row in payload["checks"] if row.get("field") == var]) == 1
 
 
+@pytest.mark.parametrize(
+    ("case_id", "profile_body", "absent"),
+    [
+        # Missing credential + missing extra, no plan defect.
+        ("gaps", 'transport = "webrtc"\nstt = "deepgram"', ("aiortc",)),
+        # A real ``ProviderPlan.defect`` (phone transport with no token), so the
+        # third assertion below compares against a NON-EMPTY set of codes.
+        ("defect", 'transport = "twilio"', ()),
+    ],
+)
 def test_doctor_requirement_rows_match_the_manifest_plan(
     cli: CliRunner,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     empty_env: None,
     no_network: None,
+    case_id: str,
+    profile_body: str,
+    absent: tuple[str, ...],
 ) -> None:
     """The drift anchor: doctor's failing rows equal the plan's blocking gaps."""
     monkeypatch.chdir(tmp_path)
     _stub_sufficient_disk_space(monkeypatch)
-    _pin_extras(monkeypatch, "aiortc")
+    _pin_extras(monkeypatch, *absent)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
-    manifest_path = _write_manifest(tmp_path, 'transport = "webrtc"\nstt = "deepgram"')
+    manifest_path = _write_manifest(tmp_path, profile_body)
 
     payload = json.loads(
         cli.invoke(app, ["doctor", "--manifest", str(manifest_path), "--json"]).stdout
@@ -2092,9 +2321,9 @@ def test_doctor_requirement_rows_match_the_manifest_plan(
         for row in checks
         if row.get("code") == "EASYCAT_E202" and row["status"] == "fail"
     } == set(plan.missing_extras)
-    assert {row["code"] for row in checks if row["status"] == "fail"} >= {
-        issue.code for issue in plan.defects
-    }
+    defect_codes = {issue.code for issue in plan.defects}
+    assert (defect_codes != set()) is (case_id == "defect")
+    assert {row["code"] for row in checks if row["status"] == "fail"} >= defect_codes
 
 
 # ── Pure units ─────────────────────────────────────────────────────────
@@ -2220,10 +2449,19 @@ def test_selected_app_codes_a_manifest_reference_var_as_e604() -> None:
     assert selected.code_for_env("OTHER") == "EASYCAT_E210"
 
 
-def test_doctor_selected_app_check_functions_are_pure() -> None:
-    """U-4: neither new check reads the environment nor imports a module."""
+def test_doctor_selected_app_check_functions_are_pure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """U-4: neither new check reads the environment nor imports a module.
+
+    The one filesystem touch is ``install_fix``'s ``pyproject.toml`` read, so it
+    is stubbed here AND pinned: it must be handed the selected app's project
+    root, not the process working directory.
+    """
+    manifest_path = tmp_path / "elsewhere" / "easycat.toml"
     selected = SelectedApp(
         source="manifest",
+        manifest_path=str(manifest_path),
         roles=(
             RoleRequirement(
                 role="transport",
@@ -2234,14 +2472,22 @@ def test_doctor_selected_app_check_functions_are_pure() -> None:
             ),
         ),
     )
+    roots: list[Path] = []
+    monkeypatch.setattr(
+        doctor_module,
+        "install_fix",
+        lambda extra, *, project_root: roots.append(project_root) or "stub fix",
+    )
     before_env = dict(os.environ)
     before_modules = sorted(sys.modules)
 
-    doctor_module.check_selected_extras(selected)
+    extras = doctor_module.check_selected_extras(selected)
     doctor_module.check_selection_defects(selected)
 
     assert dict(os.environ) == before_env
     assert sorted(sys.modules) == before_modules
+    assert roots == [manifest_path.parent]
+    assert extras[0].fix == "stub fix"
 
 
 def test_selected_app_checks_are_empty_without_a_selection() -> None:

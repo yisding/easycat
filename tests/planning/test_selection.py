@@ -10,6 +10,7 @@ from easycat.errors import EasyCatError
 from easycat.planning import provider_plan
 from easycat.planning.selection import (
     build_manifest_plan,
+    degraded_extra_roles,
     load_selected_profile,
     plan_issues,
     plan_selected_profile,
@@ -180,3 +181,20 @@ def test_plan_selected_profile_passes_an_unknown_provider_through(tmp_path: Path
         plan_selected_profile(voice_profile, profile="default", environ={})
 
     assert raised.value.code == "EASYCAT_E104"
+
+
+def test_degraded_extra_roles_is_the_one_parser_of_the_planner_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Doctor reads these pairs through this helper, never a private copy."""
+    _absent(monkeypatch, "livekit")
+    manifest = parse_manifest(
+        {
+            "project": {"name": "sel"},
+            "voice": {"default": {"transport": "webrtc"}},
+        }
+    )
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+
+    assert "echo_canceller_extra_aec_missing_degraded" in plan.warnings
+    assert degraded_extra_roles(plan) == [("echo_canceller", "aec")]
