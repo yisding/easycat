@@ -21,6 +21,7 @@ from easycat.planning.transport_registry import (
     TRANSPORT_BACKENDS,
     TRANSPORT_BACKENDS_BY_CONFIG_TYPE,
     VAD_BACKENDS,
+    RoleBackend,
     probe_module_for_extra,
 )
 
@@ -46,8 +47,11 @@ def test_vad_backends_cover_vad_literal() -> None:
     assert VAD_BACKENDS["silero"].extra == "silero-vad"
     assert VAD_BACKENDS["ten"].extra == "ten-vad"
     assert VAD_BACKENDS["funasr"].extra == "funasr-vad"
-    # Krisp is a commercial SDK with no pyproject extra.
+    # Krisp is a commercial SDK with no pyproject extra, so it declares the
+    # module to probe instead — see
+    # ``test_every_backend_without_an_extra_declares_a_probe_or_needs_none``.
     assert VAD_BACKENDS["krisp"].extra is None
+    assert VAD_BACKENDS["krisp"].probe_module == "krisp_audio"
 
 
 def test_noise_reducer_backends_cover_backend_literal() -> None:
@@ -56,6 +60,7 @@ def test_noise_reducer_backends_cover_backend_literal() -> None:
     assert set(NOISE_REDUCER_BACKENDS) == set(_VALID_NOISE_REDUCER_BACKENDS)
     assert NOISE_REDUCER_BACKENDS["rnnoise"].extra == "rnnoise"
     assert NOISE_REDUCER_BACKENDS["krisp"].extra is None
+    assert NOISE_REDUCER_BACKENDS["krisp"].probe_module == "krisp_audio"
 
 
 def test_echo_canceller_backends() -> None:
@@ -182,6 +187,73 @@ def test_transport_factory_dispatch_and_registry_agree() -> None:
         f"missing from the registry: {missing_from_registry}; "
         f"missing from the factory dispatch: {missing_from_factory}"
     )
+
+
+# Every backend that declares NO pip extra, and why it needs no probe module.
+# A backend absent from this map must declare ``probe_module`` — the planner has
+# no other way to notice that ``create_session`` would refuse to build it, and a
+# selection with neither is silently reported READY forever. Adding an entry here
+# is a deliberate statement that the backend needs no third-party import at all.
+_EXTRA_LESS_BACKENDS_NEEDING_NO_PROBE: dict[tuple[str, str], str] = {
+    ("transport", "websocket"): "stdlib + the core ``websockets`` dependency",
+    ("echo_canceller", "passthrough"): "the built-in no-op AEC; pure Python",
+    ("agent", "python"): "the user's own module; its imports are not EasyCat's",
+    ("agent", "none"): "``NoopAgent``; pure Python",
+}
+
+
+def test_every_backend_without_an_extra_declares_a_probe_or_needs_none() -> None:
+    # The D2 guard. ``VAD_BACKENDS["krisp"]`` reported READY on every machine
+    # without the commercial SDK for exactly this reason: no extra to probe and
+    # no probe module either. This test makes the next extra-less backend a
+    # deliberate decision rather than a silent repeat.
+    tables: dict[str, dict[str, RoleBackend]] = {
+        "transport": TRANSPORT_BACKENDS,
+        "vad": VAD_BACKENDS,
+        "noise_reducer": NOISE_REDUCER_BACKENDS,
+        "echo_canceller": ECHO_CANCELLER_BACKENDS,
+        "agent": AGENT_BACKENDS,
+    }
+    undeclared: list[str] = []
+    for role, table in tables.items():
+        for name, backend in table.items():
+            if backend.extra is not None or backend.probe_module is not None:
+                continue
+            if (role, name) in _EXTRA_LESS_BACKENDS_NEEDING_NO_PROBE:
+                continue
+            undeclared.append(f"{role}:{name}")
+    assert not undeclared, (
+        "These backends declare neither an install extra nor a probe module, so "
+        "the planner can never report them as unbuildable: "
+        + ", ".join(sorted(undeclared))
+        + ". Declare probe_module=..., or add the entry to "
+        "_EXTRA_LESS_BACKENDS_NEEDING_NO_PROBE with the reason it needs none."
+    )
+    # The allow-list must not rot either: every entry has to name a real,
+    # extra-less, probe-less backend.
+    stale = [
+        f"{role}:{name}"
+        for role, name in _EXTRA_LESS_BACKENDS_NEEDING_NO_PROBE
+        if name not in tables[role]
+        or tables[role][name].extra is not None
+        or tables[role][name].probe_module is not None
+    ]
+    assert not stale, f"stale _EXTRA_LESS_BACKENDS_NEEDING_NO_PROBE entries: {sorted(stale)}"
+
+
+def test_a_backend_declaring_an_extra_needs_no_probe_module() -> None:
+    # ``probe_module`` is only read when ``extra is None`` (an extra resolves its
+    # own probe through ``probe_module_for_extra``), so the two must not both be
+    # set — that would be two sources of truth for one backend.
+    for table in (
+        TRANSPORT_BACKENDS,
+        VAD_BACKENDS,
+        NOISE_REDUCER_BACKENDS,
+        ECHO_CANCELLER_BACKENDS,
+        AGENT_BACKENDS,
+    ):
+        for name, backend in table.items():
+            assert not (backend.extra is not None and backend.probe_module is not None), name
 
 
 def test_builtin_backend_roles_are_the_five() -> None:

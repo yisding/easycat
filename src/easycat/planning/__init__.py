@@ -49,6 +49,7 @@ from easycat.planning.provider_plan import (
     ProviderSelection,
     Role,
     build_provider_plan,
+    plan_to_dict,
     selection_to_dict,
 )
 from easycat.planning.transport_registry import (
@@ -67,5 +68,6 @@ __all__ = [
     "Role",
     "RoleBackend",
     "build_provider_plan",
+    "plan_to_dict",
     "selection_to_dict",
 ]

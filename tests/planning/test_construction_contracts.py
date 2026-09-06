@@ -12,8 +12,9 @@ backend actually builds, which is a different, already-covered code path).
 The two ``krisp`` rows are split in half on purpose: the CONSTRUCTION half
 (``create_vad`` / ``create_noise_reducer`` raises without the SDK) is a plain
 assertion that holds today and after every DX1 PR, while the PLAN half (the plan
-must block) is the D2 divergence and carries the ``xfail(strict=True)`` DX1-5
-has to delete.
+must block) was the D2 divergence. D2 is now FIXED — the planner reports a
+selected backend whose SDK is absent as a ``missing_backends`` gap — so both
+halves assert, and the ``xfail(strict=True)`` markers are gone.
 """
 
 from __future__ import annotations
@@ -130,31 +131,33 @@ def test_noise_reducer_krisp_raises_without_the_sdk(fallback_policy: str) -> Non
 
     ``create_noise_reducer`` raises for a krisp backend without the SDK today
     AND after DX1-5, which changes only the planner — so this half must stay a
-    plain passing assertion, never hidden behind the xfail below.
+    plain passing assertion, never folded into the plan-half row below.
     """
     _skip_if_installed("krisp_audio")
     with pytest.raises(RuntimeError):
         create_noise_reducer(NoiseReducerConfig(backend="krisp", fallback_policy=fallback_policy))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "D2: NOISE_REDUCER_BACKENDS['krisp'] declares extra=None, so the plan "
-        "reports ready although create_noise_reducer raises without the "
-        "krisp_audio SDK. DX1-5 makes an unbuildable backend a blocking gap "
-        "and must delete this marker."
-    ),
-)
 @pytest.mark.parametrize("fallback_policy", ["passthrough", "error"])
 def test_noise_reducer_krisp_plan_blocks(fallback_policy: str) -> None:
-    """The plan half of D2: a selection the session cannot build must block."""
+    """The plan half of D2: a selection the session cannot build must block.
+
+    ``NOISE_REDUCER_BACKENDS["krisp"]`` declares ``extra=None`` because Krisp
+    ships no PyPI package, so no missing-extra check can ever fire for it. It
+    declares ``probe_module="krisp_audio"`` instead and an absent SDK is reported
+    as an unbuildable BACKEND. (This row carried an ``xfail(strict=True)`` until
+    the fix landed.) The policy does not matter: an explicit ``krisp`` backend
+    never degrades to passthrough — the construction half above proves it raises
+    under both.
+    """
     _skip_if_installed("krisp_audio")
     plan = _plan(
         enable_noise_reduction=True,
         noise_reduction=NoiseReducerConfig(backend="krisp", fallback_policy=fallback_policy),
     )
     assert plan.has_blocking_errors, plan.selected["noise_reducer"]
+    assert plan.missing_backends == ("noise_reducer:krisp",)
+    assert "missing_backend:noise_reducer:krisp" in plan.blocking_errors()
 
 
 # ── Echo canceller ────────────────────────────────────────────────────
@@ -235,20 +238,19 @@ def test_vad_krisp_raises_without_the_sdk() -> None:
         create_vad(VADConfig(backend="krisp"))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "D2: VAD_BACKENDS['krisp'] declares extra=None, so the plan reports "
-        "ready although create_vad raises without the krisp_audio SDK. DX1-5 "
-        "makes an unbuildable backend a blocking gap and must delete this "
-        "marker."
-    ),
-)
 def test_vad_krisp_plan_blocks() -> None:
-    """The plan half of D2: a selection the session cannot build must block."""
+    """The plan half of D2: a selection the session cannot build must block.
+
+    ``VAD_BACKENDS["krisp"]`` declares ``extra=None`` (no PyPI package) and
+    ``probe_module="krisp_audio"``, so the absent SDK is reported as an
+    unbuildable BACKEND rather than a missing extra. (This row carried an
+    ``xfail(strict=True)`` until the fix landed.)
+    """
     _skip_if_installed("krisp_audio")
     plan = _plan(vad=VADConfig(backend="krisp"))
     assert plan.has_blocking_errors, plan.selected["vad"]
+    assert plan.missing_backends == ("vad:krisp",)
+    assert "missing_backend:vad:krisp" in plan.blocking_errors()
 
 
 def test_vad_auto_raises_and_blocks_on_silero_vad_when_the_whole_union_is_absent() -> None:

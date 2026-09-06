@@ -744,7 +744,9 @@ def test_every_json_command_has_an_envelope_assertion() -> None:
     )
 
 
-def _write_plan_manifest(tmp_path: Path, *, vad: str = "silero") -> Path:
+def _write_plan_manifest(
+    tmp_path: Path, *, vad: str = "silero", transport: str = "webrtc"
+) -> Path:
     manifest = tmp_path / "easycat.toml"
     manifest.write_text(
         "\n".join(
@@ -756,7 +758,7 @@ def _write_plan_manifest(tmp_path: Path, *, vad: str = "silero") -> Path:
                 'auth = "bearer-env:EASYCAT_SERVE_TOKEN"',
                 "",
                 "[voice.default]",
-                'transport = "webrtc"',
+                f'transport = "{transport}"',
                 'stt = "openai/realtime"',
                 'tts = "openai"',
                 f'vad = "{vad}"',
@@ -802,9 +804,43 @@ def test_plan_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
         assert isinstance(selection["capabilities"], list)
     assert isinstance(payload["missing_env"], list)
     assert isinstance(payload["missing_extras"], list)
+    assert isinstance(payload["missing_backends"], list)
     assert isinstance(payload["warnings"], list)
     assert isinstance(payload["blocking_errors"], list)
     assert payload["has_blocking_errors"] is False
+
+
+def test_plan_envelope_reports_missing_backends_without_extras(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The extras-free peer of ``test_plan_envelope``.
+
+    ``test_plan_envelope`` is gated on three ``importorskip`` calls and SKIPS in
+    a dev-group-only environment (``just check``, ``easycat validate quick``), so
+    it gates nothing about the plan envelope there. ``websocket`` + ``krisp``
+    need no installed extra at all, so this row runs everywhere — and it is the
+    one that pins the ``missing_backends`` key, whose whole point is a selection
+    that has no extra to be missing.
+
+    The probe seam is forced rather than trusted: a machine that HAS the Krisp
+    SDK would otherwise report a ready plan.
+    """
+    manifest = _write_plan_manifest(tmp_path, vad="krisp", transport="websocket")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available",
+        lambda name: name != "krisp_audio",
+    )
+
+    result = cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "plan")
+    assert payload["missing_backends"] == ["vad:krisp"]
+    assert payload["missing_extras"] == []
+    assert "missing_backend:vad:krisp" in payload["blocking_errors"]
+    assert payload["has_blocking_errors"] is True
 
 
 def test_plan_missing_manifest_error_envelope(cli: CliRunner, tmp_path: Path) -> None:

@@ -36,6 +36,42 @@ class _Agent:
         return "ok"
 
 
+class _InjectedSTT:
+    """A live STT object: no catalog entry, no config class, nothing to look up."""
+
+    async def start_stream(self) -> None: ...
+
+    async def send_audio(self, _chunk: object) -> None: ...
+
+    async def commit_segment(self) -> None: ...
+
+    async def end_stream(self) -> None: ...
+
+    async def events(self):
+        if False:  # pragma: no cover - shape-only async generator
+            yield None
+
+
+class _InjectedTTS:
+    async def synthesize(self, _text: str):
+        if False:  # pragma: no cover - shape-only async generator
+            yield None
+
+    async def stop(self) -> None: ...
+
+    async def cancel(self) -> None: ...
+
+
+class _InjectedVAD:
+    """A live VAD, so a noise/AEC row is not blocked by the default VAD's extra."""
+
+    def configure(self, **_kwargs: object) -> None: ...
+
+    async def process(self, _chunk: object):
+        if False:  # pragma: no cover - shape-only async generator
+            yield None
+
+
 def _config(**overrides: object) -> EasyConfig:
     kwargs: dict[str, object] = {
         "stt": "openai",
@@ -367,9 +403,219 @@ def test_late_smart_turn_override_keeps_the_vad_role_and_its_extra(
     assert "silero-vad" in resolved.missing_extras
 
 
-def test_missing_backends_is_empty_until_a_later_workstream() -> None:
+# ── Selections the session cannot construct ──────────────────────────
+
+
+def test_missing_backends_is_empty_for_a_fully_available_pipeline() -> None:
     resolved = resolve_from_easyconfig(_config(), probe=ProbeEnvironment.fake(default=True))
     assert resolved.missing_backends == ()
+
+
+def test_missing_probe_module_without_an_extra_is_a_blocking_backend_gap() -> None:
+    """DX1-D2: a commercial backend with no pip extra must still be able to block.
+
+    ``VAD_BACKENDS["krisp"]`` declares ``extra=None`` because Krisp ships no PyPI
+    package, so ``_role_gap`` (which resolves a probe module FROM the extra) can
+    never fire for it — while ``create_vad(VADConfig(backend="krisp"))`` raises on
+    every machine without the SDK. The backend's own ``probe_module`` closes that,
+    and the gap is reported separately from ``missing_extras`` because there is no
+    extra to install.
+    """
+    resolved = resolve_from_easyconfig(
+        _config(vad=VADConfig(backend="krisp")),
+        probe=ProbeEnvironment.fake(
+            env={"OPENAI_API_KEY": "sk-resolution-test"},
+            unavailable=["krisp_audio"],
+            default=True,
+        ),
+    )
+    assert resolved.missing_backends == ("vad:krisp",)
+    # Reported as its OWN gap class: there is no extra to name, so
+    # ``missing_extras`` must stay untouched.
+    assert resolved.missing_extras == ()
+
+    plan = _plan_with_probe(
+        _config(vad=VADConfig(backend="krisp")),
+        probe=ProbeEnvironment.fake(
+            env={"OPENAI_API_KEY": "sk-resolution-test"},
+            unavailable=["krisp_audio"],
+            default=True,
+        ),
+    )
+    assert plan.missing_backends == ("vad:krisp",)
+    assert "missing_backend:vad:krisp" in plan.blocking_errors()
+    assert plan.has_blocking_errors is True
+    assert plan.missing_extras == ()
+
+
+def test_present_probe_module_is_not_a_gap() -> None:
+    """The SAME selection on a machine that HAS the SDK is buildable, so no gap."""
+    resolved = resolve_from_easyconfig(
+        _config(vad=VADConfig(backend="krisp")),
+        probe=ProbeEnvironment.fake(
+            env={"OPENAI_API_KEY": "sk-resolution-test"},
+            available=["krisp_audio"],
+            default=True,
+        ),
+    )
+    assert resolved.missing_backends == ()
+    assert resolved.roles["vad"].provider == "krisp"
+    assert resolved.roles["vad"].probe_module == "krisp_audio"
+
+
+def test_a_backend_declaring_an_extra_never_becomes_a_backend_gap() -> None:
+    """An extra-bearing backend keeps the missing-EXTRA path, unchanged.
+
+    ``silero`` is absent here in exactly the same way ``krisp`` is above, and it
+    must still be reported as ``missing_extras=("silero-vad",)`` — the operator
+    fix is ``uv sync --extra silero-vad``, which ``missing_backends`` cannot
+    express.
+    """
+    resolved = resolve_from_easyconfig(
+        _config(),
+        probe=ProbeEnvironment.fake(
+            env={"OPENAI_API_KEY": "sk-resolution-test"},
+            unavailable=["onnxruntime"],
+            default=True,
+        ),
+    )
+    assert resolved.roles["vad"].provider == "silero"
+    assert resolved.missing_extras == ("silero-vad",)
+    assert resolved.missing_backends == ()
+
+
+def test_degrading_backend_is_never_a_backend_gap() -> None:
+    """An auto chain that falls back to passthrough warns; it never blocks.
+
+    ``create_noise_reducer`` with ``backend="auto"`` and the default
+    ``fallback_policy="passthrough"`` returns a no-op reducer instead of raising
+    when nothing is installed, so ``/health/ready`` must stay ready however many
+    probes are absent.
+    """
+    from easycat.noise_reduction import NoiseReducerConfig
+
+    resolved = resolve_from_easyconfig(
+        _config(
+            enable_noise_reduction=True,
+            noise_reduction=NoiseReducerConfig(backend="auto", fallback_policy="passthrough"),
+            vad=_InjectedVAD(),
+        ),
+        # EVERY probe absent, so nothing is available to hide behind.
+        probe=ProbeEnvironment.fake(env={"OPENAI_API_KEY": "sk-resolution-test"}, default=False),
+    )
+    assert "degrades_to_passthrough" in resolved.roles["noise_reducer"].capabilities
+    assert resolved.missing_backends == ()
+    assert resolved.missing_extras == ()
+    assert any("degraded" in warning for warning in resolved.warnings)
+
+
+def test_a_disabled_role_never_contributes_a_backend_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A skipped stage is not a requirement — the same rule env/extras follow.
+
+    ``deepgram/flux-general-en`` owns endpointing, so ``create_session`` builds no
+    VAD at all and the absent Krisp SDK is not a gap for this deployment.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-resolution-test")
+    resolved = resolve_from_easyconfig(
+        _config(stt="deepgram/flux-general-en", vad=VADConfig(backend="krisp")),
+        probe=ProbeEnvironment.fake(env=_NATIVE_ENDPOINTING_ENV, unavailable=["krisp_audio"]),
+    )
+    assert resolved.roles["vad"].enabled is False
+    assert resolved.missing_backends == ()
+
+
+# ── Injected stt/tts providers ───────────────────────────────────────
+
+
+def test_injected_stt_and_tts_report_unknown_capabilities() -> None:
+    """DX1-D3: a live injected provider is opaque, not capability-free.
+
+    ``capabilities=frozenset()`` reads as "a known provider that declares no
+    capabilities" — the opposite of the truth for an object EasyCat cannot
+    introspect. ``{"injected"}`` is the representation the vad / noise_reducer /
+    echo_canceller roles have always used; stt and tts now match.
+    """
+    resolved = resolve_from_easyconfig(
+        _config(stt=_InjectedSTT(), tts=_InjectedTTS()),
+        probe=ProbeEnvironment.fake(default=True),
+    )
+    for role, expected in (("stt", "_InjectedSTT"), ("tts", "_InjectedTTS")):
+        decision = resolved.roles[role]
+        assert decision.capabilities == frozenset({"injected"}), role
+        assert decision.provider == expected
+        assert decision.config_type == expected
+        assert decision.extra is None
+        assert decision.required_env is None
+    # No credential is invented for an object that needs none, so an injected
+    # pipeline is not blocked by an env var it never reads.
+    assert "OPENAI_API_KEY" not in resolved.missing_env
+
+
+def test_injected_stt_does_not_claim_native_endpointing() -> None:
+    """The ``{"injected"}`` tag must not accidentally satisfy the turn policy.
+
+    ``_decide_auto_turn`` reads ``"native_endpointing" in stt.capabilities``, so an
+    opaque STT keeps EasyCat's own VAD stage — the conservative answer, and the
+    one ``create_session`` takes (``_stt_uses_native_endpointing`` asks the
+    catalog, which knows nothing about a live object).
+    """
+    resolved = resolve_from_easyconfig(
+        _config(stt=_InjectedSTT()), probe=ProbeEnvironment.fake(default=True)
+    )
+    assert resolved.auto_turn_from_stt_final is False
+    assert resolved.enable_vad is True
+
+
+def test_a_registered_config_instance_still_reports_its_catalog_capabilities() -> None:
+    """The injected branch must not swallow a REGISTERED third-party config.
+
+    ``catalog.is_config_instance`` is checked first for vad/noise/aec, and an stt
+    config is not a live provider, so declared capabilities survive.
+    """
+    from easycat.vad.factory import _CATALOG as vad_catalog
+
+    class _EnergyVADConfig:
+        pass
+
+    class _EnergyVAD:
+        def configure(self, **_kwargs: object) -> None: ...
+
+        async def process(self, _chunk: object):
+            if False:  # pragma: no cover - shape-only async generator
+                yield None
+
+    tables = (
+        "providers",
+        "env_vars",
+        "extras",
+        "api_domains",
+        "probe_modules",
+        "capabilities",
+        "capability_resolvers",
+        "config_to_provider",
+    )
+    saved = {name: dict(getattr(vad_catalog, name)) for name in tables}
+    discovered = vad_catalog._discovered
+    try:
+        from easycat.vad.factory import register_vad_provider
+
+        register_vad_provider(
+            "energy", _EnergyVAD, _EnergyVADConfig, capabilities=frozenset({"offline"})
+        )
+        resolved = resolve_from_easyconfig(
+            _config(vad=_EnergyVADConfig()), probe=ProbeEnvironment.fake(default=True)
+        )
+    finally:
+        for name, entries in saved.items():
+            table = getattr(vad_catalog, name)
+            table.clear()
+            table.update(entries)
+        object.__setattr__(vad_catalog, "_discovered", discovered)
+
+    assert resolved.roles["vad"].provider == "energy"
+    assert resolved.roles["vad"].capabilities == frozenset({"offline"})
 
 
 # ── Import weight ────────────────────────────────────────────────────

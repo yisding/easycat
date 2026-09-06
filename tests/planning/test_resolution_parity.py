@@ -10,25 +10,23 @@ provider constructor is RECORDED (never executed for real) via
 ``tests/planning/_recording.py``, so every row runs on the dev group with no
 ``pytest.importorskip``.
 
-Two divergences are still live at this revision and characterized here as
-``xfail(strict=True)``, so the PR that fixes each one MUST delete its marker
-or the suite fails:
+Every divergence this table characterized is now FIXED, and each row asserts the
+fix instead of carrying an ``xfail(strict=True)``:
 
+* **D1** (``native_endpointing_stt``) — the planner reports the ``vad`` role
+  ``off`` when the STT owns endpointing, matching the stage ``create_session``
+  skips, so a VAD extra is no longer a blocking gap for a deployment that starts
+  fine.
 * **D2** (``commercial_backend_without_sdk_*``) — a selected backend whose
-  commercial SDK is absent has no pip extra, so it is never a blocking gap.
-  These two rows cannot compare constructed values at all (construction raises
-  and will keep raising after the fix, which touches only the planner), so they
-  assert both halves of the divergence instead: that construction raises
-  (unconditionally) and that the plan blocks (the xfailing half).
-* **D3** (``custom_stt_reports_unknown_capabilities``) — an injected STT is
+  commercial SDK is absent used to have no pip extra and therefore no blocking
+  gap. It now declares a ``probe_module`` and an absent SDK is reported in
+  ``missing_backends``. These two rows cannot compare constructed values at all
+  (construction raises, and keeps raising — the fix touches only the planner), so
+  they assert both halves: that construction raises AND that the plan blocks.
+* **D3** (``custom_stt_reports_unknown_capabilities``) — an injected STT was
   described as a provider with no capabilities, indistinguishable from a
-  known-capability-free provider (an injected VAD/noise/AEC gets
-  ``{"injected"}``).
-
-**D1** (``native_endpointing_stt``) is FIXED: the planner now reports the
-``vad`` role ``off`` when the STT owns endpointing, matching the stage
-``create_session`` skips, so a VAD extra is no longer a blocking gap for a
-deployment that starts fine. The row asserts both halves and carries no marker.
+  known-capability-free provider. It is now tagged ``{"injected"}``, the same as
+  an injected VAD/noise/AEC.
 
 D4 (a registered third-party AEC config or injected AEC instance reports
 ``enable_echo_cancellation=False`` although a canceller was built) is
@@ -537,11 +535,19 @@ def _custom_stt_capability_check(
     plan: ProviderPlan, built: ConstructedInputs, config: EasyConfig
 ) -> None:
     del built, config
-    # D3: an injected STT should be tagged {"injected"} the same way an
-    # injected VAD/noise-reducer/AEC instance is (see
-    # ``_resolution._injected_decision``); today it falls through to the empty
-    # capability set instead.
+    # DX1-D3: an injected STT is tagged {"injected"} the same way an injected
+    # VAD/noise-reducer/AEC instance is (``_resolution._injected_decision``). It
+    # used to fall through to ``catalog.capabilities_for(<class name>)`` -> the
+    # empty set, which reads as "a known provider that declares no capabilities"
+    # — the opposite of the truth. (This row carried an ``xfail(strict=True)``
+    # until the fix landed.)
     assert plan.selected["stt"].capabilities == frozenset({"injected"})
+    # The rest of the selection is unchanged by the fix: the class name still
+    # names the provider and the config type, and no extra/env is invented.
+    assert plan.selected["stt"].provider == "_DuckSTT"
+    assert plan.selected["stt"].config_type == "_DuckSTT"
+    assert plan.selected["stt"].extra is None
+    assert plan.selected["stt"].required_env is None
 
 
 def _custom_transport_instance(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:
@@ -645,6 +651,9 @@ class _Row:
     # blocks is the only honest verdict for a config the session cannot build)
     # rather than trying to compare a construction that never completed.
     expects_construction_error: type[BaseException] | None = None
+    # The exact ``ProviderPlan.missing_backends`` tuple such a row must report, so
+    # "the plan blocks" cannot be satisfied by an unrelated gap.
+    expects_missing_backends: tuple[str, ...] | None = None
 
 
 _ROWS: dict[str, _Row] = {
@@ -695,40 +704,27 @@ _ROWS: dict[str, _Row] = {
         passthrough=frozenset({"vad"}),
         skip_if_installed="krisp_audio",
         expects_construction_error=RuntimeError,
+        expects_missing_backends=("vad:krisp",),
     ),
     "commercial_backend_without_sdk_noise": _Row(
         _commercial_backend_without_sdk_noise,
         passthrough=frozenset({"noise"}),
         skip_if_installed="krisp_audio",
         expects_construction_error=RuntimeError,
+        expects_missing_backends=("noise_reducer:krisp",),
     ),
     "third_party_aec_config_reports_disabled": _Row(
         _third_party_aec_config_reports_disabled, checks=_third_party_aec_checks
     ),
 }
 
-_XFAIL_ROWS: dict[str, str] = {
-    # DX1-D1 ``native_endpointing_stt`` used to live here; the planner now
-    # reports the skipped VAD stage, so the row asserts the fix instead.
-    "custom_stt_reports_unknown_capabilities": (
-        "D3: an injected STT is described with capabilities=frozenset(), "
-        "indistinguishable from a known-capability-free provider, while an "
-        "injected VAD/noise/AEC instance is tagged {'injected'}."
-    ),
-    "commercial_backend_without_sdk_vad": (
-        "D2: VADConfig(backend='krisp') has no pip extra, so the plan reports "
-        "ready even though create_vad('krisp') raises without the krisp_audio "
-        "SDK. The xfailing assertion is the PLAN one (has_blocking_errors); "
-        "the construction raise is asserted unconditionally."
-    ),
-    "commercial_backend_without_sdk_noise": (
-        "D2: NoiseReducerConfig(backend='krisp') has no pip extra, so the plan "
-        "reports ready even though create_noise_reducer raises without the "
-        "krisp_audio SDK. The xfailing assertion is the PLAN one "
-        "(has_blocking_errors); the construction raise is asserted "
-        "unconditionally."
-    ),
-}
+# DX1-D1 (``native_endpointing_stt``), DX1-D2 (``commercial_backend_without_sdk_*``)
+# and DX1-D3 (``custom_stt_reports_unknown_capabilities``) each carried an
+# ``xfail(strict=True)`` here until their fix landed. The table is empty on
+# purpose rather than deleted: a future characterization row can register a
+# divergence without reinventing the mechanism, and an empty mapping keeps
+# ``_make_param`` honest.
+_XFAIL_ROWS: dict[str, str] = {}
 
 
 def _make_param(case_id: str) -> Any:
@@ -749,19 +745,21 @@ def test_preview_matches_constructed_values(case_id: str, monkeypatch: pytest.Mo
 
     if row.expects_construction_error is not None:
         # The session genuinely cannot be built for this config, so there is no
-        # ``ConstructedInputs`` to compare against. Assert BOTH halves of the
-        # divergence instead: construction raises (true today and after the fix
-        # — DX1-5 changes only the planner, never ``create_vad`` /
-        # ``create_noise_reducer``), and the plan must block. The second half is
-        # what is false today, so it — not an unhandled constructor error — is
-        # what carries the ``xfail(strict=True)``, and it flips to an xpass the
-        # moment the planner learns to report an unbuildable backend.
+        # ``ConstructedInputs`` to compare against. Assert BOTH halves instead:
+        # construction raises (true before and after the D2 fix — it changed only
+        # the planner, never ``create_vad`` / ``create_noise_reducer``), and the
+        # plan blocks. The second half is the one that used to be false and
+        # carried the ``xfail(strict=True)``.
         with pytest.raises(row.expects_construction_error):
             capture_construction(monkeypatch, config, passthrough=row.passthrough)
         assert plan.has_blocking_errors, (
             "the plan must block when create_session cannot construct the "
             f"selection: {plan.selected}"
         )
+        if row.expects_missing_backends is not None:
+            # ...and blocks for the RIGHT reason. Without this the row would pass
+            # on any unrelated gap (a missing credential, another role's extra).
+            assert plan.missing_backends == row.expects_missing_backends
         return
 
     built = capture_construction(monkeypatch, config, passthrough=row.passthrough)

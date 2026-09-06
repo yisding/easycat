@@ -85,6 +85,30 @@ _LISTENER_CLEANUP_COHORT = "voice-server-listener-cleanup"
 _SESSION_SWEEP_TASK = "voice_server_session_sweep"
 _SESSION_SWEEP_COHORT = "voice-server-session-sweep"
 
+# The gap tuples every ``/plan`` payload carries. ``plan_payload`` has three
+# branches and only ONE of them has a resolved ``ProviderPlan`` to project
+# through ``easycat.planning.plan_to_dict``; the other two build their payload by
+# hand. Sharing the empty shape here keeps ``/plan``'s TOP-LEVEL KEY SET
+# branch-independent, so a client doing ``payload["missing_backends"]`` cannot
+# hit a ``KeyError`` on the unresolvable-profile path — which is exactly the
+# diagnostic case where it matters most.
+_EMPTY_PLAN_GAP_KEYS: tuple[str, ...] = (
+    "missing_env",
+    "missing_extras",
+    "missing_backends",
+    "warnings",
+)
+
+
+def _empty_plan_gaps() -> dict[str, list[str]]:
+    """The four gap tuples of a payload with no resolved plan, all empty.
+
+    A function rather than a module-level dict constant so each payload owns its
+    OWN lists: spreading a shared constant would alias the same mutable lists
+    into every response.
+    """
+    return {key: [] for key in _EMPTY_PLAN_GAP_KEYS}
+
 
 class _ListenerCleanupWaitResult(Enum):
     COMPLETED = auto()
@@ -1221,14 +1245,16 @@ class VoiceServer:
         documented empty plan (``selected={}``) — there is no manifest profile to
         plan. No resolved token can appear: the planner reads only provider
         metadata (names/extras/env-var NAMES), never secret values.
+
+        All three branches emit the SAME top-level keys: the resolved one through
+        :func:`easycat.planning.plan_to_dict`, the other two through
+        :func:`_empty_plan_gaps`.
         """
         if self._manifest is None:
             return {
                 "profile": self.config.profile,
                 "selected": {},
-                "missing_env": [],
-                "missing_extras": [],
-                "warnings": [],
+                **_empty_plan_gaps(),
                 "blocking_errors": [],
                 "has_blocking_errors": False,
                 "manifest_loaded": self._manifest_load_error is None,
@@ -1241,27 +1267,14 @@ class VoiceServer:
             return {
                 "profile": profile,
                 "selected": {},
-                "missing_env": [],
-                "missing_extras": [],
-                "warnings": [],
+                **_empty_plan_gaps(),
                 "blocking_errors": [error],
                 "has_blocking_errors": True,
                 "manifest_loaded": True,
             }
-        from easycat.planning import selection_to_dict
+        from easycat.planning import plan_to_dict
 
-        return {
-            "profile": plan.profile,
-            "selected": {
-                role: selection_to_dict(selection) for role, selection in plan.selected.items()
-            },
-            "missing_env": list(plan.missing_env),
-            "missing_extras": list(plan.missing_extras),
-            "warnings": list(plan.warnings),
-            "blocking_errors": list(plan.blocking_errors()),
-            "has_blocking_errors": plan.has_blocking_errors,
-            "manifest_loaded": True,
-        }
+        return {**plan_to_dict(plan), "manifest_loaded": True}
 
     def metrics_payload(self) -> dict[str, Any]:
         """Return the read-only ``GET /metrics`` JSON payload (M8).
