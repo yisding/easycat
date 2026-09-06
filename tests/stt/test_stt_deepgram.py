@@ -215,6 +215,56 @@ def _deepgram_turn_info(
     return json.dumps(payload)
 
 
+async def _no_reconnect_backoff(delay: float) -> None:
+    """Fail a test that reaches the reconnect backoff instead of waiting it out."""
+    raise AssertionError(f"unexpected reconnect backoff of {delay}s")
+
+
+class ServerClosingMockWebSocket:
+    """Socket that terminates itself after ``CloseStream``, as Deepgram does.
+
+    Deepgram's docs say the server answers ``CloseStream`` with the remaining
+    results and metadata "and then terminate[s] the WebSocket connection".
+    ``MockWebSocket`` raises ``StopAsyncIteration`` without setting
+    ``close_code``, so ``recv_iter`` returns cleanly and the reconnect path is
+    never exercised — the real ``websockets`` client sets ``close_code`` on a
+    server close (gh 1066).
+    """
+
+    _STOP = object()
+
+    def __init__(self, messages: list[str | bytes] | None = None) -> None:
+        self.sent: list[bytes | str] = []
+        self.close_code: int | None = None
+        self.close_reason: str | None = None
+        self._queue: asyncio.Queue[str | bytes | object] = asyncio.Queue()
+        for message in messages or []:
+            self._queue.put_nowait(message)
+
+    async def send(self, data: bytes | str) -> None:
+        self.sent.append(data)
+        if not isinstance(data, str):
+            return
+        if json.loads(data).get("type") == "CloseStream":
+            self._queue.put_nowait(json.dumps({"type": "Metadata"}))
+            self._queue.put_nowait(self._STOP)
+
+    async def close(self) -> None:
+        self._queue.put_nowait(self._STOP)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str | bytes:
+        message = await self._queue.get()
+        if message is self._STOP:
+            self.close_code = 1000
+            self.close_reason = "server closed after CloseStream"
+            raise StopAsyncIteration
+        assert isinstance(message, (str, bytes))
+        return message
+
+
 def _make_deepgram_stt(
     messages: list[str | bytes] | None = None,
     *,
@@ -526,6 +576,96 @@ def test_deepgram_flux_build_url_uses_v2_without_legacy_params():
 
 
 # ── Multiple streams ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_non_persistent_close_does_not_reconnect_or_stall(monkeypatch):
+    """Deepgram's expected end-of-stream close must be terminal (gh 1066).
+
+    ``_connect_new_websocket`` wires ``on_reconnect`` unconditionally, and
+    ``recv_iter`` treated *any* ``ConnectionClosed`` — a graceful code-1000
+    close included — as a transient drop whenever such a hook exists.  So the
+    server's documented post-``CloseStream`` shutdown opened a replacement
+    connection just to tear it down, emitted a spurious provider error, and
+    left the receive task alive until the whole ``close_timeout`` expired:
+    about five seconds of dead latency at the end of every turn, since
+    ``end_stream()`` is awaited by the STT committer.
+    """
+    connects = 0
+    sockets: list[ServerClosingMockWebSocket] = []
+
+    async def mock_connect(url, **kwargs):
+        nonlocal connects
+        connects += 1
+        ws = ServerClosingMockWebSocket([_deepgram_result("hello", is_final=True)])
+        sockets.append(ws)
+        return ws
+
+    errors: list[Error] = []
+    bus = EventBus()
+    bus.subscribe(Error, errors.append)
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            persistent_ws=False,
+            ws_connect=mock_connect,
+            event_bus=bus,
+        )
+    )
+    # A reconnect would sleep on the backoff; fail loudly instead of waiting.
+    monkeypatch.setattr(
+        "easycat.reconnecting_ws.asyncio.sleep",
+        _no_reconnect_backoff,
+    )
+
+    events = await asyncio.wait_for(
+        collect_stt_events(stt, make_audio_chunks(generate_pcm_sine(duration_ms=100))),
+        timeout=2,
+    )
+
+    assert [e.text for e in events] == ["hello"]
+    assert connects == 1, "the expected close must not open a replacement socket"
+    assert errors == [], f"no provider error is warranted here: {errors}"
+
+
+@pytest.mark.asyncio
+async def test_non_persistent_close_records_an_abnormal_server_death():
+    """An abnormal close during the expected shutdown is still an abnormality.
+
+    Skipping the reconnect must not turn a server that dies mid-drain into a
+    silent clean finish.
+    """
+
+    class _AbnormalClose(ServerClosingMockWebSocket):
+        async def __anext__(self) -> str | bytes:
+            message = await self._queue.get()
+            if message is self._STOP:
+                self.close_code = 1006
+                close_frame = websockets.frames.Close(1006, "abnormal")
+                raise websockets.exceptions.ConnectionClosed(close_frame, None)
+            assert isinstance(message, (str, bytes))
+            return message
+
+    sockets: list[_AbnormalClose] = []
+
+    async def mock_connect(url, **kwargs):
+        ws = _AbnormalClose([_deepgram_result("hello", is_final=True)])
+        sockets.append(ws)
+        return ws
+
+    stt = DeepgramSTT(DeepgramSTTConfig(api_key="k", persistent_ws=False, ws_connect=mock_connect))
+    await stt.start_stream()
+    socket = stt._ws
+    assert socket is not None
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=100)):
+        await stt.send_audio(chunk)
+    await asyncio.wait_for(stt.end_stream(), timeout=2)
+    await stt.close()
+
+    assert len(sockets) == 1
+    assert socket.died_abnormally is True
+    assert socket.reconnect_exhaustion_reason == ("peer closed abnormally during end-of-stream")
 
 
 @pytest.mark.asyncio

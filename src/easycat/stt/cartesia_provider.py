@@ -205,6 +205,11 @@ class CartesiaSTT(WebSocketSTTBase):
     async def _on_end(self) -> None:
         if self._ws is not None:
             await self._flush_audio_resampler()
+            # Cartesia closes the session itself after acking ``close``, so
+            # declare that close expected before sending: ``recv_iter`` would
+            # otherwise read it as a transient drop, open a replacement socket
+            # and wait out the whole close timeout on every turn (gh 1066).
+            self._ws.expect_peer_close()
             # ``close`` is the end-of-session command: it flushes the
             # remaining audio, closes the session, and is acked with
             # ``{"type": "done"}``.  ``done`` is the *server's* ack keyword
