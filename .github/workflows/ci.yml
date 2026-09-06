@@ -390,6 +390,12 @@ jobs:
           PYTHONPATH: ${{ runner.temp }}/netguard
           OPENAI_API_KEY: sk-ambient-not-used
         run: |
+          # GitHub's default step shell is `bash -e {0}` -- errexit but NOT
+          # pipefail -- so without this line a failing pytest piped into `tee`
+          # would leave the pipeline status at tee's 0 and this step, the only
+          # continuous proof that a generated project's tests pass, would stay
+          # green on a broken app. Same reason as nightly-validation.yml.
+          set -o pipefail
           # Console script, not `python -m pytest`: it does NOT prepend the cwd,
           # so this also proves the generated `[tool.pytest.ini_options]
           # pythonpath = ["."]` key from PR1 (see design section 0.2).

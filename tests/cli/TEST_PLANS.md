@@ -24,12 +24,18 @@ first, debug second, safety net third, and infrastructure last.
 | 14 | Library prereqs — `run()` lifecycle | `test_library_prereqs.py` |
 | 15 | Library prereqs — string-keyed providers | `test_library_prereqs.py` |
 | 16 | Packaging — wheel and sdist ship template dotfiles, metadata, and clean contents | `test_packaging.py` (integration) |
-| 17 | End-to-end scaffold-and-invoke | `tests/cli/e2e/test_scaffold_smoke.py` (integration) |
+| 17 | End-to-end scaffold-and-invoke | `tests/cli/e2e/test_scaffold_smoke.py` (integration) + `tests/cli/e2e/test_generated_project_wheel.py` (`integration_external`) |
 
 Plans 1-10 are fast unit tests. Plans 11-15 add coverage for cross-
-cutting contracts. Plans 16-17 are marked `integration_local` so validation
-lanes and maintainers can select or filter them explicitly; bare `pytest`
-still collects them unless the caller supplies a marker expression.
+cutting contracts. Plan 16 and `test_scaffold_smoke.py` are marked
+`integration_local` so validation lanes and maintainers can select or filter
+them explicitly; bare `pytest` still collects them unless the caller supplies
+a marker expression. Plan 17's `test_generated_project_wheel.py` is the
+exception: it is `integration_external`, which the default `addopts` and every
+`just guard-*` recipe deselect, so **no automated lane runs it**. It is a
+maintainer reproduction tool for `.github/workflows/ci.yml`'s
+`generated-app-smoke` job — the job is the gate, and
+`tests/test_generated_app_smoke_lane.py` pins its load-bearing contents.
 
 ---
 
@@ -530,4 +536,10 @@ support module failing at import time; env var not loading from `.env`.
   guard run; resolution proves the install path without the weight.
 
 **Backed by.** `tests/cli/e2e/test_scaffold_smoke.py` (covers
-`py_compile` + `ruff` + `uv lock` resolution per template).
+`py_compile` + `ruff` + `uv lock` resolution per template) and
+`tests/cli/e2e/test_generated_project_wheel.py`, which installs the built
+wheel plus the agent SDK into a throwaway venv outside this checkout, then
+scaffolds and runs a generated project's own tests there with an ambient
+credential and outbound provider traffic blocked. That module is
+`integration_external` and runs only when a maintainer selects it; the
+automated peer is `ci.yml`'s `generated-app-smoke` job.

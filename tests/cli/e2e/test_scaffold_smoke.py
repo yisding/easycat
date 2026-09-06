@@ -102,15 +102,22 @@ def _netguard_env(**extra: str) -> dict[str, str]:
     return {**os.environ, "PYTHONPATH": str(_NETGUARD_DIR), **extra}
 
 
-def _assert_netguard_is_loaded(env: dict[str, str]) -> None:
+def _assert_netguard_is_loaded(env: dict[str, str], python: Path | str = sys.executable) -> None:
     """Canary: ``sitecustomize`` is silently skipped under ``-I``/``-S``.
 
     Without this the offline test below passes identically when nothing is
     blocked at all, i.e. it stops testing the condition it exists for.
+
+    ``python`` must be the *same interpreter* the guarded work then runs
+    under: loading ``sitecustomize`` is a per-interpreter property (a
+    shadowing ``sitecustomize`` earlier on that venv's ``sys.path``, an
+    ``-I``/``-S`` invocation, a different ``site`` layout), so canarying one
+    interpreter proves nothing about another.  It defaults to this process's
+    interpreter for callers that guard subprocesses of the dev venv.
     """
     blocked = subprocess.run(
         [
-            sys.executable,
+            str(python),
             "-c",
             # The connect timeout matters only when the guard did NOT load:
             # this must then fail fast, not stall the whole lane on a SYN to
@@ -131,7 +138,7 @@ def _assert_netguard_is_loaded(env: dict[str, str]) -> None:
     # servers would break and the run would fail for the wrong reason.
     loopback = subprocess.run(
         [
-            sys.executable,
+            str(python),
             "-c",
             (
                 "import socket\n"
@@ -148,6 +155,22 @@ def _assert_netguard_is_loaded(env: dict[str, str]) -> None:
         check=False,
     )
     assert loopback.returncode == 0, loopback.stderr
+
+
+def test_netguard_marker_string_matches_the_shared_file() -> None:
+    """Canary the canary: every caller of ``tests/_netguard`` greps this string.
+
+    ``_NETGUARD_MARKER`` is copied into CI workflow steps that cannot import
+    it (``ci.yml``'s ``generated-app-smoke`` job, ``release-validation.yml``),
+    so a drift between the constant and ``sitecustomize.py``'s own message
+    would turn every one of those greps into an unnoticed no-op.  This test
+    lives here, in a module the credential-free lane actually runs, rather
+    than beside the ``integration_external`` wheel rehearsal that no lane
+    selects.
+    """
+    sitecustomize = (_NETGUARD_DIR / "sitecustomize.py").read_text(encoding="utf-8")
+
+    assert _NETGUARD_MARKER in sitecustomize
 
 
 @pytest.mark.parametrize("template", sorted(available_templates()))
