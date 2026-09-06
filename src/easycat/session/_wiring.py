@@ -128,6 +128,10 @@ class SessionWiringContext:
     # ── Session-owned services ───────────────────────────────────
     session_actions: Callable[[], SessionActions | None]
     drain_session_actions: Callable[[], Awaitable[bool]]
+    #: Discard a cancelled turn's queued actions, emitting one
+    #: ``SessionActionFailed`` per dropped action and clearing the barge-in
+    #: guard (gh 1099).
+    fence_session_actions: Callable[[str], Awaitable[None]]
     telephony_helpers_present: Callable[[], bool]
     caller_id_system_message: Callable[[], str | None]
 
@@ -193,6 +197,7 @@ def build_wiring(session: Session) -> SessionWiringContext:
         ),
         session_actions=lambda: session._session_actions,
         drain_session_actions=session._drain_session_actions,
+        fence_session_actions=session._fence_session_actions,
         telephony_helpers_present=lambda: bool(session.telephony.helpers),
         caller_id_system_message=session._caller_id.system_message,
         clear_turn=_clear_turn,

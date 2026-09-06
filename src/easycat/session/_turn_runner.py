@@ -238,6 +238,7 @@ class TurnRunner:
         self._is_gated = wiring.is_gated
         self._agent = wiring.agent
         self._drain_session_actions = wiring.drain_session_actions
+        self._fence_session_actions = wiring.fence_session_actions
         self._caller_id_system_message = wiring.caller_id_system_message
         self._cancel_turn = wiring.cancel_turn
         self._cut_off_tts_for_text_replacement = wiring.cut_off_tts_for_text_replacement
@@ -735,6 +736,12 @@ class TurnRunner:
         budget is logged rather than allowed to stall the live turn
         indefinitely.
         """
+        # A superseded turn's queued session actions are stale for the same
+        # reason its agent output is: the caller spoke again.  Drop them here so
+        # a later, unrelated turn's finalize cannot execute them, and so a
+        # stranded ``no_interrupt`` guard cannot suppress barge-in for the rest
+        # of the call (gh 1099).
+        await self._fence_session_actions("turn superseded")
         current = asyncio.current_task()
         pending = {task for task in tasks if not task.done() and task is not current}
         if not pending:
