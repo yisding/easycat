@@ -392,6 +392,11 @@ def _native_endpointing_checks_vad_skipped(
     assert plan.selected["vad"].capabilities == frozenset({"disabled"})
     assert plan.selected["vad"].extra is None
     assert "silero-vad" not in plan.missing_extras
+    # The headline symptom of D1, on the ``EasyConfig`` path the design states
+    # the repro as: readiness flipped from blocked to ready for a session that
+    # already started fine. The row's websocket + deepgram + openai config pulls
+    # no other extra, so this holds whatever is installed.
+    assert plan.has_blocking_errors is False
 
 
 def _native_endpointing_overridden_by_smart_turn(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:
@@ -432,13 +437,61 @@ def _native_endpointing_overridden_by_voicemail(monkeypatch: pytest.MonkeyPatch)
     )
 
 
+def _native_endpointing_overridden_by_late_smart_turn_bool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> EasyConfig:
+    """``smart_turn = True`` assigned AFTER construction — a bool, not a config.
+
+    ``EasyConfig.smart_turn`` is typed ``SmartTurnConfig | bool | None`` and
+    ``create_session`` re-normalizes it in ``_validate_for_session``, so this is
+    a supported spelling that builds a VAD. A planner reading the raw attribute
+    saw ``getattr(True, "enabled", False)`` -> ``False`` and reported the role
+    ``off``. The construction-time ``smart_turn=True`` row above cannot catch
+    that: ``__post_init__`` has already turned it into a ``SmartTurnConfig``.
+    """
+    config = _native_endpointing_overridden_by_smart_turn(monkeypatch)
+    config.smart_turn = True
+    return config
+
+
+def _native_endpointing_overridden_by_late_sensitivity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> EasyConfig:
+    """``smart_turn_sensitivity`` assigned AFTER construction.
+
+    ``_normalize_smart_turn_config`` forces ``enabled=True`` whenever a
+    sensitivity is set, so the VAD comes back even though ``smart_turn`` still
+    holds the ``enabled=False`` default this transport/STT pair resolved.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    config = EasyConfig(
+        stt="deepgram/flux-general-en",
+        transport=WebSocketTransportConfig(),
+        agent=_Agent(),
+        debug="off",
+    )
+    assert config.smart_turn.enabled is False
+    config.smart_turn_sensitivity = 0.7
+    return config
+
+
 def _native_endpointing_checks_vad_built(
     plan: ProviderPlan, built: ConstructedInputs, config: EasyConfig
 ) -> None:
-    del plan, config
+    del config
     assert built.vad is not None
     assert built.enable_vad is True
     assert built.auto_turn_from_stt_final is False
+    # A skipped VAD must never hide a live one: the override takes endpointing
+    # back from the STT, so the plan has to describe the stage the session
+    # builds. Neither ``extra`` nor ``missing_extras`` is asserted here — both
+    # depend on whether the checkout installed ``silero-vad``; the fake-probe
+    # peer ``test_resolution.py::
+    # test_late_smart_turn_override_keeps_the_vad_role_and_its_extra`` pins the
+    # blocking gap deterministically.
+    assert plan.selected["vad"].provider == "auto"
+    assert "disabled" not in plan.selected["vad"].capabilities
 
 
 def _custom_instances(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:
@@ -618,6 +671,14 @@ _ROWS: dict[str, _Row] = {
     ),
     "native_endpointing_overridden_by_voicemail": _Row(
         _native_endpointing_overridden_by_voicemail, checks=_native_endpointing_checks_vad_built
+    ),
+    "native_endpointing_overridden_by_late_smart_turn_bool": _Row(
+        _native_endpointing_overridden_by_late_smart_turn_bool,
+        checks=_native_endpointing_checks_vad_built,
+    ),
+    "native_endpointing_overridden_by_late_sensitivity": _Row(
+        _native_endpointing_overridden_by_late_sensitivity,
+        checks=_native_endpointing_checks_vad_built,
     ),
     "custom_instances": _Row(_custom_instances, checks=_custom_instances_checks),
     "custom_stt_reports_unknown_capabilities": _Row(

@@ -301,17 +301,6 @@ def test_echo_canceller_selected_is_not_the_session_config_flag() -> None:
     assert echo_cancellation_enabled(injected, config_cls=EchoCancellationConfig) is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DX1-4: resolution reads the raw ``smart_turn`` attribute, while "
-        "construction re-derives it in ``EasyConfig._validate_for_session`` via "
-        "``_renormalize_smart_turn`` (gh-1027). After a late ``stt`` mutation of "
-        "a preset the two disagree. DX1-1 pins the construction side in "
-        "``test_resolution_parity.py::"
-        "test_late_mutation_back_to_openai_restores_the_preset_default``."
-    ),
-)
 def test_late_stt_mutation_resolves_the_renormalized_smart_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -319,10 +308,16 @@ def test_late_stt_mutation_resolves_the_renormalized_smart_turn(
 
     ``EasyConfig.mic`` ships ``smart_turn.enabled=True``. Reassigning ``stt`` to
     a native-endpointing provider afterwards makes ``_validate_for_session``
-    turn smart-turn back off, so ``create_session`` drives turns from STT finals
-    and builds no VAD. The resolver reads the un-renormalized attribute and says
-    the opposite — and it is exactly ``auto_turn_from_stt_final`` / ``enable_vad``
-    that DX1-4 is specified to publish.
+    turn smart-turn back off (``_renormalize_smart_turn``, gh-1027), so
+    ``create_session`` drives turns from STT finals and builds no VAD. The
+    resolver used to read the un-renormalized attribute and say the opposite;
+    this row carried an ``xfail(strict=True)`` until
+    :func:`easycat.planning._resolution._resolved_smart_turn_enabled` learned
+    the same "untouched default" rule.
+
+    ``tests/planning/test_resolution_parity.py::
+    test_late_mutation_back_to_openai_restores_the_preset_default`` pins the
+    construction side of the same mutation.
     """
     monkeypatch.setenv("OPENAI_API_KEY", "sk-resolution-test")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-resolution-test")
@@ -334,6 +329,42 @@ def test_late_stt_mutation_resolves_the_renormalized_smart_turn(
 
     assert resolved.auto_turn_from_stt_final is True
     assert resolved.enable_vad is False
+
+    # ...and switching back restores the preset default, so the stage the
+    # planner reports is never frozen by an earlier preview.
+    config.stt = "openai"
+    restored = resolve_from_easyconfig(config, probe=ProbeEnvironment.fake(default=True))
+    assert restored.auto_turn_from_stt_final is False
+    assert restored.enable_vad is True
+
+
+@pytest.mark.parametrize("spelling", ["bool", "sensitivity"])
+def test_late_smart_turn_override_keeps_the_vad_role_and_its_extra(
+    spelling: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two smart-turn spellings a raw ``.enabled`` read cannot see.
+
+    ``cfg.smart_turn = True`` is a supported assignment (the field is typed
+    ``SmartTurnConfig | bool | None``) and ``getattr(True, "enabled", False)`` is
+    ``False``; a late ``cfg.smart_turn_sensitivity`` forces ``enabled=True``
+    without touching ``smart_turn`` at all. Both make ``create_session`` build a
+    VAD, so both must keep the role — and its missing extra as a blocking gap —
+    in the plan.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-resolution-test")
+    config = _config(stt="deepgram/flux-general-en")
+    if spelling == "bool":
+        config.smart_turn = True
+    else:
+        config.smart_turn_sensitivity = 0.7
+
+    resolved = resolve_from_easyconfig(
+        config, probe=ProbeEnvironment.fake(env=_NATIVE_ENDPOINTING_ENV, default=False)
+    )
+    assert resolved.auto_turn_from_stt_final is False
+    assert resolved.enable_vad is True
+    assert resolved.roles["vad"].provider == "silero"
+    assert "silero-vad" in resolved.missing_extras
 
 
 def test_missing_backends_is_empty_until_a_later_workstream() -> None:

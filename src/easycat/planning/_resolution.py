@@ -566,6 +566,49 @@ def _incompatibility_warnings(roles: Mapping[Role, RoleDecision]) -> tuple[str, 
 # ── Turn-ownership decision ──────────────────────────────────────────
 
 
+def _resolved_smart_turn_enabled(config: Any) -> bool:
+    """``smart_turn.enabled`` as ``create_session`` RE-DERIVES it, not as stored.
+
+    ``EasyConfig.smart_turn`` is typed ``SmartTurnConfig | bool | None`` and
+    mutating it after construction is supported, so the stored attribute is not
+    the value the session runs with: ``_validate_for_session`` calls
+    ``EasyConfig._renormalize_smart_turn`` before anything is built. A bare
+    ``getattr(config.smart_turn, "enabled", False)`` therefore missed two
+    supported spellings and reported the VAD role ``off`` for a config
+    ``create_session`` then refuses to build without a VAD backend:
+
+    * ``cfg.smart_turn = True`` — ``getattr(True, "enabled", False)`` is
+      ``False``, while ``_normalize_smart_turn_config`` reads the bool.
+    * ``cfg.smart_turn_sensitivity = 0.7`` — sensitivity forces
+      ``enabled=True`` no matter what ``smart_turn`` holds.
+
+    A manifest ``VoiceProfile`` carries none of these attributes, so every
+    ``getattr`` misses and the profile path answers ``False``.
+    """
+    if getattr(config, "smart_turn_sensitivity", None) is not None:
+        # ``_normalize_smart_turn_config`` forces ``enabled=True`` whenever a
+        # sensitivity is supplied, and rejects the combination outright when
+        # smart-turn was explicitly turned off — so sensitivity decides first.
+        return True
+    is_untouched_default = getattr(config, "_smart_turn_is_untouched_default", None)
+    if callable(is_untouched_default) and is_untouched_default():
+        # The value ``EasyConfig`` synthesized for an unset ``smart_turn``, which
+        # ``_renormalize_smart_turn`` re-derives from the CURRENT stt and
+        # transport at ``create_session`` time (gh-1027). Reading the stale
+        # materialized default is what made a late ``cfg.stt`` switch to a
+        # native-endpointing provider keep a VAD in the plan that the session no
+        # longer builds. The re-derivation only turns smart-turn ON for a
+        # local-microphone transport whose STT does NOT own endpointing — the
+        # case where :func:`auto_turn_from_stt_final` already answers ``False``
+        # — so treating an untouched default as "no override" is exactly what
+        # construction resolves, without a second transport lookup here.
+        return False
+    smart_turn = getattr(config, "smart_turn", None)
+    if isinstance(smart_turn, bool):
+        return smart_turn
+    return bool(getattr(smart_turn, "enabled", False))
+
+
 def _decide_auto_turn(config: Any, *, stt: RoleDecision) -> bool:
     """Whether turn boundaries come from STT finals, so the VAD stage is skipped.
 
@@ -576,7 +619,7 @@ def _decide_auto_turn(config: Any, *, stt: RoleDecision) -> bool:
     """
     return auto_turn_from_stt_final(
         push_to_talk=is_push_to_talk(getattr(getattr(config, "turn_taking", None), "mode", None)),
-        smart_turn_enabled=bool(getattr(getattr(config, "smart_turn", None), "enabled", False)),
+        smart_turn_enabled=_resolved_smart_turn_enabled(config),
         voicemail_detector_enabled=bool(
             getattr(getattr(config, "telephony", None), "enable_voicemail_detector", False)
         ),

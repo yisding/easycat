@@ -269,15 +269,21 @@ def test_ready_is_ready_for_a_native_endpointing_profile(
     at all. Before the fix ``/health/ready`` reported ``plan_has_blocking_errors``
     on the absent ``silero-vad`` extra for a deployment that starts fine.
 
-    Deliberately runs against the REAL process probe (no
-    ``_default_module_available`` patch) with a ``websocket`` transport, so it is
-    extras-free and exercises the readiness verdict an operator would actually
-    get. The ``deepgram/nova-2`` control proves the extra is still blocking for a
-    profile that does build a VAD.
+    Uses a ``websocket`` transport so the profile itself pulls no install
+    extra, and forces the VAD probe modules absent rather than depending on the
+    checkout: a maintainer who ran ``uv sync --extra silero-vad`` has
+    ``onnxruntime`` importable, and an ambient probe would make the
+    ``deepgram/nova-2`` control's "extra is still missing" assertion fail there.
+    The control proves the ``off`` verdict is not vacuous — the same extra IS
+    blocking for a profile that does build a VAD.
     """
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-stub")
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available",
+        lambda name: name not in {"onnxruntime", "ten_vad", "krisp_audio"},
+    )
 
     control_dir = tmp_path / "control"
     control_dir.mkdir()
@@ -291,13 +297,19 @@ def test_ready_is_ready_for_a_native_endpointing_profile(
     assert "missing_extra:silero-vad" in control["blocking_errors"]
     assert control["has_blocking_errors"] is True
 
-    payload = VoiceServer.from_manifest(
+    native = VoiceServer.from_manifest(
         _write_manifest(native_dir, stt="deepgram/flux-general-en", transport="websocket")
-    ).plan_payload()
+    )
+    payload = native.plan_payload()
     assert payload["selected"]["vad"]["provider"] == "off"
     assert payload["selected"]["vad"]["capabilities"] == ["disabled"]
     assert payload["missing_extras"] == []
     assert payload["has_blocking_errors"] is False
+    # The tuple ``VoiceServerHealth`` turns into the 200/503 verdict
+    # (``server/health.py`` reads ``plan_has_blocking_errors``). Asserted
+    # directly because the HTTP peers in this file need aiohttp, which the dev
+    # group does not install.
+    assert native._manifest_readiness() == (True, ())
 
 
 def test_plan_payload_unresolvable_backend_returns_blocking_errors(

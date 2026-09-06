@@ -194,10 +194,21 @@ def test_unknown_vad_backend_still_raises_when_the_stage_is_skipped() -> None:
     # backend is RESOLVED before it is disabled: an unresolvable profile must
     # stay unresolvable regardless of who owns endpointing, or ``easycat plan``
     # would print a clean plan for a manifest ``to_easyconfig`` rejects.
+    environ = {"OPENAI_API_KEY": "x", "DEEPGRAM_API_KEY": "y"}
+    # Pin the premise: without it this row would keep passing (``_decide_vad``
+    # raises on every path) even if ``deepgram/flux-general-en`` stopped
+    # declaring ``native_endpointing``, and would silently stop guarding the
+    # resolve-then-disable ordering it exists for.
+    skipped = build_provider_plan(
+        _profile(transport="websocket", stt="deepgram/flux-general-en", vad="silero"),
+        environ=environ,
+    )
+    assert skipped.selected["vad"].provider == "off"
+
     with pytest.raises(ValueError, match="Unknown VAD backend 'not-a-backend'"):
         build_provider_plan(
             _profile(transport="websocket", stt="deepgram/flux-general-en", vad="not-a-backend"),
-            environ={"OPENAI_API_KEY": "x", "DEEPGRAM_API_KEY": "y"},
+            environ=environ,
         )
 
 
