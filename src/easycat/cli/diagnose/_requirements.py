@@ -90,6 +90,21 @@ class SelectedApp:
             return True
         return any("microphone" in role.capabilities for role in self.roles)
 
+    @property
+    def project_root(self) -> Path:
+        """Directory whose ``pyproject.toml`` governs this app's install fix.
+
+        The manifest's own directory when a manifest was selected — ``doctor
+        --manifest /elsewhere/easycat.toml`` must classify THAT project's
+        dependency source, not the one that happens to sit in the process's
+        working directory. Falls back to the working directory for a
+        scaffold-only selection, which is where the ``[tool.easycat.scaffold]``
+        table was read from.
+        """
+        if self.manifest_path is not None:
+            return Path(self.manifest_path).parent
+        return Path()
+
     def role_for_env(self, var: str) -> str:
         """Role that needs *var*, or ``""`` for a scaffold-table-only var."""
         for role in self.roles:
@@ -140,20 +155,6 @@ def reference_var_names(manifest: ProjectManifest, *, profile: str) -> frozenset
     return frozenset(requirement.var for requirement in manifest.profile_requirements(profile))
 
 
-def _degraded_extras(warnings: tuple[str, ...]) -> set[tuple[str, str]]:
-    """``(role, extra)`` pairs the planner reported as gracefully degraded."""
-    suffix = "_missing_degraded"
-    infix = "_extra_"
-    pairs: set[tuple[str, str]] = set()
-    for warning in warnings:
-        if not warning.endswith(suffix):
-            continue
-        role, separator, extra = warning[: -len(suffix)].partition(infix)
-        if separator and role and extra:
-            pairs.add((role, extra))
-    return pairs
-
-
 def selected_app_from_manifest(
     manifest: ProjectManifest,
     voice_profile: VoiceProfile,
@@ -171,7 +172,11 @@ def selected_app_from_manifest(
     the planner propagate as ``EasyCatError`` so ``cli_command`` renders them
     exactly as ``easycat plan`` does — same code, same message, same exit code.
     """
-    from easycat.planning.selection import build_manifest_plan, plan_issues
+    from easycat.planning.selection import (
+        build_manifest_plan,
+        degraded_extra_roles,
+        plan_issues,
+    )
 
     plan = build_manifest_plan(
         manifest,
@@ -180,7 +185,7 @@ def selected_app_from_manifest(
         voice_profile=voice_profile,
     )
     issues = plan_issues(plan)
-    degraded = _degraded_extras(plan.warnings)
+    degraded = set(degraded_extra_roles(plan))
     missing_extras = set(plan.missing_extras)
 
     roles: list[RoleRequirement] = []

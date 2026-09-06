@@ -460,6 +460,15 @@ def _check_scaffold_env_var(
     field: str = "",
     role: str = "",
 ) -> CheckResult:
+    """One row for a declared env var; *code* applies ONLY to the unset state.
+
+    ``code`` is the caller's answer to "what does startup raise when this var is
+    UNSET?" — ``EASYCAT_E604`` for a manifest ``bearer-env:`` reference. Every
+    other failure here (a placeholder, a non-``wss://`` stream URL, a malformed
+    number) is a value that IS set, which ``EnvReference.resolve`` accepts, so
+    those rows keep ``EASYCAT_E210`` rather than naming a code startup cannot
+    produce for that value.
+    """
     value = os.getenv(var)
     state = _env_value_state(value)
     detail: str | None = None
@@ -498,7 +507,7 @@ def _check_scaffold_env_var(
         status="fail",
         detail=detail,
         requirement=requirement,
-        code=code,
+        code=code if state == "missing" else "EASYCAT_E210",
         fix=f"Set {var} to the real project value in `.env`, then rerun doctor.",
         role=role,
         field=field,
@@ -997,8 +1006,11 @@ def check_selected_extras(selected: SelectedApp | None) -> list[CheckResult]:
     ``ProviderPlan.missing_extras`` already excludes extras whose role degrades
     gracefully, so a missing ``aec`` extra stays a warning here exactly as it
     does on ``/health/ready``. Returns ``[]`` when no profile was selected, so a
-    non-manifest run's row set is unchanged. Pure: detection happened in the
-    planner via ``find_spec``; nothing is imported here.
+    non-manifest run's row set is unchanged. Nothing is IMPORTED here and no
+    environment variable is read — detection happened in the planner via
+    ``find_spec``. The one filesystem touch is on a failing row: ``install_fix``
+    reads ``selected.project_root``'s ``pyproject.toml`` (``tomllib`` only) so
+    the printed fix respects a Git- or path-pinned ``easycat`` dependency.
     """
     if selected is None or not selected.roles:
         return []
@@ -1043,7 +1055,7 @@ def check_selected_extras(selected: SelectedApp | None) -> list[CheckResult]:
                     detail=issue.detail if issue else f"Missing required extra: {extra}",
                     requirement="required",
                     code="EASYCAT_E202",
-                    fix=install_fix(extra),
+                    fix=install_fix(extra, project_root=selected.project_root),
                     role=role.role,
                     field=extra,
                 )

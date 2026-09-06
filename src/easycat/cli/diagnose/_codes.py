@@ -185,8 +185,10 @@ entry points include:
                          `filesystem` = touches local disk; `hardware` =
                          touches audio hardware; `network` = one bounded
                          unauthenticated probe), and may include `code`
-                         and `fix` when the check fails, plus `role` and
-                         `field` when the row belongs to a selected role;
+                         and `fix` when the check fails, `field` naming the
+                         env var, install extra, or manifest path the row is
+                         about, and `role` when the row belongs to a selected
+                         pipeline role;
                          `selection` appears when a scaffold table or
                          `--manifest`/`--profile` scopes the run to one app;
                          `probes` reports which probe classes ran; `fixes`

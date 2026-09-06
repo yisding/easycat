@@ -58,24 +58,38 @@ actually ran.
 
 ### From a failed doctor to a first run
 
-A fresh checkout, from the first red run to a green one:
+A fresh checkout, from the first red run to a green one. `easycat init`
+scaffolds an application, not a server manifest, so step 2 writes the
+`easycat.toml` the rest of the sequence diagnoses:
 
 ```bash
 easycat init my-agent && cd my-agent          # 1. scaffold the project
-easycat doctor --manifest easycat.toml --json # 2. fails: EASYCAT_E203, no credential
-cp .env.example .env                          # 3. fill in the real key
-easycat doctor --manifest easycat.toml --env-file .env --json # 4. fails: EASYCAT_E202
-uv sync                                       # 5. run the `fix` field step 4 printed
-easycat doctor --manifest easycat.toml --env-file .env --json # 6. green
-easycat plan --manifest easycat.toml          # 7. the same selection, role by role
+cat > easycat.toml <<'TOML'                   # 2. declare the profile to serve
+[project]
+name = "my-agent"
+
+[voice.default]
+transport = "webrtc"
+stt = "openai"
+tts = "openai"
+TOML
+easycat doctor --manifest easycat.toml --json # 3. fails: EASYCAT_E203, no credential
+cp .env.example .env                          # 4. fill in the real key, then save
+easycat doctor --manifest easycat.toml --env-file .env --json # 5. fails: EASYCAT_E202
+# 6. apply each failing row's `fix` field, then:
+uv sync
+easycat doctor --manifest easycat.toml --env-file .env --json # 7. green
+easycat plan --manifest easycat.toml          # 8. the same selection, role by role
 ```
 
-Step 5 is whatever the failing row's `fix` field names. A project scaffolded by
-`easycat init` pins its `easycat` dependency in `[tool.uv.sources]` (EasyCat is
-unpublished), so that fix asks you to add the extra to the `easycat[...]` list
-in the project's own `pyproject.toml` and then run `uv sync` — never `uv add`,
-which would drop the pin. A project that depends on a published `easycat` gets
-the registry guidance instead.
+Step 6 is whatever the failing rows' `fix` fields name — here, adding `webrtc`
+and `silero-vad` to the `easycat[...]` extras in the project's own
+`pyproject.toml`. A project scaffolded by `easycat init` pins its `easycat`
+dependency in `[tool.uv.sources]` (EasyCat is unpublished), so the fix edits
+that list and then runs `uv sync` — never `uv add`, which would drop the pin. A
+project that depends on a published `easycat` gets the registry guidance
+instead. `doctor --manifest` classifies the dependency source of the directory
+holding the manifest, so the fix is right even when you run it from elsewhere.
 
 ## Running an application or playground
 
