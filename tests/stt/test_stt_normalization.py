@@ -120,11 +120,17 @@ def _make_deepgram(
 
 
 def _make_elevenlabs_batch(
-    text: str = "elevenlabs result", confidence: float | None = None
+    text: str = "elevenlabs result",
+    language_code: str | None = None,
+    language_probability: float | None = None,
 ) -> ElevenLabsSTT:
+    # Mirrors the documented ``POST /v1/speech-to-text`` response: there is no
+    # top-level transcription ``confidence`` field (gh 1064).
     body: dict = {"text": text}
-    if confidence is not None:
-        body["confidence"] = confidence
+    if language_code is not None:
+        body["language_code"] = language_code
+    if language_probability is not None:
+        body["language_probability"] = language_probability
     resp = httpx.Response(
         status_code=200,
         json=body,
@@ -247,9 +253,22 @@ async def test_deepgram_provides_confidence():
 
 
 @pytest.mark.asyncio
-async def test_elevenlabs_batch_provides_confidence():
-    events = await collect_stt_events(_make_elevenlabs_batch(confidence=0.85), _audio())
-    assert events[0].confidence == 0.85
+async def test_elevenlabs_batch_confidence_is_none():
+    """The batch response carries no top-level transcription confidence.
+
+    Its only top-level score is ``language_probability`` — language-detection
+    confidence, a different quantity — and per-word scores are ``logprob``
+    values inside ``words``. Neither belongs in ``STTEvent.confidence`` (gh
+    1064).
+    """
+    events = await collect_stt_events(_make_elevenlabs_batch(language_probability=0.85), _audio())
+    assert events[0].confidence is None
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_provides_detected_language():
+    events = await collect_stt_events(_make_elevenlabs_batch(language_code="deu"), _audio())
+    assert events[0].language == "deu"
 
 
 @pytest.mark.asyncio
