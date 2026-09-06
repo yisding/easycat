@@ -334,3 +334,149 @@ def test_create_session_keeps_vad_enabled_for_flux_when_voicemail_detector_enabl
     assert create_vad_called is True
     assert session._enable_vad is True
     assert session._auto_turn_from_stt_final is False
+
+
+# ── Late STT mutation (gh 1027) ──────────────────────────────────
+
+
+def _stub_pipeline(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Record whether the VAD stage was built, without loading real backends."""
+    created: list[bool] = []
+
+    class _VAD:
+        async def process(self, chunk):
+            if False:
+                yield chunk
+
+        def configure(self, **kwargs):
+            pass
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    def _create_vad(*_args, **_kwargs):
+        created.append(True)
+        return _VAD()
+
+    monkeypatch.setattr("easycat.config._factory.create_vad", _create_vad)
+    monkeypatch.setattr(
+        "easycat.config._factory.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+    )
+    return created
+
+
+def test_mutating_stt_to_flux_before_create_session_disables_smart_turn(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """``cfg.stt = "deepgram/flux"`` after construction must re-derive the default.
+
+    ``__post_init__`` materializes ``smart_turn=None`` into a concrete
+    ``SmartTurnConfig``, so the "left unset" signal is gone by the time
+    ``create_session`` calls ``_validate_for_session``. Without a recompute
+    the mic preset's smart-turn stayed on, ``auto_turn_from_stt_final``
+    stayed False, and EasyCat's VAD double-endpointed against Flux's own.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
+    created = _stub_pipeline(monkeypatch)
+
+    config = EasyConfig(
+        stt="openai/gpt-4o-transcribe",
+        tts=OpenAITTSConfig(api_key="test-key"),
+        openai_api_key="test-key",
+        agent=_DummyAgent(),
+    )
+    assert config.smart_turn.enabled is True  # local-mic preset default
+
+    config.stt = "deepgram/flux-general-en"
+    session = create_session(config)
+
+    assert session._enable_vad is False
+    assert session._auto_turn_from_stt_final is True
+    assert created == []
+
+
+def test_validate_for_session_recomputes_smart_turn_after_stt_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The recompute happens on the config itself, not only inside the build."""
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
+
+    config = EasyConfig(
+        stt="openai/gpt-4o-transcribe",
+        tts=OpenAITTSConfig(api_key="test-key"),
+        openai_api_key="test-key",
+        agent=_DummyAgent(),
+    )
+    assert config.smart_turn.enabled is True
+
+    config.stt = "deepgram/flux-general-en"
+    config._validate_for_session()
+
+    assert config.smart_turn.enabled is False
+
+
+def test_mutating_stt_away_from_flux_restores_the_mic_preset_default(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The recompute is symmetric: leaving Flux re-enables the default."""
+    created = _stub_pipeline(monkeypatch)
+
+    config = EasyConfig(
+        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        openai_api_key="test-key",
+        agent=_DummyAgent(),
+    )
+    assert config.smart_turn.enabled is False
+
+    config.stt = "openai/gpt-4o-transcribe"
+    session = create_session(config)
+
+    assert session._enable_vad is True
+    assert session._auto_turn_from_stt_final is False
+    assert created == [True]
+
+
+@pytest.mark.parametrize("explicit", [True, SmartTurnConfig(enabled=True)])
+def test_explicit_smart_turn_survives_a_late_stt_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    explicit,
+):
+    """Only an untouched default is re-derived; an explicit choice wins."""
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
+    _stub_pipeline(monkeypatch)
+
+    config = EasyConfig(
+        stt="openai/gpt-4o-transcribe",
+        tts=OpenAITTSConfig(api_key="test-key"),
+        openai_api_key="test-key",
+        smart_turn=explicit,
+        agent=_DummyAgent(),
+    )
+
+    config.stt = "deepgram/flux-general-en"
+    session = create_session(config)
+
+    assert config.smart_turn.enabled is True
+    assert session._auto_turn_from_stt_final is False
+
+
+def test_smart_turn_assigned_after_construction_is_normalized():
+    """A late ``cfg.smart_turn = True`` resolves to a ``SmartTurnConfig``.
+
+    ``_normalized_smart_turn`` asserts the field is already typed, so a bool
+    assigned after construction previously reached the factory unnormalized.
+    """
+    config = EasyConfig(
+        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        agent=_DummyAgent(),
+    )
+    assert config.smart_turn.enabled is False
+
+    config.smart_turn = True
+    config._validate_for_session()
+
+    assert isinstance(config.smart_turn, SmartTurnConfig)
+    assert config.smart_turn.enabled is True

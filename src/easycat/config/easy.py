@@ -924,12 +924,8 @@ class EasyConfig(_AgentSessionConfig):
         # recognizable once ``parse_stt_string`` has run above.  Computing it
         # before string resolution left the string form with smart-turn (and a
         # Silero VAD) on, diverging from the typed form.
-        self.smart_turn = _normalize_smart_turn_config(
-            self.smart_turn,
-            sensitivity=self.smart_turn_sensitivity,
-            transport=self.transport,
-            stt_native_endpointing=_stt_uses_native_endpointing(self.stt),
-        )
+        self._smart_turn_default: SmartTurnConfig | None = None
+        self._renormalize_smart_turn()
 
         # Catalog membership (not an isinstance against the built-in
         # ``TTSConfig`` union) so third-party configs registered via
@@ -983,12 +979,44 @@ class EasyConfig(_AgentSessionConfig):
             else None
         )
         self._resolve_provider_shortcuts(api_key_overrides)
+        self._renormalize_smart_turn()
         self.turn_taking.validate()
         if self.telephony is not None:
             if not isinstance(self.telephony, TelephonyConfig):
                 raise EasyConfigError("telephony must be a TelephonyConfig instance or None.")
             self.telephony.validate()
         self._validate()
+
+    def _renormalize_smart_turn(self) -> None:
+        """Re-resolve smart-turn against the current ``stt`` and ``transport``.
+
+        ``__post_init__`` materializes the ``smart_turn=None`` default into a
+        concrete :class:`SmartTurnConfig`, which erases the "left unset"
+        signal the default depends on.  ``create_session`` calls
+        ``_validate_for_session`` precisely so mutations made after
+        construction are honored, and the STT shortcut is re-resolved there —
+        but smart-turn was not, so switching ``cfg.stt`` to a
+        provider-side-endpointing provider (``"deepgram/flux"``) left the mic
+        preset's smart-turn on.  ``_should_auto_turn_from_stt_final`` then
+        returns False, EasyCat's own VAD keeps running alongside the
+        provider's, and the turn double-endpoints (duplicate ``STTFinal``,
+        stalled classification gate).  gh 1027.
+
+        Tracking the synthesized default by identity keeps an explicit
+        ``smart_turn=`` — passed at construction or assigned afterwards —
+        authoritative; only an untouched default is re-derived.
+        """
+        raw: SmartTurnConfig | bool | None = self.smart_turn
+        if raw is self._smart_turn_default:
+            raw = None
+        resolved = _normalize_smart_turn_config(
+            raw,
+            sensitivity=self.smart_turn_sensitivity,
+            transport=self.transport,
+            stt_native_endpointing=_stt_uses_native_endpointing(self.stt),
+        )
+        self.smart_turn = resolved
+        self._smart_turn_default = resolved if raw is None else None
 
     def _warn_if_vad_pre_roll_is_too_short(self) -> None:
         """Surface VAD/pre-roll combinations that can clip utterance onset."""
