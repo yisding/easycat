@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from difflib import get_close_matches
-from typing import Any
+from typing import Any, Literal
 
 
 class EasyCatError(Exception):
@@ -123,6 +123,110 @@ REGISTRY: dict[str, ErrorEntry] = {}
 
 
 ErrorFactory = Callable[..., EasyCatError]
+
+
+@dataclass(frozen=True, slots=True)
+class SetupIssue:
+    """One coded setup failure, in the shape every surface reports.
+
+    ``code``     — the stable ``EASYCAT_Exxx``.
+    ``reason``   — a stable, content-free token: ``"missing_env"``,
+                   ``"missing_extra"``, ``"unset_reference"``,
+                   ``"incomplete_selection"``, ``"unresolvable_profile"``.
+                   The same vocabulary ``ProviderPlan.blocking_errors()``
+                   already emits.
+    ``field``    — the concrete thing at fault: an env-var NAME, an install
+                   extra, or a manifest path such as ``"[voice.default]"``.
+                   NEVER a value.
+    ``role``     — the pipeline role that needs it (``"stt"`` / ``"tts"`` /
+                   ``"transport"`` / …), or ``""`` when not role-scoped.
+    ``detail``   — the rendered registry headline (or a situational message).
+    ``fix``      — the rendered registry fix.
+    ``severity`` — ``"blocking"`` when the issue stops the SELECTED VOICE
+                   PROFILE from serving one call; ``"warning"`` when it is a
+                   real, reportable setup gap that does NOT stop that profile
+                   from serving (a role that degrades gracefully, or a
+                   requirement owned by a different surface, such as
+                   ``[server] auth``).
+    """
+
+    code: str
+    reason: str
+    field: str = ""
+    role: str = ""
+    detail: str = ""
+    fix: str = ""
+    severity: Literal["blocking", "warning"] = "blocking"
+
+    def as_dict(self) -> dict[str, str]:
+        """``{code, reason, severity}`` plus any non-empty optional field."""
+        payload: dict[str, str] = {
+            "code": self.code,
+            "reason": self.reason,
+            "severity": self.severity,
+        }
+        for name in ("field", "role", "detail", "fix"):
+            value: str = getattr(self, name)
+            if value:
+                payload[name] = value
+        return payload
+
+    @classmethod
+    def from_error(
+        cls,
+        err: EasyCatError,
+        *,
+        reason: str,
+        field: str = "",
+        role: str = "",
+        severity: Literal["blocking", "warning"] = "blocking",
+    ) -> SetupIssue:
+        """Project an UNRAISED :class:`EasyCatError` into an issue.
+
+        ``detail = err.message`` and ``fix = err.rendered_fix() or ""``, so an
+        issue and the exception raised for the same cause carry byte-identical
+        text. :meth:`EasyCatError.rendered_fix` already guards a missing
+        substitution by returning the raw template, so this never raises.
+
+        **This constructor does NOT redact.** ``errors.py`` is a stdlib-only
+        leaf and must not import ``easycat.validation.redaction``. Some coded
+        errors interpolate a RAW manifest value into their message
+        (``EASYCAT_E104``'s headline is one), so any issue built from a CAUGHT
+        EXCEPTION that will reach a terminal or an HTTP body MUST instead be
+        built through :func:`easycat.planning.selection.selection_issue`, which
+        redacts ``detail`` and ``fix``. Calling ``from_error`` directly is safe
+        only for an error the caller constructed itself from known-safe context
+        (an env-var name, an install extra, a manifest path).
+        """
+        return cls(
+            code=err.code,
+            reason=reason,
+            field=field,
+            role=role,
+            detail=err.message,
+            fix=err.rendered_fix() or "",
+            severity=severity,
+        )
+
+    @classmethod
+    def from_code(
+        cls,
+        factory: ErrorFactory,
+        *,
+        reason: str,
+        field: str = "",
+        role: str = "",
+        severity: Literal["blocking", "warning"] = "blocking",
+        **context: Any,
+    ) -> SetupIssue:
+        """Sugar for ``from_error(factory(**context), ...)``."""
+        return cls.from_error(
+            factory(**context),
+            reason=reason,
+            field=field,
+            role=role,
+            severity=severity,
+        )
 
 
 def register(
@@ -410,13 +514,15 @@ EASYCAT_E210 = register(
     "EASYCAT_E210",
     "Required project environment variable is missing or invalid: {var}",
     cause=(
-        "The current EasyCat scaffold declares this environment variable as a "
-        "startup requirement, but doctor found it unset, still set to an example "
+        "The selected EasyCat project (its `[tool.easycat.scaffold]` table or its "
+        "`easycat.toml` profile) declares this environment variable as a startup "
+        "requirement, but doctor found it unset, still set to an example "
         "placeholder, or invalid for its declared use."
     ),
     fix=(
         "Copy `.env.example` to `.env`, replace every required placeholder with "
-        "the real project value, and rerun `easycat doctor --env-file .env`."
+        "the real project value, and rerun `easycat doctor --env-file .env` "
+        "(or `easycat doctor --manifest easycat.toml --env-file .env`)."
     ),
     example="easycat doctor --env-file .env",
     related=["EASYCAT_E203"],
@@ -736,6 +842,7 @@ __all__ = [
     "EasyConfigError",
     "ErrorEntry",
     "ErrorFactory",
+    "SetupIssue",
     "all_codes",
     "get_entry",
     "register",

@@ -10,7 +10,10 @@ it.  The ladder of evals, smallest to largest:
 2. **Text turns** — :func:`run_text_turn` drives one real agent-bridge
    turn through ``Session.send_text`` with Noop audio stages and
    returns a journal-backed :class:`TurnResult` that the same
-   ``assert_*`` helpers accept.
+   ``assert_*`` helpers accept.  :func:`run_text_turns` runs several
+   inputs against one session, and :func:`run_scripted_audio_turn`
+   drives one turn through the real *audio* pipeline with scripted
+   stub I/O — it checks pipeline wiring, not speech quality.
 3. **Latency + judge** — :func:`assert_latency` budgets turn latency
    using the validation percentile vocabulary; :func:`assert_llm_judge`
    scores conversational quality with an LLM rubric (teaching chapter
@@ -23,7 +26,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -45,7 +48,9 @@ __all__ = [
     "find_record",
     "iter_records",
     "load_bundle",
+    "run_scripted_audio_turn",
     "run_text_turn",
+    "run_text_turns",
     "turn_records",
 ]
 
@@ -121,17 +126,114 @@ async def run_text_turn(config_or_session: Any, user_input: str) -> TurnResult:
     The turn's journal records are captured into the returned
     :class:`TurnResult`, so the ``assert_*`` helpers in this module can
     be applied to it exactly like a loaded bundle.
+
+    Use :func:`run_text_turns` when a scenario needs several turns on
+    one session.
+    """
+    return (await run_text_turns(config_or_session, [user_input]))[0]
+
+
+async def run_text_turns(
+    config_or_session: Any,
+    user_inputs: Sequence[str],
+) -> list[TurnResult]:
+    """Run several text turns against ONE session, in order.
+
+    Same dispatch as :func:`run_text_turn`: a live
+    :class:`~easycat.session.Session` is used as given and left running
+    (the caller owns it); a config or bare agent gets one throwaway
+    journaled session that serves every turn and is force-stopped when
+    the sequence ends or raises.  Returns one :class:`TurnResult` per
+    input, in order; each result's records are scoped to its own turn.
+
+    A config is resolved once, at session construction — the same
+    snapshot semantics ``create_text_session`` already has, so mutating
+    the config between turns has no effect on the running session.
     """
     from easycat.session import Session
 
+    if isinstance(user_inputs, str):
+        raise TypeError("run_text_turns() takes a sequence of inputs; pass [text] for one turn.")
+    inputs = list(user_inputs)
+    if not inputs:
+        raise ValueError("run_text_turns() needs at least one user input")
+
     if isinstance(config_or_session, Session):
-        return await _run_turn_on_session(config_or_session, user_input)
+        return [await _run_turn_on_session(config_or_session, text) for text in inputs]
 
     session = _build_text_session(config_or_session)
     try:
-        return await _run_turn_on_session(session, user_input)
+        return [await _run_turn_on_session(session, text) for text in inputs]
     finally:
         await session.stop(force=True)
+
+
+async def run_scripted_audio_turn(
+    agent: Any,
+    *,
+    transcript: str = "hello",
+    timeout_s: float = 10.0,
+    drain_s: float = 0.25,
+) -> TurnResult:
+    """Drive one turn through the *audio* pipeline with scripted stub I/O.
+
+    Uses :func:`easycat.stubs.scripted_turn_config` — a scripted
+    transport, VAD, STT and TTS around the caller's *agent* — so
+    transport → VAD → STT → agent → TTS really runs with no microphone,
+    no API key, no provider extra and no network.  The audio is
+    synthetic: this checks pipeline wiring, not speech quality.
+
+    The returned ``latency_ms`` is the voice pipeline's
+    turn-ended-to-first-TTS-audio interval (``turn_total_latency_ms``),
+    not :func:`run_text_turn`'s send-to-reply interval.
+    """
+    import asyncio
+
+    from easycat.config import create_session
+    from easycat.debug._serialize import record_to_dict
+    from easycat.events import AgentFinal
+    from easycat.stubs import scripted_turn_config
+
+    config = scripted_turn_config(agent=agent, transcript=transcript)
+    session = create_session(config)
+    reply: dict[str, str] = {}
+    done = asyncio.Event()
+
+    def _on_reply(event: AgentFinal) -> None:
+        reply.setdefault("text", event.text)
+        done.set()
+
+    session.subscribe_event(AgentFinal, _on_reply)
+    timed_out = False
+    wall_ms = 0.0
+    async with session:
+        # Bracket the turn alone: session start-up, the drain sleep and
+        # teardown must not inflate the fallback latency.
+        t0 = time.monotonic()
+        try:
+            await asyncio.wait_for(done.wait(), timeout=timeout_s)
+        except TimeoutError:
+            timed_out = True
+        else:
+            wall_ms = (time.monotonic() - t0) * 1000
+            # Let TTS synthesis drain into the journal before teardown.
+            await asyncio.sleep(drain_s)
+    if timed_out:
+        raise AssertionError(
+            f"scripted audio turn produced no agent reply within {timeout_s:.1f}s"
+        )
+
+    view = session.journal
+    raw = view.read() if view is not None else []
+    records = tuple(record_to_dict(record) for record in raw)
+    turn_id = next((r["turn_id"] for r in records if r.get("turn_id")), "")
+    return TurnResult(
+        turn_id=turn_id,
+        user_input=transcript,
+        response=reply.get("text", ""),
+        latency_ms=_latency_ms(records, fallback=wall_ms),
+        journal_records=records,
+    )
 
 
 def _build_text_session(config_or_agent: Any) -> Any:
@@ -182,23 +284,32 @@ async def _run_turn_on_session(session: Any, user_input: str) -> TurnResult:
 
     records = tuple(record_to_dict(record) for record in view.read()[seen:])
     turn_id = next((r["turn_id"] for r in records if r.get("turn_id")), "")
-    latency_ms = next(
-        (
-            float(r["data"]["value"])
-            for r in records
-            if r.get("name") == "text_turn_latency_ms"
-            and isinstance(r.get("data"), dict)
-            and isinstance(r["data"].get("value"), (int, float))
-        ),
-        wall_ms,
-    )
     return TurnResult(
         turn_id=turn_id,
         user_input=user_input,
         response=response,
-        latency_ms=latency_ms,
+        latency_ms=_latency_ms(records, fallback=wall_ms),
         journal_records=records,
     )
+
+
+# Name priority, NOT record order: scan for the first name, and only if no
+# record carries it fall through to the next.  A text turn's latency must keep
+# coming from text_turn_latency_ms even if a future release also emits
+# turn_total_latency_ms on the text path — the two measure different intervals.
+_LATENCY_METRIC_NAMES = ("text_turn_latency_ms", "turn_total_latency_ms")
+
+
+def _latency_ms(records: Sequence[dict[str, Any]], *, fallback: float) -> float:
+    """Return the first journal latency metric by name priority."""
+    for name in _LATENCY_METRIC_NAMES:  # outer loop = the priority
+        for record in records:  # inner loop = record order
+            if record.get("name") != name:
+                continue
+            data = record.get("data")
+            if isinstance(data, dict) and isinstance(data.get("value"), (int, float)):
+                return float(data["value"])
+    return fallback
 
 
 # ── Iteration helpers ────────────────────────────────────────────

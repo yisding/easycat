@@ -69,6 +69,10 @@ app = typer.Typer(
 class _CommandText(NamedTuple):
     help: str
     journey: str
+    # ``None`` lets Click derive the one-line Commands-table entry from ``help``.
+    # Set it whenever ``help`` grows past one sentence, so ``easycat --help``
+    # keeps a single line per command.
+    short_help: str | None = None
 
 
 _COMMAND_TEXT: dict[str, _CommandText] = {
@@ -81,8 +85,21 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         journey="Scaffold a new project from a template",
     ),
     "doctor": _CommandText(
-        help="Check local readiness, configured credentials, and provider network liveness.",
+        help=(
+            "Check local readiness, configured credentials, and provider "
+            "network liveness.\n\n"
+            "Static checks read declared metadata, environment variables, "
+            "and module availability. Probes import optional modules, touch "
+            "local disk or audio hardware, or make one bounded (2s) "
+            "unauthenticated network request per configured provider; every "
+            "row reports its `probe` class in --json. Selecting "
+            "--manifest/--profile resolves the profile statically — it is "
+            "never imported or run, and no provider is called."
+        ),
         journey="Check local readiness, configured credentials, and provider network liveness",
+        short_help=(
+            "Check local readiness, configured credentials, and provider network liveness."
+        ),
     ),
     "serve": _CommandText(
         help="Serve the browser playground or a manifest-backed VoiceServer.",
@@ -280,6 +297,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat init my-agent --easycat-git URL --easycat-git-rev REV",
             "easycat doctor --json",
             "easycat doctor --env-file .env --json",
+            "easycat doctor --manifest easycat.toml --profile default --json",
             "easycat docs",
             "easycat docs --verbose",
             "easycat docs --audience learners",
@@ -1358,7 +1376,11 @@ def _register_commands() -> None:
 
     app.command(name="console", help=_COMMAND_TEXT["console"].help)(console_cmd)
     app.command(name="init", help=_COMMAND_TEXT["init"].help)(init_cmd)
-    app.command(name="doctor", help=_COMMAND_TEXT["doctor"].help)(doctor_cmd)
+    app.command(
+        name="doctor",
+        help=_COMMAND_TEXT["doctor"].help,
+        short_help=_COMMAND_TEXT["doctor"].short_help,
+    )(doctor_cmd)
     app.command(name="serve", help=_COMMAND_TEXT["serve"].help)(serve_cmd)
     app.command(name="plan", help=_COMMAND_TEXT["plan"].help)(plan_cmd)
     app.command(name="docs", help=_COMMAND_TEXT["docs"].help)(docs_command)

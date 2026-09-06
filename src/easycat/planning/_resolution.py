@@ -37,6 +37,7 @@ from easycat._pipeline_decisions import (
     noise_reduction_enabled,
     vad_stage_enabled,
 )
+from easycat.planning.provider_plan import _ROLE_ORDER
 from easycat.planning.transport_registry import (
     AGENT_BACKENDS,
     DEFAULT_AGENT,
@@ -57,16 +58,6 @@ if TYPE_CHECKING:
     from easycat.config import EasyConfig
     from easycat.planning.provider_plan import Role
     from easycat.project.schema import VoiceProfile
-
-_ROLE_ORDER: tuple[Role, ...] = (
-    "stt",
-    "tts",
-    "vad",
-    "transport",
-    "agent",
-    "noise_reducer",
-    "echo_canceller",
-)
 
 # ``create_vad('auto')`` tries Silero -> FunASR -> TEN -> Krisp and only raises
 # when NONE is importable. These are the probe modules for that union (Silero +
