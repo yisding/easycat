@@ -192,6 +192,7 @@ nav:
       - Installation: install.md
       - CLI: cli.md
       - Architecture: architecture.md
+      - Error codes: reference/error-codes.md
       - Events: reference/events.md
       - EasyConfig fields: reference/easyconfig.md
       - Journal records: reference/journal-records.md
