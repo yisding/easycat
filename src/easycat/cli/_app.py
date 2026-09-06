@@ -785,6 +785,17 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Error code reference",
+        "path": "docs/reference/error-codes.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": ("Look up any EASYCAT_Exxx code with its cause, fix, and related codes."),
+        "commands": (
+            "uv run easycat explain --list",
+            "uv run python scripts/regen_error_codes.py --check",
+        ),
+    },
+    {
         "label": "Events reference",
         "path": "docs/reference/events.md",
         "audience": "app builders",

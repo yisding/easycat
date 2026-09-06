@@ -25,7 +25,10 @@ Coding agent? Use [AGENTS.md](AGENTS.md) for repository coding rules; use
 `uv run easycat explain json-schema`; `uv run easycat docs --json` emits the
 full route map. After editing the docs route map, regenerate the machine docs
 with `uv run python scripts/regen_llms_txt.py` (`--check` verifies them in
-CI).
+CI). After adding or editing an `EASYCAT_Exxx` code in
+[`src/easycat/errors.py`](src/easycat/errors.py), regenerate the error-code
+reference with `uv run python scripts/regen_error_codes.py` (`--check` and
+`just guard-docs` both verify it).
 For local audio or provider work, set the relevant environment variables and
 run `uv run easycat doctor` before debugging tests or examples. Use
 `uv run easycat doctor --env-file .env` when those keys live in a project

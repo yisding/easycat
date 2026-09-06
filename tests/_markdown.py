@@ -17,7 +17,12 @@ def github_markdown_heading_anchors(path: Path) -> set[str]:
             continue
         title = re.sub(r"\s+#+$", "", match.group("title").strip())
         slug = title.lower()
-        slug = slug.translate(str.maketrans("", "", string.punctuation.replace("-", "")))
+        # GitHub and Python-Markdown's ``toc`` both keep ``-`` and ``_`` and
+        # drop the rest of the punctuation, so a heading like ``EASYCAT_E304``
+        # anchors as ``#easycat_e304``. Stripping the underscore here would
+        # reject links that resolve correctly in both renderers.
+        droppable = string.punctuation.replace("-", "").replace("_", "")
+        slug = slug.translate(str.maketrans("", "", droppable))
         slug = re.sub(r"\s+", "-", slug).strip("-")
         if not slug:
             continue
