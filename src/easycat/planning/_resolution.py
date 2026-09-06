@@ -189,13 +189,16 @@ class ResolvedConfiguration:
     auto_turn_from_stt_final: bool
     enable_vad: bool
     enable_noise_reduction: bool
-    enable_echo_cancellation: bool
+    echo_canceller_selected: bool
     """Whether the planner selected an *active* canceller (not the passthrough).
 
-    This is the planner's view of the AEC role. It is deliberately NOT the
-    ``SessionConfig.enable_echo_cancellation`` rule, which is ``isinstance``-based
-    and reports ``False`` for a registered third-party AEC config — see
-    :func:`easycat._pipeline_decisions.echo_cancellation_enabled`.
+    Deliberately NOT named ``enable_echo_cancellation``: that is the
+    ``SessionConfig`` field, whose rule is ``isinstance``-based and reports
+    ``False`` for an injected canceller and for a registered third-party AEC
+    config — exactly the two cases where this field reports ``True`` (see
+    :func:`easycat._pipeline_decisions.echo_cancellation_enabled` and
+    ``tests/planning/test_resolution.py``). A consumer that wants the
+    ``SessionConfig`` value must call that function, not read this field.
     """
     missing_env: tuple[str, ...]
     missing_extras: tuple[str, ...]
@@ -701,7 +704,7 @@ def _finalize(
         auto_turn_from_stt_final=auto_turn,
         enable_vad=vad_stage_enabled(auto_turn_from_stt_final=auto_turn),
         enable_noise_reduction=roles["noise_reducer"].enabled,
-        enable_echo_cancellation=roles["echo_canceller"].provider != DEFAULT_ECHO_CANCELLER,
+        echo_canceller_selected=roles["echo_canceller"].provider != DEFAULT_ECHO_CANCELLER,
         missing_env=tuple(sorted(missing_env)),
         missing_extras=tuple(sorted(missing_extras)),
         missing_backends=(),

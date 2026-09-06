@@ -282,3 +282,47 @@ def test_instance_is_treated_as_an_injected_provider() -> None:
     assert selection.provider == "_VADLike"
     assert selection.capabilities == frozenset({"injected"})
     assert selection.extra is None
+
+
+# ── The one selection projection ─────────────────────────────────────
+
+#: The keys every JSON surface publishes per role. Spelled out here, once, so a
+#: field added to ``selection_to_dict`` has to be added to this list too.
+_SELECTION_PAYLOAD_KEYS = {
+    "role",
+    "provider",
+    "model",
+    "config_type",
+    "extra",
+    "required_env",
+    "capabilities",
+}
+
+
+def test_selection_to_dict_is_the_projection_both_json_surfaces_use() -> None:
+    """``easycat plan --json`` and the server's ``/plan`` payload cannot drift.
+
+    ``VoiceServer.plan_payload`` calls :func:`easycat.planning.selection_to_dict`
+    per role, and ``cli.plan._selection_to_dict`` is a thin alias for it. The
+    server assertions in ``tests/server/test_plan_endpoint.py`` need aiohttp, so
+    this credential-free row is what actually executes the shared projection and
+    pins its key set on a dev-group-only machine.
+    """
+    from easycat.cli.plan import _selection_to_dict
+    from easycat.planning import selection_to_dict
+
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=VADConfig(backend="silero"),
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    plan = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"})
+    for selection in plan.selected.values():
+        payload = selection_to_dict(selection)
+        assert set(payload) == _SELECTION_PAYLOAD_KEYS
+        assert _selection_to_dict(selection) == payload
+        # JSON-ready: ``capabilities`` is a sorted list, never a frozenset.
+        assert payload["capabilities"] == sorted(selection.capabilities)

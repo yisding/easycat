@@ -403,18 +403,24 @@ def _catalog_provider_name(
 
     ``strict=True`` lets ``catalog.validate_name`` raise for an unknown NAMED
     provider — the historical behaviour of :func:`_provider_requires_api_key`,
-    which callers depend on for the error it produces. The default swallows the
-    failure and returns ``None``.
+    which callers depend on for the error it produces, and which reached the
+    name path only for a wrapper. The lenient default reproduces the other
+    historical caller (``_validate``'s gh-1041 ambient-credential lookup): it
+    tries the name path for ANY config carrying a ``provider`` string and falls
+    through to the config-type walk when that yields nothing, so a registered
+    third-party config subclass still resolves a name.
     """
     catalog = _catalog_for(kind)
     catalog.discover()
-    if isinstance(cfg, STTProviderConfig | TTSProviderConfig):
+    provider = getattr(cfg, "provider", None)
+    named = isinstance(cfg, STTProviderConfig | TTSProviderConfig)
+    if named or (not strict and isinstance(provider, str)):
         try:
-            return cast("str", catalog.validate_name(cfg.provider))
+            return cast("str", catalog.validate_name(provider))
         except Exception:
             if strict:
                 raise
-            return None
+            # Fall through to the config-type walk, as the pre-DX1-2 code did.
     cfg_type = type(cfg)
     for provider_name, (_provider_cls, config_cls) in catalog.providers.items():
         if config_cls is cfg_type:

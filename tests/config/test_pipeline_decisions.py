@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import ast
 import inspect
+import sys
 from dataclasses import dataclass
 from typing import Any
 
 import pytest
 
 from easycat import _pipeline_decisions as decisions
+from easycat import providers
 from easycat.echo_cancellation import EchoCancellationConfig, PassthroughAEC
 from easycat.noise_reduction import NoiseReducerConfig
 from easycat.turn_manager import TurnMode
@@ -41,6 +43,46 @@ _ROLES = tuple(_ROLE_PREDICATES)
 def _shaped_class(methods: tuple[str, ...]) -> type:
     """A class exposing exactly ``methods`` as callables."""
     return type("Shaped", (), {name: (lambda self, *a, **k: None) for name in methods})
+
+
+# The method tuples, transcribed a SECOND time by hand. ``_shaped_class`` builds
+# its fixtures from the leaf's own constants, so without an independent spelling
+# a typo (``"sendaudio"``) would grow a matching attribute on the fixture and
+# every predicate test would still pass.
+_EXPECTED_METHODS: dict[str, tuple[str, ...]] = {
+    "stt": ("start_stream", "send_audio", "commit_segment", "end_stream", "events"),
+    "tts": ("synthesize", "stop", "cancel"),
+    "vad": ("process", "configure"),
+    "noise_reducer": ("process",),
+    "echo_canceller": ("process", "feed_reference"),
+}
+
+_ROLE_PROTOCOLS: dict[str, type] = {
+    "stt": providers.STTProvider,
+    "tts": providers.TTSProvider,
+    "vad": providers.VADProvider,
+    "noise_reducer": providers.NoiseReducer,
+    "echo_canceller": providers.EchoCanceller,
+}
+
+
+@pytest.mark.parametrize("role", _ROLES)
+def test_method_tuples_match_an_independent_transcription(role: str) -> None:
+    _predicate, methods = _ROLE_PREDICATES[role]
+    assert methods == _EXPECTED_METHODS[role]
+
+
+@pytest.mark.parametrize("role", _ROLES)
+def test_method_tuples_name_real_members_of_the_provider_protocol(role: str) -> None:
+    """A typo cannot hide behind ``_shaped_class``: the names must exist upstream.
+
+    ``easycat.providers`` is the protocol every provider implements, so a method
+    the leaf's tuple names must be declared there. (The tuples are the SUBSET the
+    duck check needs, so a protocol may legitimately carry more.)
+    """
+    _predicate, methods = _ROLE_PREDICATES[role]
+    declared = {name for name in vars(_ROLE_PROTOCOLS[role]) if not name.startswith("_")}
+    assert set(methods) <= declared, sorted(set(methods) - declared)
 
 
 @pytest.mark.parametrize("role", _ROLES)
@@ -84,6 +126,51 @@ def test_instance_predicates_reject_a_config_and_a_string(role: str) -> None:
     assert predicate(None) is False
     assert predicate("silero") is False
     assert predicate(NoiseReducerConfig()) is False
+
+
+_LEAF_FACTORY_ROLES = ("vad", "noise_reducer", "echo_canceller")
+
+
+def _leaf_factory(role: str) -> Any:
+    from easycat.echo_cancellation import create_echo_canceller
+    from easycat.noise_reduction import create_noise_reducer
+    from easycat.vad.factory import create_vad
+
+    return {
+        "vad": create_vad,
+        "noise_reducer": create_noise_reducer,
+        "echo_canceller": create_echo_canceller,
+    }[role]
+
+
+@pytest.mark.parametrize("role", _LEAF_FACTORY_ROLES)
+def test_leaf_factories_hand_back_exactly_the_shared_shape(role: str) -> None:
+    """``create_vad`` / ``create_noise_reducer`` / ``create_echo_canceller`` agree.
+
+    Each used to re-spell its own method tuple inline; they now call
+    :func:`has_provider_shape` with the constant above. This is the behavioural
+    half of that claim: an object matching the tuple is returned unchanged, and
+    dropping any one method takes it off the injected path entirely.
+    """
+    _predicate, methods = _ROLE_PREDICATES[role]
+    factory = _leaf_factory(role)
+
+    injected = _shaped_class(methods)()
+    assert factory(injected) is injected
+
+    for dropped in methods:
+        partial = _shaped_class(tuple(n for n in methods if n != dropped))()
+        with pytest.raises(ValueError):
+            factory(partial)
+
+
+@pytest.mark.parametrize("role", _LEAF_FACTORY_ROLES)
+def test_leaf_factories_hand_back_a_shape_matching_class(role: str) -> None:
+    # The reason the planner mirrors ``has_provider_shape`` and not the stricter
+    # ``is_provider_instance``: these factories have no class-object guard.
+    _predicate, methods = _ROLE_PREDICATES[role]
+    shaped = _shaped_class(methods)
+    assert _leaf_factory(role)(shaped) is shaped
 
 
 def test_noise_reduction_enabled_table() -> None:
@@ -158,18 +245,47 @@ def test_auto_turn_from_stt_final_table(
     assert decisions.vad_stage_enabled(auto_turn_from_stt_final=result) is not expected
 
 
-def test_module_imports_nothing_from_easycat() -> None:
+def _import_violations(source: str) -> list[str]:
+    """Every import in ``source`` that is not a plain absolute stdlib import.
+
+    RELATIVE imports are reported rather than resolved: ``from .turn_manager
+    import TurnMode`` is the tempting line to add to the leaf (which keeps
+    ``PUSH_TO_TALK_MODE_VALUE`` precisely to avoid it), and an absolute-name
+    filter cannot see it — ``node.module`` is ``"turn_manager"`` for that form
+    and ``None`` for ``from . import turn_manager``.
+    """
+    violations: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            violations.extend(
+                alias.name
+                for alias in node.names
+                if alias.name.split(".")[0] not in sys.stdlib_module_names
+            )
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                violations.append("." * node.level + (node.module or ""))
+            elif node.module is not None and node.module.split(".")[0] not in (
+                sys.stdlib_module_names
+            ):
+                violations.append(node.module)
+    return violations
+
+
+def test_module_imports_only_the_standard_library() -> None:
     """The stdlib-only contract, checked cheaply on the source itself.
 
     An ``easycat`` import here would let the shared leaf drag either side's
-    dependencies into the other and break
-    ``tests/planning/test_boundary.py``'s subprocess checks.
+    dependencies into the other and break ``tests/planning/test_boundary.py``'s
+    subprocess checks.
     """
-    tree = ast.parse(inspect.getsource(decisions))
-    imported: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            imported.append(node.module)
-    assert not [name for name in imported if name.split(".")[0] == "easycat"], imported
+    assert _import_violations(inspect.getsource(decisions)) == []
+
+
+def test_the_import_guard_catches_the_lines_it_exists_to_catch() -> None:
+    """The guard itself, on the three forms an absolute-name filter would miss."""
+    assert _import_violations("from .turn_manager import TurnMode") == [".turn_manager"]
+    assert _import_violations("from . import config") == ["."]
+    assert _import_violations("from easycat.config import EasyConfig") == ["easycat.config"]
+    assert _import_violations("import numpy") == ["numpy"]
+    assert _import_violations("from collections.abc import Sequence\nimport ast\n") == []

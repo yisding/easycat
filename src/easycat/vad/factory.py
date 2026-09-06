@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
 
+from easycat._pipeline_decisions import VAD_INSTANCE_METHODS, has_provider_shape
 from easycat._provider_catalog import ProviderCatalog
 from easycat.providers import VADProvider
 from easycat.vad._base import (
@@ -189,11 +190,7 @@ def create_vad(config: Any = None) -> VADProvider:
     """
     if isinstance(config, str):
         config = parse_vad_string(config)
-    if (
-        config is not None
-        and callable(getattr(config, "process", None))
-        and callable(getattr(config, "configure", None))
-    ):
+    if config is not None and has_provider_shape(config, VAD_INSTANCE_METHODS):
         return config
     if _CATALOG.is_config_instance(config):
         return _CATALOG.create_from_config(config, event_bus=None)

@@ -16,6 +16,15 @@ Consumers:
 * :mod:`easycat.planning._resolution` — preview. It calls the same instance
   predicates, :func:`noise_reduction_enabled`, :func:`is_push_to_talk`,
   :func:`auto_turn_from_stt_final` and :func:`vad_stage_enabled`.
+* The leaf factories ``easycat.vad.factory.create_vad``,
+  ``easycat.noise_reduction.create_noise_reducer`` and
+  ``easycat.echo_cancellation.create_echo_canceller`` — they call
+  :func:`has_provider_shape` with the matching method tuple, so the "is this
+  already a provider?" duck check the planner mirrors is the same object, not a
+  hand-kept copy.
+* :func:`easycat.helpers._wired_summary` — the startup banner. It calls
+  :func:`noise_reduction_enabled` so its "noise-reduction=on/off" line cannot
+  disagree with what ``create_session`` wired.
 
 :func:`echo_cancellation_enabled` is the deliberate exception: it is called from
 ``config/_factory.py`` only, because the planner's superficially similar
@@ -29,7 +38,10 @@ from typing import Any
 
 # The duck-typed method tuples that discriminate a live provider *instance*
 # from a provider *config*. Transcribed from the five near-identical predicates
-# ``config/_factory.py`` used to carry, and re-typed by hand in the planner.
+# ``config/_factory.py`` used to carry, and re-typed by hand in the planner and
+# in the three leaf factories — all of which now read these tuples instead.
+# ``tests/config/test_pipeline_decisions.py`` pins them against an independent
+# transcription and against the ``easycat.providers`` protocols.
 STT_INSTANCE_METHODS: tuple[str, ...] = (
     "start_stream",
     "send_audio",
@@ -52,10 +64,11 @@ def has_provider_shape(value: Any, methods: Sequence[str]) -> bool:
     """Whether ``value`` exposes every method in ``methods`` as a callable.
 
     The bare duck check, class objects included. It is what the leaf factories
-    (``create_vad`` / ``create_noise_reducer`` / ``create_echo_canceller``) apply
-    to decide "is this already a provider?", so the planner — whose job is to
-    predict them — applies the same one. :func:`is_provider_instance` is the
-    stricter variant ``config/_factory.py`` uses.
+    (``create_vad`` / ``create_noise_reducer`` / ``create_echo_canceller``) call
+    to decide "is this already a provider?" — literally this function — so the
+    planner, whose job is to predict them, applies the same one.
+    :func:`is_provider_instance` is the stricter variant ``config/_factory.py``
+    uses.
     """
     return all(callable(getattr(value, name, None)) for name in methods)
 

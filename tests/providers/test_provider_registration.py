@@ -203,6 +203,49 @@ def test_create_from_plain_config_does_not_require_dataclass() -> None:
     assert provider.config is config
 
 
+@dataclass
+class SubclassedSTTConfig(FakeSTTConfig):
+    """A registered config's SUBCLASS, carrying the registered name explicitly.
+
+    Its exact type is not in the catalog (the catalog holds ``FakeSTTConfig``),
+    so the config-type walk cannot name it — only its ``provider`` string can.
+    """
+
+    provider: str = "fakestt"
+
+
+def test_ambient_credential_reaches_a_registered_config_subclass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gh-1041's ambient-credential injection resolves the name by ``provider``.
+
+    ``EasyConfig._validate`` has always tried the ``provider``-string lookup for
+    ANY config that carries one and fallen back to the config-type walk. A
+    wrapper-only ``isinstance`` gate would return no name here, leave ``env_var``
+    unset, and raise "requires an API key" although the ambient credential is
+    right there.
+    """
+    from easycat.config import EasyConfig
+
+    _register_fake_stt()
+    monkeypatch.setenv("FAKESTT_API_KEY", "fake-ambient-key-1234567890")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-registration-test")
+
+    class _Agent:
+        async def run(self, text: str) -> str:
+            return "ok"
+
+    config = EasyConfig(
+        stt=SubclassedSTTConfig(),
+        tts="openai",
+        agent=_Agent(),
+        debug="off",
+        openai_api_key="sk-registration-test",
+    )
+
+    assert config.stt.api_key == "fake-ambient-key-1234567890"
+
+
 def test_identical_reregistration_is_a_noop() -> None:
     _register_fake_stt()
     _register_fake_stt()  # must not raise

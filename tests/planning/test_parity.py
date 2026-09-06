@@ -274,7 +274,8 @@ def test_parity_browser_profile_aec_extra_missing_is_warning_not_blocking(
     # A manifest browser profile auto-enables AEC with the passthrough fallback
     # (the manifest cannot pick "error"), so a missing aec extra must stay a
     # warning — otherwise /health/ready would reject a deployable browser server.
-    _require_extras("onnxruntime", "aiortc")
+    # No extras gate: this half has no ``create_session`` call, and
+    # ``_plan_without`` states the whole probe environment as data.
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     from easycat.project.schema import VoiceProfile
 
@@ -348,8 +349,10 @@ def test_parity_auto_vad_satisfied_by_union_does_not_block(
     # satisfiable by ANY of {onnxruntime, ten_vad, krisp_audio}. The planner must
     # not block the auto VAD on a single missing extra when another union member
     # is importable — here onnxruntime is gone but ten_vad remains.
+    # No ``importorskip("ten_vad")``: ``_plan_without`` names onnxruntime as the
+    # ONLY absent module, so ten_vad reads as present whether or not it is
+    # installed. The plan-side verdict is a function of that data alone.
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
-    pytest.importorskip("ten_vad")
     config = _base_config(vad="auto")
 
     plan = _plan_without(config, "onnxruntime")

@@ -127,11 +127,11 @@ def test_transport_aec_defaults_match_manifest_resolved_easyconfig(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The planner's per-transport ``default_echo_cancellation_enabled`` mirror is
-    # consumed ONLY by the manifest path (``_select_from_profile``), so tie it to
-    # what ``to_easyconfig`` ACTUALLY resolves per transport — NOT the bare
-    # transport-config ClassVar, which the browser/phone presets override (webrtc's
-    # ClassVar is False but ``EasyConfig.browser`` forces AEC on). This catches a
-    # silent drift if a preset OR the mirror changes.
+    # consumed ONLY by the manifest path (``_resolution.resolve_from_profile``),
+    # so tie it to what ``to_easyconfig`` ACTUALLY resolves per transport — NOT
+    # the bare transport-config ClassVar, which the browser/phone presets
+    # override (webrtc's ClassVar is False but ``EasyConfig.browser`` forces AEC
+    # on). This catches a silent drift if a preset OR the mirror changes.
     from easycat.project.manifest import ProjectManifest
     from easycat.project.schema import (
         ProjectSection,

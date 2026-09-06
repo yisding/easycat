@@ -193,14 +193,81 @@ def test_voicemail_detector_overrides_native_endpointing(
 def test_resolution_reports_the_noise_and_aec_switches() -> None:
     off = resolve_from_easyconfig(_config(), probe=ProbeEnvironment.fake(default=True))
     assert off.enable_noise_reduction is False
-    assert off.enable_echo_cancellation is False
+    assert off.echo_canceller_selected is False
 
     on = resolve_from_easyconfig(
         _config(enable_noise_reduction=True, enable_echo_cancellation=True),
         probe=ProbeEnvironment.fake(default=True),
     )
     assert on.enable_noise_reduction is True
-    assert on.enable_echo_cancellation is True
+    # The planner's AEC view, NOT ``SessionConfig.enable_echo_cancellation`` —
+    # hence the distinct field name.
+    assert on.echo_canceller_selected is True
+
+
+class _InjectedAEC:
+    def process(self, _chunk: object) -> object: ...
+
+    def feed_reference(self, _chunk: object) -> None: ...
+
+
+def test_echo_canceller_selected_is_not_the_session_config_flag() -> None:
+    """The two AEC booleans disagree, on purpose, for an injected canceller.
+
+    ``create_session`` builds and wires the injected canceller but
+    ``SessionConfig.enable_echo_cancellation`` still reports ``False``, because
+    its rule is ``isinstance(spec, EchoCancellationConfig) and spec.enabled``
+    (pinned by ``tests/planning/test_resolution_parity.py``'s D4 row and by
+    ``test_echo_cancellation_enabled_table``). The resolver answers the OTHER
+    question — "did the planner pick something other than the passthrough?" — so
+    this row pins the divergence rather than leaving it only described in a
+    docstring.
+    """
+    from easycat._pipeline_decisions import echo_cancellation_enabled
+    from easycat.echo_cancellation import EchoCancellationConfig
+
+    injected = _InjectedAEC()
+    resolved = resolve_from_easyconfig(
+        _config(echo_cancellation=injected), probe=ProbeEnvironment.fake(default=True)
+    )
+    assert resolved.echo_canceller_selected is True
+    assert resolved.roles["echo_canceller"].capabilities == frozenset({"injected"})
+    assert echo_cancellation_enabled(injected, config_cls=EchoCancellationConfig) is False
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "DX1-4: resolution reads the raw ``smart_turn`` attribute, while "
+        "construction re-derives it in ``EasyConfig._validate_for_session`` via "
+        "``_renormalize_smart_turn`` (gh-1027). After a late ``stt`` mutation of "
+        "a preset the two disagree. DX1-1 pins the construction side in "
+        "``test_resolution_parity.py::"
+        "test_late_mutation_back_to_openai_restores_the_preset_default``."
+    ),
+)
+def test_late_stt_mutation_resolves_the_renormalized_smart_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The late-mutation row the boolean table cannot express.
+
+    ``EasyConfig.mic`` ships ``smart_turn.enabled=True``. Reassigning ``stt`` to
+    a native-endpointing provider afterwards makes ``_validate_for_session``
+    turn smart-turn back off, so ``create_session`` drives turns from STT finals
+    and builds no VAD. The resolver reads the un-renormalized attribute and says
+    the opposite — and it is exactly ``auto_turn_from_stt_final`` / ``enable_vad``
+    that DX1-4 is specified to publish.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-resolution-test")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-resolution-test")
+    config = EasyConfig.mic(agent=_Agent(), debug="off")
+    assert config.smart_turn.enabled is True
+
+    config.stt = "deepgram/flux-general-en"
+    resolved = resolve_from_easyconfig(config, probe=ProbeEnvironment.fake(default=True))
+
+    assert resolved.auto_turn_from_stt_final is True
+    assert resolved.enable_vad is False
 
 
 def test_missing_backends_is_empty_until_a_later_workstream() -> None:

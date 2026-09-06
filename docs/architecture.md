@@ -441,9 +441,9 @@ factories that produce them, rather than bypassing `create_session()`.
 
 Role resolution and resource construction are owned by different modules that
 never import each other: `easycat.planning` resolves every pipeline role
-statically (`_resolution.py` decides once, `provider_plan.py` projects the
-result into the public `ProviderPlan`), while `config/_factory.py` owns
-construction. The pure decisions both need — the live-provider predicates, the
+statically (`planning/_resolution.py` decides once, `planning/provider_plan.py`
+projects the result into the public `ProviderPlan`), while `config/_factory.py`
+owns construction. The pure decisions both need — the live-provider predicates, the
 noise-reduction switch, and the STT-native-endpointing turn policy — live in the
 stdlib-only leaf `easycat._pipeline_decisions`, below both, and an Import Linter
 independence contract keeps the two layers from reaching for each other.
