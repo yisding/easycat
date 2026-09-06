@@ -101,6 +101,15 @@ class _FakeTransport:
 
 
 # role name -> (patched attribute name on easycat.config._factory, fake factory)
+#
+# The ``transport`` role is deliberately ABSENT here: ``_create_transport``
+# (``_factory.py:147``) is a role wrapper, not a leaf — it owns the
+# ``isinstance(config, TransportLike)`` injected-instance branch and the
+# ``config._event_bus`` injection, unlike ``_create_stt``/``_create_vad``/… whose
+# predicates sit above the leaf they call. Patching it out would delete both from
+# the code under test and turn every ``built.transport_spec is config.transport``
+# assertion into a tautology of this recorder. ``_patch_transport_leaves`` below
+# patches the per-config-type factories *inside* it instead.
 _LEAF_TARGETS: tuple[tuple[str, str, type], ...] = (
     ("stt", "create_stt_provider", _FakeSTT),
     ("stt", "create_stt_provider_from_config", _FakeSTT),
@@ -109,8 +118,27 @@ _LEAF_TARGETS: tuple[tuple[str, str, type], ...] = (
     ("vad", "create_vad", _FakeVAD),
     ("noise", "create_noise_reducer", _FakeNoiseReducer),
     ("echo", "create_echo_canceller", _FakeEchoCanceller),
-    ("transport", "_create_transport", _FakeTransport),
 )
+
+
+def _patch_transport_leaves(monkeypatch: pytest.MonkeyPatch, record: Any) -> None:
+    """Record the transport role BELOW ``_create_transport``, not instead of it.
+
+    ``_transport_factories()`` (``_factory.py:116``) is the real leaf: it is
+    called only after ``_create_transport`` has already handled an injected
+    ``TransportLike`` instance and the ``_event_bus`` injection, so replacing its
+    per-config-type entries leaves both of those branches executing for real
+    while still keeping every built-in transport SDK out of the test.
+    """
+    real_transport_factories = _factory._transport_factories
+
+    def _fake_transport_factories() -> dict[type, Any]:
+        return {
+            config_type: (lambda config, event_bus: record(config))
+            for config_type in real_transport_factories()
+        }
+
+    monkeypatch.setattr(_factory, "_transport_factories", _fake_transport_factories)
 
 
 @dataclass(frozen=True)
@@ -184,6 +212,9 @@ def capture_construction(
             continue
         monkeypatch.setattr(_factory, attr_name, _recorder(role, fake_cls))
 
+    if "transport" not in passthrough:
+        _patch_transport_leaves(monkeypatch, _recorder("transport", _FakeTransport))
+
     session_configs: list[Any] = []
     real_make_session_config = _factory._make_session_config
 
@@ -238,13 +269,21 @@ def assert_preview_matches_construction(
     assert plan.selected["agent"].provider == ("python" if config.agent is not None else "none")
 
     # Invariant 8, narrowed to what this FAKE-constructor harness can actually
-    # prove: every leaf provider constructor is patched to a stub that always
-    # "succeeds", so a missing-EXTRA blocking gap is untestable here by
-    # construction — real extra-vs-raise parity is covered separately by
+    # prove, and written as an EXCLUSION so a blocking category added later (for
+    # example DX1-5's ``missing_backend:``) is covered here by default instead of
+    # slipping past an allow-list. Only ``missing_extra:`` is exempt: every leaf
+    # provider constructor is patched to a stub that always "succeeds", so a
+    # missing-EXTRA blocking gap is untestable here by construction — real
+    # extra-vs-raise parity is covered separately by
     # ``test_construction_contracts.py``, which runs the REAL factories. A
     # missing-ENV credential gap is different: ``EasyConfig`` raises
     # ``EASYCAT_E203`` at *construction* (before any factory patch takes
     # effect), so a successful ``capture_construction`` call already proves no
     # required credential was missing — if the plan disagreed here, that would
-    # be a genuine divergence worth catching.
-    assert not plan.missing_env, plan.missing_env
+    # be a genuine divergence worth catching (and
+    # ``test_inline_credential_constructs_while_the_plan_blocks_on_missing_env``
+    # characterizes the one shape where it does).
+    unexplained = [
+        error for error in plan.blocking_errors() if not error.startswith("missing_extra:")
+    ]
+    assert not unexplained, unexplained

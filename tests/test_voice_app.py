@@ -256,20 +256,36 @@ def test_resolve_config_is_repeatable_and_does_not_mutate_the_app() -> None:
 
 @pytest.mark.parametrize("mode", ["browser", "websocket", "twilio", "telnyx"])
 def test_resolve_config_matches_the_per_connection_factory(mode: str) -> None:
-    from easycat.transports._webrtc_config import WebRTCTransportConfig
+    """The inline preview branch agrees with the real per-connection factory.
+
+    ``resolve_config(mode, transport=...)`` short-circuits to
+    ``self._per_connection_factory(mode)(transport)`` verbatim
+    (``voice_app.py``), so passing a transport here would compare the factory's
+    result with itself and pin nothing. The branch worth pinning is the
+    NO-transport one, which calls ``_per_connection_factory`` only for its
+    validation side effect and then rebuilds the preset inline — a duplication
+    that agrees today by inspection alone. So: build the transport the inline
+    branch would build, and compare that branch against the factory applied to
+    it.
+    """
     from easycat.transports.telnyx_media import TelnyxTransportConfig
     from easycat.transports.twilio_media import TwilioTransportConfig
     from easycat.transports.websocket import WebSocketTransportConfig
 
-    transport = {
-        "browser": WebRTCTransportConfig,
-        "websocket": WebSocketTransportConfig,
-        "twilio": TwilioTransportConfig,
-        "telnyx": TelnyxTransportConfig,
-    }[mode]()
-
     app = VoiceApp(agent="a", stt="openai/realtime", tts="openai")
-    from_resolve = app.resolve_config(mode, transport=transport)
+    if mode == "browser":
+        # The same builder ``resolve_config``'s browser branch uses, so the
+        # comparison isolates the preset duplication rather than transport
+        # construction.
+        transport, _unsafe = app._browser_transport_config()
+    elif mode == "websocket":
+        transport = WebSocketTransportConfig()
+    elif mode == "telnyx":
+        transport = TelnyxTransportConfig()
+    else:
+        transport = TwilioTransportConfig()
+
+    from_resolve = app.resolve_config(mode)
     from_factory = app._per_connection_factory(mode)(transport)
 
     for field_name in ("stt", "tts", "vad", "debug"):
@@ -277,6 +293,10 @@ def test_resolve_config_matches_the_per_connection_factory(mode: str) -> None:
     assert from_resolve.echo_cancellation == from_factory.echo_cancellation
     assert from_resolve.smart_turn == from_factory.smart_turn
     assert type(from_resolve.transport) is type(from_factory.transport)
+    # The inline branch builds its OWN transport, so the two are equal-but-
+    # distinct rather than the same object — which is exactly what makes the
+    # field-by-field comparison above a real check.
+    assert from_resolve.transport is not from_factory.transport
 
 
 @pytest.mark.parametrize("mode", ["browser", "websocket", "twilio", "ws", "phone"])

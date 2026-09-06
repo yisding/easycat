@@ -18,6 +18,10 @@ or the suite fails:
   VAD stage at construction, but the planner still selects a VAD and blocks.
 * **D2** (``commercial_backend_without_sdk_*``) — a selected backend whose
   commercial SDK is absent has no pip extra, so it is never a blocking gap.
+  These two rows cannot compare constructed values at all (construction raises
+  and will keep raising after the fix, which touches only the planner), so they
+  assert both halves of the divergence instead: that construction raises
+  (unconditionally) and that the plan blocks (the xfailing half).
 * **D3** (``custom_stt_reports_unknown_capabilities``) — an injected STT is
   described as a provider with no capabilities, indistinguishable from a
   known-capability-free provider (an injected VAD/noise/AEC gets
@@ -41,6 +45,7 @@ from easycat.config import EasyConfig
 from easycat.echo_cancellation import register_echo_canceller_provider
 from easycat.noise_reduction import NoiseReducerConfig
 from easycat.planning import ProviderPlan, build_provider_plan
+from easycat.project.schema import TRANSPORT_SHORTCUTS
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.transports._webrtc_config import WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
@@ -135,6 +140,48 @@ class _DuckTransport:
 # ── Third-party registrations shared across a couple of rows ──────────
 # ``register_*_provider`` is idempotent for identical metadata, so calling it
 # from every test that needs it (rather than once at import time) is safe.
+# ``restore_provider_catalogs`` below still undoes them: the VAD/noise/echo
+# catalogs are process globals, and ``"energy"`` is the very name the scaffold
+# template ``cli/scaffold/templates/provider/test_custom_vad.py`` registers, so
+# leaking these classes would make any later catalog-enumerating test
+# order-dependent (and a same-name re-registration with different classes raises
+# ``ValueError`` in ``ProviderCatalog.register``).
+
+
+@pytest.fixture(autouse=True)
+def restore_provider_catalogs():
+    """Snapshot/restore the process-global stage catalogs around every test.
+
+    Same shape as ``tests/providers/test_audio_stage_registration.py``'s
+    ``restore_audio_stage_catalogs``, which is the repo convention for a test
+    that calls ``register_vad_provider`` / ``register_echo_canceller_provider``.
+    """
+    from easycat.echo_cancellation import _CATALOG as echo_catalog
+    from easycat.noise_reduction import _CATALOG as noise_catalog
+    from easycat.vad.factory import _CATALOG as vad_catalog
+
+    tables = (
+        "providers",
+        "env_vars",
+        "extras",
+        "api_domains",
+        "probe_modules",
+        "capabilities",
+        "capability_resolvers",
+        "config_to_provider",
+    )
+    catalogs = (vad_catalog, noise_catalog, echo_catalog)
+    snapshots = [
+        (catalog, {name: dict(getattr(catalog, name)) for name in tables}, catalog._discovered)
+        for catalog in catalogs
+    ]
+    yield
+    for catalog, saved, discovered in snapshots:
+        for name, entries in saved.items():
+            table = getattr(catalog, name)
+            table.clear()
+            table.update(entries)
+        object.__setattr__(catalog, "_discovered", discovered)
 
 
 class _EnergyVADConfig:
@@ -213,6 +260,21 @@ def _shortcut_without_model(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:
         agent=_Agent(),
         debug="off",
     )
+
+
+def _shortcut_without_model_checks(
+    plan: ProviderPlan, built: ConstructedInputs, config: EasyConfig
+) -> None:
+    del config
+    # On the EasyConfig path a bare ``stt="deepgram"`` shortcut is resolved to
+    # ``DeepgramSTTConfig()`` by ``__post_init__`` BEFORE the planner ever sees
+    # it, so both sides read the dataclass default off the same object and the
+    # generic model invariant cannot disagree. Pin the value explicitly so the
+    # dataclass default is a recorded fact rather than an implication, and see
+    # ``test_manifest_shortcut_without_model_invents_no_default_model`` for the
+    # manifest side, where a default model COULD be invented and is not.
+    assert built.stt_spec.model == "nova-2"
+    assert plan.selected["stt"].model == "nova-2"
 
 
 def _zero_config_openai_defaults(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:
@@ -393,6 +455,11 @@ def _custom_instances_checks(
     assert built.noise_spec is config.noise_reduction
     assert built.echo_spec is config.echo_cancellation
     assert built.transport_spec is config.transport
+    # The transport role is recorded BELOW ``_create_transport`` (see
+    # ``_recording._patch_transport_leaves``), so its ``TransportLike``
+    # injected-instance branch really ran and the SessionConfig holds the caller's
+    # own object rather than anything this harness fabricated.
+    assert built.session_config.transport is config.transport
 
 
 def _custom_stt_reports_unknown_capabilities(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:
@@ -426,6 +493,7 @@ def _custom_transport_instance_checks(
     assert plan.selected["transport"].capabilities == frozenset()
     assert plan.selected["transport"].extra is None
     assert built.transport_spec is config.transport
+    assert built.session_config.transport is config.transport
 
 
 def _registered_third_party_vad(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:
@@ -459,6 +527,10 @@ def _commercial_backend_without_sdk_noise(monkeypatch: pytest.MonkeyPatch) -> Ea
     return EasyConfig(
         noise_reduction=NoiseReducerConfig(backend="krisp"),
         enable_noise_reduction=True,
+        # An injected VAD instance, so the row's plan assertion cannot be
+        # satisfied by the UNRELATED default vad="auto" backend missing its
+        # silero-vad extra: only the krisp noise reducer may decide the verdict.
+        vad=_DuckVAD(),
         transport=WebSocketTransportConfig(),
         agent=_Agent(),
         debug="off",
@@ -503,12 +575,17 @@ class _Row:
     passthrough: frozenset[str] = frozenset()
     checks: Any = None
     skip_if_installed: str | None = None
+    # When set, ``capture_construction`` is expected to RAISE this exception —
+    # the row then asserts the PLAN side of the divergence (that a plan which
+    # blocks is the only honest verdict for a config the session cannot build)
+    # rather than trying to compare a construction that never completed.
+    expects_construction_error: type[BaseException] | None = None
 
 
 _ROWS: dict[str, _Row] = {
     "explicit_typed_configs": _Row(_explicit_typed_configs),
     "shortcut_with_model": _Row(_shortcut_with_model),
-    "shortcut_without_model": _Row(_shortcut_without_model),
+    "shortcut_without_model": _Row(_shortcut_without_model, checks=_shortcut_without_model_checks),
     "zero_config_openai_defaults": _Row(_zero_config_openai_defaults),
     "mic_preset": _Row(_mic_preset, checks=_mic_preset_checks),
     "browser_preset_aec_on": _Row(_browser_preset, checks=_browser_preset_checks),
@@ -544,11 +621,13 @@ _ROWS: dict[str, _Row] = {
         _commercial_backend_without_sdk_vad,
         passthrough=frozenset({"vad"}),
         skip_if_installed="krisp_audio",
+        expects_construction_error=RuntimeError,
     ),
     "commercial_backend_without_sdk_noise": _Row(
         _commercial_backend_without_sdk_noise,
         passthrough=frozenset({"noise"}),
         skip_if_installed="krisp_audio",
+        expects_construction_error=RuntimeError,
     ),
     "third_party_aec_config_reports_disabled": _Row(
         _third_party_aec_config_reports_disabled, checks=_third_party_aec_checks
@@ -568,12 +647,16 @@ _XFAIL_ROWS: dict[str, str] = {
     ),
     "commercial_backend_without_sdk_vad": (
         "D2: VADConfig(backend='krisp') has no pip extra, so the plan reports "
-        "ready even though create_vad('krisp') raises without the krisp_audio SDK."
+        "ready even though create_vad('krisp') raises without the krisp_audio "
+        "SDK. The xfailing assertion is the PLAN one (has_blocking_errors); "
+        "the construction raise is asserted unconditionally."
     ),
     "commercial_backend_without_sdk_noise": (
         "D2: NoiseReducerConfig(backend='krisp') has no pip extra, so the plan "
         "reports ready even though create_noise_reducer raises without the "
-        "krisp_audio SDK."
+        "krisp_audio SDK. The xfailing assertion is the PLAN one "
+        "(has_blocking_errors); the construction raise is asserted "
+        "unconditionally."
     ),
 }
 
@@ -593,6 +676,24 @@ def test_preview_matches_constructed_values(case_id: str, monkeypatch: pytest.Mo
 
     config = row.build(monkeypatch)
     plan = build_provider_plan(config)
+
+    if row.expects_construction_error is not None:
+        # The session genuinely cannot be built for this config, so there is no
+        # ``ConstructedInputs`` to compare against. Assert BOTH halves of the
+        # divergence instead: construction raises (true today and after the fix
+        # — DX1-5 changes only the planner, never ``create_vad`` /
+        # ``create_noise_reducer``), and the plan must block. The second half is
+        # what is false today, so it — not an unhandled constructor error — is
+        # what carries the ``xfail(strict=True)``, and it flips to an xpass the
+        # moment the planner learns to report an unbuildable backend.
+        with pytest.raises(row.expects_construction_error):
+            capture_construction(monkeypatch, config, passthrough=row.passthrough)
+        assert plan.has_blocking_errors, (
+            "the plan must block when create_session cannot construct the "
+            f"selection: {plan.selected}"
+        )
+        return
+
     built = capture_construction(monkeypatch, config, passthrough=row.passthrough)
     try:
         assert_preview_matches_construction(plan, built, config)
@@ -615,6 +716,7 @@ def test_custom_instances_preserve_identity(monkeypatch: pytest.MonkeyPatch) -> 
         assert built.noise_spec is config.noise_reduction
         assert built.echo_spec is config.echo_cancellation
         assert built.transport_spec is config.transport
+        assert built.session_config.transport is config.transport
     finally:
         import asyncio
 
@@ -642,6 +744,80 @@ def test_missing_credential_raises_at_easyconfig_construction_not_create_session
     plan = build_provider_plan(profile, environ={"OPENAI_API_KEY": "sk-test"})
     assert plan.missing_env == ("DEEPGRAM_API_KEY",)
     # The planner reports the gap without raising.
+
+
+def test_manifest_shortcut_without_model_invents_no_default_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The planner never fills in a model the caller did not ask for.
+
+    The two entry paths genuinely disagree here, and the disagreement is
+    ``EasyConfig``'s doing, not the planner's: ``EasyConfig(stt="deepgram")``
+    resolves the shortcut to ``DeepgramSTTConfig()`` — whose dataclass default
+    is ``"nova-2"`` — before ``build_provider_plan`` is called, while a raw
+    manifest ``VoiceProfile`` carries only the bare provider name and the
+    planner leaves ``model`` as ``None``. Pinned as a documented divergence so a
+    later PR cannot quietly teach the planner to invent ``"nova-2"`` for the
+    profile path (or drop it from the EasyConfig path).
+    """
+    from easycat.project.schema import VoiceProfile
+
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    profile = VoiceProfile(name="default", transport="websocket", stt="deepgram")
+    plan_from_profile = build_provider_plan(
+        profile, environ={"OPENAI_API_KEY": "sk-test", "DEEPGRAM_API_KEY": "dg-test"}
+    )
+    assert plan_from_profile.selected["stt"].provider == "deepgram"
+    assert plan_from_profile.selected["stt"].model is None
+
+    config = EasyConfig(
+        stt="deepgram", transport=WebSocketTransportConfig(), agent=_Agent(), debug="off"
+    )
+    assert config.stt.model == "nova-2"
+    assert build_provider_plan(config).selected["stt"].model == "nova-2"
+
+
+def test_inline_credential_constructs_while_the_plan_blocks_on_missing_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An inline ``api_key=`` satisfies construction but not the plan.
+
+    This is the one shape in which the harness's narrowed invariant 8 (see
+    ``_recording.assert_preview_matches_construction``) can actually be false,
+    so it gets its own row rather than being implied: the planner reports only
+    the env-var NAME a provider declares and never looks at an inline key, so a
+    config ``create_session`` builds happily is reported as blocking readiness.
+    Characterized as-is — DX1 does not fix it (it is neither D1 nor D2 nor D3),
+    and every table row above deliberately sets its credentials in the
+    environment so it stays out of the parity comparison.
+    """
+    from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    config = EasyConfig(
+        stt=OpenAIRealtimeSTTConfig(api_key="sk-inline"),
+        tts=OpenAITTSConfig(api_key="sk-inline"),
+        vad=_DuckVAD(),
+        transport=WebSocketTransportConfig(),
+        agent=_Agent(),
+        debug="off",
+    )
+
+    plan = build_provider_plan(config, environ={})
+    assert plan.missing_env == ("OPENAI_API_KEY",)
+    assert plan.has_blocking_errors
+    assert "missing_env:OPENAI_API_KEY" in plan.blocking_errors()
+
+    built = capture_construction(monkeypatch, config)
+    try:
+        assert built.stt_spec is config.stt
+        assert built.tts_spec is config.tts
+    finally:
+        import asyncio
+
+        asyncio.run(built.session.stop(force=True))
 
 
 def test_late_mutation_is_reflected_in_both_preview_and_construction(
@@ -698,7 +874,7 @@ def test_late_mutation_back_to_openai_restores_the_preset_default(
         asyncio.run(built_openai.session.stop(force=True))
 
 
-@pytest.mark.parametrize("shortcut", ["webrtc", "websocket", "twilio", "telnyx", "local"])
+@pytest.mark.parametrize("shortcut", sorted(TRANSPORT_SHORTCUTS))
 def test_manifest_profile_and_easyconfig_paths_agree(
     shortcut: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

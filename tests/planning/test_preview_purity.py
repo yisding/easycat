@@ -7,6 +7,7 @@ presence, never values" acceptance gates.
 
 from __future__ import annotations
 
+import copy
 import json
 import subprocess
 import sys
@@ -39,21 +40,46 @@ def test_repeated_preview_is_equal_and_leaves_the_config_untouched(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     config = EasyConfig(agent=_Agent(), debug="off")
 
-    def _snapshot() -> dict[str, tuple[object, int]]:
+    # Snapshot by VALUE (a detached deep copy), not by live reference: storing a
+    # reference and comparing it against the same live attribute afterwards
+    # compares an object with itself, so only whole-field REPLACEMENT (the id()
+    # half) could ever be caught — never the likelier failure, a planner that
+    # mutates a nested config object in place.
+    def _copy(value: object) -> tuple[object, bool]:
+        """Return ``(detached copy, is it comparable by value)``.
+
+        A field holding a live collaborator (the agent here) deep-copies fine
+        but compares by identity, so a copy of it can never equal the original;
+        those fields keep the ``id()`` identity check alone.
+        """
+        try:
+            copied = copy.deepcopy(value)
+        except (TypeError, ValueError, copy.Error):  # pragma: no cover - defensive
+            return value, False
+        return copied, bool(copied == value)
+
+    def _live() -> dict[str, tuple[object, int]]:
         return {
             f.name: (getattr(config, f.name), id(getattr(config, f.name))) for f in fields(config)
         }
 
-    before = _snapshot()
+    before = {name: (*_copy(value), obj_id) for name, (value, obj_id) in _live().items()}
     plan1 = build_provider_plan(config)
     plan2 = build_provider_plan(config)
-    after = _snapshot()
+    after = _live()
+
+    # Guard the guard: at least the nested provider/turn dataclasses must be
+    # value-comparable, or the mutation check below would silently degrade to
+    # the identity check it replaces.
+    assert sum(comparable for _copied, comparable, _id in before.values()) >= 3
 
     assert plan1 == plan2
-    for name, (value_before, id_before) in before.items():
+    for name, (value_before, comparable, id_before) in before.items():
         value_after, id_after = after[name]
         assert id_after == id_before, f"{name} was replaced by a new object"
-        assert value_after == value_before, f"{name} was mutated"
+        if not comparable:
+            continue
+        assert value_after == value_before, f"{name} was mutated in place"
 
 
 # ── No provider constructor / heavy SDK reachable from the preview ─────
@@ -87,6 +113,11 @@ def test_preview_never_calls_a_role_constructor_easyconfig(
     monkeypatch.setattr(vad_mod, "create_vad", boom)
     monkeypatch.setattr(noise_mod, "create_noise_reducer", boom)
     monkeypatch.setattr(echo_mod, "create_echo_canceller", boom)
+    # Belt-and-braces only: there is no transport constructor outside
+    # ``_factory``, and today's planner cannot reach this name at all (the
+    # subprocess peer below proves ``easycat.config._factory`` never even
+    # loads). It is patched so a future planner that grows a transport
+    # construction call fails here instead of silently allocating one.
     monkeypatch.setattr(_factory, "_create_transport", boom)
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -161,17 +192,24 @@ def test_preview_output_carries_no_credential_values_easyconfig(
 def test_preview_output_carries_no_credential_values_server_manifest(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The manifest/server path carries a different secret: the serve token.
+    """The manifest/server path carries a different secret: the profile token.
 
     ``VoiceServer.plan_payload()`` resolves a manifest ``VoiceProfile``, whose
     fields (``name``/``transport``/``agent``/``stt``/``tts``/``vad``/``debug``/
     ``path``/``stream_url``/``token``) have no ``api_key`` — so asserting the
-    EasyConfig secret above against it would be vacuous. This covers the
-    secret it CAN carry instead.
+    EasyConfig secret above against it would be vacuous. The token is the one
+    field on that path that carries a credential, so the profile under test is a
+    ``twilio`` one, where ``token`` is REQUIRED (``project/manifest.py`` raises
+    ``EASYCAT_E602`` without it) and is resolved from the environment into the
+    transport config. Both projections are checked: the server payload built
+    from the raw profile, and the plan built from the resolved ``EasyConfig``,
+    whose object graph really does contain the secret value.
     """
+    from easycat.project.loader import load_manifest
     from easycat.server import VoiceServer
 
     resolved_token = "sk-live-secret-token-abcdef1234567890"
+    monkeypatch.setenv("TWILIO_STREAM_TOKEN_SECRET", resolved_token)
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", resolved_token)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
 
@@ -187,10 +225,11 @@ port = 0
 auth = "bearer-env:EASYCAT_SERVE_TOKEN"
 
 [voice.default]
-transport = "webrtc"
+transport = "twilio"
 stt = "openai/realtime"
 tts = "openai"
 vad = "silero"
+token = "bearer-env:TWILIO_STREAM_TOKEN_SECRET"
 """,
         encoding="utf-8",
     )
@@ -198,5 +237,19 @@ vad = "silero"
     payload = server.plan_payload()
     dumped = json.dumps(payload)
 
+    assert payload["selected"], "the profile must resolve, or this asserts nothing"
     assert resolved_token not in dumped
     assert not contains_unredacted_sensitive_text(dumped)
+
+    # The EasyConfig the manifest resolves DOES hold the secret (the token is
+    # closed over by the transport's stream-token validator), so the plan built
+    # from it is the stronger of the two projections.
+    manifest = load_manifest(manifest_path)
+    resolved_config = manifest.to_easyconfig("default", resolve_agent=False)
+    plan = build_provider_plan(resolved_config, environ={"OPENAI_API_KEY": "sk-stub"})
+    plan_dumped = json.dumps(
+        {role: _selection_to_dict(sel) for role, sel in plan.selected.items()}
+    )
+    assert resolved_token not in plan_dumped
+    assert resolved_token not in repr(plan)
+    assert not contains_unredacted_sensitive_text(plan_dumped)
