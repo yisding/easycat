@@ -120,6 +120,15 @@ _LEAF_TARGETS: tuple[tuple[str, str, type], ...] = (
     ("echo", "create_echo_canceller", _FakeEchoCanceller),
 )
 
+#: The leaf constructor names in ``_LEAF_TARGETS``, in declaration order. Shared
+#: with ``tests/config/test_session_factory_stages.py`` so its "must not run
+#: while deciding the pipeline" list cannot drift from the recorded list when a
+#: new leaf constructor is added (DX1 §5.3 names one list, not two). The
+#: ``transport`` role is not here for the reason ``_LEAF_TARGETS`` states.
+LEAF_CONSTRUCTOR_NAMES: tuple[str, ...] = tuple(
+    dict.fromkeys(name for _role, name, _fake in _LEAF_TARGETS)
+)
+
 
 def _patch_transport_leaves(monkeypatch: pytest.MonkeyPatch, record: Any) -> None:
     """Record the transport role BELOW ``_create_transport``, not instead of it.
