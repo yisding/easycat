@@ -33,7 +33,7 @@ The validation surface should answer five questions:
 
 ## Current Repo Inventory
 
-Snapshot: maintenance update on 2026-06-05.
+Snapshot: maintenance update on 2026-09-06.
 
 Implemented strengths:
 
@@ -88,8 +88,11 @@ Current gaps:
   validation lanes.
 - Live-provider validation is opt-in and only partially decomposed by provider,
   surface, scenario, cost, and flake risk.
-- HTTP record/replay and WebSocket protocol cassette workflows are not
-  standardized.
+- HTTP record/replay and WebSocket protocol cassette workflows are
+  standardized only as offline contract cassettes
+  (`tests/contracts/test_ws_cassette_replay.py`,
+  `test_sse_cassette_replay.py`, `test_http_cassette_redaction.py`), not as a
+  public record/replay API.
 - Browser-side WebRTC network stats now have a first-class optional socket
   validation artifact path; browser automation that always produces those
   snapshots is still open.

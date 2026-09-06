@@ -95,9 +95,17 @@ class SessionManager(Generic[TKey]):
     - This manager relies on :meth:`Session.stop` being idempotent. A session
       may be stopped by :meth:`remove`, :meth:`stop_all`, the ``finally`` block
       of :meth:`connection`, or an external caller; any combination of these
-      must be safe. ``Session.stop`` satisfies this with an internal teardown
-      guard (the ``self._closed or self._stopping`` early-return at the top of
-      ``stop``) that makes repeated calls a no-op.
+      must be safe. ``Session.stop`` satisfies this with a ``_stop_task``
+      ownership protocol rather than an early-return: the first caller becomes
+      the owner, and a later caller *joins* that in-flight teardown (through a
+      shield, so its own cancellation stays its own) and observes the owner's
+      outcome — including a re-raised teardown exception. A ``force=True``
+      caller may supersede a graceful owner: it takes ownership, cancels the
+      previous owner, and runs the force path, and any concurrent force caller
+      then joins the new owner instead of racing a second teardown. Calls after
+      teardown has finished re-run the idempotent tail (transferred provider
+      close retries, debug-backend finalization), which is safe but is not a
+      no-op — so do not "simplify" this into an early return.
     - :meth:`connection` and :meth:`stop_all` (or :meth:`remove`) must **not**
       be used concurrently on overlapping keys. ``stop_all``/``remove`` tear
       the session down without signalling an in-flight ``connection`` body, so

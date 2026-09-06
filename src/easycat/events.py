@@ -198,7 +198,7 @@ class BotStoppedSpeaking(Event):
 
 @dataclass(frozen=True)
 class TurnStarted(Event):
-    """A new user turn has begun (VAD triggered)."""
+    """A new user turn has begun (VAD triggered or push-to-talk opened)."""
 
 
 _TURN_STARTED_OBSERVATION_MARKER = object()
