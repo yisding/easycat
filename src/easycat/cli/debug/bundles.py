@@ -133,7 +133,14 @@ def list_bundles(
 
     entries: list[dict[str, Any]] = []
     for bundle_path, status in bundle_paths:
-        stat = bundle_path.stat()
+        try:
+            stat = bundle_path.stat()
+        except OSError:
+            # Discovery already skips entries that do not resolve, but the
+            # window between it and here is real: a retention sweep or the
+            # crash-dump promoter can move a file mid-listing. Skip it rather
+            # than replacing the whole table with a traceback (gh 1107).
+            continue
         entries.append(
             {
                 "path": str(bundle_path),

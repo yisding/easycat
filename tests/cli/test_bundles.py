@@ -210,6 +210,39 @@ def test_bundles_list_json(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["bundles"][0]["status"] == "bundle"
 
 
+def test_bundles_list_skips_a_dangling_entry(cli: CliRunner, tmp_path: Path) -> None:
+    """A dangling symlink must not replace the table with a traceback (gh 1107).
+
+    ``discover_bundles`` yielded every suffix-matching ``iterdir()`` entry, and
+    ``bundles list`` then called ``stat()`` unguarded; ``main()`` only maps
+    ``EasyCatError``, so the user saw a raw ``FileNotFoundError``.
+    """
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    _make_bundle(recordings / "real.zip", [{"sequence": 1, "name": "TurnStarted"}])
+    (recordings / "dangling.zip").symlink_to(tmp_path / "gone" / "target.zip")
+
+    result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path), "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert [entry["path"].rsplit("/", 1)[-1] for entry in payload["bundles"]] == ["real.zip"]
+
+
+def test_discover_bundles_skips_entries_that_do_not_resolve(tmp_path: Path) -> None:
+    from easycat.debug.bundle import discover_bundles, discover_bundles_with_status
+
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    _make_bundle(recordings / "real.zip", [{"sequence": 1, "name": "TurnStarted"}])
+    (recordings / "dangling.zip").symlink_to(tmp_path / "gone" / "target.zip")
+
+    assert [path.name for path in discover_bundles(str(tmp_path))] == ["real.zip"]
+    assert [path.name for path, _status in discover_bundles_with_status(str(tmp_path))] == [
+        "real.zip"
+    ]
+
+
 def _crash_journal_file(journals_dir: Path, session_id: str) -> Path:
     """Create a crashed ``journals/<id>.sqlite`` (rows, no clean_close)."""
     from easycat.runtime import SqliteJournal

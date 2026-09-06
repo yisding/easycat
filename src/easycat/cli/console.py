@@ -84,13 +84,25 @@ def _select_mode(*, voice_demo: bool, live: bool = False) -> ConsoleMode:
 
 
 def _find_exported_bundle(record_dir: Path, *, since: float) -> Path | None:
-    """Return the newest debug bundle exported after ``since``."""
+    """Return the newest debug bundle exported after ``since``.
+
+    Entries that no longer resolve are skipped: a dangling ``*.zip`` symlink in
+    the recordings directory would otherwise replace the "Saved debug bundle"
+    payoff with a traceback after an otherwise successful run (gh 1107).
+    """
     if not record_dir.is_dir():
         return None
-    candidates = [path for path in record_dir.glob("*.zip") if path.stat().st_mtime >= since]
+    candidates: list[tuple[float, Path]] = []
+    for path in record_dir.glob("*.zip"):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime >= since:
+            candidates.append((mtime, path))
     if not candidates:
         return None
-    return max(candidates, key=lambda path: path.stat().st_mtime)
+    return max(candidates)[1]
 
 
 def _print_journal_summary(session: Session) -> None:
