@@ -30,7 +30,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from hmac import compare_digest
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from easycat.errors import EASYCAT_E602, EASYCAT_E605, EasyCatError
 from easycat.project.schema import (
@@ -100,6 +100,16 @@ def _resolve_python_agent(reference: str) -> Any:
     return target
 
 
+@dataclass(frozen=True, slots=True)
+class ProfileRequirement:
+    """One env var the manifest itself binds for a profile (never its value)."""
+
+    var: str
+    field: str
+    reference: str
+    requirement: Literal["required", "optional"] = "required"
+
+
 @dataclass(frozen=True)
 class ProjectManifest:
     """A parsed, validated ``easycat.toml``.
@@ -125,6 +135,67 @@ class ProjectManifest:
                 path=str(self.source_path or "easycat.toml"),
                 problem=f"unknown profile {name!r}; available: {available}",
             )
+
+    # ── Static requirements and defects ──────────────────────────────
+
+    def profile_requirements(self, profile: str = "default") -> tuple[ProfileRequirement, ...]:
+        """Env vars this manifest binds for *profile*, from its own references.
+
+        Pure — reads only ``self``, resolves nothing, reads no environment.
+        Covers ``[server] auth`` and the profile's ``token``: the two
+        reference-bearing fields ``build_provider_plan`` cannot see, because it
+        receives a :class:`~easycat.project.schema.VoiceProfile`, not a manifest.
+        """
+        spec = self.profile(profile)
+        requirements: list[ProfileRequirement] = []
+        if self.server.auth is not None:
+            requirements.append(
+                ProfileRequirement(
+                    var=self.server.auth.env_var,
+                    field="[server] auth",
+                    reference=self.server.auth.reference,
+                )
+            )
+        if spec.token is not None:
+            requirements.append(
+                ProfileRequirement(
+                    var=spec.token.env_var,
+                    field=f"[voice.{profile}] token",
+                    reference=spec.token.reference,
+                )
+            )
+        return tuple(requirements)
+
+    def profile_defects(self, profile: str = "default") -> tuple[EasyCatError, ...]:
+        """Static selection defects for *profile* — no import, no construction.
+
+        Returns UNRAISED coded errors built by the same factories
+        :meth:`to_easyconfig` raises, so code, message, and rendered fix are
+        identical whether the caller diagnoses or starts.
+
+        There is exactly one rule today (a phone-preset profile with no
+        ``token``), which is why :meth:`to_easyconfig` can raise these from
+        inside its phone branch without changing which error wins for a profile
+        with several defects. **Adding a non-phone rule here requires moving or
+        splitting that loop** and extending the precedence test that pins it.
+        """
+        spec = self.profile(profile)
+        if TRANSPORT_PRESET.get(spec.transport) == "phone" and spec.token is None:
+            token_env_var = (
+                "TELNYX_STREAM_TOKEN_SECRET"
+                if spec.transport == "telnyx"
+                else "TWILIO_STREAM_TOKEN_SECRET"
+            )
+            return (
+                EASYCAT_E602(
+                    path=str(self.source_path or "easycat.toml"),
+                    problem=(
+                        f"phone profile {profile!r} requires a token reference; "
+                        f"set token = 'bearer-env:{token_env_var}'"
+                    ),
+                ),
+            )
+        return ()
 
     # ── EasyConfig conversion ────────────────────────────────────────
 
@@ -163,20 +234,16 @@ class ProjectManifest:
         if preset == "phone":
             # Both phone transports bind the one-time stream token through the
             # same ``bearer-env:NAME`` contract; only the secret's env var and
-            # the transport config differ per provider.
-            token_env_var = (
-                "TELNYX_STREAM_TOKEN_SECRET"
-                if spec.transport == "telnyx"
-                else "TWILIO_STREAM_TOKEN_SECRET"
-            )
-            if spec.token is None:
-                raise EASYCAT_E602(
-                    path=str(self.source_path or "easycat.toml"),
-                    problem=(
-                        f"phone profile {profile!r} requires a token reference; "
-                        f"set token = 'bearer-env:{token_env_var}'"
-                    ),
-                )
+            # the transport config differ per provider. The "which env var"
+            # half of that rule lives in ``profile_defects``, which owns the
+            # missing-token diagnosis for both the planner and this converter.
+            #
+            # This loop stays HERE, not earlier in the function: moving it up
+            # would let a token defect pre-empt the agent-reference and
+            # ``_coerce_vad`` raises that currently win.
+            for defect in self.profile_defects(profile):
+                raise defect
+            assert spec.token is not None  # profile_defects raises when it is not set
             token = spec.token.resolve(dict(os.environ))
             if spec.transport == "telnyx":
                 from easycat.transports.telnyx_media import TelnyxTransportConfig
@@ -320,5 +387,6 @@ class ProjectManifest:
 
 
 __all__ = [
+    "ProfileRequirement",
     "ProjectManifest",
 ]
