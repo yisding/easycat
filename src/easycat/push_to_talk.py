@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import threading
 from collections import deque
@@ -34,7 +35,18 @@ class _LineReader(Protocol):
 
 
 class _SelectorLineReader:
-    """Read selectable stdin without blocking the event-loop thread."""
+    """Read selectable stdin without blocking the event-loop thread.
+
+    Reads raw bytes with :func:`os.read` and splits lines itself rather than
+    calling ``stream.readline()``.  A buffered ``TextIOWrapper`` slurps every
+    readable byte into its own userspace buffer, so type-ahead (two quick
+    Enters) left the second line invisible to ``add_reader``: the fd reported
+    no data, the callback never fired again, and every later toggle lagged a
+    keypress (gh 1006).  Owning the buffer keeps kernel readiness and pending
+    bytes in sync.
+    """
+
+    _READ_SIZE = 4096
 
     def __init__(
         self,
@@ -45,6 +57,7 @@ class _SelectorLineReader:
         self._stream = stream
         self._loop = loop
         self._fd = fd
+        self._buffer = b""
         self._pending: deque[bool | Exception] = deque()
         self._ready = asyncio.Event()
         self._registered = False
@@ -53,14 +66,28 @@ class _SelectorLineReader:
 
     def _on_readable(self) -> None:
         try:
-            got_line = bool(self._stream.readline())
+            data = os.read(self._fd, self._READ_SIZE)
+        except (BlockingIOError, InterruptedError):
+            # Spurious readability on a non-blocking fd, or a signal raced the
+            # read; the reader stays armed for the next callback.
+            return
         except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self.close()
             self._publish(exc)
             return
-        if not got_line:
+        if not data:
+            # EOF. A trailing unterminated line is still a line, matching
+            # ``readline()``'s behaviour, and is reported before the close.
             self.close()
-        self._publish(got_line)
+            if self._buffer:
+                self._buffer = b""
+                self._publish(True)
+            self._publish(False)
+            return
+        self._buffer += data
+        while b"\n" in self._buffer:
+            _line, _, self._buffer = self._buffer.partition(b"\n")
+            self._publish(True)
 
     def _publish(self, result: bool | Exception) -> None:
         self._pending.append(result)

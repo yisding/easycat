@@ -75,9 +75,6 @@ class _RaisingSelectable:
     def fileno(self) -> int:
         return self._fd
 
-    def readline(self) -> str:
-        raise self.error
-
 
 async def test_run_stdin_push_to_talk_toggles_turns_from_enter_presses() -> None:
     session = _FakeSession()
@@ -136,6 +133,80 @@ async def test_run_stdin_push_to_talk_reads_selectable_pipe() -> None:
 
     assert session.actions == ["start", "end"]
     assert output[-1] == "  [stdin closed - exiting]"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_delivers_type_ahead_without_eof() -> None:
+    """Two quick Enters must both toggle while the pipe stays open (gh 1006).
+
+    The sibling test above closes the write end immediately, so EOF
+    re-triggers readability and masks a swallowed second line.  Here the pipe
+    stays open: a buffered ``readline()`` would leave the second Enter stuck
+    in the ``TextIOWrapper`` with the fd reporting no data.
+    """
+    from easycat.push_to_talk import _SelectorLineReader
+
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as stream:
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                os.write(write_fd, b"\n\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+
+                # A partial line stays pending until its newline arrives.
+                os.write(write_fd, b"partial")
+                await asyncio.sleep(0)
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(), timeout=0.1)
+                os.write(write_fd, b"\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_reports_unterminated_tail_then_eof() -> None:
+    from easycat.push_to_talk import _SelectorLineReader
+
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd) as stream:
+        reader = _SelectorLineReader(stream, loop, read_fd)
+        try:
+            os.write(write_fd, b"tail")
+            os.close(write_fd)
+            assert await asyncio.wait_for(reader.read(), timeout=1) is True
+            assert await asyncio.wait_for(reader.read(), timeout=1) is False
+        finally:
+            reader.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_run_stdin_push_to_talk_toggles_on_type_ahead() -> None:
+    session = _FakeSession()
+    output: list[str] = []
+    read_fd, write_fd = os.pipe()
+
+    async def _drive() -> None:
+        with os.fdopen(read_fd) as stream:
+            await run_stdin_push_to_talk(session, input_stream=stream, print_fn=output.append)
+
+    try:
+        task = asyncio.create_task(_drive())
+        os.write(write_fd, b"\n\n")
+        for _ in range(200):
+            if session.actions == ["start", "end"]:
+                break
+            await asyncio.sleep(0.005)
+        assert session.actions == ["start", "end"]
+    finally:
+        os.close(write_fd)
+        await asyncio.wait_for(task, timeout=1)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
@@ -204,9 +275,16 @@ async def test_add_reader_failure_uses_thread_fallback(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
-async def test_selector_reader_propagates_read_failure() -> None:
+async def test_selector_reader_propagates_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     read_fd, write_fd = os.pipe()
     error = RuntimeError("stdin failed")
+
+    def _raising_read(fd: int, size: int) -> bytes:
+        raise error
+
+    monkeypatch.setattr("easycat.push_to_talk.os.read", _raising_read)
     try:
         os.write(write_fd, b"x")
         with pytest.raises(RuntimeError, match="stdin failed") as exc_info:
@@ -220,6 +298,38 @@ async def test_selector_reader_propagates_read_failure() -> None:
         assert exc_info.value is error
     finally:
         os.close(read_fd)
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selector_reader_stays_armed_after_transient_read_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A spurious wakeup on a non-blocking fd must not end the reader."""
+    from easycat.push_to_talk import _SelectorLineReader
+
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    real_read = os.read
+    calls: list[int] = []
+
+    def _flaky_read(fd: int, size: int) -> bytes:
+        calls.append(fd)
+        if len(calls) == 1:
+            raise BlockingIOError
+        return real_read(fd, size)
+
+    monkeypatch.setattr("easycat.push_to_talk.os.read", _flaky_read)
+    try:
+        with os.fdopen(read_fd) as stream:
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                os.write(write_fd, b"\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                assert len(calls) >= 2
+            finally:
+                reader.close()
+    finally:
         os.close(write_fd)
 
 
