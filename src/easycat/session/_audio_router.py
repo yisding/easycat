@@ -269,6 +269,10 @@ class AudioRouter:
 
         # Gated replay
         self._replay_chunks_pending: int = 0
+        # Depth of in-progress ``gated_replay`` enqueues. While non-zero the
+        # tally counts chunks that have not reached the outbound queue yet, so
+        # the "tally > 0 and queue empty" reconciliation must not fire.
+        self._replay_enqueue_depth: int = 0
 
         # Outbound send-failure streak.  A transient ``send_audio`` failure
         # is expected to be swallowed (a turn must still complete after one
@@ -627,25 +631,65 @@ class AudioRouter:
             self._outbound_queue.flush()
         chunks = [ev.chunk for ev in events if isinstance(ev, TTSAudio)]
         if chunks:
-            self._replay_chunks_pending += len(chunks)
-            if not already_replaying:
-                await self._turn_manager.bot_started_speaking()
-            for chunk in chunks:
-                # Tag each replay chunk so the drain loop only decrements
-                # ``_replay_chunks_pending`` (and only fires
-                # ``bot_stopped_speaking``) when an actual replay chunk
-                # drains.  Without the tag the bare counter would be
-                # decremented by *any* chunk sharing the outbound queue
-                # (e.g. interleaved synthesis or hold audio), which could
-                # leave BOT_SPEAKING early and truncate the replayed tail.
-                # Guarded: providers are duck-typed, so a foreign chunk class
-                # (slots/frozen/NamedTuple) may reject the tag; it then simply
-                # doesn't count against the replay tally.
-                try:
-                    chunk._easycat_replay_chunk = True
-                except Exception:
-                    logger.debug("Failed to tag replay chunk", exc_info=True)
-                await self._outbound_queue.put(chunk)
+            # Hold off tally reconciliation until every counted chunk is
+            # actually queued.  The tally is claimed up front so a chunk that
+            # drains mid-loop still decrements it, which leaves a window where
+            # it counts chunks the queue has never seen — and the
+            # ``bot_started_speaking()`` await below suspends right inside it.
+            # A concurrent ``_finish_outbound_send`` would otherwise read
+            # "tally > 0 and queue empty", zero the tally, and fire a premature
+            # ``bot_stopped_speaking``: the turn manager drops to IDLE while
+            # replay audio is still to play, so caller speech during replay
+            # takes the new-turn path instead of barge-in (gh 1007).
+            self._replay_enqueue_depth += 1
+            try:
+                self._replay_chunks_pending += len(chunks)
+                if not already_replaying:
+                    await self._turn_manager.bot_started_speaking()
+                for chunk in chunks:
+                    # Tag each replay chunk so the drain loop only decrements
+                    # ``_replay_chunks_pending`` (and only fires
+                    # ``bot_stopped_speaking``) when an actual replay chunk
+                    # drains.  Without the tag the bare counter would be
+                    # decremented by *any* chunk sharing the outbound queue
+                    # (e.g. interleaved synthesis or hold audio), which could
+                    # leave BOT_SPEAKING early and truncate the replayed tail.
+                    # Guarded: providers are duck-typed, so a foreign chunk
+                    # class (slots/frozen/NamedTuple) may reject the tag; it
+                    # then simply doesn't count against the replay tally.
+                    try:
+                        chunk._easycat_replay_chunk = True
+                    except Exception:
+                        logger.debug("Failed to tag replay chunk", exc_info=True)
+                    await self._outbound_queue.put(chunk)
+            finally:
+                self._replay_enqueue_depth -= 1
+                await self._reconcile_abandoned_replay()
+
+    async def _reconcile_abandoned_replay(self) -> None:
+        """Clear a replay tally whose chunks never reached the queue.
+
+        The enqueue guard above suppresses the ``_finish_outbound_send``
+        reconciliation, so an enqueue that is cancelled — or whose
+        ``bot_started_speaking()`` raises — before any chunk is queued would
+        leave a claimed tally with no queued chunk left to drain and clear it.
+        The session would then sit in BOT_SPEAKING forever and treat the next
+        caller utterance as barge-in.  Re-run the same empty-queue
+        reconciliation once the outermost enqueue exits, on the exceptional
+        path too.
+
+        A no-op on the normal path: the chunks are queued by then, so the
+        queue is not empty.
+        """
+        if self._replay_enqueue_depth != 0:
+            return
+        if self._replay_chunks_pending <= 0 or not self._outbound_queue.empty():
+            return
+        # Zero the tally before awaiting so the state stays consistent even if
+        # a cancelled caller cuts the emit short.
+        self._replay_chunks_pending = 0
+        if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+            await self._turn_manager.bot_stopped_speaking()
 
     def on_playback_ack(self, event: PlaybackMarkAck) -> None:
         """Track acknowledged playout byte positions for the active turn."""
@@ -1080,9 +1124,15 @@ class AudioRouter:
         if replayed_chunk:
             self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
             replay_pending_finished = self._replay_chunks_pending == 0
-        if self._replay_chunks_pending > 0 and self._outbound_queue.empty():
+        if (
+            self._replay_chunks_pending > 0
+            and self._replay_enqueue_depth == 0
+            and self._outbound_queue.empty()
+        ):
             # DROP_OLDEST can evict replay chunks before the drain sees
-            # them; once the real queue empties, reconcile the tally.
+            # them; once the real queue empties, reconcile the tally.  Skipped
+            # while ``gated_replay`` is still enqueuing: there the tally leads
+            # the queue by design and an empty queue proves nothing (gh 1007).
             self._replay_chunks_pending = 0
             replay_pending_finished = True
         if replay_pending_finished and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
