@@ -1227,6 +1227,11 @@ class LitestreamSqliteJournal:
             tags=tags,
         )
 
+    def slice_by_stage(self, stage_name: str) -> list[JournalRecord]:
+        # Delegate so ``JournalView.filter_by_stage`` finds the indexed lookup
+        # instead of falling back to deserializing every record (gh 1026).
+        return self._inner.slice_by_stage(stage_name)
+
     def flush(self) -> None:
         self._inner.flush()
 
