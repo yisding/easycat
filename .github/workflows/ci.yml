@@ -334,3 +334,88 @@ jobs:
       - name: Enforce 13 MiB wheel size budget
         run: python scripts/check_wheel_size.py dist/*.whl
       - run: uvx twine check dist/*
+
+  # DX3: the generated project's own tests, run from the built wheel, outside
+  # the workspace, with the agent SDK installed. This is the ONLY continuously
+  # running lane where `tests/test_agent.py`'s `importorskip("agents")` half
+  # actually executes -- every other lane syncs `--group dev` only, where
+  # `agents` is absent and that half silently skips.
+  generated-app-smoke:
+    name: Generated App Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          version: "0.12.1"
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+          python-version: "3.12"
+      - run: uv build --wheel
+      - name: Install the wheel into a throwaway venv outside the workspace
+        run: |
+          echo "APP_VENV=$RUNNER_TEMP/easycat-app-venv" >> "$GITHUB_ENV"
+          uv venv "$RUNNER_TEMP/easycat-app-venv" --python 3.12
+          WHEEL_PATH="$(find "$GITHUB_WORKSPACE/dist" -name '*.whl' | head -n 1)"
+          uv pip install --python "$RUNNER_TEMP/easycat-app-venv/bin/python" \
+            "easycat[openai-agents] @ file://$WHEEL_PATH" pytest
+      - name: Scaffold a project outside the checkout
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ""
+        run: |
+          "$APP_VENV/bin/easycat" init "$RUNNER_TEMP/easycat-app-smoke" \
+            --template openai-agents --no-git --json
+          ! grep -q "tool.uv.sources" "$RUNNER_TEMP/easycat-app-smoke/pyproject.toml"
+      - name: Import the generated app (nothing may start)
+        working-directory: ${{ runner.temp }}/easycat-app-smoke
+        env:
+          PYTHONPATH: ""
+        run: timeout 30 "$APP_VENV/bin/python" -c "import agent, tools"
+      - name: Install the network guard and prove it loaded (canary)
+        run: |
+          mkdir -p "$RUNNER_TEMP/netguard"
+          cp "$GITHUB_WORKSPACE/tests/_netguard/sitecustomize.py" "$RUNNER_TEMP/netguard/"
+          if PYTHONPATH="$RUNNER_TEMP/netguard" "$APP_VENV/bin/python" \
+              -c "import socket; socket.create_connection(('api.openai.com', 443), timeout=5)" 2>guard.err; then
+            echo "network guard did not block outbound traffic"; exit 1
+          fi
+          grep -q "easycat test guard: outbound network blocked" guard.err
+      - name: Generated tests pass with an ambient credential and no provider traffic
+        working-directory: ${{ runner.temp }}/easycat-app-smoke
+        env:
+          PYTHONPATH: ${{ runner.temp }}/netguard
+          OPENAI_API_KEY: sk-ambient-not-used
+        run: |
+          # Console script, not `python -m pytest`: it does NOT prepend the cwd,
+          # so this also proves the generated `[tool.pytest.ini_options]
+          # pythonpath = ["."]` key from PR1 (see design section 0.2).
+          "$APP_VENV/bin/pytest" tests -q -rs -p no:cacheprovider -p no:randomly | tee run.log
+          if grep -q "skipped" run.log; then
+            echo "a generated test skipped with the SDK installed"; exit 1
+          fi
+          # `-rs` prints "file:line: reason" and never a test name, so assert on
+          # the exact nodeid instead: a skip reports "1 skipped", not "1 passed".
+          "$APP_VENV/bin/pytest" \
+            tests/test_agent.py::test_agent_wires_its_instructions_and_tools \
+            -q -p no:cacheprovider | tee wiring.log
+          grep -q "1 passed" wiring.log
+      - name: A broken tool must fail the generated tests (A3)
+        working-directory: ${{ runner.temp }}/easycat-app-smoke
+        env:
+          PYTHONPATH: ""
+          OPENAI_API_KEY: sk-ambient-not-used
+        run: |
+          python - <<'PY'
+          import pathlib
+          p = pathlib.Path("tools.py")
+          text = p.read_text(encoding="utf-8")
+          assert '"%H:%M"' in text, "seeded-break target moved; update this step"
+          p.write_text(text.replace('"%H:%M"', '"%H hours"'), encoding="utf-8")
+          PY
+          if "$APP_VENV/bin/pytest" tests -q -p no:cacheprovider; then
+            echo "generated tests did not detect a broken app"; exit 1
+          fi
