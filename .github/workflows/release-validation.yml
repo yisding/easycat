@@ -120,6 +120,44 @@ jobs:
           "$RELEASE_VENV/bin/easycat" init "$RUNNER_TEMP/easycat-scaffold-smoke" --template text-chat --no-git --json
           "$RELEASE_VENV/bin/easycat" doctor --json
           "$RELEASE_VENV/bin/python" -m pytest "$GITHUB_WORKSPACE/tests/cli/test_app.py" -q
+      - name: DX3 - generated app smoke, ambient credential, no provider traffic
+        # Release-time peer of ci.yml's `generated-app-smoke` job (push + PR):
+        # this venv already has the agent SDK installed (see above), so the
+        # marginal cost of proving A2/A3 here too is a few seconds. It fires
+        # on workflow_dispatch and on a release tag via release.yml -- never
+        # on a PR; the continuous proof is the ci.yml job.
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONPATH: ""
+        run: |
+          "$RELEASE_VENV/bin/easycat" init "$RUNNER_TEMP/easycat-app-smoke" \
+            --template openai-agents --no-git --json
+          cd "$RUNNER_TEMP/easycat-app-smoke"
+          # Capture stderr and grep the guard's own marker: a bare "the
+          # connection failed" check cannot tell an active guard from an
+          # egress-restricted runner or a DNS failure, and would then let the
+          # run below proceed believing traffic is blocked when it is not.
+          # The marker string is pinned against tests/_netguard/sitecustomize.py
+          # by test_netguard_marker_string_matches_the_shared_file.
+          if PYTHONPATH="$GITHUB_WORKSPACE/tests/_netguard" "$RELEASE_VENV/bin/python" \
+              -c "import socket; socket.create_connection(('api.openai.com', 443), timeout=5)" \
+              2>"$RUNNER_TEMP/guard.err"; then
+            echo "network guard did not block outbound traffic"; exit 1
+          fi
+          grep -q "easycat test guard: outbound network blocked" "$RUNNER_TEMP/guard.err"
+          OPENAI_API_KEY="sk-ambient-not-used" \
+          PYTHONPATH="$GITHUB_WORKSPACE/tests/_netguard" \
+            "$RELEASE_VENV/bin/python" -m pytest tests -q -p no:cacheprovider
+          python - <<'PY'
+          import pathlib
+          p = pathlib.Path("tools.py")
+          t = p.read_text()
+          assert '"%H:%M"' in t, "seeded-break target moved; update this step"
+          p.write_text(t.replace('"%H:%M"', '"%H hours"'))
+          PY
+          if "$RELEASE_VENV/bin/python" -m pytest tests -q -p no:cacheprovider; then
+            echo "generated tests did not detect a broken app"; exit 1
+          fi
       - name: Run installed wheel quick validation
         working-directory: ${{ runner.temp }}
         env:
