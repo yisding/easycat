@@ -28,6 +28,21 @@ if TYPE_CHECKING:
     from easycat.errors import SetupIssue
 
 
+def _selection_to_dict(selection: Any) -> dict[str, Any]:
+    """The ``ProviderSelection`` -> JSON projection this command emits.
+
+    A thin alias for :func:`easycat.planning.selection.selection_to_dict`, which
+    is now the single owner of the shape (the server's ``/plan`` body calls the
+    same function). Kept on this module because it is the name that identifies
+    "what ``easycat plan --json`` puts on the wire", and the planner's purity
+    guard reads it from here. Imported lazily so ``easycat.cli.plan`` keeps
+    costing nothing beyond Typer at CLI import time.
+    """
+    from easycat.planning.selection import selection_to_dict
+
+    return selection_to_dict(selection)
+
+
 def _render_human(plan: Any, issues: Sequence[SetupIssue]) -> None:
     stdout_console.print(f"[bold]Provider plan[/] (profile: {plan.profile})")
     for role, selection in plan.selected.items():
