@@ -113,6 +113,21 @@ def _new_first_tts_payload_gate() -> asyncio.Future[bool]:
     return asyncio.get_running_loop().create_future()
 
 
+def _tts_consumer_is_gone(st: _StreamingTtsState) -> bool:
+    """Whether the TTS consumer has stopped, or is being torn down.
+
+    ``cancelling()`` matters as much as ``done()``: ``_cancel_and_drain``
+    cancels every task synchronously before it awaits, so on a barge-in the
+    consumer is already condemned while still reporting ``done() is False``.
+    Treating that as "still draining" would let the producer's stop sentinel
+    block on a full queue that nobody will drain again (gh 1063).
+    """
+    task = st.tts_consumer_task
+    if task is None:
+        return False
+    return task.done() or task.cancelling() > 0
+
+
 @dataclass
 class _StreamingTtsState:
     """Mutable per-turn TTS state shared between the streaming phases.
@@ -140,6 +155,10 @@ class _StreamingTtsState:
     #: Set before externally cancelling the agent consumer after a provider
     #: failure/timeout so its finalizer drops incomplete buffered text.
     agent_stream_aborted: asyncio.Event = field(default_factory=asyncio.Event)
+    #: The TTS consumer task, published so the agent-stream producer's stop
+    #: sentinel can tell "the consumer is gone" from "the consumer is still
+    #: draining" (gh 1063).
+    tts_consumer_task: asyncio.Task[None] | None = None
     #: The consumer received its first payload and decided gating/playback.
     synth_started: bool = False
     #: Gate state snapshotted at first-payload time (see ``_settle_turn_after_tts``).
@@ -1114,10 +1133,12 @@ class TurnRunner:
                 abort_event=st.agent_stream_aborted,
                 is_active=lambda: self._streaming_turn_is_current(st),
                 on_tts_replacement_conflict=self._cut_off_tts_for_text_replacement,
+                consumer_gone=lambda: _tts_consumer_is_gone(st),
             )
 
         agent_task = asyncio.create_task(_run_agent_consumer())
         tts_task = asyncio.create_task(self._consume_tts_payloads(st))
+        st.tts_consumer_task = tts_task
 
         try:
             try:
