@@ -54,7 +54,7 @@ uv run pytest tests/docs/test_route_contracts.py::test_deployment_docs_route_mat
 <!-- END auto:guard-commands -->
 
 ```bash
-uv run pytest                    # Credential-free suite (live/external excluded)
+uv run pytest                    # Credential-free suite (live/external/serial excluded)
 uv run pytest tests/stt/test_stt_openai.py              # Run one test file
 uv run pytest tests/validation/test_latency_percentiles.py::test_latency_percentile_stats_from_values_empty_input  # Run one test
 uv run pytest tests/install/test_install_guidance.py    # Verify onboarding/install guidance
@@ -85,7 +85,7 @@ uv run python examples/ws_server.py  # Run an example
 
 ## Architecture
 
-**Pipeline flow:** Transport (audio in) → EchoCanceller → NoiseReducer → VAD → STT → [SmartTurn] → Agent → TTS → Transport (audio out). AEC runs on the raw mic signal *before* NoiseReducer because NR's nonlinear processing breaks AEC convergence. The `EchoCanceller` also consumes TTS output as reference audio (fed in by `session/_audio_router.py`) so it can subtract the bot's own playback from the captured mic signal.
+**Pipeline flow:** Transport (audio in) → EchoCanceller → NoiseReducer → VAD → STT → [SmartTurn] → Agent → TTS → Transport (audio out). AEC runs on the raw mic signal *before* NoiseReducer because NR's nonlinear processing breaks AEC convergence. The `EchoCanceller` also consumes transport-accepted bot playback as reference audio (fed in by `session/_audio_router.py`) so it can subtract the bot's own playback from the captured mic signal. The reference is playback accepted at the transport boundary, not raw TTS provider output — feeding generated audio would teach the canceller about sound the listener may never receive.
 
 The full architecture explanation — the `session/` collaborator map
 (`session/_builder.py`, `session/_wiring.py`, `session/_turn_runner.py`, …),
@@ -104,6 +104,7 @@ test, decision, and pitfall tour.
 - `turn_manager.py` — 5-state turn FSM with pre-roll buffering and interruption detection; `smart_turn.py` — optional ONNX endpoint detection.
 - `runtime/` — journal-based debug-first runtime; the journal is the single source of truth for all observability. `validation/` — report models and runners behind the `easycat validate` lanes.
 - `stages/` — pipeline stages wrapping providers; `debug/` — `RunBundle` serialization; `debugger/` — aiohttp debugger UI; `cli/` — Typer command surface.
+- `server/` — the process layer behind `run_webrtc_config_server()` and `VoiceServer.from_app(...)`: route stack, auth, health/readiness, metrics, and the WebSocket/WebRTC/WebTransport server helpers.
 - Provider subpackages `stt/`, `tts/`, `vad/`, `transports/`, `telephony/` — one provider per file; `AudioQueueMixin`, `ServerTransportBase`, and `TransportDegraded` are re-exported from `easycat.transports` for out-of-tree transports (see `docs/extending/`); agent bridges in `integrations/agents/` behind the `ExternalAgentBridge` protocol.
 - `_turn_context.py` (package root) — `TurnContext` per-turn state and the `TurnHandle` protocol; a leaf depending only on `cancel.py` so `session/` and `stages/` both import downward.
 

@@ -110,12 +110,14 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   realtime STT.
 - `tts` — text-to-speech selection: shortcut string, config dataclass, named
   `TTSProviderConfig`, or live `TTSProvider` instance. Unset → OpenAI TTS.
-- `vad` — `VADConfig` or a live `VADProvider`; backend auto-resolves
-  Silero → FunASR → TEN → Krisp unless forced via `VADConfig.backend`.
-- `noise_reduction` — `NoiseReducerConfig` or live `NoiseReducer`; backend
-  auto-resolves Krisp → RNNoise → passthrough.
-- `echo_cancellation` — `EchoCancellationConfig` or live `EchoCanceller`;
-  LiveKitAEC when enabled and available, else passthrough.
+- `vad` — a registered shortcut string, `VADConfig`, or a live
+  `VADProvider`; backend auto-resolves Silero → FunASR → TEN → Krisp unless
+  forced via `VADConfig.backend`.
+- `noise_reduction` — a registered shortcut string, `NoiseReducerConfig`, or a
+  live `NoiseReducer`; backend auto-resolves Krisp → RNNoise → passthrough.
+- `echo_cancellation` — a registered shortcut string,
+  `EchoCancellationConfig`, or a live `EchoCanceller`; LiveKitAEC when enabled
+  and available, else passthrough.
 - `enable_noise_reduction` — opt into noise reduction with default settings
   (default `False`).
 - `enable_echo_cancellation` — force AEC on/off; `None` derives a

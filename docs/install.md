@@ -57,7 +57,10 @@ scaffold rejects credentials embedded in HTTP(S) URLs.
 ## The quickstart bundle
 
 The `quickstart` extra includes local audio, OpenAI providers, OpenAI Agents
-SDK, NumPy, onnxruntime, Silero VAD, Smart Turn, and LiveKit AEC3:
+SDK, NumPy, onnxruntime, Silero VAD, Smart Turn, and LiveKit AEC3 — the last
+three via the bundled ONNX models and the `livekit` dependency rather than
+`silero-vad` / `smart-turn` / `aec` extras of their own, so they will not
+appear as separate names in a pip dependency audit:
 
 ```bash
 uv sync --extra quickstart --group dev
