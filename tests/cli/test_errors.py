@@ -10,14 +10,17 @@ from easycat.errors import (
     EASYCAT_E104,
     EASYCAT_E201,
     EASYCAT_E202,
+    EASYCAT_E203,
     EASYCAT_E205,
     EASYCAT_E501,
     REGISTRY,
     EasyCatError,
     EasyConfigError,
+    SetupIssue,
     register,
     suggest_codes,
 )
+from easycat.planning.selection import selection_error, selection_issue
 
 
 def test_config_errors_share_the_public_easycat_error_boundary() -> None:
@@ -183,3 +186,76 @@ def test_exit_code_mapping() -> None:
     assert exit_code_for("EASYCAT_E501") == 2
     # Unlisted codes fall back to 1.
     assert exit_code_for("EASYCAT_E999") == 1
+
+
+# ── SetupIssue: the shared coded projection (DX2) ──────────────────────
+
+_SECRET_SHAPED = "sk-live-secret-token-abcdef1234567890"
+
+
+def test_setup_issue_projects_registry_text() -> None:
+    """U-7: an issue and the raised exception carry byte-identical text."""
+    issue = SetupIssue.from_code(
+        EASYCAT_E203, reason="missing_env", field="X", role="stt", var="X"
+    )
+    raised = EASYCAT_E203(var="X")
+
+    assert issue.code == "EASYCAT_E203"
+    assert issue.detail == raised.message
+    assert issue.fix == raised.rendered_fix()
+    assert issue.severity == "blocking"
+    assert set(issue.as_dict()) <= {"code", "reason", "field", "role", "detail", "fix", "severity"}
+    assert issue.as_dict()["reason"] == "missing_env"
+    assert issue.as_dict()["role"] == "stt"
+
+
+def test_setup_issue_omits_empty_optional_fields() -> None:
+    payload = SetupIssue(code="EASYCAT_E203", reason="missing_env").as_dict()
+
+    assert payload == {"code": "EASYCAT_E203", "reason": "missing_env", "severity": "blocking"}
+
+
+def test_setup_issue_missing_substitution_falls_back_to_template() -> None:
+    """U-8: a context-less error must not explode the projection."""
+    issue = SetupIssue.from_error(EasyCatError("EASYCAT_E203", ""), reason="missing_env")
+
+    assert issue.code == "EASYCAT_E203"
+    assert issue.fix == REGISTRY["EASYCAT_E203"].fix
+
+
+def test_selection_error_preserves_easycat_codes() -> None:
+    """S-1: a coded error already names the right cause; pass it through."""
+    coded = EASYCAT_E104(provider="x", available="openai", hint="")
+
+    assert selection_error(coded, profile="p") is coded
+    assert selection_error(coded, profile="p").code == "EASYCAT_E104"
+
+
+def test_selection_error_maps_value_error_to_e602() -> None:
+    """S-2: the planner's bare ValueError becomes the coded manifest error."""
+    err = selection_error(ValueError("Unknown VAD backend 'silro'"), profile="p")
+
+    assert err.code == "EASYCAT_E602"
+    assert err.context["path"] == "[voice.p]"
+    assert "silro" in err.message
+
+
+def test_selection_issue_redacts_a_passed_through_easycat_error() -> None:
+    """S-3: the redaction ``SetupIssue.from_error`` structurally cannot do."""
+    coded = EASYCAT_E104(provider=_SECRET_SHAPED, available="openai", hint="")
+
+    issue = selection_issue(coded, profile="p")
+
+    assert issue.code == "EASYCAT_E104"
+    assert issue.reason == "unresolvable_profile"
+    assert _SECRET_SHAPED not in issue.detail
+    assert _SECRET_SHAPED not in issue.fix
+    assert "[REDACTED_SECRET]" in issue.detail
+
+
+def test_selection_error_redacts_a_secret_shaped_planner_message() -> None:
+    err = selection_error(ValueError(f"Unknown VAD backend {_SECRET_SHAPED!r}"), profile="p")
+
+    assert err.code == "EASYCAT_E602"
+    assert _SECRET_SHAPED not in err.message
+    assert "[REDACTED_SECRET]" in err.message

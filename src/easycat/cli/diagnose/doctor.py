@@ -25,7 +25,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import typer
 from rich.markup import escape
@@ -37,6 +37,24 @@ from easycat._extras import PORTAUDIO_INSTALL_FIX
 from easycat._provider_registry import credential_env_vars
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, emit_json, json_envelope, stderr_console
+from easycat.cli.diagnose._requirements import (
+    SelectedApp,
+    install_fix,
+    selected_app_from_scaffold,
+)
+
+if TYPE_CHECKING:
+    from easycat.project.manifest import ProjectManifest
+    from easycat.project.schema import VoiceProfile
+
+
+# How a check row learned what it reports. ``static`` reads declared metadata,
+# environment variables, and module availability (``find_spec``); the other four
+# name the resource the row actually touched, so the probe boundary the plan asks
+# for is visible in ``--json`` without a new flag.
+ProbeKind = Literal["static", "import", "filesystem", "network", "hardware"]
+
+PROBE_KINDS: tuple[ProbeKind, ...] = ("static", "import", "filesystem", "network", "hardware")
 
 
 @dataclass
@@ -49,6 +67,9 @@ class CheckResult:
     requirement: Literal["required", "optional", "unused", "not_applicable"] = "required"
     code: str = ""  # EASYCAT_Exxx when status == "fail"
     fix: str = ""  # one-liner suggestion shown to TTY users
+    role: str = ""  # pipeline role that needs this, when a profile was selected
+    field: str = ""  # the env var / install extra / manifest path at fault
+    probe: ProbeKind = "static"
 
     def as_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -61,6 +82,11 @@ class CheckResult:
             payload["code"] = self.code
         if self.fix:
             payload["fix"] = self.fix
+        if self.role:
+            payload["role"] = self.role
+        if self.field:
+            payload["field"] = self.field
+        payload["probe"] = self.probe
         return payload
 
 
@@ -120,6 +146,7 @@ def check_easycat_version() -> CheckResult:
             detail="easycat package not found",
             code="EASYCAT_E202",
             fix="uv add easycat",
+            probe="import",
         )
     # Detect which integration extras are importable — informational,
     # not fail/ok.
@@ -142,7 +169,7 @@ def check_easycat_version() -> CheckResult:
     detail = f"easycat {version}"
     if integrations:
         detail += f" (extras: {', '.join(integrations)})"
-    return CheckResult(name="easycat_version", status="ok", detail=detail)
+    return CheckResult(name="easycat_version", status="ok", detail=detail, probe="import")
 
 
 def _provider_env() -> dict[str, str]:
@@ -367,6 +394,7 @@ def _missing_provider_result(
     *,
     state: str,
     requirement: Literal["required", "optional"] = "required",
+    role: str = "",
 ) -> CheckResult:
     detail = f"{var} looks like a placeholder" if state == "placeholder" else f"{var} is not set"
     return CheckResult(
@@ -375,6 +403,8 @@ def _missing_provider_result(
         detail=detail,
         requirement=requirement,
         code="EASYCAT_E203",
+        role=role,
+        field=var,
         fix=(
             f"Set {var} to a real credential: `export {var}=...`, or fill it in "
             "inside the project `.env` and rerun `easycat doctor --env-file .env`."
@@ -426,7 +456,19 @@ def _check_scaffold_env_var(
     var: str,
     *,
     requirement: Literal["required", "optional"],
+    code: str = "EASYCAT_E210",
+    field: str = "",
+    role: str = "",
 ) -> CheckResult:
+    """One row for a declared env var; *code* applies ONLY to the unset state.
+
+    ``code`` is the caller's answer to "what does startup raise when this var is
+    UNSET?" — ``EASYCAT_E604`` for a manifest ``bearer-env:`` reference. Every
+    other failure here (a placeholder, a non-``wss://`` stream URL, a malformed
+    number) is a value that IS set, which ``EnvReference.resolve`` accepts, so
+    those rows keep ``EASYCAT_E210`` rather than naming a code startup cannot
+    produce for that value.
+    """
     value = os.getenv(var)
     state = _env_value_state(value)
     detail: str | None = None
@@ -437,6 +479,8 @@ def _check_scaffold_env_var(
                 status="skip",
                 detail=f"{var} not set (optional)",
                 requirement="optional",
+                role=role,
+                field=field,
             )
         detail = f"{var} is not set"
     elif state == "placeholder":
@@ -455,14 +499,18 @@ def _check_scaffold_env_var(
             status="ok",
             detail=f"{var} set",
             requirement=requirement,
+            role=role,
+            field=field,
         )
     return CheckResult(
         name=name,
         status="fail",
         detail=detail,
         requirement=requirement,
-        code="EASYCAT_E210",
+        code=code if state == "missing" else "EASYCAT_E210",
         fix=f"Set {var} to the real project value in `.env`, then rerun doctor.",
+        role=role,
+        field=field,
     )
 
 
@@ -474,6 +522,7 @@ def _provider_env_result(
     required: bool,
     optional: bool,
     requirements_scoped: bool,
+    role: str = "",
 ) -> tuple[CheckResult, bool]:
     """Classify one hosted-provider credential and whether it is active."""
     if requirements_scoped and not required and not optional:
@@ -486,6 +535,8 @@ def _provider_env_result(
                 status="skip",
                 detail=detail,
                 requirement="unused",
+                role=role,
+                field=var,
             ),
             False,
         )
@@ -496,6 +547,8 @@ def _provider_env_result(
                 status="ok",
                 detail=f"{var} set",
                 requirement="required" if required else "optional",
+                role=role,
+                field=var,
             ),
             True,
         )
@@ -506,6 +559,7 @@ def _provider_env_result(
                 var,
                 state=state,
                 requirement="required" if required else "optional",
+                role=role,
             ),
             False,
         )
@@ -516,6 +570,8 @@ def _provider_env_result(
                 status="skip",
                 detail=f"{var} not set (optional)",
                 requirement="optional",
+                role=role,
+                field=var,
             ),
             False,
         )
@@ -525,6 +581,8 @@ def _provider_env_result(
             status="skip",
             detail=f"{var} not set",
             requirement="unused",
+            role=role,
+            field=var,
         ),
         False,
     )
@@ -533,9 +591,7 @@ def _provider_env_result(
 def check_env_vars(
     only_provider: str | None = None,
     *,
-    required_env_names: tuple[str, ...] = (),
-    optional_env_names: tuple[str, ...] = (),
-    requirements_scoped: bool = False,
+    selected: SelectedApp | None = None,
 ) -> list[CheckResult]:
     # Scoped mode: user asked to verify a specific provider.  A missing
     # key for *that* provider must fail — otherwise `doctor --provider X`
@@ -557,6 +613,10 @@ def check_env_vars(
             ]
         return [_missing_provider_result(only_provider, var, state=state)]
 
+    required_env_names = selected.required_env if selected is not None else ()
+    optional_env_names = selected.optional_env if selected is not None else ()
+    requirements_scoped = selected is not None
+
     results: list[CheckResult] = []
     any_set = False
     required = set(required_env_names)
@@ -569,16 +629,33 @@ def check_env_vars(
             required=var in required,
             optional=var in optional,
             requirements_scoped=requirements_scoped,
+            role=selected.role_for_env(var) if selected is not None else "",
         )
         results.append(result)
         any_set = any_set or active
     provider_vars = set(provider_env.values())
     for var in required_env_names:
         if var not in provider_vars:
-            results.append(_check_scaffold_env_var(var, requirement="required"))
+            results.append(
+                _check_scaffold_env_var(
+                    var,
+                    requirement="required",
+                    code=selected.code_for_env(var) if selected is not None else "EASYCAT_E210",
+                    field=var,
+                    role=selected.role_for_env(var) if selected is not None else "",
+                )
+            )
     for var in optional_env_names:
         if var not in provider_vars:
-            results.append(_check_scaffold_env_var(var, requirement="optional"))
+            results.append(
+                _check_scaffold_env_var(
+                    var,
+                    requirement="optional",
+                    code=selected.code_for_env(var) if selected is not None else "EASYCAT_E210",
+                    field=var,
+                    role=selected.role_for_env(var) if selected is not None else "",
+                )
+            )
 
     if not any_set:
         # No hosted key is a valid generic state: local and custom providers can
@@ -610,15 +687,14 @@ def check_provider_reachability(
     only_provider: str | None = None,
     timeout: float = 2.0,
     *,
-    required_env_names: tuple[str, ...] = (),
-    optional_env_names: tuple[str, ...] = (),
-    requirements_scoped: bool = False,
+    selected: SelectedApp | None = None,
 ) -> list[CheckResult]:
     import httpx
 
     results: list[CheckResult] = []
-    required = set(required_env_names)
-    scoped = required | set(optional_env_names)
+    requirements_scoped = selected is not None
+    required = set(selected.required_env) if selected is not None else set()
+    scoped = required | (set(selected.optional_env) if selected is not None else set())
     for provider, var in _provider_env().items():
         if only_provider and only_provider != provider:
             continue
@@ -647,6 +723,9 @@ def check_provider_reachability(
                     requirement=(
                         "required" if only_provider is not None or var in required else "optional"
                     ),
+                    role=selected.role_for_env(var) if selected is not None else "",
+                    field=var,
+                    probe="network",
                 )
             )
         except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as exc:
@@ -662,6 +741,9 @@ def check_provider_reachability(
                     fix=(
                         f"Check network connectivity, DNS, and provider status. HEAD {url} failed."
                     ),
+                    role=selected.role_for_env(var) if selected is not None else "",
+                    field=var,
+                    probe="network",
                 )
             )
         except Exception as exc:  # noqa: BLE001
@@ -675,6 +757,9 @@ def check_provider_reachability(
                     ),
                     code="EASYCAT_E204",
                     fix="Unexpected probe error — check network connectivity.",
+                    role=selected.role_for_env(var) if selected is not None else "",
+                    field=var,
+                    probe="network",
                 )
             )
     return results
@@ -699,6 +784,7 @@ def check_microphone() -> CheckResult:
             status="skip",
             detail="sounddevice not installed (only required for local transport)",
             requirement="optional",
+            probe="hardware",
         )
     except OSError as exc:
         return CheckResult(
@@ -708,6 +794,7 @@ def check_microphone() -> CheckResult:
             requirement="optional",
             code="EASYCAT_E209",
             fix=PORTAUDIO_INSTALL_FIX,
+            probe="hardware",
         )
     try:
         # ``sd.default.device`` is a two-tuple ``(input, output)`` when
@@ -727,6 +814,7 @@ def check_microphone() -> CheckResult:
                     "macOS: grant mic access to the terminal. "
                     "Linux: check PulseAudio/PipeWire. Windows: check Sound settings."
                 ),
+                probe="hardware",
             )
         # Try to resolve the device name for an informative OK row.
         try:
@@ -739,6 +827,7 @@ def check_microphone() -> CheckResult:
             status="ok",
             detail=f"default input: {name}",
             requirement="optional",
+            probe="hardware",
         )
     except Exception as exc:  # noqa: BLE001
         # Unexpected sounddevice errors (portaudio missing, etc.) are
@@ -750,6 +839,7 @@ def check_microphone() -> CheckResult:
             status="skip",
             detail=f"sounddevice probe failed: {type(exc).__name__}",
             requirement="optional",
+            probe="hardware",
         )
 
 
@@ -784,6 +874,7 @@ def check_journal_writable() -> CheckResult:
                 detail=f"cannot create {path}: {existing_parent} is not a directory",
                 code="EASYCAT_E207",
                 fix=f"choose a directory for EASYCAT_DATA_DIR, then mkdir -p {path}",
+                probe="filesystem",
             )
         return CheckResult(
             name="journal_writable",
@@ -791,6 +882,7 @@ def check_journal_writable() -> CheckResult:
             detail=f"{path} does not exist; writable state was not probed",
             code="EASYCAT_E207",
             fix=f"easycat doctor --fix  # creates {path}",
+            probe="filesystem",
         )
     if not path.is_dir():
         return CheckResult(
@@ -799,6 +891,7 @@ def check_journal_writable() -> CheckResult:
             detail=f"{path} exists but is not a directory",
             code="EASYCAT_E207",
             fix=f"set EASYCAT_DATA_DIR to a writable directory; refusing to replace {path}",
+            probe="filesystem",
         )
     # Keep the default diagnostic observational: permission inspection can
     # produce a useful readiness answer without creating and deleting a probe
@@ -810,8 +903,9 @@ def check_journal_writable() -> CheckResult:
             detail=f"{path} is not writable by the current process",
             code="EASYCAT_E207",
             fix=f"chmod u+w {path}",
+            probe="filesystem",
         )
-    return CheckResult(name="journal_writable", status="ok", detail=str(path))
+    return CheckResult(name="journal_writable", status="ok", detail=str(path), probe="filesystem")
 
 
 def check_disk_space(min_free_mb: int = 500) -> CheckResult:
@@ -835,6 +929,7 @@ def check_disk_space(min_free_mb: int = 500) -> CheckResult:
             name="disk_space",
             status="skip",
             detail=f"cannot stat {probe_path}: {exc}",
+            probe="filesystem",
         )
     free_mb = usage.free // (1024 * 1024)
     if free_mb < min_free_mb:
@@ -844,11 +939,13 @@ def check_disk_space(min_free_mb: int = 500) -> CheckResult:
             detail=f"{free_mb}MB free at {probe_path} (need >= {min_free_mb}MB)",
             code="EASYCAT_E208",
             fix="Free up disk space or set EASYCAT_DATA_DIR to a larger filesystem.",
+            probe="filesystem",
         )
     return CheckResult(
         name="disk_space",
         status="ok",
         detail=f"{free_mb}MB free at {probe_path}",
+        probe="filesystem",
     )
 
 
@@ -869,12 +966,14 @@ def check_onnxruntime() -> CheckResult:
             status="skip",
             detail="onnxruntime not installed (smart-turn extra is optional)",
             requirement="optional",
+            probe="import",
         )
     return CheckResult(
         name="onnxruntime",
         status="ok",
         detail="onnxruntime importable",
         requirement="optional",
+        probe="import",
     )
 
 
@@ -890,13 +989,108 @@ def check_resampling_backend() -> CheckResult:
                 "easycat[quickstart] for SoXR"
             ),
             requirement="optional",
+            probe="import",
         )
     return CheckResult(
         name="audio_resampling",
         status="ok",
         detail=f"{backend} high-quality backend",
         requirement="optional",
+        probe="import",
     )
+
+
+def check_selected_extras(selected: SelectedApp | None) -> list[CheckResult]:
+    """One row per DISTINCT install extra a SELECTED role needs.
+
+    ``ProviderPlan.missing_extras`` already excludes extras whose role degrades
+    gracefully, so a missing ``aec`` extra stays a warning here exactly as it
+    does on ``/health/ready``. Returns ``[]`` when no profile was selected, so a
+    non-manifest run's row set is unchanged. Nothing is IMPORTED here and no
+    environment variable is read — detection happened in the planner via
+    ``find_spec``. The one filesystem touch is on a failing row: ``install_fix``
+    reads ``selected.project_root``'s ``pyproject.toml`` (``tomllib`` only) so
+    the printed fix respects a Git- or path-pinned ``easycat`` dependency.
+    """
+    if selected is None or not selected.roles:
+        return []
+    results: list[CheckResult] = []
+    seen: set[str] = set()
+    for role in selected.roles:
+        extra = role.extra
+        if extra is None or extra in seen:
+            continue
+        seen.add(extra)
+        if not role.extra_missing:
+            results.append(
+                CheckResult(
+                    name=f"extra_{extra}",
+                    status="ok",
+                    detail=f"{extra} extra available for {role.role}",
+                    requirement="required",
+                    role=role.role,
+                    field=extra,
+                )
+            )
+        elif role.degrades_without_extra:
+            results.append(
+                CheckResult(
+                    name=f"extra_{extra}",
+                    status="skip",
+                    detail=(
+                        f"{extra} extra not installed; {role.role} degrades to "
+                        "passthrough instead of failing"
+                    ),
+                    requirement="optional",
+                    role=role.role,
+                    field=extra,
+                )
+            )
+        else:
+            issue = selected.issue_for("missing_extra", extra)
+            results.append(
+                CheckResult(
+                    name=f"extra_{extra}",
+                    status="fail",
+                    detail=issue.detail if issue else f"Missing required extra: {extra}",
+                    requirement="required",
+                    code="EASYCAT_E202",
+                    fix=install_fix(extra, project_root=selected.project_root),
+                    role=role.role,
+                    field=extra,
+                )
+            )
+    return results
+
+
+def check_selection_defects(selected: SelectedApp | None) -> list[CheckResult]:
+    """One ``fail`` row per incomplete-selection defect on the chosen profile.
+
+    ``code`` / ``detail`` / ``fix`` / ``field`` come straight off the issue, so
+    doctor prints the same code and fix text the startup path raises.
+
+    It deliberately does NOT emit rows for ``reason == "unset_reference"``: every
+    manifest reference var is already in ``SelectedApp.required_env``, so
+    ``check_env_vars`` emits one ``env_<var>`` row for it with
+    ``code=selected.code_for_env(var)`` -> ``"EASYCAT_E604"``. Emitting here too
+    would produce two rows for one cause.
+    """
+    if selected is None:
+        return []
+    return [
+        CheckResult(
+            name=f"selection_{issue.reason}",
+            status="fail",
+            detail=issue.detail,
+            requirement="required",
+            code=issue.code,
+            fix=issue.fix,
+            role=issue.role,
+            field=issue.field,
+        )
+        for issue in selected.issues
+        if issue.reason == "incomplete_selection"
+    ]
 
 
 # ── Orchestration ────────────────────────────────────────────────
@@ -947,7 +1141,7 @@ def _apply_requested_fixes(
     *,
     only_provider: str | None,
     environment: str,
-    scaffold: ScaffoldRequirements | None,
+    selected: SelectedApp | None,
 ) -> tuple[list[CheckResult], list[FixResult]]:
     """Apply, report, and verify explicit ``--fix`` mutations."""
     fix_results = _apply_safe_fixes(results)
@@ -960,7 +1154,7 @@ def _apply_requested_fixes(
         results = _run_all_checks(
             only_provider=only_provider,
             environment=environment,
-            scaffold=scaffold,
+            selected=selected,
         )
     elif not fix_results:
         stderr_console.print("[dim]--fix: no auto-remediatable issues found.[/]")
@@ -970,48 +1164,44 @@ def _apply_requested_fixes(
 def _run_all_checks(
     only_provider: str | None,
     environment: str = "dev",
-    scaffold: ScaffoldRequirements | None = None,
+    selected: SelectedApp | None = None,
 ) -> list[CheckResult]:
     results: list[CheckResult] = []
     results.append(check_python_version())
     results.append(check_easycat_version())
-    if scaffold is not None:
+    if selected is not None and selected.template is not None:
         results.append(
             CheckResult(
                 name="scaffold",
                 status="ok",
                 detail=(
-                    f"{scaffold.template} ({len(scaffold.required_env)} required, "
-                    f"{len(scaffold.optional_env)} optional env vars)"
+                    f"{selected.template} ({len(selected.required_env)} required, "
+                    f"{len(selected.optional_env)} optional env vars)"
                 ),
             )
         )
-    results.extend(
-        check_env_vars(
-            only_provider=only_provider,
-            required_env_names=scaffold.required_env if scaffold is not None else (),
-            optional_env_names=scaffold.optional_env if scaffold is not None else (),
-            requirements_scoped=scaffold is not None,
-        )
-    )
-    results.extend(
-        check_provider_reachability(
-            only_provider=only_provider,
-            required_env_names=scaffold.required_env if scaffold is not None else (),
-            optional_env_names=scaffold.optional_env if scaffold is not None else (),
-            requirements_scoped=scaffold is not None,
-        )
-    )
+    results.extend(check_selection_defects(selected))
+    results.extend(check_env_vars(only_provider=only_provider, selected=selected))
+    results.extend(check_selected_extras(selected))
+    results.extend(check_provider_reachability(only_provider=only_provider, selected=selected))
     results.append(check_onnxruntime())
     results.append(check_resampling_backend())
     # The local microphone is only meaningful for the dev profile's
     # local transport; server deployments (production) have no mic, so
-    # running the probe there only produces a noisy, irrelevant skip.
-    if environment != "production":
+    # running the probe there only produces a noisy, irrelevant skip. A
+    # selected profile whose transport declares no ``microphone`` capability
+    # (every browser/server/phone transport) does not need one either.
+    if environment != "production" and (selected is None or selected.requires_microphone):
         results.append(check_microphone())
     results.append(check_journal_writable())
     results.append(check_disk_space())
     return results
+
+
+def probe_summary(results: list[CheckResult]) -> dict[str, bool]:
+    """Which probe classes actually ran, derived from the emitted rows."""
+    emitted = {result.probe for result in results}
+    return {kind: kind in emitted for kind in PROBE_KINDS}
 
 
 def _doctor_usage_error(message: str, *, json_output: bool) -> NoReturn:
@@ -1022,13 +1212,78 @@ def _doctor_usage_error(message: str, *, json_output: bool) -> NoReturn:
 _STATUS_GLYPH = {"ok": "[green]✓[/]", "fail": "[red]✗[/]", "skip": "[dim]~[/]"}
 
 
+def _validate_doctor_scope(
+    *,
+    environment: str,
+    only_provider: str | None,
+    provider_env: dict[str, str],
+    manifest_mode: bool,
+    json_output: bool,
+) -> None:
+    """Reject the three incompatible/unknown scoping requests (exit 2 each)."""
+    if environment not in {"dev", "production"}:
+        _doctor_usage_error(
+            f"Unknown --environment {environment!r}. Use 'dev' or 'production'.",
+            json_output=json_output,
+        )
+    if only_provider is not None and only_provider not in provider_env:
+        # A typo or mis-cased provider must fail loudly rather than fall
+        # through to the generic checks and exit 0 — automation that
+        # scopes doctor to one provider would otherwise treat the typo as
+        # a green run.
+        supported = ", ".join(sorted(provider_env))
+        _doctor_usage_error(
+            f"Unknown --provider {only_provider!r}. Supported: {supported}.",
+            json_output=json_output,
+        )
+    if manifest_mode and only_provider is not None:
+        _doctor_usage_error(
+            "--provider cannot be combined with --manifest/--profile; the profile "
+            "already selects which providers are checked.",
+            json_output=json_output,
+        )
+
+
+def _resolve_selected_app(
+    *,
+    loaded: tuple[ProjectManifest, VoiceProfile] | None,
+    scaffold: ScaffoldRequirements | None,
+    profile: str,
+) -> SelectedApp | None:
+    """Derive the ``SelectedApp`` for this run (called INSIDE ``_temporary_env``).
+
+    The environment snapshot is taken here so a ``--env-file`` value is visible
+    to the planner, and the manifest pair is the one loaded before the
+    allow-list was built — the file is never read twice.
+    """
+    if loaded is None:
+        return selected_app_from_scaffold(scaffold) if scaffold is not None else None
+    from easycat.cli.diagnose._requirements import selected_app_from_manifest
+
+    project_manifest, voice_profile = loaded
+    return selected_app_from_manifest(
+        project_manifest,
+        voice_profile,
+        profile,
+        environ=dict(os.environ),
+        scaffold=scaffold,
+    )
+
+
 def _render_report(
     results: list[CheckResult],
     profile: str,
     *,
     failed_fixes: int = 0,
+    selected: SelectedApp | None = None,
 ) -> None:
-    stderr_console.print(f"[bold]EasyCat doctor[/] — {profile} profile")
+    # NOTE ``profile`` here is the ENVIRONMENT profile (dev/production); the
+    # selected VOICE profile is read off ``selected``.
+    header = f"[bold]EasyCat doctor[/] — {profile} profile"
+    if selected is not None and selected.profile is not None:
+        location = escape(selected.manifest_path or "easycat.toml")
+        header += f" · {location} {escape(f'[voice.{selected.profile}]')}"
+    stderr_console.print(header)
     stderr_console.print()
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column(style="bold", no_wrap=True)
@@ -1039,7 +1294,8 @@ def _render_report(
         detail = escape(r.detail)
         if r.status == "fail":
             detail = f"[red]{detail}[/] [red]({escape(r.code)})[/]"
-        table.add_row(glyph, escape(r.name), detail)
+        row_name = f"{r.name} ({r.role})" if r.role else r.name
+        table.add_row(glyph, escape(row_name), detail)
         if r.status == "fail" and r.fix:
             short = r.code.removeprefix("EASYCAT_")
             table.add_row(
@@ -1084,6 +1340,22 @@ def doctor(
         "--provider",
         help="Only check this provider (e.g. --provider openai).",
     ),
+    manifest: str | None = typer.Option(
+        None,
+        "--manifest",
+        help=(
+            "Diagnose this easycat.toml's selected profile (defaults to "
+            "EASYCAT_MANIFEST or ./easycat.toml). Resolution is static: the "
+            "profile's application module is never imported or run."
+        ),
+    ),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help=(
+            "Voice profile to diagnose (for example, voice.default). Implies manifest discovery."
+        ),
+    ),
     fix: bool = typer.Option(
         False,
         "--fix",
@@ -1100,23 +1372,16 @@ def doctor(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     """Check credentials, extras, providers, audio backends, and local resources."""
-    if environment not in {"dev", "production"}:
-        _doctor_usage_error(
-            f"Unknown --environment {environment!r}. Use 'dev' or 'production'.",
-            json_output=json_output,
-        )
-
+    manifest_mode = manifest is not None or profile is not None
+    selected_profile = profile or "default"
     provider_env = _provider_env()
-    if only_provider is not None and only_provider not in provider_env:
-        # A typo or mis-cased provider must fail loudly rather than fall
-        # through to the generic checks and exit 0 — automation that
-        # scopes doctor to one provider would otherwise treat the typo as
-        # a green run.
-        supported = ", ".join(sorted(provider_env))
-        _doctor_usage_error(
-            f"Unknown --provider {only_provider!r}. Supported: {supported}.",
-            json_output=json_output,
-        )
+    _validate_doctor_scope(
+        environment=environment,
+        only_provider=only_provider,
+        provider_env=provider_env,
+        manifest_mode=manifest_mode,
+        json_output=json_output,
+    )
 
     try:
         scaffold = _load_scaffold_requirements() if only_provider is None else None
@@ -1127,6 +1392,21 @@ def doctor(
     if scaffold is not None:
         allowed_env_names.update(scaffold.required_env)
         allowed_env_names.update(scaffold.optional_env)
+
+    loaded: tuple[ProjectManifest, VoiceProfile] | None = None
+    if manifest_mode:
+        # Load the manifest ONCE, here, and keep the pair. Two reasons this must
+        # happen before ``_parse_env_file``: (a) the manifest's own reference
+        # vars have to widen the --env-file allow-list, or a token supplied only
+        # through `.env` would be dropped; (b) building the plan must happen
+        # INSIDE ``_temporary_env`` so --env-file values are visible to the
+        # planner snapshot, and re-loading the file there would read it twice.
+        # E601/E602/E104 propagate -> the same code and exit as `easycat plan`.
+        from easycat.cli.diagnose._requirements import reference_var_names
+        from easycat.planning.selection import load_selected_profile
+
+        loaded = load_selected_profile(manifest, profile=selected_profile)
+        allowed_env_names |= reference_var_names(loaded[0], profile=selected_profile)
     try:
         env_values = (
             _parse_env_file(env_file, allowed_names=allowed_env_names)
@@ -1137,10 +1417,13 @@ def doctor(
         _doctor_usage_error(f"Invalid --env-file: {exc}", json_output=json_output)
 
     with _temporary_env(env_values):
+        selected = _resolve_selected_app(
+            loaded=loaded, scaffold=scaffold, profile=selected_profile
+        )
         results = _run_all_checks(
             only_provider=only_provider,
             environment=environment,
-            scaffold=scaffold,
+            selected=selected,
         )
         fix_results: list[FixResult] = []
 
@@ -1153,21 +1436,27 @@ def doctor(
                 results,
                 only_provider=only_provider,
                 environment=environment,
-                scaffold=scaffold,
+                selected=selected,
             )
 
         failed_fixes = sum(result.status == "failed" for result in fix_results)
         failed = any(r.status == "fail" for r in results) or failed_fixes > 0
         if json_output:
-            fields: dict[str, Any] = {
-                "environment": environment,
-                "checks": [r.as_dict() for r in results],
-            }
+            fields: dict[str, Any] = {"environment": environment}
+            if selected is not None:
+                fields["selection"] = selected.as_dict()
+            fields["probes"] = probe_summary(results)
+            fields["checks"] = [r.as_dict() for r in results]
             if fix:
                 fields["fixes"] = [result.as_dict() for result in fix_results]
             emit_json(json_envelope("doctor", status="error" if failed else "ok", **fields))
         else:
-            _render_report(results, profile=environment, failed_fixes=failed_fixes)
+            _render_report(
+                results,
+                profile=environment,
+                failed_fixes=failed_fixes,
+                selected=selected,
+            )
 
     raise typer.Exit(1 if failed else 0)
 
