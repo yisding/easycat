@@ -243,7 +243,7 @@ consume model memory, sockets, file descriptors, or paid resources. Stream
 tokens must not be minted before authenticating the request that asks for
 them.
 
-## 7.7 WebSocket and WebRTC
+## 7.7 WebSocket, WebRTC, and WebTransport
 
 The WebSocket transport implementation lives in
 [`transports/websocket.py`](../../src/easycat/transports/websocket.py). Server
@@ -286,6 +286,41 @@ flowchart TD
 
 WebRTC libraries are optional and loaded lazily at the route/feature boundary.
 `import easycat.server` must not require aiohttp or aiortc.
+
+### WebTransport
+
+WebTransport is the third network transport and follows the same two-layer
+split:
+
+- [`transports/webtransport.py`](../../src/easycat/transports/webtransport.py)
+  owns `WebTransportTransportConfig` and the per-connection
+  `WebTransportTransport`.
+- [`server/webtransport.py`](../../src/easycat/server/webtransport.py) owns
+  `serve_webtransport_config_sessions()` /
+  `run_webtransport_config_server()`, which construct one transport and one
+  session per accepted HTTP/3 CONNECT — the same per-connection factory
+  contract as the WebSocket and WebRTC paths.
+
+Two properties are specific to it and worth knowing before reading the module:
+
+- **Auth cannot use a header from a browser.** A browser cannot set
+  `Authorization` on an HTTP/3 CONNECT, so the query-token path
+  (`allow_query_token=True`) is not a convenience here the way it is for
+  WebSocket — it is the only browser-reachable option. The default bind is
+  loopback and a public bind without a token is refused, same as the other
+  serve paths (§7.6).
+- **Backpressure reads a private aioquic attribute.** Bounding stalled-client
+  memory requires aioquic's per-stream send-buffer size, which aioquic does not
+  expose publicly. Server startup preflights that access path and refuses to
+  bind against an incompatible aioquic release rather than silently losing the
+  bound. Treat a failure there as a dependency-compatibility problem.
+
+`aioquic` lives behind the optional `webtransport` extra and is loaded lazily,
+so `import easycat.server` must not require it. The operator-facing deployment
+requirements (UDP/443 ingress, certificates, load-balancer support) are in
+[production-servers.md](../../docs/deployment/production-servers.md#webtransport-servers),
+and `examples/webtransport_server.py` plus
+`examples/webtransport_browser_client.html` are the runnable pair.
 
 ## 7.8 Twilio, Telnyx, and Telephony
 
