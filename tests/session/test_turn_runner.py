@@ -706,6 +706,67 @@ async def test_superseded_turn_ended_drains_before_the_successor_runs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_superseded_turn_ended_drains_the_whole_chain() -> None:
+    """A third TurnEnded must still wait on the first, stuck predecessor.
+
+    A drains slowly; B is created and parks on A; a third ``TurnEnded``
+    cancels B. B's own wait ends with ``CancelledError`` immediately, which
+    says nothing about A — so draining only the handle just replaced would
+    let C run while A is still going.
+    """
+    session = Session(_config())
+    runner = session._turn_runner
+    order: list[str] = []
+    release_a = asyncio.Event()
+
+    async def _stubborn_a() -> None:
+        # Resists *every* cancellation until released: the chain cancels A
+        # once per superseding TurnEnded.
+        order.append("a:start")
+        waiter = asyncio.ensure_future(release_a.wait())
+        try:
+            while not release_a.is_set():
+                try:
+                    await asyncio.shield(waiter)
+                except asyncio.CancelledError:
+                    continue
+        finally:
+            waiter.cancel()
+            order.append("a:done")
+
+    task_a = session._runtime_scope.create_task("on_turn_ended", _stubborn_a())
+    session._tts_scheduler.active_turn_task = task_a
+    await asyncio.sleep(0)
+    assert order == ["a:start"]
+
+    # Second TurnEnded: B is created and parks draining A.
+    runner.schedule_turn_ended(TurnEnded(turn_id="t-b"))
+    task_b = session._tts_scheduler.active_turn_task
+    assert task_b is not None and task_b is not task_a
+    await asyncio.sleep(0.02)
+    assert not task_b.done()
+
+    # Third TurnEnded: B is cancelled, C must still inherit A.
+    runner.schedule_turn_ended(TurnEnded(turn_id="t-c"))
+    task_c = session._tts_scheduler.active_turn_task
+    assert task_c is not None and task_c not in (task_a, task_b)
+
+    try:
+        await asyncio.sleep(0.05)
+        assert task_b.done()
+        # C is parked on A, which is still running.
+        assert not task_c.done()
+        assert order == ["a:start"]
+    finally:
+        # Always release, so a regression fails on the assertion rather than
+        # hanging the suite on a task that never unwinds.
+        release_a.set()
+
+    await asyncio.wait_for(task_c, timeout=2)
+    assert order == ["a:start", "a:done"]
+
+
+@pytest.mark.asyncio
 async def test_superseded_turn_ended_drain_is_bounded(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -717,11 +778,18 @@ async def test_superseded_turn_ended_drain_is_bounded(
     never_released = asyncio.Event()
 
     async def _uncancellable_predecessor() -> None:
-        while not never_released.is_set():
-            try:
-                await asyncio.shield(asyncio.sleep(0.01))
-            except asyncio.CancelledError:
-                continue
+        # One long-lived inner waiter, cancelled on the way out: a fresh
+        # ``shield(sleep(...))`` per iteration would strand orphan tasks that
+        # outlive the test and trip the suite's task-leak detector.
+        waiter = asyncio.ensure_future(never_released.wait())
+        try:
+            while not never_released.is_set():
+                try:
+                    await asyncio.shield(waiter)
+                except asyncio.CancelledError:
+                    continue
+        finally:
+            waiter.cancel()
 
     predecessor = session._runtime_scope.create_task("on_turn_ended", _uncancellable_predecessor())
     session._tts_scheduler.active_turn_task = predecessor
