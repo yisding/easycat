@@ -397,7 +397,7 @@ EASYCAT_E202 = register(
         "EasyCat repo, use `uv sync --extra {extra} --group dev`."
     ),
     example="uv add 'easycat[openai-agents]'  # or: uv sync --extra openai-agents --group dev",
-    related=["EASYCAT_E203"],
+    related=["EASYCAT_E203", "EASYCAT_E602"],
 )
 
 EASYCAT_E203 = register(
@@ -525,7 +525,7 @@ EASYCAT_E210 = register(
         "(or `easycat doctor --manifest easycat.toml --env-file .env`)."
     ),
     example="easycat doctor --env-file .env",
-    related=["EASYCAT_E203"],
+    related=["EASYCAT_E203", "EASYCAT_E202"],
 )
 
 
@@ -750,7 +750,7 @@ EASYCAT_E602 = register(
         "(`webrtc`/`websocket`/`twilio`/`telnyx`/`local`)."
     ),
     example='[voice.default]\ntransport = "webrtc"',
-    related=["EASYCAT_E601", "EASYCAT_E603"],
+    related=["EASYCAT_E601", "EASYCAT_E603", "EASYCAT_E203", "EASYCAT_E202"],
 )
 
 EASYCAT_E603 = register(

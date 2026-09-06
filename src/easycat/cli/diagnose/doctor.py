@@ -42,6 +42,7 @@ from easycat.cli.diagnose._requirements import (
     install_fix,
     selected_app_from_scaffold,
 )
+from easycat.errors import EasyCatError
 
 if TYPE_CHECKING:
     from easycat.project.manifest import ProjectManifest
@@ -120,6 +121,24 @@ class FixResult:
 # ── Individual checks ─────────────────────────────────────────────
 
 
+def _registry_fix(code: str, **context: str) -> str:
+    """The registry's fix text for *code* with *context* applied, or ``""``.
+
+    Reuses :meth:`EasyCatError.rendered_fix`'s missing-substitution guard, so a
+    template whose placeholder the caller did not supply falls back to the raw
+    template instead of raising.
+
+    Only the rows whose hand-written fix DUPLICATED the registry are derived
+    this way (E201, E203, E210/E604). E204/E206/E207/E208/E209 deliberately keep
+    their situational fixes (``chmod u+w {path}``, ``easycat doctor --fix  #
+    creates {path}``, the PortAudio install line): those name the exact local
+    condition doctor just observed and are strictly better than the registry's
+    generic text. ``EASYCAT_E202``'s extras row keeps ``install_fix`` for the
+    same reason — it respects a Git-/path-pinned ``easycat`` dependency.
+    """
+    return EasyCatError(code, "", **context).rendered_fix() or ""
+
+
 def check_python_version() -> CheckResult:
     found = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     if sys.version_info < (3, 11):  # noqa: UP036 — intentional diagnostic check
@@ -128,10 +147,7 @@ def check_python_version() -> CheckResult:
             status="fail",
             detail=f"Python {found}",
             code="EASYCAT_E201",
-            fix=(
-                "Install Python 3.11+ (e.g. `uv python install 3.12`). "
-                "From this repo, rerun setup with `uv sync --python 3.12 --group dev`."
-            ),
+            fix=_registry_fix("EASYCAT_E201"),
         )
     return CheckResult(name="python_version", status="ok", detail=f"Python {found}")
 
@@ -395,20 +411,25 @@ def _missing_provider_result(
     state: str,
     requirement: Literal["required", "optional"] = "required",
     role: str = "",
+    code: str = "EASYCAT_E203",
 ) -> CheckResult:
+    """One failed hosted-credential row.
+
+    *code* is the planner's verdict for this var when a profile was selected
+    (``SelectedApp.issue_for_env``), so a doctor row and a ``plan --json`` issue
+    for the same cause carry the same code by construction; it falls back to
+    ``EASYCAT_E203``, the code startup raises for a missing provider key.
+    """
     detail = f"{var} looks like a placeholder" if state == "placeholder" else f"{var} is not set"
     return CheckResult(
         name=f"env_{provider}",
         status="fail",
         detail=detail,
         requirement=requirement,
-        code="EASYCAT_E203",
+        code=code,
         role=role,
         field=var,
-        fix=(
-            f"Set {var} to a real credential: `export {var}=...`, or fill it in "
-            "inside the project `.env` and rerun `easycat doctor --env-file .env`."
-        ),
+        fix=_registry_fix(code, var=var),
     )
 
 
@@ -502,13 +523,14 @@ def _check_scaffold_env_var(
             role=role,
             field=field,
         )
+    row_code = code if state == "missing" else "EASYCAT_E210"
     return CheckResult(
         name=name,
         status="fail",
         detail=detail,
         requirement=requirement,
-        code=code if state == "missing" else "EASYCAT_E210",
-        fix=f"Set {var} to the real project value in `.env`, then rerun doctor.",
+        code=row_code,
+        fix=_registry_fix(row_code, var=var),
         role=role,
         field=field,
     )
@@ -523,6 +545,7 @@ def _provider_env_result(
     optional: bool,
     requirements_scoped: bool,
     role: str = "",
+    code: str = "EASYCAT_E203",
 ) -> tuple[CheckResult, bool]:
     """Classify one hosted-provider credential and whether it is active."""
     if requirements_scoped and not required and not optional:
@@ -560,6 +583,7 @@ def _provider_env_result(
                 state=state,
                 requirement="required" if required else "optional",
                 role=role,
+                code=code,
             ),
             False,
         )
@@ -586,6 +610,37 @@ def _provider_env_result(
         ),
         False,
     )
+
+
+def _env_role(selected: SelectedApp | None, var: str) -> str:
+    """Pipeline role that needs *var*, preferring the planner's attribution."""
+    if selected is None:
+        return ""
+    issue = selected.issue_for_env(var)
+    if issue is not None and issue.role:
+        return issue.role
+    return selected.role_for_env(var)
+
+
+def _env_code(selected: SelectedApp | None, var: str, *, fallback: str) -> str:
+    """Code for an env-var row, stamped from the planner issue when there is one.
+
+    A ``plan --json`` issue and the doctor row for the same var then carry the
+    same ``EASYCAT_Exxx`` by construction rather than by two tables agreeing.
+    A manifest ``bearer-env:`` reference still resolves to ``EASYCAT_E604`` even
+    when the planner made no issue for it (the var IS set, but the row failed a
+    value check). Otherwise the row keeps *fallback* — the code doctor has
+    always used for that scope (``EASYCAT_E203`` for a hosted provider
+    credential, ``EASYCAT_E210`` for a project-declared var).
+    """
+    if selected is None:
+        return fallback
+    issue = selected.issue_for_env(var)
+    if issue is not None:
+        return issue.code
+    if var in selected.reference_vars:
+        return "EASYCAT_E604"
+    return fallback
 
 
 def check_env_vars(
@@ -629,7 +684,8 @@ def check_env_vars(
             required=var in required,
             optional=var in optional,
             requirements_scoped=requirements_scoped,
-            role=selected.role_for_env(var) if selected is not None else "",
+            role=_env_role(selected, var),
+            code=_env_code(selected, var, fallback="EASYCAT_E203"),
         )
         results.append(result)
         any_set = any_set or active
@@ -640,9 +696,9 @@ def check_env_vars(
                 _check_scaffold_env_var(
                     var,
                     requirement="required",
-                    code=selected.code_for_env(var) if selected is not None else "EASYCAT_E210",
+                    code=_env_code(selected, var, fallback="EASYCAT_E210"),
                     field=var,
-                    role=selected.role_for_env(var) if selected is not None else "",
+                    role=_env_role(selected, var),
                 )
             )
     for var in optional_env_names:
@@ -651,9 +707,9 @@ def check_env_vars(
                 _check_scaffold_env_var(
                     var,
                     requirement="optional",
-                    code=selected.code_for_env(var) if selected is not None else "EASYCAT_E210",
+                    code=_env_code(selected, var, fallback="EASYCAT_E210"),
                     field=var,
-                    role=selected.role_for_env(var) if selected is not None else "",
+                    role=_env_role(selected, var),
                 )
             )
 
@@ -1054,9 +1110,15 @@ def check_selected_extras(selected: SelectedApp | None) -> list[CheckResult]:
                     status="fail",
                     detail=issue.detail if issue else f"Missing required extra: {extra}",
                     requirement="required",
-                    code="EASYCAT_E202",
+                    # ``code``/``detail``/``role`` come off the planner issue so
+                    # the row, ``plan --json``'s ``issues`` entry, and
+                    # ``require_module``'s tagged ImportError all name
+                    # EASYCAT_E202 for this extra. The FIX deliberately does not:
+                    # ``install_fix`` respects a Git-/path-pinned dependency
+                    # source, which the registry's generic `uv add` would drop.
+                    code=issue.code if issue else "EASYCAT_E202",
                     fix=install_fix(extra, project_root=selected.project_root),
-                    role=role.role,
+                    role=issue.role if issue and issue.role else role.role,
                     field=extra,
                 )
             )

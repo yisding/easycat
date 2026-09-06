@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
 import pytest
 
 from easycat.cli._errors import exit_code_for
@@ -17,6 +21,7 @@ from easycat.errors import (
     EasyCatError,
     EasyConfigError,
     SetupIssue,
+    all_codes,
     register,
     suggest_codes,
 )
@@ -184,6 +189,11 @@ def test_exit_code_mapping() -> None:
     assert exit_code_for("EASYCAT_E103") == 2
     assert exit_code_for("EASYCAT_E203") == 3
     assert exit_code_for("EASYCAT_E501") == 2
+    # E-5: DX2 PR2 reports these three codes on new surfaces without changing
+    # what a CLI run exits with.
+    assert exit_code_for("EASYCAT_E210") == 1
+    assert exit_code_for("EASYCAT_E602") == 1
+    assert exit_code_for("EASYCAT_E604") == 1
     # Unlisted codes fall back to 1.
     assert exit_code_for("EASYCAT_E999") == 1
 
@@ -259,3 +269,244 @@ def test_selection_error_redacts_a_secret_shaped_planner_message() -> None:
     assert err.code == "EASYCAT_E602"
     assert _SECRET_SHAPED not in err.message
     assert "[REDACTED_SECRET]" in err.message
+
+
+# ── DX2 PR2: one cause, one code, on every surface ────────────────────
+
+
+@dataclass(frozen=True)
+class _SameCause:
+    """One manifest defect and the code each surface must report for it."""
+
+    id: str
+    body: str
+    code: str
+    absent: tuple[str, ...] = ()
+    plan_field: str = ""
+    plan_role: str = ""
+    doctor_row: str = ""
+    raises: bool = False
+    startup_module: tuple[str, str] | None = None
+
+
+_SAME_CAUSE_CASES: tuple[_SameCause, ...] = (
+    _SameCause(
+        id="missing-credential",
+        body='transport = "websocket"\nstt = "deepgram"\n',
+        code="EASYCAT_E203",
+        plan_field="DEEPGRAM_API_KEY",
+        plan_role="stt",
+        doctor_row="env_deepgram",
+    ),
+    _SameCause(
+        id="missing-extra",
+        body='transport = "webrtc"\n',
+        code="EASYCAT_E202",
+        absent=("aiortc",),
+        plan_field="webrtc",
+        plan_role="transport",
+        doctor_row="extra_webrtc",
+        # ``require_module`` is what the WebRTC transport calls at connection
+        # time. The probe name is a module that CANNOT exist, so this asserts
+        # the same code in a dev lane and in an extras lane alike.
+        startup_module=("easycat_missing_aiortc_probe", "webrtc"),
+    ),
+    _SameCause(
+        id="invalid-provider-stt",
+        body='transport = "websocket"\nstt = "opnai"\n',
+        code="EASYCAT_E104",
+        raises=True,
+    ),
+    _SameCause(
+        id="invalid-provider-vad",
+        body='transport = "websocket"\nvad = "silro"\n',
+        code="EASYCAT_E602",
+        raises=True,
+    ),
+    _SameCause(
+        id="incomplete-selection",
+        body='transport = "twilio"\n',
+        code="EASYCAT_E602",
+        plan_field="[voice.default]",
+        doctor_row="selection_incomplete_selection",
+    ),
+    _SameCause(
+        id="unset-reference",
+        body='transport = "twilio"\ntoken = "bearer-env:TW_TOK"\n',
+        code="EASYCAT_E604",
+        plan_field="TW_TOK",
+        doctor_row="env_tw_tok",
+    ),
+)
+
+
+def _force_modules(monkeypatch: pytest.MonkeyPatch, absent: tuple[str, ...]) -> None:
+    """Pin extras availability at the planner's single private seam.
+
+    Every extra check flows through ``provider_plan._module_available``, so
+    forcing it makes these assertions identical in the credential-free lane and
+    in an extras lane. Everything not named in *absent* reads as present, so a
+    case only ever goes red for the defect it is about.
+    """
+    from easycat.planning import provider_plan
+
+    missing = set(absent)
+    monkeypatch.setattr(provider_plan, "_module_available", lambda module: module not in missing)
+
+
+@pytest.mark.parametrize("case", _SAME_CAUSE_CASES, ids=lambda case: case.id)
+def test_same_cause_reports_one_code(
+    case: _SameCause, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The DX2 acceptance case: plan, doctor, and startup name ONE code.
+
+    Each row builds a single manifest and asserts the same ``EASYCAT_Exxx``
+    from ``easycat plan --json``, ``easycat doctor --manifest … --json``, and
+    the raise a running application hits for the same defect.
+    """
+    from typer.testing import CliRunner
+
+    from easycat.cli._app import _register_commands, app
+    from easycat.project import load_manifest
+
+    _register_commands()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    for var in ("DEEPGRAM_API_KEY", "TW_TOK"):
+        monkeypatch.delenv(var, raising=False)
+    _force_modules(monkeypatch, case.absent)
+    manifest_path = tmp_path / "easycat.toml"
+    manifest_path.write_text(
+        '[project]\nname = "same-cause"\n\n[voice.default]\n' + case.body, encoding="utf-8"
+    )
+    runner = CliRunner()
+
+    # ── plan surface ──
+    planned = runner.invoke(app, ["plan", "--manifest", str(manifest_path), "--json"])
+    plan_payload = json.loads(planned.stdout)
+    if case.raises:
+        assert planned.exit_code != 0
+        assert plan_payload["code"] == case.code
+    else:
+        issue = next(i for i in plan_payload["issues"] if i["field"] == case.plan_field)
+        assert issue["code"] == case.code
+        assert issue.get("role", "") == case.plan_role
+        assert issue["fix"]
+        assert plan_payload["has_blocking_errors"] is True
+
+    # ── doctor surface ──
+    diagnosed = runner.invoke(
+        app, ["doctor", "--manifest", str(manifest_path), "--json", "--environment", "production"]
+    )
+    doctor_payload = json.loads(diagnosed.stdout)
+    if case.raises:
+        assert doctor_payload["code"] == case.code
+    else:
+        row = next(r for r in doctor_payload["checks"] if r["name"] == case.doctor_row)
+        assert row["status"] == "fail"
+        assert row["code"] == case.code
+        assert row.get("role", "") == case.plan_role
+
+    # ── startup surface ──
+    if case.startup_module is not None:
+        module_name, extra = case.startup_module
+        from easycat._extras import require_module
+
+        with pytest.raises(ImportError) as import_info:
+            require_module(module_name, extra=extra)
+        assert import_info.value.code == case.code  # type: ignore[attr-defined]
+    else:
+        with pytest.raises(EasyCatError) as raise_info:
+            load_manifest(manifest_path).to_easyconfig("default", resolve_agent=False)
+        assert raise_info.value.code == case.code
+
+
+def test_setup_issues_are_stable_and_deduped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """E-1: deterministic order, no duplicates, earliest pipeline role wins."""
+    from easycat.planning.provider_plan import ProviderPlan, ProviderSelection
+    from easycat.planning.selection import plan_issues
+
+    def _selection(role: str, extra: str | None, env: str | None) -> ProviderSelection:
+        return ProviderSelection(
+            role=role,  # type: ignore[arg-type]
+            provider=f"{role}-provider",
+            model=None,
+            config_type=f"{role.title()}Config",
+            extra=extra,
+            required_env=env,
+            capabilities=frozenset(),
+        )
+
+    plan = ProviderPlan(
+        profile="default",
+        # ``tts`` also needs SHARED_KEY, and ``transport`` also needs the
+        # ``webrtc`` extra — both must be reported once, on the earlier role.
+        selected={
+            "stt": _selection("stt", "stt-extra", "SHARED_KEY"),
+            "tts": _selection("tts", "webrtc", "SHARED_KEY"),
+            "transport": _selection("transport", "webrtc", None),
+        },
+        missing_env=("SHARED_KEY",),
+        missing_extras=("stt-extra", "webrtc"),
+        warnings=(),
+    )
+
+    issues = plan_issues(plan)
+
+    # Ordered by (severity, pipeline role, code, field): both ``stt`` rows come
+    # before the ``tts`` one, and within ``stt`` E202 precedes E203.
+    assert [(i.reason, i.field, i.role) for i in issues] == [
+        ("missing_extra", "stt-extra", "stt"),
+        ("missing_env", "SHARED_KEY", "stt"),
+        ("missing_extra", "webrtc", "tts"),
+    ]
+    assert plan_issues(plan) == issues
+
+
+def test_related_codes_link_credential_extra_and_manifest_failures() -> None:
+    """E-2: ``easycat explain`` routes a reader across the same failure family."""
+    assert "EASYCAT_E203" in REGISTRY["EASYCAT_E602"].related
+    assert "EASYCAT_E202" in REGISTRY["EASYCAT_E602"].related
+    assert "EASYCAT_E202" in REGISTRY["EASYCAT_E210"].related
+    assert "EASYCAT_E602" in REGISTRY["EASYCAT_E202"].related
+
+
+def test_no_new_error_codes_were_added() -> None:
+    """E-3: the compat guard for "add optional fields, not codes".
+
+    DX2 reports existing causes with a shared record; it registers nothing. A
+    new code here is a deliberate act that must update this baseline (and the
+    ``easycat explain`` docs) in the same commit.
+    """
+    assert set(all_codes()) == {
+        "EASYCAT_E101",
+        "EASYCAT_E102",
+        "EASYCAT_E103",
+        "EASYCAT_E104",
+        "EASYCAT_E105",
+        "EASYCAT_E201",
+        "EASYCAT_E202",
+        "EASYCAT_E203",
+        "EASYCAT_E204",
+        "EASYCAT_E205",
+        "EASYCAT_E206",
+        "EASYCAT_E207",
+        "EASYCAT_E208",
+        "EASYCAT_E209",
+        "EASYCAT_E210",
+        "EASYCAT_E301",
+        "EASYCAT_E302",
+        "EASYCAT_E303",
+        "EASYCAT_E304",
+        "EASYCAT_E305",
+        "EASYCAT_E401",
+        "EASYCAT_E402",
+        "EASYCAT_E403",
+        "EASYCAT_E404",
+        "EASYCAT_E501",
+        "EASYCAT_E601",
+        "EASYCAT_E602",
+        "EASYCAT_E603",
+        "EASYCAT_E604",
+        "EASYCAT_E605",
+    }

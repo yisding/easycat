@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from easycat.errors import (
     EASYCAT_E202,
@@ -24,7 +24,12 @@ from easycat.errors import (
     EasyCatError,
     SetupIssue,
 )
-from easycat.planning.provider_plan import _ROLE_ORDER, ProviderPlan, build_provider_plan
+from easycat.planning.provider_plan import (
+    _ROLE_ORDER,
+    ProviderPlan,
+    ProviderSelection,
+    build_provider_plan,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -217,6 +222,46 @@ def degraded_extra_roles(plan: ProviderPlan) -> list[tuple[str, str]]:
     return pairs
 
 
+def selection_to_dict(selection: ProviderSelection) -> dict[str, Any]:
+    """The ONE ``ProviderSelection`` -> JSON shape.
+
+    Keys, order, and value types are what ``easycat plan --json`` and the
+    server's ``/plan`` body have always emitted: ``role``, ``provider``,
+    ``model``, ``config_type``, ``extra``, ``required_env``, ``capabilities``
+    (sorted list). Both surfaces call this, so the shape has one owner.
+    """
+    return {
+        "role": selection.role,
+        "provider": selection.provider,
+        "model": selection.model,
+        "config_type": selection.config_type,
+        "extra": selection.extra,
+        "required_env": selection.required_env,
+        "capabilities": sorted(selection.capabilities),
+    }
+
+
+def plan_body(plan: ProviderPlan) -> dict[str, Any]:
+    """The seven shared ``/plan`` + ``plan --json`` keys, in one place.
+
+    ``{profile, selected, missing_env, missing_extras, warnings,
+    blocking_errors, has_blocking_errors}``. The CLI spreads it into its
+    envelope; ``VoiceServer.plan_payload`` adds ``manifest_loaded`` on top.
+    Both then add ``issues`` from :func:`plan_issues`.
+    """
+    return {
+        "profile": plan.profile,
+        "selected": {
+            role: selection_to_dict(selection) for role, selection in plan.selected.items()
+        },
+        "missing_env": list(plan.missing_env),
+        "missing_extras": list(plan.missing_extras),
+        "warnings": list(plan.warnings),
+        "blocking_errors": list(plan.blocking_errors()),
+        "has_blocking_errors": plan.has_blocking_errors,
+    }
+
+
 def plan_issues(plan: ProviderPlan) -> tuple[SetupIssue, ...]:
     """Role-attributed issues for a resolved plan, in pipeline-role order.
 
@@ -299,8 +344,10 @@ __all__ = [
     "build_manifest_plan",
     "degraded_extra_roles",
     "load_selected_profile",
+    "plan_body",
     "plan_issues",
     "plan_selected_profile",
     "selection_error",
     "selection_issue",
+    "selection_to_dict",
 ]

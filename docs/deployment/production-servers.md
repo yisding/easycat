@@ -391,6 +391,43 @@ metric/attribute catalog and the PII-safety allow-list, and docker.md's
 ["Scraping metrics"](docker.md#scraping-metrics) for the container-specific
 walkthrough.
 
+### Readiness and plan endpoints
+
+`/health` and `/health/ready` are **unauthenticated** so a probe can reach them,
+and they stay deliberately content-free: they report *that* a selection is
+blocked, never which secret is missing. `/health`'s `plan_blocking_errors` and
+`/health/ready`'s `reasons` use one `key:value` grammar —
+`missing_env:<VAR>`, `missing_extra:<extra>`, and the sibling
+`incomplete_selection:[voice.<name>]` token, which names a manifest path and
+never a value. `/health/ready`'s reason for an unbuildable profile stays the
+bare `plan_unresolvable`.
+
+`/plan` sits next to them behind the same bearer auth as `/metrics`,
+`/manifest`, and `/capabilities`, and reports *which* issue. It returns the
+seven keys `easycat plan --json` emits — `profile`, `selected`, `missing_env`,
+`missing_extras`, `warnings`, `blocking_errors`, `has_blocking_errors` — plus
+`manifest_loaded` and an additive `issues` array. Each issue carries `code`
+(`EASYCAT_E203`, `EASYCAT_E202`, `EASYCAT_E604`, `EASYCAT_E602`, `EASYCAT_E104`),
+a content-free `reason` (`missing_env`, `missing_extra`, `unset_reference`,
+`incomplete_selection`, `unresolvable_profile`), a `severity` of `blocking` or
+`warning`, and any of `field`, `role`, `detail`, and `fix`. Every string is
+redacted, so a secret-shaped manifest value cannot reach the body. When the
+profile cannot be resolved at all, `blocking_errors[0]` keeps its
+`plan_unresolvable: ` prefix and the coded message follows it;
+`/capabilities` keeps its `profile`/`roles`/`all_capabilities` shape and adds
+the same `issues` entry instead of dropping the reason.
+
+`/health/ready` is **red when the selected profile is statically incomplete**,
+not only when a credential or extra is missing: a phone (`twilio`/`telnyx`)
+profile with no `token`, or a profile whose own `[voice.<name>] token`
+reference points at an unset variable, cannot serve a single call — both raise
+per connection — so readiness reports that up front rather than accepting
+traffic and failing on the first call. An unset `[server] auth` variable is
+**not** in that set: `VoiceServer.from_manifest` already refuses to construct
+the server, so such a process never reaches `/health/ready` at all. It is
+reported as a `warning`-severity issue on `/plan` and by `easycat doctor`
+instead.
+
 ## Operations checklist
 
 - **Ingress:** terminate TLS/WSS at a reverse proxy or load balancer; forward

@@ -88,8 +88,8 @@ def test_manifest_plan_drops_a_satisfied_reference() -> None:
     assert plan.defects == ()
 
 
-def test_manifest_plan_defects_do_not_block_yet() -> None:
-    """PR1 is behavior-preserving for readiness; PR2 owns ``blocking_errors``."""
+def test_blocking_manifest_defects_reach_blocking_errors() -> None:
+    """V-1's unit half: a phone profile with no token cannot report READY."""
     manifest = parse_manifest(
         {"project": {"name": "sel"}, "voice": {"default": {"transport": "twilio"}}}
     )
@@ -99,7 +99,8 @@ def test_manifest_plan_defects_do_not_block_yet() -> None:
     )
 
     assert plan.defects
-    assert all(not reason.startswith("incomplete") for reason in plan.blocking_errors())
+    assert "incomplete_selection:[voice.default]" in plan.blocking_errors()
+    assert plan.has_blocking_errors is True
 
 
 def test_plan_issues_attribute_gaps_to_pipeline_roles(

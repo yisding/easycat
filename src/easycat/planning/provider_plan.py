@@ -120,20 +120,39 @@ class ProviderPlan:
     def blocking_errors(self) -> tuple[str, ...]:
         """Return content-free blocking-error reasons (sorted, deduped).
 
-        A blocking error is a missing required env var or a missing required
-        extra for a SELECTED role. Warnings are NOT blocking. The reasons are
-        deliberately content-free (role + env/extra name only) so they are safe
-        to echo on ``/health/ready`` and to compare in the parity test.
+        A blocking error is a missing required env var, a missing required
+        extra for a SELECTED role, or a ``blocking`` selection defect (an
+        ``incomplete_selection:[voice.<name>]`` reason). Warnings are NOT
+        blocking. The reasons are deliberately content-free (role, env/extra
+        name, or a manifest path — never a value) so they are safe to echo on
+        ``/health/ready`` and to compare in the parity test.
         """
         reasons: list[str] = []
         reasons.extend(f"missing_env:{var}" for var in self.missing_env)
         reasons.extend(f"missing_extra:{extra}" for extra in self.missing_extras)
+        reasons.extend(
+            f"incomplete_selection:{issue.field}"
+            for issue in self.defects
+            if issue.severity == "blocking"
+        )
         return tuple(reasons)
 
     @property
     def has_blocking_errors(self) -> bool:
-        """``True`` when any selected role has a missing required env/extra."""
-        return bool(self.missing_env or self.missing_extras)
+        """``True`` when any selected role has a missing required env/extra.
+
+        A ``blocking`` selection defect counts too: a phone profile with no
+        ``token`` cannot serve one call, so ``/health/ready`` must be red for it
+        rather than green-then-``EASYCAT_E602``-on-first-connection. A
+        ``warning`` defect (an unset ``[server] auth`` reference, which
+        ``VoiceServer.from_manifest`` already refuses to construct around) is
+        reported but never blocking.
+        """
+        return bool(
+            self.missing_env
+            or self.missing_extras
+            or any(issue.severity == "blocking" for issue in self.defects)
+        )
 
 
 def _module_available(module: str) -> bool:

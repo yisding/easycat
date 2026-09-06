@@ -419,12 +419,17 @@ def test_doctor_only_provider_fails_when_its_key_missing(
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-stub")
     monkeypatch.setenv("NO_COLOR", "1")
     result = cli.invoke(app, ["doctor", "--provider", "openai"])
+    # Whitespace-normalized: the fix now comes from EASYCAT_E203's registry
+    # entry, which is long enough that Rich soft-wraps it inside the report
+    # table. The guidance an operator reads is unchanged; only the column the
+    # line break lands in is.
+    stderr = " ".join(result.stderr.split())
     assert result.exit_code == 1
-    assert "EASYCAT_E203" in result.stderr
-    assert "OPENAI_API_KEY" in result.stderr
-    assert "--env-file" in result.stderr
-    assert ".env" in result.stderr
-    assert "easycat doctor" in result.stderr
+    assert "EASYCAT_E203" in stderr
+    assert "OPENAI_API_KEY" in stderr
+    assert "--env-file" in stderr
+    assert ".env" in stderr
+    assert "easycat doctor --env-file .env" in stderr
 
 
 def test_doctor_unknown_provider_is_usage_error(
