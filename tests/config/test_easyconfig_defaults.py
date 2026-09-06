@@ -63,6 +63,30 @@ def test_openai_defaults_match_the_planner_default_provider_names():
     assert plan.selected["tts"].config_type == type(config.tts).__name__
 
 
+def test_unknown_named_stt_provider_still_raises_from_requires_api_key():
+    """DX1-2: the ``strict=True`` carve-out of the collapsed catalog lookup.
+
+    ``_provider_requires_api_key`` has always let ``catalog.validate_name``
+    raise ``EASYCAT_E104`` for an unknown NAMED provider. The shared
+    ``_catalog_provider_name`` helper swallows that failure by default, so the
+    strict flag is load-bearing: without it the caller would silently fall
+    through to the ``hasattr(cfg, "api_key")`` heuristic and the coded error
+    would disappear.
+    """
+    from easycat.config.easy import _catalog_provider_name, _provider_requires_api_key
+    from easycat.errors import EasyCatError
+    from easycat.stt.factory import STTProviderConfig
+
+    unknown = STTProviderConfig(provider="definitely-not-a-provider")
+    with pytest.raises(EasyCatError) as excinfo:
+        _provider_requires_api_key(unknown, "STT")
+    assert excinfo.value.code == "EASYCAT_E104"
+
+    # The lenient default is what ``_validate``'s ambient-credential lookup and
+    # ``_provider_display_name`` need: no raise, just "unknown".
+    assert _catalog_provider_name(unknown, "STT") is None
+
+
 def test_easycat_config_defaults_debug_to_light():
     # The default is the in-memory ``"light"`` journal so per-frame capture
     # stays off the disk and off the live audio loop. ``"full"`` is the

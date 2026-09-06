@@ -35,10 +35,12 @@ Strategy (offline + side-effect-free):
 * **missing env** — unset the env var: ``create_session`` raises the credential
   error (``EASYCAT_E203``) AND the plan lists that role's ``required_env`` in
   ``missing_env`` / ``blocking_errors``.
-* **missing extra** — simulate ``find_spec=None`` for the planner AND make the
-  matching ``require_module`` raise for ``create_session`` (no uninstall): the
-  plan lists the extra in ``missing_extras`` AND ``create_session`` raises the
-  missing-extra error.
+* **missing extra** — hand the planner a ``ProbeEnvironment`` in which the
+  extra's probe module is absent AND make the matching ``require_module`` raise
+  for ``create_session`` (no uninstall): the plan lists the extra in
+  ``missing_extras`` AND ``create_session`` raises the missing-extra error. The
+  planner side is DATA, not a monkeypatched interpreter, so the verdict is the
+  same on a bare dev-group machine and a fully installed one.
 
 The vad-string coercion fix (``silero`` round-trips identically through both
 paths) is covered here too.
@@ -46,13 +48,13 @@ paths) is covered here too.
 
 from __future__ import annotations
 
-import importlib.util
-
 import pytest
 
 from easycat.config import EasyConfig, create_session
 from easycat.errors import EasyCatError
 from easycat.planning import build_provider_plan
+from easycat.planning._resolution import ProbeEnvironment
+from easycat.planning.provider_plan import _plan_with_probe
 from easycat.vad import VADConfig
 
 _ENV = {"OPENAI_API_KEY": "sk-parity-test"}
@@ -179,16 +181,18 @@ def test_parity_openai_missing_env(monkeypatch: pytest.MonkeyPatch) -> None:
 # ── Missing-extra parity, per non-catalog role ───────────────────────
 
 
-def _force_find_spec_none(monkeypatch: pytest.MonkeyPatch, *probe_modules: str) -> None:
-    """Make ``find_spec`` return ``None`` for the named probe modules only."""
-    real_find_spec = importlib.util.find_spec
+def _plan_without(config: object, *probe_modules: str) -> object:
+    """Plan ``config`` against a snapshot where ``probe_modules`` are absent.
 
-    def fake_find_spec(name: str, package: object = None):
-        if name in probe_modules:
-            return None
-        return real_find_spec(name, package)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    Every other probe module reads as present, so the planner verdict is a
+    function of the named absence alone. ``_plan_with_probe`` is the seam
+    ``build_provider_plan`` itself calls with the process snapshot — nothing
+    about resolution changes, only where the probe answers come from.
+    """
+    return _plan_with_probe(
+        config,  # type: ignore[arg-type]
+        probe=ProbeEnvironment.fake(env=_ENV, unavailable=probe_modules, default=True),
+    )
 
 
 def test_parity_missing_vad_extra(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -196,8 +200,7 @@ def test_parity_missing_vad_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     config = _base_config()
 
     # Planner: simulate the silero-vad probe module (onnxruntime) absent.
-    _force_find_spec_none(monkeypatch, "onnxruntime")
-    plan = build_provider_plan(config, environ=_ENV)
+    plan = _plan_without(config, "onnxruntime")
     assert "silero-vad" in plan.missing_extras
     assert plan.has_blocking_errors
 
@@ -222,8 +225,7 @@ def test_parity_missing_echo_canceller_extra(monkeypatch: pytest.MonkeyPatch) ->
         echo_cancellation=EchoCancellationConfig(enabled=True, fallback_policy="error"),
     )
 
-    _force_find_spec_none(monkeypatch, "livekit")
-    plan = build_provider_plan(config, environ=_ENV)
+    plan = _plan_without(config, "livekit")
     assert "aec" in plan.missing_extras
     assert plan.has_blocking_errors
 
@@ -249,8 +251,7 @@ def test_parity_passthrough_aec_extra_missing_is_warning_not_blocking(
 
     config = _base_config(echo_cancellation=EchoCancellationConfig(enabled=True))
 
-    _force_find_spec_none(monkeypatch, "livekit")
-    plan = build_provider_plan(config, environ=_ENV)
+    plan = _plan_without(config, "livekit")
     assert "aec" not in plan.missing_extras
     assert not plan.has_blocking_errors, plan.blocking_errors()
     assert any("degraded" in warning for warning in plan.warnings)
@@ -279,8 +280,7 @@ def test_parity_browser_profile_aec_extra_missing_is_warning_not_blocking(
 
     profile = VoiceProfile(name="default", transport="webrtc", stt="openai", tts="openai")
 
-    _force_find_spec_none(monkeypatch, "livekit")
-    plan = build_provider_plan(profile, environ=_ENV)
+    plan = _plan_without(profile, "livekit")
     assert plan.selected["echo_canceller"].provider == "livekit"
     assert "aec" not in plan.missing_extras
     assert not plan.has_blocking_errors, plan.blocking_errors()
@@ -296,8 +296,7 @@ def test_parity_missing_noise_reducer_extra(monkeypatch: pytest.MonkeyPatch) -> 
         enable_noise_reduction=True,
     )
 
-    _force_find_spec_none(monkeypatch, "pyrnnoise")
-    plan = build_provider_plan(config, environ=_ENV)
+    plan = _plan_without(config, "pyrnnoise")
     assert "rnnoise" in plan.missing_extras
     assert plan.has_blocking_errors
 
@@ -325,8 +324,7 @@ def test_parity_auto_passthrough_noise_reducer_missing_is_warning_not_blocking(
     config = _base_config(enable_noise_reduction=True)
 
     # Both auto-chain backends absent: rnnoise probe gone for the planner.
-    _force_find_spec_none(monkeypatch, "pyrnnoise")
-    plan = build_provider_plan(config, environ=_ENV)
+    plan = _plan_without(config, "pyrnnoise")
     assert "rnnoise" not in plan.missing_extras
     assert not plan.has_blocking_errors, plan.blocking_errors()
     assert any("degraded" in warning for warning in plan.warnings)
@@ -354,8 +352,7 @@ def test_parity_auto_vad_satisfied_by_union_does_not_block(
     pytest.importorskip("ten_vad")
     config = _base_config(vad="auto")
 
-    _force_find_spec_none(monkeypatch, "onnxruntime")
-    plan = build_provider_plan(config, environ=_ENV)
+    plan = _plan_without(config, "onnxruntime")
     assert plan.selected["vad"].provider == "auto"
     assert "silero-vad" not in plan.missing_extras
     assert not plan.has_blocking_errors, plan.blocking_errors()
@@ -369,8 +366,7 @@ def test_parity_auto_vad_blocks_only_when_whole_union_absent(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     config = _base_config(vad="auto")
 
-    _force_find_spec_none(monkeypatch, "onnxruntime", "ten_vad", "krisp_audio")
-    plan = build_provider_plan(config, environ=_ENV)
+    plan = _plan_without(config, "onnxruntime", "ten_vad", "krisp_audio")
     assert "silero-vad" in plan.missing_extras
     assert plan.has_blocking_errors
 
@@ -395,8 +391,7 @@ def test_parity_transport_extra_blocks_readiness_even_though_construction_defers
         openai_api_key="sk-parity-test", agent=_Agent(), debug="off"
     )
 
-    _force_find_spec_none(monkeypatch, "aiortc")
-    plan = build_provider_plan(config, environ=_ENV)
+    plan = _plan_without(config, "aiortc")
     assert plan.selected["transport"].provider == "webrtc"
     assert "webrtc" in plan.missing_extras
     assert plan.has_blocking_errors

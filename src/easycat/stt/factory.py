@@ -33,6 +33,18 @@ STTConfig = (
 )
 STT_PROVIDER_ENTRY_POINT_GROUP = "easycat.stt_providers"
 
+#: The provider ``EasyConfig`` falls back to when ``stt=`` is left unset.
+#:
+#: Named here so the planner and ``EasyConfig`` are greppable as a pair.
+#: ``easycat.config.easy`` deliberately does NOT import this constant: it fills
+#: its default by constructing ``OpenAIRealtimeSTTConfig`` directly, and routing
+#: that through the catalog would force ``discover()`` — third-party entry-point
+#: execution — during plain ``EasyConfig()`` construction. The two are tied
+#: together by ``tests/config/test_easyconfig_defaults.py::
+#: test_openai_defaults_match_the_planner_default_provider_names`` instead, so do
+#: not "finish the job" by wiring them.
+DEFAULT_STT_PROVIDER = "openai-realtime"
+
 
 def _deepgram_capabilities(config: Any, model: str | None) -> frozenset[str]:
     selected_model = config.model if isinstance(config, DeepgramSTTConfig) else model

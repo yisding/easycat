@@ -107,7 +107,9 @@ def test_plan_payload_factory_only_server_is_empty() -> None:
 def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
-    monkeypatch.setattr("easycat.planning.provider_plan._extra_is_missing", lambda _extra: False)
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available", lambda _name: True
+    )
     server = VoiceServer.from_manifest(_write_manifest(tmp_path))
     payload = server.plan_payload()
     assert set(payload["selected"]) == {
@@ -188,7 +190,9 @@ async def test_ready_200_when_manifest_plan_clean(
 ) -> None:
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
-    monkeypatch.setattr("easycat.planning.provider_plan._extra_is_missing", lambda _extra: False)
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available", lambda _name: True
+    )
     server = VoiceServer.from_manifest(_write_manifest(tmp_path))
     server.config.port = 0
     await server.start()

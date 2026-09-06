@@ -236,3 +236,49 @@ def test_provider_plan_dataclasses_are_frozen() -> None:
     )
     assert not plan.has_blocking_errors
     assert plan.blocking_errors() == ()
+
+
+class _VADLike:
+    def configure(self, **_kwargs: object) -> None: ...
+
+    async def process(self, _chunk: object) -> object: ...
+
+
+def test_class_object_is_described_the_way_create_vad_treats_it() -> None:
+    """A provider CLASS keeps its current, factory-matching verdict.
+
+    ``create_vad`` (like ``create_noise_reducer`` / ``create_echo_canceller``)
+    duck-checks the method names WITHOUT a class-object guard and hands a
+    matching class straight back, so the planner must describe it the same way.
+    ``config/_factory.py``'s stricter ``_is_vad_provider_instance`` disagrees —
+    that divergence is pre-existing and belongs to a behaviour-change PR, not to
+    the structural collapse.
+    """
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=_VADLike,  # the CLASS, not an instance
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    selection = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"}).selected["vad"]
+    # ``type(_VADLike).__name__`` is ``"type"`` — an unflattering but faithful
+    # record of what the injected branch reports for a class today.
+    assert selection.provider == "type"
+    assert selection.capabilities == frozenset({"injected"})
+
+
+def test_instance_is_treated_as_an_injected_provider() -> None:
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=_VADLike(),
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    selection = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"}).selected["vad"]
+    assert selection.provider == "_VADLike"
+    assert selection.capabilities == frozenset({"injected"})
+    assert selection.extra is None
