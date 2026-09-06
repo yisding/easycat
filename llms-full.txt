@@ -793,6 +793,21 @@ uv run pytest tests/test_public_api.py
 uv run pytest tests/contracts
 ```
 
+## Security policy
+
+- Path: SECURITY.md
+- URL: https://github.com/yisding/easycat/blob/main/SECURITY.md
+- Audience: operators
+- Diataxis: reference
+- Report a vulnerability privately, see which versions are supported, and find the hardening guidance for a deployment.
+
+Commands:
+
+```bash
+uv run easycat docs --audience operators
+uv run easycat docs --audience operators --json
+```
+
 ## Contributing
 
 - Path: CONTRIBUTING.md

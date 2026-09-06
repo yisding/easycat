@@ -896,6 +896,20 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Security policy",
+        "path": "SECURITY.md",
+        "audience": "operators",
+        "diataxis": "reference",
+        "description": (
+            "Report a vulnerability privately, see which versions are supported, "
+            "and find the hardening guidance for a deployment."
+        ),
+        "commands": (
+            "uv run easycat docs --audience operators",
+            "uv run easycat docs --audience operators --json",
+        ),
+    },
+    {
         "label": "Contributing",
         "path": "CONTRIBUTING.md",
         "audience": "contributors",
