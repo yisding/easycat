@@ -181,6 +181,36 @@ would make reverse dispatch ambiguous.
 the family catalogs only for consumers that need a cross-family view. Provider
 families remain independently importable.
 
+### The static planner
+
+[`planning/`](../../src/easycat/planning/) is the catalog's most demanding
+consumer, and the reason several of the rules above exist.
+`build_provider_plan()` resolves all seven pipeline roles **without
+instantiating a provider or importing a heavy SDK**, then reports missing
+environment variables, missing extras, and incompatible provider/transport
+combinations. It backs `easycat plan` and the manifest preflight.
+
+"Side-effect-free" is a hard constraint, not an aspiration, and it shapes the
+implementation:
+
+- shortcut strings are split the same way `parse_string` splits them but
+  **without calling it**, because `parse_string` reads the environment, can
+  raise `EASYCAT_E203`, and constructs a config;
+- missing extras are detected with `importlib.util.find_spec`, not
+  `require_module`, which imports;
+- the catalog factories are imported lazily inside `build_provider_plan`, so
+  `import easycat.planning` itself stays free of provider SDK imports.
+
+STT/TTS and registered third-party providers read their metadata from
+`ProviderCatalog`; the built-in VAD / noise-reduction / echo-cancellation
+fallback chains and the transport/agent roles keep declarative metadata in
+[`planning/transport_registry.py`](../../src/easycat/planning/transport_registry.py).
+
+The planner is the *static counterpart* to `create_session`, so a
+planner-versus-`create_session` parity test is the required gate: a preview that
+disagrees with startup is worse than no preview. That is also why the planner
+belongs here rather than in chapter 6 — it consumes catalogs, not journals.
+
 ## 5.6 Registration and Entry Points
 
 Direct instance injection always works:
@@ -278,6 +308,49 @@ minimal public STT protocol.
 Cancellation operations should be idempotent and prompt. `TTSProvider.stop()`
 means graceful synthesis stop; `cancel()` means immediate discard. STT
 `end_stream()` must cause the matching event iterator to terminate.
+
+### Reconnect semantics
+
+Every WebSocket-backed STT/TTS/transport provider shares one reconnect
+implementation:
+[`reconnecting_ws.py`](../../src/easycat/reconnecting_ws.py). Read it before
+writing reconnect logic in a provider — an in-provider retry loop will fight
+this one.
+
+The pivotal detail is that **the presence of an `on_reconnect` callback is
+itself the policy switch.** Inside `recv_iter`:
+
+- **No `on_reconnect`** — a `ConnectionClosed` is re-raised into the consumer.
+  Providers that send one-shot init frames cannot safely resume a half-open
+  session, so they surface the error and let the caller restart cleanly.
+- **With `on_reconnect`** — the socket is re-established under the same
+  retry/backoff policy as the initial `connect()`, the hook re-primes provider
+  session state, and iteration resumes. `WebSocketSTTBase` therefore passes a
+  deliberately empty `_noop_reconnect` for providers whose whole session
+  travels in the URL query string (Deepgram, Cartesia): without *some* hook
+  they would die silently on any transient drop.
+
+Three consequences follow, and each one is a real bug someone has already hit:
+
+- A reconnect hook that re-primes state must also **fence** work that belonged
+  to the previous socket. Deepgram's `from_finalize` acknowledgements carry no
+  request id and are scoped to one physical connection, so its hook closes the
+  old audio epoch and promotes the last partial rather than letting a stale
+  ledger suppress the replacement socket's next `Finalize`.
+- Reconnect churn is bounded twice: `_connect_with_retry` caps failed
+  *attempts* for one reconnect, and `recv_iter` reuses `max_retries` as a
+  per-stream cap on *successful* reconnect cycles, so a peer that accepts and
+  immediately drops cannot loop forever.
+- An **expected** end-of-stream close is not a drop. Deepgram terminates the
+  socket after answering `CloseStream`, and Cartesia after acking `close`;
+  both call `expect_peer_close()` first, which makes the next close terminal
+  instead of triggering a reconnect, a spurious `EASYCAT_E304`, and a full
+  `close_timeout` drain stall on every turn.
+
+`died_abnormally` distinguishes a terminal mid-stream death (budget exhausted,
+or a reconnect that ultimately failed) from a deliberate `close()` or a clean
+end of stream, so receive loops can surface an error instead of an empty
+transcript.
 
 ## 5.9 Built-In Fallbacks
 

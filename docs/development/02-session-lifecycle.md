@@ -242,7 +242,14 @@ without broadening ownership to unrelated runtime tasks.
 Scope teardown policy keeps cooperative token signalling separate from Python
 task cancellation. Each member declares graceful and force policies with a
 named cohort, optional token signal, `finish` or `cancel` task action, and
-optional grace/hard budgets. Teardown synchronously signals every member in a
+optional grace/hard budgets. Those budgets are not literals scattered through
+the call sites: every teardown deadline is a named constant in
+[`teardown_budgets.py`](../../src/easycat/teardown_budgets.py), and
+`tests/ratchets/teardown-budget-manifest.json` requires each discovered
+timeout site to carry one reviewed classification — so adding a new bounded
+wait is a deliberate, reviewed act rather than a number someone typed. (Those
+are *teardown* budgets; the per-stage STT/agent/TTS deadlines are a different
+thing, in §4.4.) Teardown synchronously signals every member in a
 cohort before awaiting any sibling, then drains cohorts in an explicit phase
 order. A hard deadline parks owned work in the shared survivor registry; the
 scope reports `closed_with_survivors` until that work settles. Closing a scope
