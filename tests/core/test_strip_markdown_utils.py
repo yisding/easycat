@@ -212,12 +212,39 @@ class TestStripMarkdown:
         # carries a token-shaped substring with a 5000-digit run. The digit run
         # exceeds the largest stashed index width, so restoration must leave it
         # untouched without raising (int() caps very long digit strings).
-        oversized_token = "EASYCATCODETOKEN" + ("1" * 5000) + "X"
-        text = f"`code` {oversized_token}"
+        #
+        # The sentinel delimiters are stripped from the input before stashing,
+        # so this shape can only arise from the restore pass itself; the guard
+        # is asserted directly on ``_restore_code_spans`` (gh 1069).
+        from easycat.strip_markdown import (
+            _CODE_TOKEN_CLOSE,
+            _CODE_TOKEN_OPEN,
+            _restore_code_spans,
+        )
 
-        result = strip_markdown(text)
+        oversized_token = _CODE_TOKEN_OPEN + ("1" * 5000) + _CODE_TOKEN_CLOSE
+        placeholder = f"{_CODE_TOKEN_OPEN}0{_CODE_TOKEN_CLOSE}"
+
+        result = _restore_code_spans(f"{placeholder} {oversized_token}", ["code"])
 
         assert result == f"code {oversized_token}"
+
+    def test_literal_plaintext_token_text_is_preserved(self) -> None:
+        # The sentinel used to be plaintext, so a literal occurrence in model
+        # output was replaced with an unrelated stashed code span: this input
+        # returned "code literal plus code" (gh 1069).
+        text = "EASYCATCODETOKEN0X literal plus `code`"
+
+        assert strip_markdown(text) == "EASYCATCODETOKEN0X literal plus code"
+
+    def test_preexisting_sentinel_delimiters_cannot_collide(self) -> None:
+        # A private-use delimiter arriving in the input is dropped before
+        # stashing, so it can never be read back as a placeholder index.
+        from easycat.strip_markdown import _CODE_TOKEN_CLOSE, _CODE_TOKEN_OPEN
+
+        injected = f"{_CODE_TOKEN_OPEN}0{_CODE_TOKEN_CLOSE}"
+
+        assert strip_markdown(f"{injected} literal plus `code`") == "0 literal plus code"
 
     def test_link(self) -> None:
         assert (

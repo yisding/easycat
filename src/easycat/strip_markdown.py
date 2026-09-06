@@ -73,7 +73,16 @@ _HR_UNDERSCORE_RE = re.compile(r"^_{3,}\s*$", re.MULTILINE)
 _EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
 _WS_RE = re.compile(r"\s+")
 _DUNDER_NAME_RE = re.compile(r"^__([A-Za-z][A-Za-z0-9_]*)__$")
-_CODE_TOKEN_RE = re.compile(r"EASYCATCODETOKEN(\d+)X")
+# Code spans are stashed behind a sentinel while the markdown passes run.  The
+# delimiters are private-use code points chosen so a placeholder cannot collide
+# with the caller's own text: no markdown pass matches them, and any occurrence
+# already present in the input is dropped before stashing.  A plaintext
+# sentinel ("EASYCATCODETOKEN<n>X") could collide, and a literal one in model
+# output was silently replaced with an unrelated stashed code span (gh 1069).
+_CODE_TOKEN_OPEN = "\ue002"
+_CODE_TOKEN_CLOSE = "\ue003"
+_CODE_TOKEN_CHARS_RE = re.compile(f"[{_CODE_TOKEN_OPEN}{_CODE_TOKEN_CLOSE}]")
+_CODE_TOKEN_RE = re.compile(rf"{_CODE_TOKEN_OPEN}(\d+){_CODE_TOKEN_CLOSE}")
 
 _SHORT_CODE_MAX_CHARS = 24
 
@@ -123,7 +132,7 @@ def _stash_code_span(
 
     def _replace(match: re.Match[str]) -> str:
         code_spans.append(extractor(match))
-        return f"EASYCATCODETOKEN{len(code_spans) - 1}X"
+        return f"{_CODE_TOKEN_OPEN}{len(code_spans) - 1}{_CODE_TOKEN_CLOSE}"
 
     return _replace
 
@@ -441,7 +450,11 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     if not text:
         return text
 
-    result = text
+    # Drop any sentinel delimiter the input already carries, so a stashed
+    # placeholder cannot be confused with the caller's own text.  These are
+    # unassigned private-use code points with no spoken form, so removing them
+    # costs nothing downstream (gh 1069).
+    result = _CODE_TOKEN_CHARS_RE.sub("", text)
     code_spans: list[str] = []
 
     # 1. Fenced and inline code: remove markdown wrappers, then protect
