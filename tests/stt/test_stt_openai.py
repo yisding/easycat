@@ -512,6 +512,41 @@ async def test_openai_stt_reuses_one_client_across_retries(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_openai_stt_reports_client_construction_failure(monkeypatch):
+    """A failed ``AsyncClient(...)`` is still a provider error.
+
+    Construction used to happen inside the retried attempt, so it reached the
+    provider-error handler. Hoisting it for connection reuse must not move it
+    outside that reporting path.
+    """
+    from easycat.events import Error, ErrorStage, EventBus
+
+    errors: list[Error] = []
+    bus = EventBus()
+    bus.subscribe(Error, errors.append)
+
+    def _broken_client(*args, **kwargs):
+        raise RuntimeError("invalid proxy configuration")
+
+    monkeypatch.setattr("easycat.stt.openai_provider.httpx.AsyncClient", _broken_client)
+
+    config = OpenAISTTConfig(api_key="test-key", event_bus=bus)
+    stt = OpenAISTT(config)
+
+    await stt.start_stream()
+    for c in make_audio_chunks(generate_pcm_sine(duration_ms=100)):
+        await stt.send_audio(c)
+
+    with pytest.raises(RuntimeError, match="invalid proxy configuration"):
+        await stt.end_stream()
+    await stt.close()
+
+    assert len(errors) == 1
+    assert errors[0].provider == "openai"
+    assert errors[0].stage is ErrorStage.STT
+
+
+@pytest.mark.asyncio
 async def test_openai_stt_never_closes_an_injected_client(monkeypatch):
     """A caller-supplied client outlives the transcription call."""
     mock_client = _make_mock_client()

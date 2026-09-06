@@ -167,27 +167,33 @@ class OpenAISTT(ProviderErrorEmitter, STTBase):
         Each attempt buffers its events internally and only emits on success,
         preserving the emit-on-success-only semantics across retries.
         """
-        # One client for all attempts: a per-attempt client would pay a fresh
-        # DNS+TCP+TLS handshake on every retry, exactly when the provider is
-        # already slow or rate-limited (matches the ElevenLabs provider).
-        client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
-        owns_client = self._config.http_client is None
+        # Client construction stays *inside* the reporting ``try``: a failed
+        # ``AsyncClient(...)`` (bad transport/proxy configuration) is a provider
+        # failure and must still reach ``_emit_provider_error``.
+        owned_client: httpx.AsyncClient | None = None
         try:
-            try:
-                return await self._run_with_bounded_retry(
-                    lambda: self._attempt_streaming_transcription(wav_data, client),
-                    max_retries=self._config.max_retries,
-                    provider_label="OpenAI STT",
-                )
-            except Exception as exc:
-                context: dict[str, object] = {}
-                if isinstance(exc, httpx.HTTPStatusError):
-                    context["http_status"] = exc.response.status_code
-                self._emit_provider_error(exc, **context)
-                raise
+            if self._config.http_client is not None:
+                client = self._config.http_client
+            else:
+                # One client for all attempts: a per-attempt client would pay a
+                # fresh DNS+TCP+TLS handshake on every retry, exactly when the
+                # provider is already slow or rate-limited (matches the
+                # ElevenLabs provider).
+                client = owned_client = httpx.AsyncClient(timeout=self._config.timeout)
+            return await self._run_with_bounded_retry(
+                lambda: self._attempt_streaming_transcription(wav_data, client),
+                max_retries=self._config.max_retries,
+                provider_label="OpenAI STT",
+            )
+        except Exception as exc:
+            context: dict[str, object] = {}
+            if isinstance(exc, httpx.HTTPStatusError):
+                context["http_status"] = exc.response.status_code
+            self._emit_provider_error(exc, **context)
+            raise
         finally:
-            if owns_client:
-                await client.aclose()
+            if owned_client is not None:
+                await owned_client.aclose()
 
     def _request_form_data(self) -> dict[str, str]:
         """Multipart form fields for the streaming transcription request."""
