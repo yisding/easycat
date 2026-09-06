@@ -18,8 +18,8 @@ import weakref
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Literal
-from urllib.parse import quote, urlparse, urlsplit, urlunsplit
+from typing import Any, ClassVar, Final, Literal
+from urllib.parse import quote, unquote, urlparse, urlsplit, urlunsplit
 
 from easycat._numeric import is_finite_number
 from easycat._observability import observe_gauge, record_histogram
@@ -1087,6 +1087,58 @@ def _sanitize_replica_url(url: str) -> str:
         return "<unparseable>"
 
 
+# Litestream reads a replica credential from the environment when the URL and
+# config file do not carry one.  Both S3 families are set together: litestream
+# ranks ``AWS_*`` above ``LITESTREAM_*``, so an ambient ``AWS_ACCESS_KEY_ID``
+# inherited from the parent would otherwise outrank the credentials the URL
+# carried.
+_S3_CREDENTIAL_ENV_VARS: Final = (
+    ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"),
+    ("LITESTREAM_ACCESS_KEY_ID", "LITESTREAM_SECRET_ACCESS_KEY"),
+)
+
+
+def _split_replica_credentials(url: str) -> tuple[str, dict[str, str]]:
+    """Split a replica URL into an argv-safe URL and sidecar credential env vars.
+
+    A process's command line is world-readable for its whole lifetime — ``ps``,
+    ``/proc/<pid>/cmdline`` — so litestream's documented
+    ``scheme://KEY:SECRET@host/path`` form must not reach argv.
+    ``/proc/<pid>/environ`` is readable only by the process owner, so the
+    environment is the safe hand-off, and it is the mechanism litestream
+    documents (gh 1068).
+
+    Only schemes with a documented credential environment variable are
+    rewritten.  ``sftp`` has none, so its URL is returned unchanged and the
+    caller warns rather than silently breaking replication.  For ``abs`` only
+    the account *key* moves: the account name is not a secret and litestream
+    still needs it in the URL.
+    """
+    parsed = urlsplit(url)
+    if not parsed.password:
+        return url, {}
+    userinfo, _, host = parsed.netloc.rpartition("@")
+    raw_user, _, raw_password = userinfo.partition(":")
+    password = unquote(raw_password)
+    scheme = parsed.scheme.lower()
+    if scheme == "s3":
+        access_key = unquote(raw_user)
+        env = {
+            var: value
+            for key_var, secret_var in _S3_CREDENTIAL_ENV_VARS
+            for var, value in ((key_var, access_key), (secret_var, password))
+        }
+        netloc = host
+    elif scheme == "abs":
+        env = {"LITESTREAM_AZURE_ACCOUNT_KEY": password}
+        netloc = f"{raw_user}@{host}"
+    else:
+        return url, {}
+    # ``host`` is sliced from the original netloc, so its case and port survive
+    # verbatim (``urlsplit().hostname`` would lowercase them).
+    return urlunsplit(parsed._replace(netloc=netloc)), env
+
+
 def _session_replica_url(base_url: str, session_id: str) -> str:
     """Namespace a replica root by session without disturbing URL options."""
     parsed = urlsplit(base_url)
@@ -1144,16 +1196,48 @@ class LitestreamSqliteJournal:
 
         self._litestream_available = True
         safe_url = _sanitize_replica_url(self._replica_url)
+        argv_url, credential_env = _split_replica_credentials(self._replica_url)
+        sidecar_env: dict[str, str] | None = None
+        if credential_env:
+            if any("\x00" in value for value in credential_env.values()):
+                # A ``%00`` in the URL decodes to a NUL, which no environment
+                # value may contain: ``Popen`` would raise ``ValueError`` and
+                # take journal construction down with it. Such a credential
+                # cannot authenticate anyway, so name it and degrade the same
+                # way a missing binary does.
+                logger.warning(
+                    "LitestreamSqliteJournal: replica credential contains a NUL byte "
+                    "(a percent-encoded %%00); it cannot be passed to the sidecar. "
+                    "Degrading to plain SqliteJournal"
+                )
+                self._litestream_available = False
+                return
+            sidecar_env = {**os.environ, **credential_env}
+        elif urlsplit(self._replica_url).password:
+            logger.warning(
+                "LitestreamSqliteJournal: the %s replica URL embeds a password and "
+                "litestream documents no credential environment variable for that "
+                "scheme, so it stays on the sidecar's command line where any local "
+                "user can read it via `ps`. Prefer a credential-free URL plus "
+                "litestream's own environment contract, or an external litestream "
+                "sidecar with a config file.",
+                urlsplit(self._replica_url).scheme or "replica",
+            )
         try:
+            # ``shell=False`` with an argv list: no shell parses these, so an
+            # argument cannot be reinterpreted as a command and ``shlex.quote``
+            # would be meaningless here.  ``litestream_bin`` comes from
+            # ``shutil.which``, and ``argv_url`` is now credential-free.
             self._sidecar = subprocess.Popen(
                 [
                     litestream_bin,
                     "replicate",
                     str(self._inner.db_path),
-                    self._replica_url,
+                    argv_url,
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
+                env=sidecar_env,
             )
             # Drain stderr on a daemon thread so a full OS pipe buffer can never
             # block (and silently stall) the sidecar, and so replication errors
@@ -1172,7 +1256,10 @@ class LitestreamSqliteJournal:
                 self._sidecar.pid,
                 self._inner.db_path,
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            # ``ValueError`` covers ``Popen`` rejecting an argument or an
+            # environment value outright; a journal must degrade rather than
+            # fail construction for a replica-target problem.
             logger.warning(
                 "LitestreamSqliteJournal: failed to start sidecar (%s); "
                 "degrading to plain SqliteJournal",

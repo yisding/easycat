@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import signal
@@ -1876,6 +1877,184 @@ class TestLitestreamSqliteJournal:
         )
         first.close()
         second.close()
+
+    def test_s3_credentials_move_from_argv_to_the_sidecar_environment(self, tmp_path):
+        """A replica URL's credentials must not reach the command line (gh 1068).
+
+        ``ps`` / ``/proc/<pid>/cmdline`` are world-readable for the sidecar's
+        whole lifetime, and the sidecar runs for the whole session.
+        ``/proc/<pid>/environ`` is owner-only, and the environment is the
+        hand-off litestream documents.
+        """
+        with (
+            mock.patch(
+                "easycat.runtime.journal_sql.shutil.which",
+                return_value="/usr/bin/litestream",
+            ),
+            mock.patch(
+                "easycat.runtime.journal_sql.subprocess.Popen",
+                return_value=mock.Mock(pid=101, stderr=None),
+            ) as popen,
+            mock.patch.dict(
+                os.environ,
+                {"AWS_ACCESS_KEY_ID": "ambient", "AWS_SECRET_ACCESS_KEY": "ambient"},
+            ),
+        ):
+            j = LitestreamSqliteJournal(
+                "creds",
+                data_dir=tmp_path,
+                replica_url="s3://AKIAEXAMPLE:s3cr3t%2Fkey@bucket.example.com:9000/j",
+            )
+        try:
+            argv = popen.call_args.args[0]
+            assert argv[-1] == "s3://bucket.example.com:9000/j/creds.sqlite"
+            assert not any("s3cr3t" in str(arg) for arg in argv)
+            assert not any("AKIAEXAMPLE" in str(arg) for arg in argv)
+
+            env = popen.call_args.kwargs["env"]
+            # The URL's credentials outrank whatever the parent inherited:
+            # litestream ranks ``AWS_*`` above ``LITESTREAM_*``.
+            assert env["AWS_ACCESS_KEY_ID"] == "AKIAEXAMPLE"
+            assert env["AWS_SECRET_ACCESS_KEY"] == "s3cr3t/key"
+            assert env["LITESTREAM_ACCESS_KEY_ID"] == "AKIAEXAMPLE"
+            assert env["LITESTREAM_SECRET_ACCESS_KEY"] == "s3cr3t/key"
+            # The rest of the parent environment still reaches the sidecar.
+            assert env.get("PATH") == os.environ.get("PATH")
+        finally:
+            j.close()
+
+    def test_azure_account_key_moves_off_argv_but_the_account_name_stays(self, tmp_path):
+        """Only the secret half of ``abs://account:key@host`` is a credential."""
+        with (
+            mock.patch(
+                "easycat.runtime.journal_sql.shutil.which",
+                return_value="/usr/bin/litestream",
+            ),
+            mock.patch(
+                "easycat.runtime.journal_sql.subprocess.Popen",
+                return_value=mock.Mock(pid=102, stderr=None),
+            ) as popen,
+        ):
+            j = LitestreamSqliteJournal(
+                "abs-creds",
+                data_dir=tmp_path,
+                replica_url="abs://acct:AzKey%2B123@acct.blob.core.windows.net/container",
+            )
+        try:
+            argv = popen.call_args.args[0]
+            assert argv[-1] == ("abs://acct@acct.blob.core.windows.net/container/abs-creds.sqlite")
+            assert not any("AzKey" in str(arg) for arg in argv)
+            assert popen.call_args.kwargs["env"]["LITESTREAM_AZURE_ACCOUNT_KEY"] == "AzKey+123"
+        finally:
+            j.close()
+
+    def test_nul_in_a_credential_degrades_instead_of_crashing(self, tmp_path, caplog):
+        """``%00`` decodes to a NUL no environment value may hold.
+
+        ``Popen`` raises ``ValueError`` for an embedded null byte, so without a
+        guard a bad replica URL would take journal *construction* down instead
+        of degrading to plain SQLite.
+        """
+        with (
+            mock.patch(
+                "easycat.runtime.journal_sql.shutil.which",
+                return_value="/usr/bin/litestream",
+            ),
+            mock.patch("easycat.runtime.journal_sql.subprocess.Popen") as popen,
+            caplog.at_level(logging.WARNING, logger="easycat.runtime.journal_sql"),
+        ):
+            j = LitestreamSqliteJournal(
+                "nul-creds",
+                data_dir=tmp_path,
+                replica_url="s3://key:bad%00secret@bucket/journals",
+            )
+        try:
+            popen.assert_not_called()
+            assert any("NUL byte" in record.message for record in caplog.records)
+            # Still a working journal, exactly like a missing binary.
+            assert (
+                j.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="ev",
+                    session_id="nul-creds",
+                )
+                == 1
+            )
+        finally:
+            j.close()
+
+    def test_sidecar_argument_rejection_degrades_instead_of_crashing(self, tmp_path, caplog):
+        """Any ``Popen`` rejection is a replica-target problem, not a journal one."""
+        with (
+            mock.patch(
+                "easycat.runtime.journal_sql.shutil.which",
+                return_value="/usr/bin/litestream",
+            ),
+            mock.patch(
+                "easycat.runtime.journal_sql.subprocess.Popen",
+                side_effect=ValueError("embedded null byte"),
+            ),
+            caplog.at_level(logging.WARNING, logger="easycat.runtime.journal_sql"),
+        ):
+            j = LitestreamSqliteJournal(
+                "argv-reject",
+                data_dir=tmp_path,
+                replica_url="s3://bucket/journals",
+            )
+        try:
+            assert any("failed to start sidecar" in record.message for record in caplog.records)
+            assert not j.degraded
+        finally:
+            j.close()
+
+    def test_credential_free_url_inherits_the_environment_unchanged(self, tmp_path):
+        """Nothing to move → no synthesized environment, just inheritance."""
+        with (
+            mock.patch(
+                "easycat.runtime.journal_sql.shutil.which",
+                return_value="/usr/bin/litestream",
+            ),
+            mock.patch(
+                "easycat.runtime.journal_sql.subprocess.Popen",
+                return_value=mock.Mock(pid=103, stderr=None),
+            ) as popen,
+        ):
+            j = LitestreamSqliteJournal(
+                "plain",
+                data_dir=tmp_path,
+                replica_url="s3://bucket/journals",
+            )
+        try:
+            assert popen.call_args.args[0][-1] == "s3://bucket/journals/plain.sqlite"
+            assert popen.call_args.kwargs["env"] is None
+        finally:
+            j.close()
+
+    def test_scheme_without_a_credential_env_contract_is_reported(self, tmp_path, caplog):
+        """``sftp`` has no documented env var, so warn instead of breaking it."""
+        with (
+            mock.patch(
+                "easycat.runtime.journal_sql.shutil.which",
+                return_value="/usr/bin/litestream",
+            ),
+            mock.patch(
+                "easycat.runtime.journal_sql.subprocess.Popen",
+                return_value=mock.Mock(pid=104, stderr=None),
+            ) as popen,
+            caplog.at_level(logging.WARNING, logger="easycat.runtime.journal_sql"),
+        ):
+            j = LitestreamSqliteJournal(
+                "sftp-creds",
+                data_dir=tmp_path,
+                replica_url="sftp://user:hunter2@example.com:22/backup",
+            )
+        try:
+            # Replication keeps working; the exposure is surfaced, not hidden.
+            assert "hunter2" in popen.call_args.args[0][-1]
+            assert popen.call_args.kwargs["env"] is None
+            assert any("`ps`" in record.message for record in caplog.records)
+        finally:
+            j.close()
 
     def test_fallback_when_binary_missing(self, tmp_path):
         """When litestream is not on PATH, adapter degrades to plain SqliteJournal."""
