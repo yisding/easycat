@@ -1,10 +1,11 @@
 """Provider planner core: :class:`ProviderSelection` / :class:`ProviderPlan`.
 
 The planner resolves all seven pipeline roles WITHOUT instantiating any provider
-or importing a heavy SDK, then reports missing env vars / missing extras and any
-incompatible provider/transport combinations. It is the static, side-effect-free
-counterpart to ``create_session``; the planner-vs-``create_session`` parity test
-is the required gate that keeps the two in lock-step.
+or importing a heavy SDK, then reports missing env vars / missing extras /
+unbuildable backends and any incompatible provider/transport combinations. It is
+the static, side-effect-free counterpart to ``create_session``; the
+planner-vs-``create_session`` parity test is the required gate that keeps the two
+in lock-step.
 
 This module is the PROJECTION half. Every role decision is made exactly once in
 :mod:`easycat.planning._resolution`, which returns a
@@ -32,8 +33,9 @@ Metadata sourcing (per the M6b spec):
 
 Missing-env detection reads the env mapping directly (no provider construction).
 Missing-extra detection uses :func:`importlib.util.find_spec` on the extra's
-probe module (NOT ``require_module``, which imports). Both reach the process
-only through
+probe module (NOT ``require_module``, which imports); a backend that declares no
+extra at all but needs a commercial SDK is probed the same way and reported in
+``missing_backends``. All three reach the process only through
 :class:`~easycat.planning._resolution.ProbeEnvironment`, so a test can hand
 resolution an explicit snapshot instead of monkeypatching the interpreter.
 
@@ -101,16 +103,26 @@ class ProviderPlan:
     """The resolved plan across all seven roles.
 
     ``selected`` maps each role to its :class:`ProviderSelection`.
-    ``missing_env`` / ``missing_extras`` are the deduped, sorted blocking gaps;
-    ``warnings`` carries non-blocking notes (e.g. an incompatible-but-tolerated
-    combo). A role with a missing required env var OR a missing required extra is
-    a BLOCKING error — what ``/health/ready`` and the parity gate read.
+    ``missing_env`` / ``missing_extras`` / ``missing_backends`` are the deduped,
+    sorted blocking gaps; ``warnings`` carries non-blocking notes (e.g. an
+    incompatible-but-tolerated combo). A role with a missing required env var, a
+    missing required extra, OR a selected backend whose SDK is absent is a
+    BLOCKING error — what ``/health/ready`` and the parity gate read.
+
+    ``missing_backends`` holds ``"<role>:<provider>"`` entries for selections
+    ``create_session`` would refuse to build even though they need no pip extra
+    (a commercial SDK such as Krisp ships no PyPI package, so no missing-extra
+    check can see it). It is keyword-defaulted and last-positioned so existing
+    positional construction keeps working.
 
     ``defects`` carries coded selection defects the pure planner cannot see
     because they live on the MANIFEST rather than on a ``VoiceProfile`` (an
     unset ``bearer-env:`` reference, a phone profile with no token). It is
     populated by :func:`easycat.planning.selection.build_manifest_plan` and
-    stays ``()`` for every plan built straight from an ``EasyConfig``.
+    stays ``()`` for every plan built straight from an ``EasyConfig``. It is NOT
+    part of :func:`plan_to_dict`: ``/plan`` and ``easycat plan --json`` report
+    the pure planner's gaps, while the manifest defects reach an operator
+    through ``easycat doctor``'s coded issue rows.
     """
 
     profile: str
@@ -118,25 +130,28 @@ class ProviderPlan:
     missing_env: tuple[str, ...]
     missing_extras: tuple[str, ...]
     warnings: tuple[str, ...]
+    missing_backends: tuple[str, ...] = ()
     defects: tuple[SetupIssue, ...] = ()
 
     def blocking_errors(self) -> tuple[str, ...]:
         """Return content-free blocking-error reasons (sorted, deduped).
 
-        A blocking error is a missing required env var or a missing required
-        extra for a SELECTED role. Warnings are NOT blocking. The reasons are
-        deliberately content-free (role + env/extra name only) so they are safe
-        to echo on ``/health/ready`` and to compare in the parity test.
+        A blocking error is a missing required env var, a missing required extra,
+        or an unbuildable selected backend. Warnings are NOT blocking. The reasons
+        are deliberately content-free (role + env/extra/provider name only) so
+        they are safe to echo on ``/health/ready`` and to compare in the parity
+        test.
         """
         reasons: list[str] = []
         reasons.extend(f"missing_env:{var}" for var in self.missing_env)
         reasons.extend(f"missing_extra:{extra}" for extra in self.missing_extras)
+        reasons.extend(f"missing_backend:{entry}" for entry in self.missing_backends)
         return tuple(reasons)
 
     @property
     def has_blocking_errors(self) -> bool:
-        """``True`` when any selected role has a missing required env/extra."""
-        return bool(self.missing_env or self.missing_extras)
+        """``True`` when a selected role has a missing env/extra or an absent SDK."""
+        return bool(self.missing_env or self.missing_extras or self.missing_backends)
 
 
 def selection_to_dict(selection: ProviderSelection) -> dict[str, Any]:
@@ -154,6 +169,33 @@ def selection_to_dict(selection: ProviderSelection) -> dict[str, Any]:
         "extra": selection.extra,
         "required_env": selection.required_env,
         "capabilities": sorted(selection.capabilities),
+    }
+
+
+def plan_to_dict(plan: ProviderPlan) -> dict[str, Any]:
+    """Project a whole :class:`ProviderPlan` to its JSON payload shape.
+
+    The ONE such projection: ``easycat plan --json`` and the server's ``/plan``
+    payload both call it, so a plan-level field can never be added to one surface
+    and forgotten on the other. Callers add their own wrapper keys around it
+    (the CLI's envelope, the server's ``manifest_loaded``).
+
+    The two ``VoiceServer.plan_payload()`` branches that have NO resolved plan
+    (a factory-only server, an unresolvable profile) cannot call this — they
+    share ``voice_server._empty_plan_gaps()`` instead, so ``/plan``'s top-level
+    key set stays branch-independent.
+    """
+    return {
+        "profile": plan.profile,
+        "selected": {
+            role: selection_to_dict(selection) for role, selection in plan.selected.items()
+        },
+        "missing_env": list(plan.missing_env),
+        "missing_extras": list(plan.missing_extras),
+        "missing_backends": list(plan.missing_backends),
+        "warnings": list(plan.warnings),
+        "blocking_errors": list(plan.blocking_errors()),
+        "has_blocking_errors": plan.has_blocking_errors,
     }
 
 
@@ -202,6 +244,7 @@ def _project_plan(resolved: ResolvedConfiguration) -> ProviderPlan:
         missing_env=resolved.missing_env,
         missing_extras=resolved.missing_extras,
         warnings=resolved.warnings,
+        missing_backends=resolved.missing_backends,
     )
 
 
@@ -264,5 +307,6 @@ __all__ = [
     "ProviderSelection",
     "Role",
     "build_provider_plan",
+    "plan_to_dict",
     "selection_to_dict",
 ]

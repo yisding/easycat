@@ -34,6 +34,8 @@ from easycat._pipeline_decisions import (
     auto_turn_from_stt_final,
     has_provider_shape,
     is_push_to_talk,
+    is_stt_provider_instance,
+    is_tts_provider_instance,
     noise_reduction_enabled,
     vad_stage_enabled,
 )
@@ -160,7 +162,15 @@ class RoleDecision:
     enabled: bool = True
     """``False`` => construction builds nothing at all for this role."""
     probe_module: str | None = None
-    """SDK probe module even when ``extra`` is ``None``."""
+    """SDK probe module even when ``extra`` is ``None``.
+
+    Read only when ``extra is None`` — a backend with an extra keeps the ordinary
+    missing-extra path. An absent probe makes the decision an *unbuildable*
+    selection: ``create_session`` would raise for it, so it lands in
+    :attr:`ResolvedConfiguration.missing_backends`. Deliberately NOT projected
+    onto :class:`~easycat.planning.provider_plan.ProviderSelection`, so the public
+    selection shape does not grow.
+    """
     spec: Any = field(default=None, repr=False, compare=False)
     """The caller's live provider object or config, held BY IDENTITY.
 
@@ -194,6 +204,13 @@ class ResolvedConfiguration:
     missing_env: tuple[str, ...]
     missing_extras: tuple[str, ...]
     missing_backends: tuple[str, ...]
+    """``"<role>:<provider>"`` for every selected backend whose SDK is absent.
+
+    The gap class a pip extra cannot express: a commercial backend (Krisp) ships
+    no PyPI package, so ``extra`` is ``None`` and no missing-extra check can fire
+    — yet ``create_vad`` / ``create_noise_reducer`` raise on every machine without
+    the SDK. Blocking, exactly like a missing extra, because construction refuses.
+    """
     warnings: tuple[str, ...]
 
 
@@ -206,14 +223,68 @@ def split_shortcut(spec: str) -> tuple[str, str | None]:
     return provider.strip().lower(), (model.strip() or None)
 
 
+def _is_injected_provider(role: Role, spec: Any) -> bool:
+    """Whether ``spec`` is a LIVE stt/tts provider object rather than a config.
+
+    Scoped to ``stt`` and ``tts`` — every other role answers this question in its
+    own resolver — and written as explicit role branches so adding a role cannot
+    silently inherit an stt/tts rule.
+
+    Uses the STRICT predicate ``config/_factory.py`` applies when it decides
+    whether to construct an STT/TTS or keep the caller's object, so a provider
+    *class* is not a live provider on either side. (The vad/noise/aec branches
+    deliberately use the looser ``has_provider_shape``, because their leaf
+    factories hand a class straight back — see :func:`_injected_decision`.)
+    """
+    if role == "stt":
+        return is_stt_provider_instance(spec)
+    if role == "tts":
+        return is_tts_provider_instance(spec)
+    return False
+
+
+def _spec_model(spec: Any) -> Any:
+    """Read the model off a config instance or a live provider object.
+
+    Honours the config class's ``MODEL_FIELD`` override, exactly as the catalog
+    walk in :func:`_decide_catalog_role` always has — an injected stt/tts object
+    reports the same model it reported before it was routed to
+    :func:`_injected_decision`, so the plan's ``model`` field is unchanged by the
+    capability fix.
+    """
+    return getattr(spec, getattr(type(spec), "MODEL_FIELD", "model"), None)
+
+
 def _decide_catalog_role(role: Role, spec: Any, *, catalog: Any) -> RoleDecision:
     """Resolve a provider role from the catalog WITHOUT instantiating it.
 
     ``spec`` is the value on the config: a shortcut string, a concrete config
-    instance, or ``None``. The provider name, config-type, extra, and required
-    env are read straight from the catalog metadata.
+    instance, a LIVE provider object, or ``None``. The provider name,
+    config-type, extra, required env and probe module are read straight from the
+    catalog metadata.
+
+    The ``probe_module`` matters for a REGISTERED third-party provider that
+    declares an SDK but NO pip extra: ``docs/extending/vad.md`` promises the
+    planner reports such a backend missing, and only carrying the catalog's value
+    onto the decision makes that true. Every built-in catalog provider declares an
+    extra, so this changes no built-in verdict; a provider that declares BOTH
+    keeps the ordinary missing-extra path (:func:`_backend_gap` reads the probe
+    only when ``extra is None``).
+
+    A live injected stt/tts provider is routed to :func:`_injected_decision`
+    FIRST, so it is described as an opaque live object (``{"injected"}``) rather
+    than walked through the catalog — which answered ``capabilities=frozenset()``
+    and made an injected provider indistinguishable from a registered one that
+    genuinely declares no capabilities. ``vad`` / ``noise_reducer`` /
+    ``echo_canceller`` already route injected instances to the same place from
+    their own resolvers; this closes the gap for the remaining two. The
+    ``transport`` role's unknown branch keeps ``frozenset()`` on purpose: a custom
+    transport is not necessarily a live object (a config subclass reaches it too),
+    and changing it is a separate decision.
     """
     catalog.discover()
+    if _is_injected_provider(role, spec):
+        return _injected_decision(role, spec, model=_spec_model(spec))
     if isinstance(spec, str):
         provider, model = split_shortcut(spec)
         provider = catalog.validate_name(provider)
@@ -228,7 +299,7 @@ def _decide_catalog_role(role: Role, spec: Any, *, catalog: Any) -> RoleDecision
             (name for name, (_p, cfg) in catalog.providers.items() if cfg is config_cls),
             config_cls.__name__,
         )
-        model = getattr(spec, getattr(config_cls, "MODEL_FIELD", "model"), None)
+        model = _spec_model(spec)
         config_type = config_cls.__name__
 
     extra = catalog.extras.get(provider) or None
@@ -241,6 +312,7 @@ def _decide_catalog_role(role: Role, spec: Any, *, catalog: Any) -> RoleDecision
         extra=extra,
         required_env=required_env,
         capabilities=catalog.capabilities_for(provider, config=spec, model=model),
+        probe_module=catalog.probe_modules.get(provider),
         spec=spec,
     )
 
@@ -254,6 +326,10 @@ def _decide_catalog_string(
     ``EasyConfig``'s "default to OpenAI when unset" behavior). The provider name,
     config-type, extra, and required env come from the catalog metadata — no
     ``parse_string`` call, so no env read and no ``EASYCAT_E203``.
+
+    The catalog's declared ``probe_module`` rides along, so a REGISTERED
+    third-party provider that ships no pip extra is reported as an unbuildable
+    backend on this path too (see :func:`_decide_catalog_role`).
     """
     catalog.discover()
     if spec is None:
@@ -270,6 +346,7 @@ def _decide_catalog_string(
         extra=catalog.extras.get(provider) or None,
         required_env=catalog.env_vars.get(provider),
         capabilities=catalog.capabilities_for(provider, model=model),
+        probe_module=catalog.probe_modules.get(provider),
         spec=spec,
     )
 
@@ -293,27 +370,45 @@ def _backend_decision(
         extra=backend.extra,
         required_env=backend.required_env,
         capabilities=backend.capabilities,
+        probe_module=backend.probe_module,
         spec=spec,
     )
 
 
-def _injected_decision(role: Role, provider: Any) -> RoleDecision:
+def _injected_decision(role: Role, provider: Any, *, model: str | None = None) -> RoleDecision:
     """Describe a live injected provider without pretending it is a built-in.
 
-    Reached through :func:`~easycat._pipeline_decisions.has_provider_shape`, the
-    LOOSER of the two shared predicates, because that is the check
-    ``create_vad`` / ``create_noise_reducer`` / ``create_echo_canceller``
-    themselves apply — a class object satisfying the method names is handed
-    straight back by them today. Tightening the planner to
-    ``is_provider_instance`` would change plan output for that input without
-    changing what construction does, so it belongs in a behaviour-change PR, not
-    here.
+    ``capabilities={"injected"}`` is the ONE representation of "a live object
+    EasyCat cannot introspect", shared by all five provider roles — an injected
+    stt/tts used to fall through to the catalog walk and report
+    ``capabilities=frozenset()``, indistinguishable from a registered provider
+    that genuinely declares none.
+
+    The vad/noise/aec branches reach here through
+    :func:`~easycat._pipeline_decisions.has_provider_shape`, the LOOSER of the two
+    shared predicates, because that is the check ``create_vad`` /
+    ``create_noise_reducer`` / ``create_echo_canceller`` themselves apply — a
+    class object satisfying the method names is handed straight back by them
+    today. Tightening the planner to ``is_provider_instance`` would change plan
+    output for that input without changing what construction does, so it belongs
+    in a behaviour-change PR, not here. The stt/tts branch mirrors
+    ``config/_factory.py`` instead and uses the strict predicate
+    (:func:`_is_injected_provider`), because that is what construction applies
+    there.
+
+    ``model`` stays ``None`` for the vad/noise/aec callers (those roles have never
+    reported one) and is passed by the stt/tts caller, which reads the same
+    attribute the catalog walk read before the D3 fix routed an injected object
+    here — so the D3 fix changes ``capabilities`` and nothing else, and the
+    preview-vs-construction model invariant
+    (``tests/planning/_recording.py::assert_preview_matches_construction``) keeps
+    holding for an injected provider that exposes one.
     """
     provider_type = type(provider).__name__
     return RoleDecision(
         role=role,
         provider=provider_type,
-        model=None,
+        model=model,
         config_type=provider_type,
         extra=None,
         required_env=None,
@@ -637,6 +732,40 @@ def _role_gap(decision: RoleDecision, probe: ProbeEnvironment) -> bool:
     return not probe.module_available(module)
 
 
+def _backend_gap(decision: RoleDecision, probe: ProbeEnvironment) -> bool:
+    """Whether a selected backend's SDK is absent although it declares NO extra.
+
+    The gap a missing-extra check structurally cannot find. ``VAD_BACKENDS`` /
+    ``NOISE_REDUCER_BACKENDS`` declare ``extra=None`` for Krisp because it ships
+    no PyPI package, so :func:`_role_gap` always answers ``False`` for it while
+    ``create_vad`` / ``create_noise_reducer`` raise ``RuntimeError`` on every
+    machine without the commercial SDK. Reporting ready there breaks the
+    planner-vs-``create_session`` parity contract in the same way an unknown
+    backend would.
+
+    Mutually exclusive with :func:`_role_gap`: a backend that DOES declare an
+    extra keeps its existing missing-extra behaviour and never lands here. A
+    decision tagged ``degrades_to_passthrough`` is never a backend gap either —
+    the auto chains genuinely fall back to a no-op provider instead of raising.
+    """
+    if decision.extra is not None or decision.probe_module is None:
+        return False
+    if "degrades_to_passthrough" in decision.capabilities:
+        # Deliberately SILENT, unlike the missing-extra path, which downgrades the
+        # same situation to a ``*_missing_degraded`` warning in :func:`_finalize`.
+        # No backend carries both a ``probe_module`` and this tag today (the only
+        # extra-less probes are the two Krisp entries, and the tag is only added
+        # to the auto chains, which declare extras), so a warning string here
+        # would name a state nothing can reach and no test could pin end to end.
+        # Pinned directly instead, by
+        # ``tests/planning/test_resolution.py::
+        # test_backend_gap_skips_a_degrading_backend_whose_probe_is_absent``. If a
+        # degrading extra-less backend is ever added, mirror the extra path here
+        # rather than leaving the operator with no signal at all.
+        return False
+    return not probe.module_available(decision.probe_module)
+
+
 # ── Entry points ─────────────────────────────────────────────────────
 
 
@@ -756,15 +885,19 @@ def _finalize(
     """Turn decided roles into gaps, warnings and the pipeline booleans."""
     missing_env: set[str] = set()
     missing_extras: set[str] = set()
+    missing_backends: set[str] = set()
     degraded_extras: list[str] = []
     for role in _ROLE_ORDER:
         decision = roles[role]
         if not decision.enabled:
             # ``create_session`` builds nothing for a disabled role, so its
-            # credential and its extra are not requirements of this deployment.
+            # credential, its extra and its SDK are not requirements of this
+            # deployment.
             continue
         if decision.required_env and not probe.env.get(decision.required_env):
             missing_env.add(decision.required_env)
+        if _backend_gap(decision, probe):
+            missing_backends.add(f"{decision.role}:{decision.provider}")
         if _role_gap(decision, probe):
             assert decision.extra is not None
             # A role that degrades gracefully when its extra is absent (the AEC
@@ -785,6 +918,6 @@ def _finalize(
         echo_canceller_selected=roles["echo_canceller"].provider != DEFAULT_ECHO_CANCELLER,
         missing_env=tuple(sorted(missing_env)),
         missing_extras=tuple(sorted(missing_extras)),
-        missing_backends=(),
+        missing_backends=tuple(sorted(missing_backends)),
         warnings=_incompatibility_warnings(roles) + tuple(sorted(degraded_extras)),
     )

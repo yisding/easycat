@@ -325,13 +325,12 @@ _SELECTION_PAYLOAD_KEYS = {
 def test_selection_to_dict_is_the_projection_both_json_surfaces_use() -> None:
     """``easycat plan --json`` and the server's ``/plan`` payload cannot drift.
 
-    ``VoiceServer.plan_payload`` calls :func:`easycat.planning.selection_to_dict`
-    per role, and ``cli.plan._selection_to_dict`` is a thin alias for it. The
-    server assertions in ``tests/server/test_plan_endpoint.py`` need aiohttp, so
-    this credential-free row is what actually executes the shared projection and
-    pins its key set on a dev-group-only machine.
+    Both surfaces reach this projection through
+    :func:`easycat.planning.plan_to_dict`, which is where the per-role dict is
+    built. The server assertions in ``tests/server/test_plan_endpoint.py`` need
+    aiohttp, so this credential-free row is what actually executes the shared
+    projection and pins its key set on a dev-group-only machine.
     """
-    from easycat.cli.plan import _selection_to_dict
     from easycat.planning import selection_to_dict
 
     config = EasyConfig(
@@ -346,6 +345,66 @@ def test_selection_to_dict_is_the_projection_both_json_surfaces_use() -> None:
     for selection in plan.selected.values():
         payload = selection_to_dict(selection)
         assert set(payload) == _SELECTION_PAYLOAD_KEYS
-        assert _selection_to_dict(selection) == payload
         # JSON-ready: ``capabilities`` is a sorted list, never a frozenset.
         assert payload["capabilities"] == sorted(selection.capabilities)
+
+
+_PLAN_PAYLOAD_KEYS = {
+    "profile",
+    "selected",
+    "missing_env",
+    "missing_extras",
+    "missing_backends",
+    "warnings",
+    "blocking_errors",
+    "has_blocking_errors",
+}
+
+
+def test_plan_to_dict_is_the_plan_projection_both_json_surfaces_use() -> None:
+    """The plan-LEVEL peer of the selection projection above.
+
+    ``easycat plan --json`` spreads this dict into its envelope and
+    ``VoiceServer.plan_payload`` spreads it under ``manifest_loaded``, so a
+    plan-level field added to one surface lands on both. The key set is pinned
+    here because the server rows that would otherwise catch a drift need aiohttp.
+    """
+    from easycat.planning import plan_to_dict, selection_to_dict
+
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=VADConfig(backend="silero"),
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    plan = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"})
+    payload = plan_to_dict(plan)
+
+    assert set(payload) == _PLAN_PAYLOAD_KEYS
+    assert payload["profile"] == plan.profile
+    # Every gap tuple is a JSON-ready list, never a tuple.
+    for key in ("missing_env", "missing_extras", "missing_backends", "warnings"):
+        assert isinstance(payload[key], list), key
+    assert payload["blocking_errors"] == list(plan.blocking_errors())
+    assert payload["has_blocking_errors"] is plan.has_blocking_errors
+    # Roles go through the SAME per-selection projection, not a second copy.
+    assert payload["selected"] == {
+        role: selection_to_dict(selection) for role, selection in plan.selected.items()
+    }
+
+
+def test_plan_to_dict_key_set_matches_the_server_empty_plan_branches() -> None:
+    """``/plan``'s top-level key set must not depend on which branch answered.
+
+    ``VoiceServer.plan_payload`` has two branches with no resolved plan (a
+    factory-only server, an unresolvable profile) that build their payload by
+    hand from ``_empty_plan_gaps()``. A client reading ``missing_backends`` on the
+    unresolvable-profile path — the diagnostic case — must not get a ``KeyError``.
+    """
+    from easycat.server.voice_server import _empty_plan_gaps
+
+    hand_built = {"profile", "selected", *_empty_plan_gaps(), "blocking_errors"}
+    hand_built.add("has_blocking_errors")
+    assert hand_built == _PLAN_PAYLOAD_KEYS

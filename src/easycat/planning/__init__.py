@@ -49,6 +49,7 @@ from easycat.planning.provider_plan import (
     ProviderSelection,
     Role,
     build_provider_plan,
+    plan_to_dict,
     selection_to_dict,
 )
 from easycat.planning.selection import (
@@ -79,6 +80,7 @@ __all__ = [
     "load_selected_profile",
     "plan_issues",
     "plan_selected_profile",
+    "plan_to_dict",
     "selection_error",
     "selection_issue",
     "selection_to_dict",

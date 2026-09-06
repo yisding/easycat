@@ -197,7 +197,7 @@ What each metadata field feeds:
 | --- | --- |
 | `env_var` | Optional `easycat doctor` credential check and auto-filled API key for `"yours/model"` shortcuts; omit for local/self-hosted providers |
 | `extra` | `easycat init` scaffold, to add the right install extra to a generated `pyproject.toml` |
-| `probe_module` | `/health/ready` import check for the installed extra; set this when the extra and Python module names differ |
+| `probe_module` | `/health/ready` import check; set this when the extra and Python module names differ, or when your provider ships no pip extra at all — `easycat plan` then reports it under `missing_backends` instead of reporting it ready |
 | `capabilities` | planner and session behavior; declare `native_endpointing` when STT finals own turn boundaries — `easycat plan` then reports the `vad` role as `off` |
 | `capability_resolver` | model/config-dependent capabilities; returns a `frozenset[str]` that is combined with static capabilities |
 | `api_domains` | validation's redaction, to scrub your API host from exported debug bundles |
