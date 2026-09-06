@@ -239,7 +239,7 @@ class ProjectManifest:
             # missing-token diagnosis for both the planner and this converter.
             #
             # This loop stays HERE, not earlier in the function: moving it up
-            # would let a token defect pre-empt the agent-reference and
+            # would let a token defect preempt the agent-reference and
             # ``_coerce_vad`` raises that currently win.
             for defect in self.profile_defects(profile):
                 raise defect
