@@ -84,12 +84,14 @@ synthetic, so it checks pipeline wiring, not speech quality.
 
 `assert_latency` reuses the nearest-rank percentile code behind
 `easycat validate latency`, so a budget asserted in a unit test means
-the same thing as one enforced in a validation lane. Every scaffolded
-project ships this pattern as `tests/test_agent.py` — offline and
-key-free: the project's own `tools.py` runs for real, `agent.py`'s
-wiring is asserted as built, and a scripted stand-in for the model
-drives the text and audio pipelines — plus an `AGENTS.md` documenting
-it; run it with `uv run pytest` inside the project. A green run means
+the same thing as one enforced in a validation lane. The default
+`openai-agents` scaffold ships this pattern as `tests/test_agent.py` —
+offline and key-free: the project's own `tools.py` runs for real,
+`agent.py`'s wiring is asserted as built, and a scripted stand-in for
+the model drives the text and audio pipelines. The remaining templates
+still ship the earlier stub-agent form and migrate in a follow-up. Every
+scaffold ships an `AGENTS.md` documenting its tests; run them with
+`uv run pytest` inside the project. A green run means
 the app is wired and the pipeline is healthy; it says nothing about
 live model quality, which is what rungs 3 and 4 are for. The repo's own coverage for
 these helpers lives in the debug test suite:

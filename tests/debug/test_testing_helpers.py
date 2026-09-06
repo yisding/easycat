@@ -360,6 +360,32 @@ async def test_run_scripted_audio_turn_leaves_no_owned_tasks_behind():
     assert asyncio.all_tasks() - before == set()
 
 
+async def test_run_scripted_audio_turn_fallback_latency_times_the_turn_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wall-clock fallback must not bill session setup, drain or teardown.
+
+    A run whose journal carries no latency metric (an agent that replies but
+    whose TTS emits nothing) would otherwise report the whole session lifetime
+    as the turn latency, which then feeds a user's ``assert_latency``.
+    """
+    from easycat.debug import testing as testing_module
+
+    seen: list[float] = []
+
+    def _capture(records: object, *, fallback: float) -> float:
+        seen.append(fallback)
+        return fallback
+
+    monkeypatch.setattr(testing_module, "_latency_ms", _capture)
+
+    result = await run_scripted_audio_turn(_EchoAgent(), transcript="hello", drain_s=1.0)
+
+    assert seen, "the fallback path never ran"
+    assert seen[0] < 900.0, f"the 1 s drain leaked into the fallback latency: {seen[0]}"
+    assert result.latency_ms == seen[0]
+
+
 async def test_run_scripted_audio_turn_times_out_with_a_named_failure():
     with pytest.raises(AssertionError, match="no agent reply"):
         await run_scripted_audio_turn(_NeverRepliesAgent(), timeout_s=0.2)

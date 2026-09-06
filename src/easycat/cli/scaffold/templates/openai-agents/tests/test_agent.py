@@ -22,34 +22,34 @@ from easycat.debug.testing import (
     run_text_turns,
 )
 
-from tools import current_time
+import tools
 
 
 class ScriptedReasoning:
-    """Stands in for the LLM: no model call, but this project's real tools."""
+    """Stands in for the LLM: no model call, but this project's real tools.
+
+    It calls ``tools.current_time`` through the module so a test can swap the
+    real tool for a failing one, the way an outage would.
+    """
 
     async def run(self, text: str) -> str:
         if "time" in text.lower():
-            return f"It is {current_time()}."
+            return f"It is {tools.current_time()}."
         return f"You said: {text}"
 
 
-class BrokenTool:
-    """A tool dependency that is down; the turn must fail loudly, not hang."""
-
-    async def run(self, text: str) -> str:
-        raise RuntimeError("tool 'current_time' is unavailable")
-
-
 def test_current_time_tool_speaks_hh_mm() -> None:
-    assert re.fullmatch(r"[0-2][0-9]:[0-5][0-9]", current_time())
+    assert re.fullmatch(r"[0-2][0-9]:[0-5][0-9]", tools.current_time())
 
 
 def test_agent_wires_its_instructions_and_tools() -> None:
     pytest.importorskip("agents", reason="run `uv sync` to install the agent SDK")
     from agent import AGENT_NAME, INSTRUCTIONS, make_agent, make_app
 
-    assert "$" not in AGENT_NAME and "$" not in INSTRUCTIONS
+    # Substitution happened: no bare "$PLACEHOLDER" survived. A dollar sign
+    # inside your own name or instructions is text, and stays legal here.
+    assert not re.fullmatch(r"\$[A-Z_]+", AGENT_NAME)
+    assert not re.fullmatch(r"\$[A-Z_]+", INSTRUCTIONS)
     agent = make_agent()
     assert agent.name == AGENT_NAME
     assert agent.instructions == INSTRUCTIONS
@@ -74,11 +74,18 @@ def test_two_turns_share_one_session() -> None:
     assert_latency([hello, asked], max_ms=5000.0, percentile="p95")
 
 
-def test_tool_failure_surfaces_instead_of_hanging() -> None:
+def test_tool_failure_surfaces_instead_of_hanging(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable() -> str:
+        raise RuntimeError("tool 'current_time' is unavailable")
+
+    # Break the real tool, not a stand-in for it: renaming or deleting
+    # current_time in tools.py fails this test too.
+    monkeypatch.setattr(tools, "current_time", unavailable)
+
     # The traceback EasyCat logs here is expected: it is the failure being
     # reported, not a test error.
     with pytest.raises(RuntimeError, match="unavailable"):
-        asyncio.run(run_text_turns(BrokenTool(), ["what time is it?"]))
+        asyncio.run(run_text_turns(ScriptedReasoning(), ["what time is it?"]))
 
 
 def test_scripted_audio_turn_reaches_the_agent() -> None:

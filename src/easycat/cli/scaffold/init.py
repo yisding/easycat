@@ -960,19 +960,26 @@ def _should_template(source: Path) -> bool:
     return source.suffix in _TEMPLATED_SUFFIXES
 
 
+_CONFIG_EXTRA_LINE = re.compile(
+    r"^(?P<indent>[ ]*)\*\*__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n",
+    re.MULTILINE,
+)
+
+
 def _render_text(text: str, mapping: dict[str, str]) -> str:
     if not mapping.get("EASYCAT_SOURCES_BLOCK"):
         # Published install: drop the optional local-source block entirely.
         text = text.replace("$EASYCAT_SOURCES_BLOCK\n", "")
     rendered = Template(text).safe_substitute(mapping)
     extra_kwargs = mapping["EASYCAT_CONFIG_EXTRA"]
-    # Longest indent first: an 8-space pattern also matches inside a 12-space
-    # line and would leave four orphaned spaces behind when the sentinel drops.
-    for indent in ("            ", "        "):
-        rendered = rendered.replace(
-            f"{indent}**__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n",
-            f"{indent}{extra_kwargs},\n" if extra_kwargs else "",
-        )
+    # A sentinel on its own line takes its whole line with it.  Anchoring to
+    # the line start and capturing the indent is what keeps this correct at
+    # any nesting depth: a fixed-width pattern also matches *inside* a more
+    # deeply indented line and leaves the leftover spaces orphaned.
+    rendered = _CONFIG_EXTRA_LINE.sub(
+        (lambda match: f"{match['indent']}{extra_kwargs},\n") if extra_kwargs else "",
+        rendered,
+    )
     # Drop the sentinel together with the separator that introduced it, so no
     # dangling comma survives and the renderer needs no per-template knowledge.
     rendered = rendered.replace(

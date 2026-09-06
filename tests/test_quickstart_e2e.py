@@ -111,10 +111,17 @@ def _assigned_voice_app_names(tree: ast.AST) -> set[str]:
     return app_names
 
 
-def _uses_voice_app_local(source: str) -> bool:
+def _uses_voice_app_local(source: str, *, allow_factory: bool = False) -> bool:
+    """True when *source* runs a ``VoiceApp`` with ``.run("local")``.
+
+    ``allow_factory`` is for the scaffold alone: it builds the app in an
+    importable ``make_app()`` so its generated tests can import the module.
+    The README and the first example must keep teaching the literal
+    module-scope form, so they are checked without it.
+    """
     tree = ast.parse(source)
     app_names = _assigned_voice_app_names(tree)
-    factories = _voice_app_factory_names(tree)
+    factories = _voice_app_factory_names(tree) if allow_factory else set()
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -236,16 +243,19 @@ async def test_quickstart_public_api_imports_resolve() -> None:
 
 def test_documented_canonical_voice_quickstart_shape_stays_consistent() -> None:
     """README, first example, and scaffold template all teach the same entry shape."""
-    sources = {
+    literal = {
         "README.md Quickstart": _readme_quickstart_code(),
         "examples/openai_agents_voice.py": (
             REPO_ROOT / "examples" / "openai_agents_voice.py"
         ).read_text(encoding="utf-8"),
-        "openai-agents scaffold template": (
-            REPO_ROOT / "src/easycat/cli/scaffold/templates/openai-agents/agent.py"
-        ).read_text(encoding="utf-8"),
     }
-    missing = sorted(name for name, source in sources.items() if not _uses_voice_app_local(source))
+    missing = sorted(name for name, source in literal.items() if not _uses_voice_app_local(source))
+
+    scaffold = (REPO_ROOT / "src/easycat/cli/scaffold/templates/openai-agents/agent.py").read_text(
+        encoding="utf-8"
+    )
+    if not _uses_voice_app_local(scaffold, allow_factory=True):
+        missing.append("openai-agents scaffold template")
 
     assert not missing, "Canonical quickstart shape drifted in: " + ", ".join(missing)
 
@@ -253,6 +263,10 @@ def test_documented_canonical_voice_quickstart_shape_stays_consistent() -> None:
     assert "Quickstart (EasyConfig)" not in readme
     assert "Quickstart (VoiceApp)" not in readme
     assert 'same `VoiceApp(...).run("local")` shape' in readme
+    # The scaffold's factory form is a documented difference, not drift: the
+    # README has to say so, or this guard would pin a claim that is false.
+    assert "`make_app()`" in readme
+    assert '`if __name__ == "__main__":` guard' in readme
 
 
 def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:

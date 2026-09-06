@@ -50,13 +50,15 @@ def _scaffold_project(
     template: str,
     *,
     easycat_source: Path | None = None,
+    agent_name: str = "SmokeBot",
+    agent_instructions: str = "Answer smoke-test questions.",
 ) -> Path:
     config = json.dumps(
         {
             "schema_version": 1,
             "template": template,
-            "agent_name": "SmokeBot",
-            "agent_instructions": "Answer smoke-test questions.",
+            "agent_name": agent_name,
+            "agent_instructions": agent_instructions,
         }
     )
     project = tmp_path / f"demo-{template}"
@@ -107,10 +109,18 @@ def _assert_netguard_is_loaded(env: dict[str, str]) -> None:
     blocked at all, i.e. it stops testing the condition it exists for.
     """
     blocked = subprocess.run(
-        [sys.executable, "-c", "import socket; socket.create_connection(('example.com', 443))"],
+        [
+            sys.executable,
+            "-c",
+            # The connect timeout matters only when the guard did NOT load:
+            # this must then fail fast, not stall the whole lane on a SYN to
+            # a host a network-blackholing runner never answers for.
+            "import socket; socket.create_connection(('example.com', 443), timeout=2)",
+        ],
         capture_output=True,
         text=True,
         env=env,
+        timeout=15,
         check=False,
     )
     assert blocked.returncode != 0, "the outbound-network guard did not load"
@@ -134,6 +144,7 @@ def _assert_netguard_is_loaded(env: dict[str, str]) -> None:
         capture_output=True,
         text=True,
         env=env,
+        timeout=15,
         check=False,
     )
     assert loopback.returncode == 0, loopback.stderr
@@ -265,6 +276,39 @@ def test_scaffold_offline_tests_run_without_cwd_on_sys_path(
     )
     assert proc.returncode == 0, (
         f"console-script pytest failed in the scaffolded project:\n{proc.stdout}\n{proc.stderr}"
+    )
+
+
+def test_scaffold_offline_tests_pass_with_hostile_agent_text(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """A user's own quotes, backslashes and dollar signs are legitimate text.
+
+    ``string.Template`` never re-scans a substituted value, so ``$USD`` renders
+    fine; the generated suite must therefore check the constants against the
+    *placeholders*, not against a bare ``"$"``, or the user's very first
+    ``uv run pytest`` fails on their own agent description.
+    """
+    project = _scaffold_project(
+        cli,
+        tmp_path,
+        "openai-agents",
+        agent_name='Billing "Bot" \\ $9',
+        agent_instructions="Quote prices in $USD and explain fees.",
+    )
+    assert "$USD" in (project / "agent.py").read_text(encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OPENAI_API_KEY": ""},
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        f"a dollar sign in the agent text failed the generated tests:\n"
+        f"{proc.stdout}\n{proc.stderr}"
     )
 
 

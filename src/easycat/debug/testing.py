@@ -204,21 +204,24 @@ async def run_scripted_audio_turn(
         done.set()
 
     session.subscribe_event(AgentFinal, _on_reply)
-    t0 = time.monotonic()
     timed_out = False
+    wall_ms = 0.0
     async with session:
+        # Bracket the turn alone: session start-up, the drain sleep and
+        # teardown must not inflate the fallback latency.
+        t0 = time.monotonic()
         try:
             await asyncio.wait_for(done.wait(), timeout=timeout_s)
         except TimeoutError:
             timed_out = True
         else:
+            wall_ms = (time.monotonic() - t0) * 1000
             # Let TTS synthesis drain into the journal before teardown.
             await asyncio.sleep(drain_s)
     if timed_out:
         raise AssertionError(
             f"scripted audio turn produced no agent reply within {timeout_s:.1f}s"
         )
-    wall_ms = (time.monotonic() - t0) * 1000
 
     view = session.journal
     raw = view.read() if view is not None else []

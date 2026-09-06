@@ -79,7 +79,9 @@ _LINE_BUDGETS: dict[str, int] = {
 
 # Templates already migrated to the importable make_agent()/make_app() shape
 # with app-protecting generated tests.
-# PR2 deletes this; every guard below then parametrizes over sorted(_LINE_BUDGETS).
+# PR2 deletes this; every guard below then parametrizes over sorted(_LINE_BUDGETS),
+# and ``test_template_ships_offline_agent_tests``'s ``if``/``else`` collapses to
+# the migrated branch, dropping the ``StubAgent`` assertion with it.
 _MIGRATED_TEMPLATES: frozenset[str] = frozenset({"openai-agents"})
 
 # Line budgets for the SDK-free support modules the migrated templates ship.
@@ -709,10 +711,34 @@ def _module_level_names(source: str) -> set[str]:
 
 
 def _names_imported_from(source: str, modules: set[str]) -> set[str]:
+    """Names *source* takes from *modules*, by either import style.
+
+    ``from tools import current_time`` and ``import tools`` +
+    ``tools.current_time`` must both anchor the static mutation guard, or a
+    test that patches at the module boundary would stop pinning the symbol.
+    """
+    tree = ast.parse(source)
     names: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
+    plain: set[str] = set()
+    for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in modules:
             names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            # Only a plainly imported module counts, so a local variable that
+            # happens to share a module's name is never mistaken for one.
+            plain.update(
+                alias.name
+                for alias in node.names
+                if alias.asname is None and alias.name in modules
+            )
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in plain
+        ):
+            names.add(node.attr)
     return names
 
 
@@ -1359,9 +1385,9 @@ def test_template_ships_offline_agent_tests(name: str) -> None:
     """Every scaffold ships a key-free test exercising the real turn pipeline.
 
     Placeholders, not dollar signs, are what must never survive into a
-    generated project: a migrated template's test asserts ``"$" not in
-    AGENT_NAME`` to catch an unrendered substitution, so the literal ``$``
-    is legitimate while a ``$PLACEHOLDER`` is not.
+    generated project: a migrated template's test rejects a constant shaped
+    like an unrendered ``$PLACEHOLDER``, so a literal ``$`` in a user's own
+    agent name or instructions stays legitimate.
     """
     source = (_template_dir(name) / "tests" / "test_agent.py").read_text(encoding="utf-8")
 
@@ -1375,9 +1401,15 @@ def test_template_ships_offline_agent_tests(name: str) -> None:
     if name in _MIGRATED_TEMPLATES:
         # The generated test exercises the real app, not a private stub of it.
         assert "StubAgent" not in source
-        assert "from tools import" in source
+        assert "import tools" in source
         assert "from agent import" in source
         assert "importorskip" in source
+        # The rendered constants are checked against the *shape* of an
+        # unrendered placeholder, never against a bare ``"$"``: a dollar sign
+        # in a user's own agent name or instructions is legitimate text and
+        # must not fail their very first ``uv run pytest``.
+        assert r"\$[A-Z_]+" in source
+        assert '"$" not in' not in source
     else:
         assert "StubAgent" in source
     # No placeholders — the same file works in every rendered project.
@@ -1587,6 +1619,19 @@ def test_offline_scaffold_coverage_is_not_text_only() -> None:
             "            **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n",
             'stt="x"',
             '            stt="x",\n',
+        ),
+        # Any nesting depth, not just the two the templates happen to use
+        # today: a fixed-width match would leave four orphaned spaces here.
+        ("                **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n", "", ""),
+        (
+            "                **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n",
+            'stt="x"',
+            '                stt="x",\n',
+        ),
+        (
+            "f(\n                **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n            )\n",
+            "",
+            "f(\n            )\n",
         ),
     ],
 )
