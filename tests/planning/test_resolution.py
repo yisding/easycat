@@ -16,6 +16,7 @@ import sys
 import pytest
 
 from easycat.config import EasyConfig
+from easycat.config.easy import TelephonyConfig
 from easycat.planning import build_provider_plan
 from easycat.planning._resolution import (
     ProbeEnvironment,
@@ -176,8 +177,6 @@ def test_resolution_reports_the_pipeline_booleans(
 def test_voicemail_detector_overrides_native_endpointing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from easycat.config.easy import TelephonyConfig
-
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-resolution-test")
     resolved = resolve_from_easyconfig(
         _config(
@@ -188,6 +187,73 @@ def test_voicemail_detector_overrides_native_endpointing(
     )
     assert resolved.auto_turn_from_stt_final is False
     assert resolved.enable_vad is True
+
+
+# ── The VAD role the session skips ───────────────────────────────────
+
+
+_VAD_OVERRIDE_CASES: dict[str, dict[str, object]] = {
+    "push_to_talk": {"turn_taking": TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK)},
+    "smart_turn": {"smart_turn": SmartTurnConfig(enabled=True)},
+    "voicemail": {"telephony": TelephonyConfig(enable_voicemail_detector=True)},
+}
+
+_NATIVE_ENDPOINTING_ENV = {
+    "DEEPGRAM_API_KEY": "dg-resolution-test",
+    "OPENAI_API_KEY": "sk-resolution-test",
+}
+
+
+def test_vad_role_is_disabled_when_the_stt_owns_endpointing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The role is RESOLVED, then reported disabled — its extra stops blocking."""
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-resolution-test")
+    resolved = resolve_from_easyconfig(
+        _config(stt="deepgram/flux-general-en"),
+        probe=ProbeEnvironment.fake(env=_NATIVE_ENDPOINTING_ENV, default=False),
+    )
+    assert resolved.roles["vad"].enabled is False
+    assert resolved.enable_vad is False
+    # The underlying resolution is intact — only ``enabled`` changed.
+    assert resolved.roles["vad"].provider == "silero"
+    assert resolved.roles["vad"].extra == "silero-vad"
+    assert "silero-vad" not in resolved.missing_extras
+
+
+@pytest.mark.parametrize("override", sorted(_VAD_OVERRIDE_CASES))
+def test_vad_role_returns_when_an_override_beats_native_endpointing(
+    override: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A skipped VAD must never hide a genuinely missing extra.
+
+    Smart turn, push-to-talk and the voicemail detector each take endpointing
+    back from the STT, so ``create_session`` builds the VAD again — and the
+    plan must block on its absent extra again.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-resolution-test")
+    resolved = resolve_from_easyconfig(
+        _config(stt="deepgram/flux-general-en", **_VAD_OVERRIDE_CASES[override]),
+        probe=ProbeEnvironment.fake(env=_NATIVE_ENDPOINTING_ENV, default=False),
+    )
+    assert resolved.auto_turn_from_stt_final is False
+    assert resolved.roles["vad"].enabled is True
+    assert resolved.enable_vad is True
+    assert resolved.roles["vad"].provider == "silero"
+    assert "silero-vad" in resolved.missing_extras
+
+
+def test_profile_vad_role_is_disabled_when_the_stt_owns_endpointing() -> None:
+    """The manifest path has no override knob, so the STT capability decides."""
+    from easycat.planning._resolution import resolve_from_profile
+
+    resolved = resolve_from_profile(
+        VoiceProfile(name="default", transport="websocket", stt="deepgram/flux-general-en"),
+        probe=ProbeEnvironment.fake(env=_NATIVE_ENDPOINTING_ENV, default=False),
+    )
+    assert resolved.auto_turn_from_stt_final is True
+    assert resolved.roles["vad"].enabled is False
+    assert "silero-vad" not in resolved.missing_extras
 
 
 def test_resolution_reports_the_noise_and_aec_switches() -> None:
@@ -235,17 +301,6 @@ def test_echo_canceller_selected_is_not_the_session_config_flag() -> None:
     assert echo_cancellation_enabled(injected, config_cls=EchoCancellationConfig) is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DX1-4: resolution reads the raw ``smart_turn`` attribute, while "
-        "construction re-derives it in ``EasyConfig._validate_for_session`` via "
-        "``_renormalize_smart_turn`` (gh-1027). After a late ``stt`` mutation of "
-        "a preset the two disagree. DX1-1 pins the construction side in "
-        "``test_resolution_parity.py::"
-        "test_late_mutation_back_to_openai_restores_the_preset_default``."
-    ),
-)
 def test_late_stt_mutation_resolves_the_renormalized_smart_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -253,10 +308,16 @@ def test_late_stt_mutation_resolves_the_renormalized_smart_turn(
 
     ``EasyConfig.mic`` ships ``smart_turn.enabled=True``. Reassigning ``stt`` to
     a native-endpointing provider afterwards makes ``_validate_for_session``
-    turn smart-turn back off, so ``create_session`` drives turns from STT finals
-    and builds no VAD. The resolver reads the un-renormalized attribute and says
-    the opposite — and it is exactly ``auto_turn_from_stt_final`` / ``enable_vad``
-    that DX1-4 is specified to publish.
+    turn smart-turn back off (``_renormalize_smart_turn``, gh-1027), so
+    ``create_session`` drives turns from STT finals and builds no VAD. The
+    resolver used to read the un-renormalized attribute and say the opposite;
+    this row carried an ``xfail(strict=True)`` until
+    :func:`easycat.planning._resolution._resolved_smart_turn_enabled` learned
+    the same "untouched default" rule.
+
+    ``tests/planning/test_resolution_parity.py::
+    test_late_mutation_back_to_openai_restores_the_preset_default`` pins the
+    construction side of the same mutation.
     """
     monkeypatch.setenv("OPENAI_API_KEY", "sk-resolution-test")
     monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-resolution-test")
@@ -268,6 +329,42 @@ def test_late_stt_mutation_resolves_the_renormalized_smart_turn(
 
     assert resolved.auto_turn_from_stt_final is True
     assert resolved.enable_vad is False
+
+    # ...and switching back restores the preset default, so the stage the
+    # planner reports is never frozen by an earlier preview.
+    config.stt = "openai"
+    restored = resolve_from_easyconfig(config, probe=ProbeEnvironment.fake(default=True))
+    assert restored.auto_turn_from_stt_final is False
+    assert restored.enable_vad is True
+
+
+@pytest.mark.parametrize("spelling", ["bool", "sensitivity"])
+def test_late_smart_turn_override_keeps_the_vad_role_and_its_extra(
+    spelling: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two smart-turn spellings a raw ``.enabled`` read cannot see.
+
+    ``cfg.smart_turn = True`` is a supported assignment (the field is typed
+    ``SmartTurnConfig | bool | None``) and ``getattr(True, "enabled", False)`` is
+    ``False``; a late ``cfg.smart_turn_sensitivity`` forces ``enabled=True``
+    without touching ``smart_turn`` at all. Both make ``create_session`` build a
+    VAD, so both must keep the role — and its missing extra as a blocking gap —
+    in the plan.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-resolution-test")
+    config = _config(stt="deepgram/flux-general-en")
+    if spelling == "bool":
+        config.smart_turn = True
+    else:
+        config.smart_turn_sensitivity = 0.7
+
+    resolved = resolve_from_easyconfig(
+        config, probe=ProbeEnvironment.fake(env=_NATIVE_ENDPOINTING_ENV, default=False)
+    )
+    assert resolved.auto_turn_from_stt_final is False
+    assert resolved.enable_vad is True
+    assert resolved.roles["vad"].provider == "silero"
+    assert "silero-vad" in resolved.missing_extras
 
 
 def test_missing_backends_is_empty_until_a_later_workstream() -> None:

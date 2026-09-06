@@ -402,6 +402,27 @@ def _decide_vad(vad: Any, *, catalog: Any, probe: ProbeEnvironment) -> RoleDecis
     return decision
 
 
+def _decide_vad_role(
+    vad: Any, *, catalog: Any, probe: ProbeEnvironment, auto_turn: bool
+) -> RoleDecision:
+    """Resolve the VAD role, THEN report it disabled when the stage is skipped.
+
+    ``create_session`` builds NO VAD when the STT owns endpointing
+    (``config/_factory.py``'s ``enable_vad`` decision), so a planner that kept
+    selecting one would block ``/health/ready`` on a VAD extra for a deployment
+    that starts fine. Both sides now read the same
+    :func:`easycat._pipeline_decisions.vad_stage_enabled` rule.
+
+    Resolution runs FIRST even when the stage is skipped, so an unknown backend
+    still RAISES (``_decide_vad``'s parity rule): an unresolvable profile must
+    stay unresolvable regardless of who owns endpointing.
+    """
+    decision = _decide_vad(vad, catalog=catalog, probe=probe)
+    if vad_stage_enabled(auto_turn_from_stt_final=auto_turn):
+        return decision
+    return replace(decision, enabled=False)
+
+
 def _decide_noise_reducer(config: EasyConfig, *, catalog: Any) -> RoleDecision:
     enabled = noise_reduction_enabled(
         enable_noise_reduction=config.enable_noise_reduction,
@@ -533,6 +554,74 @@ def _incompatibility_warnings(roles: Mapping[Role, RoleDecision]) -> tuple[str, 
     return tuple(warnings)
 
 
+# ── Turn-ownership decision ──────────────────────────────────────────
+
+
+def _resolved_smart_turn_enabled(config: Any) -> bool:
+    """``smart_turn.enabled`` as ``create_session`` RE-DERIVES it, not as stored.
+
+    ``EasyConfig.smart_turn`` is typed ``SmartTurnConfig | bool | None`` and
+    mutating it after construction is supported, so the stored attribute is not
+    the value the session runs with: ``_validate_for_session`` calls
+    ``EasyConfig._renormalize_smart_turn`` before anything is built. A bare
+    ``getattr(config.smart_turn, "enabled", False)`` therefore missed two
+    supported spellings and reported the VAD role ``off`` for a config
+    ``create_session`` then refuses to build without a VAD backend:
+
+    * ``cfg.smart_turn = True`` — ``getattr(True, "enabled", False)`` is
+      ``False``, while ``_normalize_smart_turn_config`` reads the bool.
+    * ``cfg.smart_turn_sensitivity = 0.7`` — sensitivity forces
+      ``enabled=True`` no matter what ``smart_turn`` holds.
+
+    A manifest ``VoiceProfile`` carries none of these attributes, so every
+    ``getattr`` misses and the profile path answers ``False``.
+    """
+    if getattr(config, "smart_turn_sensitivity", None) is not None:
+        # ``_normalize_smart_turn_config`` forces ``enabled=True`` whenever a
+        # sensitivity is supplied, and rejects the combination outright when
+        # smart-turn was explicitly turned off — so sensitivity decides first.
+        return True
+    is_untouched_default = getattr(config, "_smart_turn_is_untouched_default", None)
+    if callable(is_untouched_default) and is_untouched_default():
+        # The value ``EasyConfig`` synthesized for an unset ``smart_turn``, which
+        # ``_renormalize_smart_turn`` re-derives from the CURRENT stt and
+        # transport at ``create_session`` time (gh-1027). Reading the stale
+        # materialized default is what made a late ``cfg.stt`` switch to a
+        # native-endpointing provider keep a VAD in the plan that the session no
+        # longer builds. The re-derivation only turns smart-turn ON for a
+        # local-microphone transport whose STT does NOT own endpointing — the
+        # case where :func:`auto_turn_from_stt_final` already answers ``False``
+        # — so treating an untouched default as "no override" is exactly what
+        # construction resolves, without a second transport lookup here.
+        return False
+    smart_turn = getattr(config, "smart_turn", None)
+    if isinstance(smart_turn, bool):
+        return smart_turn
+    return bool(getattr(smart_turn, "enabled", False))
+
+
+def _decide_auto_turn(config: Any, *, stt: RoleDecision) -> bool:
+    """Whether turn boundaries come from STT finals, so the VAD stage is skipped.
+
+    The overrides are read with ``getattr`` so ONE function serves both entry
+    points: a manifest ``VoiceProfile`` carries no push-to-talk / smart-turn /
+    voicemail knob, so every override is absent there and the decision reduces
+    to the STT's ``native_endpointing`` capability.
+    """
+    return auto_turn_from_stt_final(
+        push_to_talk=is_push_to_talk(getattr(getattr(config, "turn_taking", None), "mode", None)),
+        smart_turn_enabled=_resolved_smart_turn_enabled(config),
+        voicemail_detector_enabled=bool(
+            getattr(getattr(config, "telephony", None), "enable_voicemail_detector", False)
+        ),
+        # The capability the STT decision already carries — the same
+        # ``native_endpointing`` string ``easycat.stt.factory``'s catalog gives
+        # ``easycat.config.easy._stt_uses_native_endpointing`` — so there is no
+        # second catalog query and no ``easycat.turn_manager`` import.
+        stt_native_endpointing="native_endpointing" in stt.capabilities,
+    )
+
+
 # ── Gap detection ────────────────────────────────────────────────────
 
 
@@ -576,12 +665,15 @@ def resolve_from_easyconfig(
     roles: dict[Role, RoleDecision] = {}
     roles["stt"] = _decide_catalog_role("stt", config.stt, catalog=catalogs["stt"])
     roles["tts"] = _decide_catalog_role("tts", config.tts, catalog=catalogs["tts"])
-    roles["vad"] = _decide_vad(config.vad, catalog=catalogs["vad"], probe=probe)
+    auto_turn = _decide_auto_turn(config, stt=roles["stt"])
+    roles["vad"] = _decide_vad_role(
+        config.vad, catalog=catalogs["vad"], probe=probe, auto_turn=auto_turn
+    )
     roles["transport"] = _decide_transport(config.transport)
     roles["agent"] = _decide_agent(config)
     roles["noise_reducer"] = _decide_noise_reducer(config, catalog=catalogs["noise_reducer"])
     roles["echo_canceller"] = _decide_echo_canceller(config, catalog=catalogs["echo_canceller"])
-    return _finalize(profile=profile, roles=roles, probe=probe, config=config)
+    return _finalize(profile=profile, roles=roles, probe=probe, auto_turn=auto_turn)
 
 
 def resolve_from_profile(
@@ -606,7 +698,10 @@ def resolve_from_profile(
     roles["tts"] = _decide_catalog_string(
         "tts", spec.tts, catalog=catalogs["tts"], default_provider=DEFAULT_TTS_PROVIDER
     )
-    roles["vad"] = _decide_vad(spec.vad, catalog=catalogs["vad"], probe=probe)
+    auto_turn = _decide_auto_turn(spec, stt=roles["stt"])
+    roles["vad"] = _decide_vad_role(
+        spec.vad, catalog=catalogs["vad"], probe=probe, auto_turn=auto_turn
+    )
 
     # Transport: map the manifest shortcut to its backend.
     transport_backend = TRANSPORT_BACKENDS.get(spec.transport)
@@ -648,7 +743,7 @@ def resolve_from_profile(
         enabled=echo_enabled, fallback_policy="passthrough"
     )
     roles["noise_reducer"] = _disabled_decision("noise_reducer", "NoiseReducerConfig")
-    return _finalize(profile=profile, roles=roles, probe=probe, config=spec)
+    return _finalize(profile=profile, roles=roles, probe=probe, auto_turn=auto_turn)
 
 
 def _finalize(
@@ -656,7 +751,7 @@ def _finalize(
     profile: str,
     roles: dict[Role, RoleDecision],
     probe: ProbeEnvironment,
-    config: Any,
+    auto_turn: bool,
 ) -> ResolvedConfiguration:
     """Turn decided roles into gaps, warnings and the pipeline booleans."""
     missing_env: set[str] = set()
@@ -664,6 +759,10 @@ def _finalize(
     degraded_extras: list[str] = []
     for role in _ROLE_ORDER:
         decision = roles[role]
+        if not decision.enabled:
+            # ``create_session`` builds nothing for a disabled role, so its
+            # credential and its extra are not requirements of this deployment.
+            continue
         if decision.required_env and not probe.env.get(decision.required_env):
             missing_env.add(decision.required_env)
         if _role_gap(decision, probe):
@@ -677,23 +776,11 @@ def _finalize(
             else:
                 missing_extras.add(decision.extra)
 
-    auto_turn = auto_turn_from_stt_final(
-        push_to_talk=is_push_to_talk(getattr(getattr(config, "turn_taking", None), "mode", None)),
-        smart_turn_enabled=bool(getattr(getattr(config, "smart_turn", None), "enabled", False)),
-        voicemail_detector_enabled=bool(
-            getattr(getattr(config, "telephony", None), "enable_voicemail_detector", False)
-        ),
-        # The capability the STT decision already carries — the same
-        # ``native_endpointing`` string ``easycat.stt.factory``'s catalog gives
-        # ``easycat.config.easy._stt_uses_native_endpointing`` — so there is no
-        # second catalog query and no ``easycat.turn_manager`` import.
-        stt_native_endpointing="native_endpointing" in roles["stt"].capabilities,
-    )
     return ResolvedConfiguration(
         profile=profile,
         roles=roles,
         auto_turn_from_stt_final=auto_turn,
-        enable_vad=vad_stage_enabled(auto_turn_from_stt_final=auto_turn),
+        enable_vad=roles["vad"].enabled,
         enable_noise_reduction=roles["noise_reducer"].enabled,
         echo_canceller_selected=roles["echo_canceller"].provider != DEFAULT_ECHO_CANCELLER,
         missing_env=tuple(sorted(missing_env)),

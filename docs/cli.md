@@ -108,7 +108,10 @@ the selected `VoiceServer` profile. `plan` resolves the same provider and
 capability inputs without starting the server — and
 `easycat doctor --manifest easycat.toml --profile default` diagnoses that same
 selection against the local machine, so the two describe one selection
-mechanism rather than two.
+mechanism rather than two. Roles the session does not build are reported as
+`off` — a `vad` role, for example, when the STT declares `native_endpointing`
+and owns turn boundaries — so their install extras are not counted as blocking
+gaps by either command.
 
 ## Documentation and error lookup
 

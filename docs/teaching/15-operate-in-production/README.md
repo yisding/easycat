@@ -688,7 +688,10 @@ Run easycat explain json-schema for CLI JSON.
   It is the side-effect-free, ahead-of-deploy counterpart to a server's
   `/health/ready` check; add `--json` (`uv run easycat plan --json`) for the
   standard machine-readable envelope, and `--profile` to plan a non-default
-  `[voice.<profile>]`.
+  `[voice.<profile>]`. Roles the session does not build are reported as `off`
+  — the `vad` role, for instance, when the profile's STT declares
+  `native_endpointing` and owns turn boundaries — so their extras are not
+  counted as blocking gaps.
 - **`uv run easycat docs`** — prints the maintained docs map and route
   descriptions so installed users can jump to quickstart, examples, teaching
   chapters, architecture and maintenance guides, deployment, observability,

@@ -44,7 +44,13 @@ class _FakeSession:
         pass
 
 
-def _write_manifest(tmp_path: Path, *, stt: str = "openai/realtime", vad: str = "silero") -> Path:
+def _write_manifest(
+    tmp_path: Path,
+    *,
+    stt: str = "openai/realtime",
+    vad: str = "silero",
+    transport: str = "webrtc",
+) -> Path:
     manifest = tmp_path / "easycat.toml"
     manifest.write_text(
         "\n".join(
@@ -58,7 +64,7 @@ def _write_manifest(tmp_path: Path, *, stt: str = "openai/realtime", vad: str = 
                 'auth = "bearer-env:EASYCAT_SERVE_TOKEN"',
                 "",
                 "[voice.default]",
-                'transport = "webrtc"',
+                f'transport = "{transport}"',
                 f'stt = "{stt}"',
                 'tts = "openai"',
                 f'vad = "{vad}"',
@@ -251,6 +257,59 @@ async def test_ready_503_when_plan_has_blocking_errors(
         assert health["checks"]["providers"] == {"status": "degraded"}
     finally:
         await server.stop()
+
+
+def test_ready_is_ready_for_a_native_endpointing_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DX1-D1: readiness must not block on a VAD the session never builds.
+
+    ``deepgram/flux-general-en`` declares ``native_endpointing``, so
+    ``create_session`` drives turns from STT FINAL events and constructs no VAD
+    at all. Before the fix ``/health/ready`` reported ``plan_has_blocking_errors``
+    on the absent ``silero-vad`` extra for a deployment that starts fine.
+
+    Uses a ``websocket`` transport so the profile itself pulls no install
+    extra, and forces the VAD probe modules absent rather than depending on the
+    checkout: a maintainer who ran ``uv sync --extra silero-vad`` has
+    ``onnxruntime`` importable, and an ambient probe would make the
+    ``deepgram/nova-2`` control's "extra is still missing" assertion fail there.
+    The control proves the ``off`` verdict is not vacuous — the same extra IS
+    blocking for a profile that does build a VAD.
+    """
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-stub")
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available",
+        lambda name: name not in {"onnxruntime", "ten_vad", "krisp_audio"},
+    )
+
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    native_dir = tmp_path / "native"
+    native_dir.mkdir()
+
+    control = VoiceServer.from_manifest(
+        _write_manifest(control_dir, stt="deepgram/nova-2", transport="websocket")
+    ).plan_payload()
+    assert control["selected"]["vad"]["provider"] == "silero"
+    assert "missing_extra:silero-vad" in control["blocking_errors"]
+    assert control["has_blocking_errors"] is True
+
+    native = VoiceServer.from_manifest(
+        _write_manifest(native_dir, stt="deepgram/flux-general-en", transport="websocket")
+    )
+    payload = native.plan_payload()
+    assert payload["selected"]["vad"]["provider"] == "off"
+    assert payload["selected"]["vad"]["capabilities"] == ["disabled"]
+    assert payload["missing_extras"] == []
+    assert payload["has_blocking_errors"] is False
+    # The tuple ``VoiceServerHealth`` turns into the 200/503 verdict
+    # (``server/health.py`` reads ``plan_has_blocking_errors``). Asserted
+    # directly because the HTTP peers in this file need aiohttp, which the dev
+    # group does not install.
+    assert native._manifest_readiness() == (True, ())
 
 
 def test_plan_payload_unresolvable_backend_returns_blocking_errors(
