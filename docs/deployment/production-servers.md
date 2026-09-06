@@ -395,12 +395,18 @@ walkthrough.
 
 `/health` and `/health/ready` are **unauthenticated** so a probe can reach them,
 and they stay deliberately content-free: they report *that* a selection is
-blocked, never which secret is missing. `/health`'s `plan_blocking_errors` and
-`/health/ready`'s `reasons` use one `key:value` grammar —
+blocked, never which secret is missing. `/health/ready`'s `reasons` carry only
+check names (`plan_has_blocking_errors`, `manifest_not_loaded`, `draining`,
+`at_capacity`, `route_stack_not_ready`), and `/health` reflects the same verdict
+as `checks.providers.status = "degraded"`. Neither body names a variable, an
+extra, or a manifest path.
+
+The blocking reasons behind that verdict use one `key:value` grammar —
 `missing_env:<VAR>`, `missing_extra:<extra>`, and the sibling
 `incomplete_selection:[voice.<name>]` token, which names a manifest path and
-never a value. `/health/ready`'s reason for an unbuildable profile stays the
-bare `plan_unresolvable`.
+never a value. They are what `ProviderPlan.blocking_errors()` returns, and they
+reach an operator through the authenticated `/plan` body's `blocking_errors`
+(and through `easycat plan --json`), not through the probe endpoints.
 
 `/plan` sits next to them behind the same bearer auth as `/metrics`,
 `/manifest`, and `/capabilities`, and reports *which* issue. It returns the
