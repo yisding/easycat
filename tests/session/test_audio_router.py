@@ -922,6 +922,70 @@ async def test_gated_replay_tally_survives_a_send_completing_mid_enqueue():
 
 
 @pytest.mark.asyncio
+async def test_gated_replay_reconciles_when_the_enqueue_is_abandoned():
+    """An enqueue that fails before queuing must not strand BOT_SPEAKING.
+
+    The enqueue guard suppresses the ``_finish_outbound_send``
+    reconciliation, so if ``bot_started_speaking()`` raises (or the caller is
+    cancelled) before any chunk is queued, there is no queued chunk left to
+    drain and clear the claimed tally. Without a reconciliation on the way
+    out, the session sits in BOT_SPEAKING forever and treats the next caller
+    utterance as barge-in.
+    """
+    router, state = _make_router()
+    stopped: list[BotStoppedSpeaking] = []
+    state["bus"].subscribe(BotStoppedSpeaking, stopped.append)
+
+    tm = state["tm"]
+    await tm.bot_started_speaking()
+    assert tm.state == TurnManagerState.BOT_SPEAKING
+
+    # ``already_replaying`` is True, so the failure has to come from the
+    # enqueue itself rather than from ``bot_started_speaking()``.
+    async def _failing_put(_chunk) -> None:
+        raise RuntimeError("queue unavailable")
+
+    state["queue"].put = _failing_put  # type: ignore[method-assign]
+
+    events = [TTSAudio(chunk=_make_chunk(byte_value=i + 1)) for i in range(3)]
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await router.gated_replay(events)
+
+    assert router._replay_enqueue_depth == 0
+    assert router._replay_chunks_pending == 0
+    assert state["tm"].state == TurnManagerState.IDLE
+    assert len(stopped) == 1
+
+
+@pytest.mark.asyncio
+async def test_gated_replay_reconciles_when_cancelled_before_enqueue():
+    """Cancellation mid-``bot_started_speaking`` must clear the claimed tally."""
+    router, state = _make_router()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _slow_started_speaking(_event) -> None:
+        started.set()
+        await release.wait()
+
+    state["bus"].subscribe(BotStartedSpeaking, _slow_started_speaking)
+
+    events = [TTSAudio(chunk=_make_chunk(byte_value=i + 1)) for i in range(3)]
+    task = asyncio.create_task(router.gated_replay(events))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert router._replay_chunks_pending == 3
+    assert state["queue"].empty()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert router._replay_enqueue_depth == 0
+    assert router._replay_chunks_pending == 0
+    release.set()
+
+
+@pytest.mark.asyncio
 async def test_gated_replay_overflow_reconciles_when_non_replay_chunk_drains_last():
     queue = BoundedAudioQueue(max_size=3, name="test_outbound")
     transport = _FakeTransport()

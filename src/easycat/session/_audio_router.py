@@ -664,6 +664,32 @@ class AudioRouter:
                     await self._outbound_queue.put(chunk)
             finally:
                 self._replay_enqueue_depth -= 1
+                await self._reconcile_abandoned_replay()
+
+    async def _reconcile_abandoned_replay(self) -> None:
+        """Clear a replay tally whose chunks never reached the queue.
+
+        The enqueue guard above suppresses the ``_finish_outbound_send``
+        reconciliation, so an enqueue that is cancelled — or whose
+        ``bot_started_speaking()`` raises — before any chunk is queued would
+        leave a claimed tally with no queued chunk left to drain and clear it.
+        The session would then sit in BOT_SPEAKING forever and treat the next
+        caller utterance as barge-in.  Re-run the same empty-queue
+        reconciliation once the outermost enqueue exits, on the exceptional
+        path too.
+
+        A no-op on the normal path: the chunks are queued by then, so the
+        queue is not empty.
+        """
+        if self._replay_enqueue_depth != 0:
+            return
+        if self._replay_chunks_pending <= 0 or not self._outbound_queue.empty():
+            return
+        # Zero the tally before awaiting so the state stays consistent even if
+        # a cancelled caller cuts the emit short.
+        self._replay_chunks_pending = 0
+        if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+            await self._turn_manager.bot_stopped_speaking()
 
     def on_playback_ack(self, event: PlaybackMarkAck) -> None:
         """Track acknowledged playout byte positions for the active turn."""
