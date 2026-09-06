@@ -769,6 +769,55 @@ class TestReadonlyStageSlices:
         with pytest.raises(sqlite3.OperationalError, match="locked"):
             view.slice_by_stage("stt")
 
+    def test_litestream_wrapper_delegates_slice_by_stage(self, tmp_path):
+        # Without the delegator ``JournalView.filter_by_stage`` sees no
+        # ``slice_by_stage`` on the wrapper and deserializes every record
+        # instead of using the inner journal's stage indexes (gh 1026).
+        from easycat.runtime import LitestreamSqliteJournal
+        from easycat.runtime.journal import JournalView
+
+        j = LitestreamSqliteJournal("stage-sess", data_dir=tmp_path)
+        try:
+            j.append(
+                kind=JournalRecordKind.EVENT,
+                name="direct",
+                session_id="stage-sess",
+                data={"stage": "stt"},
+            )
+            j.append(
+                kind=JournalRecordKind.CONTROL,
+                name="observed",
+                session_id="stage-sess",
+                data={"stage": "agent", "observed_stage": "stt"},
+            )
+            j.append(
+                kind=JournalRecordKind.EVENT,
+                name="other",
+                session_id="stage-sess",
+                data={"stage": "tts"},
+            )
+
+            assert [r.name for r in j.slice_by_stage("stt")] == ["direct", "observed"]
+            assert [r.name for r in j.slice_by_stage("tts")] == ["other"]
+            assert j.slice_by_stage("missing") == []
+
+            # ``JournalView`` must reach the indexed path, not the read() scan.
+            calls: list[str] = []
+            original = j.read
+
+            def _tracked(*args, **kwargs):
+                calls.append("read")
+                return original(*args, **kwargs)
+
+            j.read = _tracked  # type: ignore[method-assign]
+            assert [r.name for r in JournalView(j).filter_by_stage("stt")] == [
+                "direct",
+                "observed",
+            ]
+            assert calls == []
+        finally:
+            j.close()
+
     def test_frozen_snapshot_matches_stage_and_observed_stage(self):
         from easycat.runtime.journal_views import FrozenJournalSnapshot
 
