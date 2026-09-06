@@ -12,6 +12,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol, Self, TextIO
 
+logger = logging.getLogger(__name__)
+
 
 class PushToTalkSession(Protocol):
     """Subset of :class:`easycat.Session` used by push-to-talk controls."""
@@ -29,20 +31,28 @@ class ManagedPushToTalkSession(PushToTalkSession, Protocol):
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None: ...
 
 
-# Cap the constructor-time adoption so a stream that is being written to
-# continuously cannot spin the drain instead of arming the reader.
-_MAX_ADOPTED_CHARS = 1 << 20
-
-logger = logging.getLogger(__name__)
-
-
 class _LineReader(Protocol):
     async def read(self) -> bool: ...
 
     def close(self) -> None: ...
 
 
+# Bytes pulled per ``os.read``; also the chunk size of the constructor-time
+# adoption below.
 _READ_SIZE = 4096
+# Universal-newline terminators, matching what ``TextIOWrapper`` translated.
+_CR = 0x0D
+
+
+def _find_line_end(buffer: bytes) -> int:
+    """Index of the first ``\r`` or ``\n`` in *buffer*, or ``-1``."""
+    cr = buffer.find(b"\r")
+    lf = buffer.find(b"\n")
+    if cr < 0:
+        return lf
+    if lf < 0:
+        return cr
+    return min(cr, lf)
 
 
 def _adopt_buffered_text(stream: TextIO, fd: int) -> bytes:
@@ -71,14 +81,18 @@ def _adopt_buffered_text(stream: TextIO, fd: int) -> bytes:
     except (OSError, ImportError, ValueError):
         return b""
 
-    pending = ""
+    chunks: list[str] = []
     try:
         fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-        while len(pending) < _MAX_ADOPTED_CHARS:
+        # Drained to exhaustion on purpose: stopping at a cap would leave text
+        # in the wrapper that ``os.read`` can never reach, which is the very
+        # bug this helper exists to prevent.  The reads are non-blocking, so
+        # the loop ends the moment nothing more is immediately available.
+        while True:
             chunk = stream.read(_READ_SIZE)
             if not chunk:
                 break
-            pending += chunk
+            chunks.append(chunk)
     except Exception:
         logger.debug("Could not adopt buffered stdin text", exc_info=True)
     finally:
@@ -87,6 +101,7 @@ def _adopt_buffered_text(stream: TextIO, fd: int) -> bytes:
         except OSError:  # pragma: no cover - the fd was valid moments ago
             logger.debug("Could not restore stdin blocking mode", exc_info=True)
 
+    pending = "".join(chunks)
     if not pending:
         return b""
     return pending.encode(stream.encoding or "utf-8", "replace")
@@ -122,14 +137,44 @@ class _SelectorLineReader:
         self._pending: deque[bool | Exception] = deque()
         self._ready = asyncio.Event()
         self._registered = False
+        # A CR ended the previous chunk: a single LF opening the next one is
+        # the other half of that terminator, not an empty line.
+        self._skip_lf = False
         self._buffer = _adopt_buffered_text(stream, fd)
         self._publish_complete_lines()
         loop.add_reader(fd, self._on_readable)
         self._registered = True
 
     def _publish_complete_lines(self) -> None:
-        while b"\n" in self._buffer:
-            _line, _, self._buffer = self._buffer.partition(b"\n")
+        """Report one line per universal-newline terminator in the buffer.
+
+        ``TextIOWrapper`` translated bare ``\r`` and ``\r\n`` into ``\n``, so
+        splitting bytes on ``\n`` alone would strand CR-terminated input (a tty
+        with ``ICRNL`` off sends ``\r`` for Enter) and never toggle.
+
+        A CR at the end of the buffer is reported immediately and its LF half,
+        should one follow, is swallowed on the next read -- the same carry an
+        incremental newline decoder keeps.  Holding the CR back until the next
+        byte disambiguated it would instead make every CR-only keypress lag by
+        one, which is the very bug this reader exists to fix.
+        """
+        while self._buffer:
+            if self._skip_lf:
+                self._skip_lf = False
+                if self._buffer[:1] == b"\n":
+                    self._buffer = self._buffer[1:]
+                    continue
+            index = _find_line_end(self._buffer)
+            if index < 0:
+                return
+            end = index + 1
+            if self._buffer[index] == _CR:
+                if end < len(self._buffer):
+                    if self._buffer[end : end + 1] == b"\n":
+                        end += 1
+                else:
+                    self._skip_lf = True
+            self._buffer = self._buffer[end:]
             self._publish(True)
 
     def _on_readable(self) -> None:
