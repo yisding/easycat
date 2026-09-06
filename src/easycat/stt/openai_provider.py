@@ -167,18 +167,27 @@ class OpenAISTT(ProviderErrorEmitter, STTBase):
         Each attempt buffers its events internally and only emits on success,
         preserving the emit-on-success-only semantics across retries.
         """
+        # One client for all attempts: a per-attempt client would pay a fresh
+        # DNS+TCP+TLS handshake on every retry, exactly when the provider is
+        # already slow or rate-limited (matches the ElevenLabs provider).
+        client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
+        owns_client = self._config.http_client is None
         try:
-            return await self._run_with_bounded_retry(
-                lambda: self._attempt_streaming_transcription(wav_data),
-                max_retries=self._config.max_retries,
-                provider_label="OpenAI STT",
-            )
-        except Exception as exc:
-            context: dict[str, object] = {}
-            if isinstance(exc, httpx.HTTPStatusError):
-                context["http_status"] = exc.response.status_code
-            self._emit_provider_error(exc, **context)
-            raise
+            try:
+                return await self._run_with_bounded_retry(
+                    lambda: self._attempt_streaming_transcription(wav_data, client),
+                    max_retries=self._config.max_retries,
+                    provider_label="OpenAI STT",
+                )
+            except Exception as exc:
+                context: dict[str, object] = {}
+                if isinstance(exc, httpx.HTTPStatusError):
+                    context["http_status"] = exc.response.status_code
+                self._emit_provider_error(exc, **context)
+                raise
+        finally:
+            if owns_client:
+                await client.aclose()
 
     def _request_form_data(self) -> dict[str, str]:
         """Multipart form fields for the streaming transcription request."""
@@ -190,45 +199,44 @@ class OpenAISTT(ProviderErrorEmitter, STTBase):
         data["stream"] = "true"
         return data
 
-    async def _attempt_streaming_transcription(self, wav_data: bytes) -> str:
+    async def _attempt_streaming_transcription(
+        self,
+        wav_data: bytes,
+        client: httpx.AsyncClient,
+    ) -> str:
         """Run one streaming transcription attempt and emit its events.
 
         Events are buffered in the parser for the whole attempt so a
         mid-stream retry does not replay duplicate PARTIAL/FINAL events
         onto the queue — they are only flushed once the attempt completes
-        successfully.
+        successfully.  ``client`` is owned by the caller and shared across
+        retries so a retry reuses the established connection.
         """
         url = f"{self._config.base_url}/audio/transcriptions"
         headers = {"Authorization": f"Bearer {self._config.api_key}"}
-        client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
-        owns_client = self._config.http_client is None
-        try:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                files={"file": ("audio.wav", wav_data, "audio/wav")},
-                data=self._request_form_data(),
-            ) as response:
-                response.raise_for_status()
-                parser = _TranscriptStreamParser(self._config)
-                stream_timeout = self._config.stream_timeout or self._config.timeout
-                try:
-                    async with asyncio.timeout(stream_timeout):
-                        async for chunk in response.aiter_bytes():
-                            if parser.feed(chunk):
-                                break
-                        parser.finish()
-                except TimeoutError as exc:
-                    raise OpenAISTTStreamLimitError(
-                        f"OpenAI STT streaming response exceeded {stream_timeout:.1f}s"
-                    ) from exc
-                for event in parser.pending_events:
-                    self._emit_event(event)
-                return parser.full_text
-        finally:
-            if owns_client:
-                await client.aclose()
+        async with client.stream(
+            "POST",
+            url,
+            headers=headers,
+            files={"file": ("audio.wav", wav_data, "audio/wav")},
+            data=self._request_form_data(),
+        ) as response:
+            response.raise_for_status()
+            parser = _TranscriptStreamParser(self._config)
+            stream_timeout = self._config.stream_timeout or self._config.timeout
+            try:
+                async with asyncio.timeout(stream_timeout):
+                    async for chunk in response.aiter_bytes():
+                        if parser.feed(chunk):
+                            break
+                    parser.finish()
+            except TimeoutError as exc:
+                raise OpenAISTTStreamLimitError(
+                    f"OpenAI STT streaming response exceeded {stream_timeout:.1f}s"
+                ) from exc
+            for event in parser.pending_events:
+                self._emit_event(event)
+            return parser.full_text
 
     @staticmethod
     def _extract_stream_text(payload: str) -> tuple[str | None, bool, bool]:
