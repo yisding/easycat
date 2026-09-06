@@ -1648,6 +1648,98 @@ class TestTwilioStreamLifecycleRaces:
         await asyncio.wait_for(new_task, timeout=1.0)
 
     @pytest.mark.asyncio
+    async def test_replacement_survives_a_reconnect_during_the_call_ended_emit(
+        self,
+    ) -> None:
+        """The finalizer's guard must be re-checked after the awaited emit (gh 1103).
+
+        ``_finalize_after_receive`` evaluated ownership *before* awaiting
+        ``_emit_call_ended_once`` and then tore down unconditionally after it.
+        That emit awaits real subscribers, so a carrier reconnect can complete
+        its ``start`` frame inside the suspension and legitimately claim the
+        slot — and the resumed teardown then wiped the *replacement's* state and
+        enqueued a sentinel against it, silently.
+        """
+        bus = EventBus()
+        ended: list[str] = []
+        reconnect_done = asyncio.Event()
+        old_ws = _BlockingTwilioWebSocket()
+        new_ws = _BlockingTwilioWebSocket()
+        transport = TwilioTransport(event_bus=bus)
+
+        async def _slow_call_ended(event: CallEnded) -> None:
+            ended.append(event.call_sid)
+            if reconnect_done.is_set():
+                return
+            # Stand in for a handler doing network I/O: the carrier reconnects
+            # and completes its ``start`` frame while we are suspended here.
+            transport._ws = new_ws  # type: ignore[assignment]
+            await transport._handle_message(_twilio_start_msg("STREAM2", "CALL2"))
+            reconnect_done.set()
+
+        bus.subscribe(CallEnded, _slow_call_ended)
+
+        old_task = asyncio.create_task(transport._handle_connection(old_ws))  # type: ignore[arg-type]
+        await asyncio.wait_for(old_ws.entered.wait(), timeout=1.0)
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+
+        # End the old receive loop; its finalizer emits CallEnded for CALL1,
+        # and the replacement lands inside that emit.
+        old_ws.release.set()
+        await asyncio.wait_for(old_task, timeout=1.0)
+        await transport._drain_emit_tasks()
+        assert reconnect_done.is_set(), "the race window was not exercised"
+
+        # The replacement's state must be intact and unpoisoned.
+        assert transport._ws is new_ws
+        assert transport.stream_sid == "STREAM2"
+        assert transport.call_sid == "CALL2"
+        assert transport._in_queue.empty(), "a phantom sentinel was enqueued"
+        assert ended == ["CALL1"]
+
+        # ...and the replacement still carries audio.
+        mulaw_data = pcm16_to_mulaw(bytes(320), source_rate=8000)
+        for _ in range(4):
+            await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
+        assert transport._in_queue.get_nowait() is not None
+
+        # The replacement socket was installed directly (no handler task), so
+        # there is nothing to await here.
+        new_ws.release.set()
+
+    @pytest.mark.asyncio
+    async def test_send_error_does_not_clear_a_replacement_claimed_mid_emit(
+        self,
+    ) -> None:
+        """``send_audio``'s slot release has the same re-check (gh 1103)."""
+        bus = EventBus()
+        reconnect_done = asyncio.Event()
+        old_ws = _BlockingTwilioWebSocket()
+        new_ws = _BlockingTwilioWebSocket()
+        transport = TwilioTransport(event_bus=bus)
+
+        async def _slow_call_ended(event: CallEnded) -> None:
+            if reconnect_done.is_set():
+                return
+            transport._ws = new_ws  # type: ignore[assignment]
+            await transport._handle_message(_twilio_start_msg("STREAM2", "CALL2"))
+            reconnect_done.set()
+
+        bus.subscribe(CallEnded, _slow_call_ended)
+
+        transport._ws = old_ws  # type: ignore[assignment]
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        old_ws.fail_sends = True
+
+        assert await transport.send_audio(make_chunk()) is False
+        await transport._drain_emit_tasks()
+        assert reconnect_done.is_set(), "the race window was not exercised"
+
+        assert transport._ws is new_ws
+        assert transport.stream_sid == "STREAM2"
+        assert transport.has_client is True
+
+    @pytest.mark.asyncio
     async def test_server_transport_ignores_stale_stop_and_media_after_new_start(
         self,
     ) -> None:

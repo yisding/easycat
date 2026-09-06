@@ -555,3 +555,111 @@ async def test_connect_replays_pending_start_and_streams_audio() -> None:
 
     await transport.disconnect()
     assert not transport.is_connected
+
+
+# ── Reconnect race across the awaited CallEnded emit (gh 1103) ────
+
+
+class _BlockingTelnyxWebSocket:
+    """Async-iterable fake that suspends in ``__anext__`` until released."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.fail_sends = False
+        self.closed_with: tuple[object, ...] | None = None
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    def __aiter__(self) -> _BlockingTelnyxWebSocket:
+        return self
+
+    async def __anext__(self) -> str:
+        self.entered.set()
+        await self.release.wait()
+        raise StopAsyncIteration
+
+    async def send(self, message: str) -> None:
+        if self.fail_sends:
+            import websockets
+
+            close_frame = websockets.frames.Close(1006, "abnormal")
+            raise websockets.exceptions.ConnectionClosed(close_frame, None)
+        self.sent.append(message)
+
+    async def close(self, *args: object) -> None:
+        self.closed_with = args
+
+
+@pytest.mark.asyncio
+async def test_telnyx_replacement_survives_a_reconnect_during_the_call_ended_emit() -> None:
+    """The finalizer's ownership guard must be re-checked after the emit (gh 1103).
+
+    Same defect and same fix as the Twilio transport — both live on the single
+    shared protocol mixin.
+    """
+    bus = EventBus()
+    ended: list[str] = []
+    reconnect_done = asyncio.Event()
+    old_ws = _BlockingTelnyxWebSocket()
+    new_ws = _BlockingTelnyxWebSocket()
+    transport = TelnyxTransport(event_bus=bus)
+
+    async def _slow_call_ended(event: CallEnded) -> None:
+        ended.append(event.call_sid)
+        if reconnect_done.is_set():
+            return
+        transport._ws = new_ws  # type: ignore[assignment]
+        await transport._handle_message(_start_msg(stream_id="ST2", call_control_id="CC2"))
+        reconnect_done.set()
+
+    bus.subscribe(CallEnded, _slow_call_ended)
+
+    old_task = asyncio.create_task(transport._handle_connection(old_ws))  # type: ignore[arg-type]
+    await asyncio.wait_for(old_ws.entered.wait(), timeout=1.0)
+    await transport._handle_message(_start_msg(stream_id="ST1", call_control_id="CC1"))
+
+    old_ws.release.set()
+    await asyncio.wait_for(old_task, timeout=1.0)
+    await drain(transport)
+    assert reconnect_done.is_set(), "the race window was not exercised"
+
+    assert transport._ws is new_ws
+    assert transport._stream_id == "ST2"
+    assert transport._call_control_id == "CC2"
+    assert transport._in_queue.empty(), "a phantom sentinel was enqueued"
+    assert ended == ["CC1"]
+
+    new_ws.release.set()
+
+
+@pytest.mark.asyncio
+async def test_telnyx_send_error_does_not_clear_a_replacement_claimed_mid_emit() -> None:
+    """``_send_media_frames``' slot release has the same re-check (gh 1103)."""
+    bus = EventBus()
+    reconnect_done = asyncio.Event()
+    old_ws = _BlockingTelnyxWebSocket()
+    new_ws = _BlockingTelnyxWebSocket()
+    transport = TelnyxTransport(event_bus=bus)
+
+    async def _slow_call_ended(event: CallEnded) -> None:
+        if reconnect_done.is_set():
+            return
+        transport._ws = new_ws  # type: ignore[assignment]
+        await transport._handle_message(_start_msg(stream_id="ST2", call_control_id="CC2"))
+        reconnect_done.set()
+
+    bus.subscribe(CallEnded, _slow_call_ended)
+
+    transport._ws = old_ws  # type: ignore[assignment]
+    await transport._handle_message(_start_msg(stream_id="ST1", call_control_id="CC1"))
+    old_ws.fail_sends = True
+
+    # Enough audio to flush the outbound coalescer and reach a real send.
+    for _ in range(10):
+        await transport.send_audio(AudioChunk(data=_pcm_silence(120), format=PCM16_MONO_16K))
+    await drain(transport)
+    assert reconnect_done.is_set(), "the race window was not exercised"
+
+    assert transport._ws is new_ws
+    assert transport._stream_id == "ST2"
+    assert transport.has_client is True
