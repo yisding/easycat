@@ -454,7 +454,10 @@ class _AudioDecisions:
     # pre-built provider objects alongside the typed provider configs.
     stt_spec: Any
     tts_spec: Any
-    # None when the VAD stage is skipped entirely (see ``enable_vad``).
+    # The caller's vad spec, or None when the VAD stage is skipped. NOT an
+    # iff: this is also None when the caller left ``vad`` unset while the
+    # stage runs, in which case construction builds a default VAD. Branch on
+    # ``enable_vad`` — it is the only authority on whether the stage runs.
     vad_spec: Any | None
     # The reducer spec, defaulted when needed; None when reduction is off.
     noise_spec: Any | None
