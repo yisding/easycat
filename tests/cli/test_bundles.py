@@ -395,9 +395,14 @@ def test_journal_grep_json_redacts_matches(cli: CliRunner, tmp_path: Path) -> No
     match = payload["matches"][0]
     assert match["sequence"] == 1
     assert match["match_fields"] == ["data"]
-    # The raw phone number must never reach the output; only the marker.
+    # The raw phone number must never reach the output — and neither must the
+    # rest of the matched utterance: ``data.text`` is free-form journal text
+    # outside the field-name allowlist, so grep replaces it wholesale rather
+    # than emitting it with only pattern redaction (gh 1102). ``match_fields``
+    # is what tells the caller *where* the hit was.
     assert "555-123-4567" not in result.stdout
-    assert match["data"]["text"] == "please call [REDACTED_PHONE] now"
+    assert "please call" not in result.stdout
+    assert match["data"]["text"] == "[REDACTED_TRANSCRIPT]"
 
 
 def test_journal_grep_regex_and_errors(cli: CliRunner, tmp_path: Path) -> None:
@@ -480,6 +485,78 @@ def test_journal_follow_json_record_redacts_sensitive_payloads() -> None:
     assert redacted["data"]["delta"] == "[REDACTED_TRANSCRIPT]"
     assert redacted["data"]["api_key"] == "[REDACTED_SECRET]"
     assert "[REDACTED_SECRET]" in rendered
+
+
+def test_journal_follow_json_record_redacts_every_free_text_data_key() -> None:
+    """The sibling free-text keys must be suppressed too (gh 1102).
+
+    Only ``text`` and ``delta`` were scrubbed, so the *same* utterance
+    scrubbed from ``data.text`` still streamed verbatim in
+    ``data.transcript_text`` of the same record — and tool results, prepared
+    TTS text, and interruption notes streamed untouched.
+    """
+    from easycat.cli.debug._common import FREE_TEXT_DATA_KEYS
+
+    secret = "the patient's account number is on file"
+    record = {
+        "sequence": 1,
+        "turn_id": "t1",
+        "name": "stt_segment_final",
+        "data": {key: secret for key in FREE_TEXT_DATA_KEYS},
+    }
+
+    redacted = _redact_follow_record(record)
+    rendered = json.dumps(redacted)
+
+    assert secret not in rendered
+    for key in FREE_TEXT_DATA_KEYS:
+        assert redacted["data"][key] == "[REDACTED_TRANSCRIPT]", key
+
+
+def test_journal_grep_json_redacts_every_free_text_data_key(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """``journal grep --json`` promised "a small, fully redacted summary row".
+
+    It passed the whole ``data`` dict through ``redact_value`` with no
+    free-text suppression, so ``data.text`` — the matched utterance itself —
+    was emitted verbatim (gh 1102).
+    """
+    from easycat.cli.debug._common import FREE_TEXT_DATA_KEYS
+
+    secret = "my mother's maiden name is Wodehouse"
+    bundle = tmp_path / "grep-free-text.zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "name": "stt_final",
+                "turn_id": "t1",
+                "data": {key: secret for key in FREE_TEXT_DATA_KEYS},
+            }
+        ],
+    )
+
+    result = cli.invoke(app, ["journal", "grep", str(bundle), "--query", "Wodehouse", "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    # The caller's own query is echoed back by design; the record's text is not.
+    assert secret not in result.stdout
+    assert "maiden name" not in result.stdout
+    match = json.loads(result.stdout)["matches"][0]
+    for key in FREE_TEXT_DATA_KEYS:
+        assert match["data"][key] == "[REDACTED_TRANSCRIPT]", key
+
+
+def test_grep_and_follow_share_one_free_text_key_list() -> None:
+    """One list, so a new text-carrying key cannot be fixed on only one surface."""
+    from easycat.cli.debug import follow as follow_module
+    from easycat.cli.debug import grep as grep_module
+    from easycat.cli.debug._common import redact_free_text_data
+
+    assert follow_module.redact_free_text_data is redact_free_text_data
+    assert grep_module.redact_free_text_data is redact_free_text_data
 
 
 def test_format_follow_line_milestone_and_audio_bar() -> None:

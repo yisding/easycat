@@ -14,9 +14,9 @@ from rich.markup import escape
 
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, stderr_console, stdout_console
-from easycat.cli.debug._common import _record_detail, _record_stage
+from easycat.cli.debug._common import _record_detail, _record_stage, redact_free_text_data
 from easycat.debug._turn_timeline import safe_turn_id
-from easycat.validation.redaction import REDACTED_TRANSCRIPT, redact_value
+from easycat.validation.redaction import redact_value
 
 # Record names whose ``data['audio_bytes']`` we render as a compact audio
 # bar so a tail watcher can eyeball codec/frame throughput without opening
@@ -296,31 +296,21 @@ def _record_to_follow_dict(record: Any) -> dict[str, Any]:
     return out
 
 
-# Free-form STT/agent text that ``SessionJournalSink`` stores under generic
-# ``data`` keys: final/partial transcript and model output land under
-# ``data.text`` and streamed tokens under ``data.delta``.  Neither key is in
-# ``redact_value``'s field-name allowlist, so they would only get pattern-based
-# redaction and otherwise stream verbatim utterances (e.g. medical or account
-# details).  Replace them wholesale with the shared transcript placeholder.
-_FOLLOW_FREE_TEXT_KEYS = ("text", "delta")
-
-
 def _redact_follow_record(record: Mapping[str, Any]) -> dict[str, Any]:
     """Return a redacted copy of a follow record before JSON streaming.
 
     Human follow output already renders a narrow, redacted summary.  JSON mode
     intentionally preserves the same record shape for incremental consumers,
     but must pass every projected field through the shared redaction policy
-    before writing newline-delimited records to stdout.  Free-form transcript
-    and model text under ``data.text`` / ``data.delta`` is stripped explicitly
-    because those generic keys fall outside the shared field-name allowlist.
+    before writing newline-delimited records to stdout.  Free-form transcript,
+    model, and tool text is stripped explicitly via
+    :data:`FREE_TEXT_DATA_KEYS`, because those generic ``data`` keys fall
+    outside the shared field-name allowlist.
     """
     redacted = cast(dict[str, Any], redact_value(dict(record)))
     data = redacted.get("data")
     if isinstance(data, dict):
-        for key in _FOLLOW_FREE_TEXT_KEYS:
-            if key in data:
-                data[key] = REDACTED_TRANSCRIPT
+        redact_free_text_data(data)
     return redacted
 
 

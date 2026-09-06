@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import typer
 from rich.markup import escape
@@ -19,7 +19,12 @@ from easycat.cli._output import (
     stdout_console,
     warn,
 )
-from easycat.cli.debug._common import _load_bundle_or_journal, _print_wide, _record_detail
+from easycat.cli.debug._common import (
+    _load_bundle_or_journal,
+    _print_wide,
+    _record_detail,
+    redact_free_text_data,
+)
 from easycat.validation.redaction import redact_text, redact_value
 
 
@@ -43,7 +48,13 @@ def _redact_grep_match(record: Mapping[str, Any]) -> dict[str, Any]:
         "turn_id": redact_text(str(record["turn_id"])) if record.get("turn_id") else None,
         "name": redact_text(str(record.get("name") or "")),
         "match_fields": list(record.get("_match_fields") or []),
-        "data": redact_value(record.get("data") or {}, "data"),
+        # ``redact_value`` alone leaves free-form ``data`` keys (``text``,
+        # ``transcript_text``, tool ``result``, …) to pattern matching, so a
+        # matched utterance streamed verbatim from a command whose whole job is
+        # a "fully redacted summary row" (gh 1102).
+        "data": redact_free_text_data(
+            cast(dict[str, Any], redact_value(record.get("data") or {}, "data"))
+        ),
         "error": error_summary,
     }
 
