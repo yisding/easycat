@@ -1,6 +1,8 @@
 # $PROJECT_NAME
 
 Text-mode EasyCat agent — iterate on prompts without audio infrastructure.
+`agent.py` builds the agent in `make_agent()`; importing it starts nothing,
+so the tests can import the real app.
 
 ## Install
 
@@ -58,9 +60,10 @@ uv run ruff check agent.py
 If Ruff reports an auto-fixable issue, run
 `uv run ruff check --fix agent.py` and then re-run the check.
 
-Then run the offline agent tests — no API keys or network needed
-(`tests/test_agent.py` exercises the real turn pipeline with a stub
-agent; see `AGENTS.md` for the testing-and-evals ladder):
+Then run the offline agent tests — no API keys, no network, no microphone
+(`tests/test_agent.py` asserts `agent.py`'s wiring and drives EasyCat's real
+text and audio pipelines with a scripted stand-in for the model; see
+`AGENTS.md` for the testing-and-evals ladder):
 
 ```bash
 uv run pytest
@@ -68,15 +71,16 @@ uv run pytest
 
 ## Next steps
 
-- **Change the agent's personality:** edit `instructions=...` in `agent.py`.
+- **Change the agent's personality:** edit the `INSTRUCTIONS` constant that
+  `make_agent()` passes to the agent in `agent.py`.
 - **Add tools:** see the OpenAI Agents SDK docs and pass `tools=[...]` to the
-  `Agent(...)` constructor.
+  `Agent(...)` constructor in `make_agent()`.
 - **Swap to a voice agent:** replace `create_text_session` with
-  `easycat.run(EasyConfig.mic(agent=agent))` and add `stt=` / `tts=`. Or run
-  `uv run easycat init my-voice-agent --template openai-agents` for a voice
-  starter.
+  `easycat.run(EasyConfig.mic(agent=make_agent()))` and add `stt=` / `tts=`.
+  Or run `uv run easycat init my-voice-agent --template openai-agents` for a
+  voice starter.
 - **Debug a session:** pass `debug="full", record_to=".easycat/runs"` to
-  `create_text_session`. EasyCat writes a SQLite journal under
+  `create_text_session(agent=make_agent(), ...)`. EasyCat writes a SQLite journal under
   `.easycat/journals/` and a timestamped `RunBundle` under `.easycat/runs/`; inspect
   the journal with `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
   Debug bundles can contain raw transcripts, tool arguments, provider payloads,
