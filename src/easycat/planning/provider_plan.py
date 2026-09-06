@@ -38,6 +38,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
+from easycat.errors import SetupIssue
 from easycat.planning.transport_registry import (
     AGENT_BACKENDS,
     DEFAULT_AGENT,
@@ -101,6 +102,12 @@ class ProviderPlan:
     ``warnings`` carries non-blocking notes (e.g. an incompatible-but-tolerated
     combo). A role with a missing required env var OR a missing required extra is
     a BLOCKING error — what ``/health/ready`` and the parity gate read.
+
+    ``defects`` carries coded selection defects the pure planner cannot see
+    because they live on the MANIFEST rather than on a ``VoiceProfile`` (an
+    unset ``bearer-env:`` reference, a phone profile with no token). It is
+    populated by :func:`easycat.planning.selection.build_manifest_plan` and
+    stays ``()`` for every plan built straight from an ``EasyConfig``.
     """
 
     profile: str
@@ -108,6 +115,7 @@ class ProviderPlan:
     missing_env: tuple[str, ...]
     missing_extras: tuple[str, ...]
     warnings: tuple[str, ...]
+    defects: tuple[SetupIssue, ...] = ()
 
     def blocking_errors(self) -> tuple[str, ...]:
         """Return content-free blocking-error reasons (sorted, deduped).

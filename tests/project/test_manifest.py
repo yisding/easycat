@@ -7,6 +7,7 @@ resolver.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import types
@@ -469,3 +470,104 @@ def test_load_from_file_round_trip(tmp_path: object) -> None:
     manifest = load_manifest(path)
     assert manifest.source_path == path.resolve()
     assert manifest.project.name == "rt"
+
+
+# ── profile requirements / defects (DX2) ───────────────────────────────
+
+
+def _phone_manifest(**profile_extra: object) -> object:
+    profile: dict[str, object] = {"transport": "twilio"}
+    profile.update(profile_extra)
+    return parse_manifest(
+        {
+            "project": {"name": "phone"},
+            "voice": {"default": profile},
+        }
+    )
+
+
+def test_profile_requirements_list_auth_and_token_references() -> None:
+    """U-6: the manifest owns "what this profile binds" — names, never values."""
+    manifest = parse_manifest(
+        {
+            "project": {"name": "demo"},
+            "server": {"auth": "bearer-env:SRV_TOK"},
+            "voice": {
+                "default": {"transport": "twilio", "token": "bearer-env:TW_TOK"},
+            },
+        }
+    )
+
+    requirements = manifest.profile_requirements("default")
+
+    assert {req.var for req in requirements} == {"SRV_TOK", "TW_TOK"}
+    by_var = {req.var: req for req in requirements}
+    assert by_var["SRV_TOK"].field == "[server] auth"
+    assert by_var["SRV_TOK"].reference == "bearer-env:SRV_TOK"
+    assert by_var["TW_TOK"].field == "[voice.default] token"
+    assert by_var["TW_TOK"].reference == "bearer-env:TW_TOK"
+    assert all(req.requirement == "required" for req in requirements)
+    # Only names and references live on the returned objects — no resolved value.
+    assert all(
+        set(dataclasses.asdict(req)) == {"var", "field", "reference", "requirement"}
+        for req in requirements
+    )
+
+
+def test_profile_requirements_are_empty_without_references() -> None:
+    manifest = parse_manifest(
+        {"project": {"name": "demo"}, "voice": {"default": {"transport": "webrtc"}}}
+    )
+
+    assert manifest.profile_requirements("default") == ()
+    assert manifest.profile_defects("default") == ()
+
+
+def test_profile_defects_match_to_easyconfig_message() -> None:
+    """U-5: pins the ``to_easyconfig`` deletion — one owner, identical text."""
+    manifest = _phone_manifest()
+
+    (defect,) = manifest.profile_defects("default")
+    with pytest.raises(EasyCatError) as raised:
+        manifest.to_easyconfig("default", resolve_agent=False)
+
+    assert defect.code == "EASYCAT_E602"
+    assert defect.message == raised.value.message
+    assert defect.context == raised.value.context
+    assert "TWILIO_STREAM_TOKEN_SECRET" in defect.message
+
+
+def test_profile_defects_name_the_telnyx_token_var() -> None:
+    manifest = parse_manifest(
+        {"project": {"name": "phone"}, "voice": {"default": {"transport": "telnyx"}}}
+    )
+
+    (defect,) = manifest.profile_defects("default")
+
+    assert "TELNYX_STREAM_TOKEN_SECRET" in defect.message
+
+
+def test_to_easyconfig_defect_precedence_is_unchanged() -> None:
+    """U-9: the token defect must not pre-empt the vad / agent raises."""
+    # (a) a bad vad shortcut still wins over the missing token.
+    both = _phone_manifest(vad="silro")
+    with pytest.raises(EasyCatError) as vad_raised:
+        both.to_easyconfig("default", resolve_agent=False)
+    assert vad_raised.value.code == "EASYCAT_E602"
+    assert vad_raised.value.context["path"] == "[voice.default]"
+    assert "vad" in vad_raised.value.message
+    assert "requires a token reference" not in vad_raised.value.message
+
+    # (b) a broken agent reference still wins over the missing token.
+    agent = _phone_manifest(agent="python:no_such_module_dx2:build")
+    with pytest.raises(EasyCatError) as agent_raised:
+        agent.to_easyconfig("default")
+    assert agent_raised.value.code == "EASYCAT_E605"
+
+    # (c) single-cause: the token defect, with the manifest-scoped path.
+    only_token = _phone_manifest()
+    with pytest.raises(EasyCatError) as token_raised:
+        only_token.to_easyconfig("default", resolve_agent=False)
+    assert token_raised.value.code == "EASYCAT_E602"
+    assert token_raised.value.context["path"] == "easycat.toml"
+    assert "requires a token reference" in token_raised.value.message
