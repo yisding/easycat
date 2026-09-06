@@ -719,8 +719,18 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 STTEvent(
                     type=STTEventType.FINAL,
                     text=result["text"],
-                    confidence=result.get("confidence"),
-                    language=result.get("language") or self._config.language,
+                    # ``language_code`` is the response field; ``language``
+                    # does not exist, so the detected language used to be
+                    # discarded in favour of the configured one (gh 1064).
+                    #
+                    # ``confidence`` stays unset on purpose: the response
+                    # carries no top-level transcription confidence.  Its only
+                    # top-level score is ``language_probability``, which is
+                    # language-detection confidence — a different quantity —
+                    # and per-word scores are ``logprob`` values inside
+                    # ``words``.  Recording either under ``confidence`` would
+                    # put a number with the wrong meaning in the journal.
+                    language=result.get("language_code") or self._config.language,
                 )
             )
 
@@ -729,9 +739,15 @@ class ElevenLabsSTT(WebSocketSTTBase):
         headers = {"xi-api-key": self._config.api_key}
 
         data: dict[str, str] = {}
-        data["model"] = self._resolved_model()
+        # ``model_id`` (required) and ``language_code`` are the documented
+        # multipart field names; the schema has no ``model``/``language``
+        # field.  The older spelling therefore sent no model at all, the API
+        # answered 422, and the bounded retry deliberately does not retry a
+        # non-429 status — so batch mode failed on every attempt.  These match
+        # the realtime query params in ``_build_realtime_ws_url`` (gh 1064).
+        data["model_id"] = self._resolved_model()
         if self._config.language:
-            data["language"] = self._config.language
+            data["language_code"] = self._config.language
         # Zero-retention mode is a *query* parameter on /v1/speech-to-text (the
         # multipart schema has no such field), so send it via ``params`` — in
         # ``data`` it would be silently ignored. Opt-in: only sent when

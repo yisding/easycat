@@ -83,12 +83,21 @@ def _make_el_stt_realtime(
 
 
 def _make_mock_http_client(
-    text: str = "hello world", confidence: float | None = None
+    text: str = "hello world",
+    language_code: str | None = None,
+    language_probability: float | None = None,
 ) -> httpx.AsyncClient:
-    """Create a mock httpx.AsyncClient for batch transcription."""
+    """Create a mock httpx.AsyncClient for batch transcription.
+
+    The body mirrors the documented ``POST /v1/speech-to-text`` response:
+    ``text`` plus optional ``language_code`` / ``language_probability``. There
+    is no top-level ``confidence`` field.
+    """
     body: dict = {"text": text}
-    if confidence is not None:
-        body["confidence"] = confidence
+    if language_code is not None:
+        body["language_code"] = language_code
+    if language_probability is not None:
+        body["language_probability"] = language_probability
     mock_response = httpx.Response(
         status_code=200,
         json=body,
@@ -357,6 +366,41 @@ def test_elevenlabs_realtime_url_omits_logging_and_language_detection_by_default
     url = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))._build_realtime_ws_url()
     assert "enable_logging" not in url
     assert "include_language_detection" not in url
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_sends_documented_multipart_field_names():
+    """``model_id``/``language_code``, not ``model``/``language`` (gh 1064).
+
+    The multipart schema for ``POST /v1/speech-to-text`` has no ``model`` or
+    ``language`` field and ``model_id`` is required, so the older spelling was
+    rejected with 422 on every attempt — the bounded retry only retries 429.
+    """
+    mock_client = _make_mock_http_client("test")
+    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client, language="en")
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    data = mock_client.post.call_args.kwargs["data"]
+    assert data["model_id"] == stt._resolved_model()
+    assert data["language_code"] == "en"
+    assert "model" not in data
+    assert "language" not in data
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_omits_language_code_when_unset():
+    """No configured language → no ``language_code`` (server auto-detects)."""
+    mock_client = _make_mock_http_client("test")
+    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client)
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert "language_code" not in mock_client.post.call_args.kwargs["data"]
 
 
 @pytest.mark.asyncio
@@ -1154,15 +1198,50 @@ async def test_elevenlabs_batch_rejects_nonpositive_byte_rate_for_duration_cap()
 
 
 @pytest.mark.asyncio
-async def test_elevenlabs_batch_with_confidence():
-    mock_client = _make_mock_http_client("test", confidence=0.88)
+async def test_elevenlabs_batch_reports_the_detected_language():
+    """``language_code`` is the response field; ``language`` never existed.
+
+    Reading the wrong key silently discarded the detection and fell back to
+    the configured language (gh 1064).
+    """
+    mock_client = _make_mock_http_client("test", language_code="deu")
+    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client, language="en")
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert events[0].language == "deu"
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_falls_back_to_the_configured_language():
+    """A response without detection keeps the configured language."""
+    mock_client = _make_mock_http_client("test")
+    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client, language="en")
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert events[0].language == "en"
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_does_not_report_language_probability_as_confidence():
+    """``language_probability`` is detection confidence, not transcription.
+
+    The response has no top-level transcription confidence, so ``confidence``
+    stays unset rather than carrying a number that means something else.
+    """
+    mock_client = _make_mock_http_client("test", language_probability=0.99)
     config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client)
     stt = ElevenLabsSTT(config)
 
     pcm = generate_pcm_sine(duration_ms=100)
     events = await collect_stt_events(stt, make_audio_chunks(pcm))
 
-    assert events[0].confidence == 0.88
+    assert events[0].confidence is None
 
 
 @pytest.mark.asyncio
