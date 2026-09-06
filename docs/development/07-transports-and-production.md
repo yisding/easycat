@@ -318,7 +318,7 @@ Two properties are specific to it and worth knowing before reading the module:
 `aioquic` lives behind the optional `webtransport` extra and is loaded lazily,
 so `import easycat.server` must not require it. The operator-facing deployment
 requirements (UDP/443 ingress, certificates, load-balancer support) are in
-[production-servers.md](../../docs/deployment/production-servers.md#webtransport-servers),
+[production-servers.md](../deployment/production-servers.md#webtransport-servers),
 and `examples/webtransport_server.py` plus
 `examples/webtransport_browser_client.html` are the runnable pair.
 
