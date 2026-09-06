@@ -51,6 +51,12 @@ logger = logging.getLogger(__name__)
 _STREAM_RACE_TASK = "responses_stream_race"
 _STREAM_RACE_COHORT = "responses-stream-race"
 
+# The tool lifecycle.  These are also the only kinds that may still be yielded
+# once the caller has cancelled and the bridge is draining pending tool calls;
+# everything else (model text) is suppressed so post-cancel output cannot reach
+# TTS.
+_TOOL_LIFECYCLE_KINDS: frozenset[str] = frozenset({"tool_started", "tool_delta", "tool_result"})
+
 
 class _ResponseStreamCancelled(Exception):
     """Internal control flow for cooperative cancellation of an idle SSE read."""
@@ -96,7 +102,7 @@ def _update_tool_lifecycle(
     seen_tool_call_ids: set[str],
 ) -> None:
     """Validate and update the exact start → delta/result tool lifecycle."""
-    if event.kind not in {"tool_started", "tool_delta", "tool_result"}:
+    if event.kind not in _TOOL_LIFECYCLE_KINDS:
         return
 
     call_id = event.call_id
@@ -443,7 +449,14 @@ class RemoteResponsesAPIBridge:
                                         if isinstance(item, Mapping):
                                             accumulated_items.append(dict(item))
                                     if bridge_ev is not None:
-                                        yield bridge_ev
+                                        # Only the tool lifecycle leaves the
+                                        # drain. Post-cancel model text must
+                                        # not reach TTS after the caller has
+                                        # already interrupted, matching
+                                        # ``route_tool_cancellation_event`` and
+                                        # ``_BridgeToolDrain.route``.
+                                        if bridge_ev.kind in _TOOL_LIFECYCLE_KINDS:
+                                            yield bridge_ev
                                         if not pending_tool_calls:
                                             break
                                     continue

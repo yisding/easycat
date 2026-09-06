@@ -717,6 +717,61 @@ class TestDrainCurrentUnit:
         assert events[-1].kind == "done"
 
     @pytest.mark.asyncio
+    async def test_cancelled_tool_drain_suppresses_post_cancel_model_text(self):
+        """Post-cancel text must not leak downstream during the drain (gh 999).
+
+        Sibling bridges route drain events through a filter that passes only
+        the tool lifecycle (``route_tool_cancellation_event``,
+        ``_BridgeToolDrain.route``). This bridge yielded *any* translated
+        event, so ``response.output_text.delta`` frames arriving after
+        barge-in reached TTS — and were then missing from ``done.text``,
+        under-reporting what had been delivered.
+        """
+        bridge = await _make_static_sse_bridge(
+            [
+                'data: {"type":"response.created","response":{"id":"resp_drain"}}',
+                'data: {"type":"response.output_text.delta","delta":"before"}',
+                (
+                    'data: {"type":"response.output_item.added","item":'
+                    '{"type":"function_call","call_id":"call_1","name":"lookup"}}'
+                ),
+                # Everything below arrives after the caller cancelled.
+                'data: {"type":"response.output_text.delta","delta":"LEAKED"}',
+                (
+                    'data: {"type":"response.output_item.done","item":'
+                    '{"type":"function_call","call_id":"call_1","name":"lookup",'
+                    '"arguments":"{}"}}'
+                ),
+                (
+                    'data: {"type":"response.output_item.done","item":'
+                    '{"type":"function_call_output","call_id":"call_1","output":"ok"}}'
+                ),
+                'data: {"type":"response.completed","response":{"id":"resp_drain"}}',
+            ]
+        )
+        token = CancelToken()
+        events = []
+
+        async for event in bridge.invoke(
+            AgentTurnInput.from_text("run tool"),
+            _recorder(),
+            cancel_token=token,
+        ):
+            events.append(event)
+            if event.kind == "tool_started":
+                token.cancel()
+
+        kinds = [event.kind for event in events]
+        # The tool lifecycle still completes so the chain stays balanced.
+        assert "tool_result" in kinds
+        assert kinds[-1] == "done"
+        # No model text escapes after the cancel...
+        assert [e.text for e in events if e.kind == "text_delta"] == ["before"]
+        # ...and ``done.text`` reports exactly what was delivered.
+        assert events[-1].text == "before"
+        await bridge.aclose()
+
+    @pytest.mark.asyncio
     async def test_cancelled_tool_drain_rejects_eof_with_pending_call(self):
         bridge = await _make_static_sse_bridge(
             [
