@@ -1199,6 +1199,19 @@ class LitestreamSqliteJournal:
         argv_url, credential_env = _split_replica_credentials(self._replica_url)
         sidecar_env: dict[str, str] | None = None
         if credential_env:
+            if any("\x00" in value for value in credential_env.values()):
+                # A ``%00`` in the URL decodes to a NUL, which no environment
+                # value may contain: ``Popen`` would raise ``ValueError`` and
+                # take journal construction down with it. Such a credential
+                # cannot authenticate anyway, so name it and degrade the same
+                # way a missing binary does.
+                logger.warning(
+                    "LitestreamSqliteJournal: replica credential contains a NUL byte "
+                    "(a percent-encoded %%00); it cannot be passed to the sidecar. "
+                    "Degrading to plain SqliteJournal"
+                )
+                self._litestream_available = False
+                return
             sidecar_env = {**os.environ, **credential_env}
         elif urlsplit(self._replica_url).password:
             logger.warning(
@@ -1239,7 +1252,10 @@ class LitestreamSqliteJournal:
                 self._sidecar.pid,
                 self._inner.db_path,
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            # ``ValueError`` covers ``Popen`` rejecting an argument or an
+            # environment value outright; a journal must degrade rather than
+            # fail construction for a replica-target problem.
             logger.warning(
                 "LitestreamSqliteJournal: failed to start sidecar (%s); "
                 "degrading to plain SqliteJournal",

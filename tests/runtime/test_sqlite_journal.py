@@ -1948,6 +1948,65 @@ class TestLitestreamSqliteJournal:
         finally:
             j.close()
 
+    def test_nul_in_a_credential_degrades_instead_of_crashing(self, tmp_path, caplog):
+        """``%00`` decodes to a NUL no environment value may hold.
+
+        ``Popen`` raises ``ValueError`` for an embedded null byte, so without a
+        guard a bad replica URL would take journal *construction* down instead
+        of degrading to plain SQLite.
+        """
+        with (
+            mock.patch(
+                "easycat.runtime.journal_sql.shutil.which",
+                return_value="/usr/bin/litestream",
+            ),
+            mock.patch("easycat.runtime.journal_sql.subprocess.Popen") as popen,
+            caplog.at_level(logging.WARNING, logger="easycat.runtime.journal_sql"),
+        ):
+            j = LitestreamSqliteJournal(
+                "nul-creds",
+                data_dir=tmp_path,
+                replica_url="s3://key:bad%00secret@bucket/journals",
+            )
+        try:
+            popen.assert_not_called()
+            assert any("NUL byte" in record.message for record in caplog.records)
+            # Still a working journal, exactly like a missing binary.
+            assert (
+                j.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="ev",
+                    session_id="nul-creds",
+                )
+                == 1
+            )
+        finally:
+            j.close()
+
+    def test_sidecar_argument_rejection_degrades_instead_of_crashing(self, tmp_path, caplog):
+        """Any ``Popen`` rejection is a replica-target problem, not a journal one."""
+        with (
+            mock.patch(
+                "easycat.runtime.journal_sql.shutil.which",
+                return_value="/usr/bin/litestream",
+            ),
+            mock.patch(
+                "easycat.runtime.journal_sql.subprocess.Popen",
+                side_effect=ValueError("embedded null byte"),
+            ),
+            caplog.at_level(logging.WARNING, logger="easycat.runtime.journal_sql"),
+        ):
+            j = LitestreamSqliteJournal(
+                "argv-reject",
+                data_dir=tmp_path,
+                replica_url="s3://bucket/journals",
+            )
+        try:
+            assert any("failed to start sidecar" in record.message for record in caplog.records)
+            assert not j.degraded
+        finally:
+            j.close()
+
     def test_credential_free_url_inherits_the_environment_unchanged(self, tmp_path):
         """Nothing to move → no synthesized environment, just inheritance."""
         with (
