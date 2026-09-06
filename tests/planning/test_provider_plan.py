@@ -236,3 +236,93 @@ def test_provider_plan_dataclasses_are_frozen() -> None:
     )
     assert not plan.has_blocking_errors
     assert plan.blocking_errors() == ()
+
+
+class _VADLike:
+    def configure(self, **_kwargs: object) -> None: ...
+
+    async def process(self, _chunk: object) -> object: ...
+
+
+def test_class_object_is_described_the_way_create_vad_treats_it() -> None:
+    """A provider CLASS keeps its current, factory-matching verdict.
+
+    ``create_vad`` (like ``create_noise_reducer`` / ``create_echo_canceller``)
+    duck-checks the method names WITHOUT a class-object guard and hands a
+    matching class straight back, so the planner must describe it the same way.
+    ``config/_factory.py``'s stricter ``_is_vad_provider_instance`` disagrees —
+    that divergence is pre-existing and belongs to a behaviour-change PR, not to
+    the structural collapse.
+    """
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=_VADLike,  # the CLASS, not an instance
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    selection = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"}).selected["vad"]
+    # ``type(_VADLike).__name__`` is ``"type"`` — an unflattering but faithful
+    # record of what the injected branch reports for a class today.
+    assert selection.provider == "type"
+    assert selection.capabilities == frozenset({"injected"})
+
+
+def test_instance_is_treated_as_an_injected_provider() -> None:
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=_VADLike(),
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    selection = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"}).selected["vad"]
+    assert selection.provider == "_VADLike"
+    assert selection.capabilities == frozenset({"injected"})
+    assert selection.extra is None
+
+
+# ── The one selection projection ─────────────────────────────────────
+
+#: The keys every JSON surface publishes per role. Spelled out here, once, so a
+#: field added to ``selection_to_dict`` has to be added to this list too.
+_SELECTION_PAYLOAD_KEYS = {
+    "role",
+    "provider",
+    "model",
+    "config_type",
+    "extra",
+    "required_env",
+    "capabilities",
+}
+
+
+def test_selection_to_dict_is_the_projection_both_json_surfaces_use() -> None:
+    """``easycat plan --json`` and the server's ``/plan`` payload cannot drift.
+
+    ``VoiceServer.plan_payload`` calls :func:`easycat.planning.selection_to_dict`
+    per role, and ``cli.plan._selection_to_dict`` is a thin alias for it. The
+    server assertions in ``tests/server/test_plan_endpoint.py`` need aiohttp, so
+    this credential-free row is what actually executes the shared projection and
+    pins its key set on a dev-group-only machine.
+    """
+    from easycat.cli.plan import _selection_to_dict
+    from easycat.planning import selection_to_dict
+
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=VADConfig(backend="silero"),
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    plan = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"})
+    for selection in plan.selected.values():
+        payload = selection_to_dict(selection)
+        assert set(payload) == _SELECTION_PAYLOAD_KEYS
+        assert _selection_to_dict(selection) == payload
+        # JSON-ready: ``capabilities`` is a sorted list, never a frozenset.
+        assert payload["capabilities"] == sorted(selection.capabilities)

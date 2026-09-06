@@ -381,6 +381,53 @@ def _inject_agent_runtime(
             inner._api_key = remote_agent_api_key
 
 
+def _catalog_for(kind: Literal["STT", "TTS"]) -> Any:
+    """Lazy-import the STT or TTS :class:`ProviderCatalog` (one place)."""
+    if kind == "STT":
+        from easycat.stt.factory import _CATALOG as catalog
+    else:
+        from easycat.tts.factory import _CATALOG as catalog
+    return catalog
+
+
+def _catalog_provider_name(
+    cfg: Any, kind: Literal["STT", "TTS"], *, strict: bool = False
+) -> str | None:
+    """The registered provider name for ``cfg``, or ``None`` when unknown.
+
+    One implementation of the "resolve the registered provider name from a
+    config instance" walk this module used to carry three near-identical copies
+    of. A named wrapper (:class:`STTProviderConfig` / :class:`TTSProviderConfig`)
+    is validated by name; any other config is matched by its type against the
+    catalog's config classes.
+
+    ``strict=True`` lets ``catalog.validate_name`` raise for an unknown NAMED
+    provider — the historical behaviour of :func:`_provider_requires_api_key`,
+    which callers depend on for the error it produces, and which reached the
+    name path only for a wrapper. The lenient default reproduces the other
+    historical caller (``_validate``'s gh-1041 ambient-credential lookup): it
+    tries the name path for ANY config carrying a ``provider`` string and falls
+    through to the config-type walk when that yields nothing, so a registered
+    third-party config subclass still resolves a name.
+    """
+    catalog = _catalog_for(kind)
+    catalog.discover()
+    provider = getattr(cfg, "provider", None)
+    named = isinstance(cfg, STTProviderConfig | TTSProviderConfig)
+    if named or (not strict and isinstance(provider, str)):
+        try:
+            return cast("str", catalog.validate_name(provider))
+        except Exception:
+            if strict:
+                raise
+            # Fall through to the config-type walk, as the pre-DX1-2 code did.
+    cfg_type = type(cfg)
+    for provider_name, (_provider_cls, config_cls) in catalog.providers.items():
+        if config_cls is cfg_type:
+            return cast("str", provider_name)
+    return None
+
+
 def _provider_display_name(cfg: Any, kind: Literal["STT", "TTS"]) -> str:
     """Human-facing label for a provider config in error messages.
 
@@ -391,34 +438,20 @@ def _provider_display_name(cfg: Any, kind: Literal["STT", "TTS"]) -> str:
     when the config type isn't in the catalog (e.g. a custom config).
     """
     if isinstance(cfg, STTProviderConfig | TTSProviderConfig):
+        # Deliberately UNVALIDATED: an error message must render even for a
+        # provider name the catalog does not know.
         return f"{cfg.provider} {kind}"
-    if kind == "STT":
-        from easycat.stt.factory import _CATALOG as catalog
-    else:
-        from easycat.tts.factory import _CATALOG as catalog
-
-    cfg_type = type(cfg)
-    for provider_name, (_provider_cls, config_cls) in catalog.providers.items():
-        if config_cls is cfg_type:
-            return f"{provider_name} {kind}"
+    provider_name = _catalog_provider_name(cfg, kind)
+    if provider_name is not None:
+        return f"{provider_name} {kind}"
     return type(cfg).__name__.replace("Config", "")
 
 
 def _provider_requires_api_key(cfg: Any, kind: Literal["STT", "TTS"]) -> bool:
     """Consult the open catalog instead of assuming every ``api_key`` field is required."""
-    if kind == "STT":
-        from easycat.stt.factory import _CATALOG as catalog
-    else:
-        from easycat.tts.factory import _CATALOG as catalog
-
-    catalog.discover()
-    if isinstance(cfg, STTProviderConfig | TTSProviderConfig):
-        provider_name = catalog.validate_name(cfg.provider)
-        return catalog.env_vars[provider_name] is not None
-    cfg_type = type(cfg)
-    for provider_name, (_provider_cls, config_cls) in catalog.providers.items():
-        if config_cls is cfg_type:
-            return catalog.env_vars[provider_name] is not None
+    provider_name = _catalog_provider_name(cfg, kind, strict=True)
+    if provider_name is not None:
+        return _catalog_for(kind).env_vars[provider_name] is not None
     # Preserve the historical conservative behavior for unknown custom config
     # objects while allowing registered keyless providers through.
     return hasattr(cfg, "api_key")
@@ -1124,7 +1157,7 @@ class EasyConfig(_AgentSessionConfig):
         level = logging.getLogger("easycat").level
         logger.debug("EasyCat debug mode enabled (level=%s)", logging.getLevelName(level))
 
-    def _validate(self) -> None:  # noqa: PLR0912
+    def _validate(self) -> None:
         try:
             _validate_caller_id_exposure(self.caller_id_exposure)
         except ValueError as exc:
@@ -1151,44 +1184,20 @@ class EasyConfig(_AgentSessionConfig):
             ):
                 # Also check ambient env var so typed configs match
                 # string/wrapper (gh 1018).
-                import os as _os
-
-                from easycat._credentials import has_usable_credential as _has_cred
-
-                env_ok = False
-                try:
-                    if kind == "STT":
-                        from easycat.stt.factory import _CATALOG as _catalog
-                    else:
-                        from easycat.tts.factory import _CATALOG as _catalog
-
-                    _catalog.discover()
-                    # Resolve provider name for this cfg type
-                    provider_name = None
-                    if hasattr(cfg, "provider"):
-                        try:
-                            provider_name = _catalog.validate_name(cfg.provider)  # type: ignore[arg-type]
-                        except Exception:  # noqa: BLE001
-                            provider_name = None
-                    if provider_name is None:
-                        for pname, (_pcls, ccls) in _catalog.providers.items():
-                            if ccls is type(cfg):
-                                provider_name = pname
-                                break
-                    if provider_name is not None:
-                        env_var = _catalog.env_vars.get(provider_name)
-                        if env_var and _has_cred(_os.getenv(env_var)):
-                            env_ok = True
-                except Exception:  # noqa: BLE001
-                    env_ok = False
-                if env_ok:
+                provider_name = _catalog_provider_name(cfg, kind)
+                env_var = (
+                    _catalog_for(kind).env_vars.get(provider_name)
+                    if provider_name is not None
+                    else None
+                )
+                if env_var and has_usable_credential(os.getenv(env_var)):
                     # Inject ambient credential so create_session
                     # succeeds (gh 1041 review).
                     try:
-                        cfg.api_key = _os.getenv(env_var or "") or cfg.api_key  # type: ignore[attr-defined]
+                        cfg.api_key = os.getenv(env_var) or cfg.api_key
                     except Exception:  # noqa: BLE001, S110
                         pass
-                    if _has_cred(getattr(cfg, "api_key", None)):
+                    if has_usable_credential(getattr(cfg, "api_key", None)):
                         continue
                 name = _provider_display_name(cfg, kind)
                 raise EasyConfigError(f"{name} requires an API key.")

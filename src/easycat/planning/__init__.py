@@ -16,6 +16,14 @@ Metadata sourcing (per the M6b spec):
 * **transport / agent** — use declarative built-in metadata in
   :mod:`easycat.planning.transport_registry`.
 
+Every role is resolved exactly ONCE, in the private
+:mod:`easycat.planning._resolution`, which returns a typed
+``ResolvedConfiguration``; ``build_provider_plan`` is a pure projection of that
+result into :class:`ProviderPlan`. The built-in decision path is genuinely pure,
+but ``ProviderCatalog.discover()`` and ``probe_module_for_extra`` reach installed
+entry points and therefore execute third-party module-level code — the one
+documented side effect on the planning path.
+
 The planner-vs-``create_session`` PARITY TEST is the required gate: the
 manifest/plan readiness checks may only ship once parity is green.
 
@@ -33,6 +41,7 @@ from easycat.planning.provider_plan import (
     ProviderSelection,
     Role,
     build_provider_plan,
+    selection_to_dict,
 )
 from easycat.planning.selection import (
     build_manifest_plan,
@@ -64,4 +73,5 @@ __all__ = [
     "plan_selected_profile",
     "selection_error",
     "selection_issue",
+    "selection_to_dict",
 ]

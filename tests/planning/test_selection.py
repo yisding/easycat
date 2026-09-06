@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from easycat.errors import EasyCatError
-from easycat.planning import provider_plan
+from easycat.planning import _resolution
 from easycat.planning.selection import (
     build_manifest_plan,
     degraded_extra_roles,
@@ -25,12 +25,12 @@ def _manifest(body: str, tmp_path: Path) -> Path:
 
 
 def _absent(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
-    """Make ``provider_plan._module_available`` report *modules* absent."""
+    """Make the resolver's module probe report *modules* absent."""
     absent = set(modules)
-    real = provider_plan._module_available
+    real = _resolution._default_module_available
     monkeypatch.setattr(
-        provider_plan,
-        "_module_available",
+        _resolution,
+        "_default_module_available",
         lambda module: False if module in absent else real(module),
     )
 

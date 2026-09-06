@@ -83,7 +83,7 @@ class RoleBackend:
     # always the bare transport-config ClassVar. (``WebRTCTransportConfig``'s own
     # ClassVar is False, but a manifest ``webrtc`` profile routes through
     # ``EasyConfig.browser`` which forces AEC on, so this is True.) Read by
-    # ``_select_from_profile``; tied to the resolved EasyConfig by
+    # ``_resolution.resolve_from_profile``; tied to the resolved EasyConfig by
     # ``test_transport_aec_defaults_match_manifest_resolved_easyconfig`` so it
     # cannot silently drift from the preset. Ignored for non-transport roles.
     default_echo_cancellation_enabled: bool = False
