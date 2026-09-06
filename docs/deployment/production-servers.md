@@ -370,6 +370,13 @@ serve an HTTP endpoint at all, so they can only be probed at the TCP level
 (see docker.md's ["Container health checks"](docker.md#container-health-checks)
 for the concrete `HEALTHCHECK` wiring and its `EASYCAT_HEALTH_URL` switch).
 
+The pre-deploy preflight for the same selection `/health/ready` evaluates is
+`easycat doctor --manifest easycat.toml --profile <name>`: it diagnoses the
+credential, install extra, and manifest reference every selected role needs
+against the target machine, statically — the profile's application module is
+never imported or run and no provider is called. See
+[the CLI reference](../cli.md#first-run-and-scaffolding).
+
 **Metrics scraping.** `VoiceServer`'s `GET /metrics` is a read-only, PII-safe
 JSON snapshot of in-process counters/gauges — poll it directly without an
 OTel SDK. For histograms and traces, install an OTel SDK/exporter and
