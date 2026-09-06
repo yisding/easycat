@@ -28,7 +28,38 @@ from easycat.debug.bundle import (
     RunBundle,
 )
 from easycat.runtime.crash_sweep import crash_dump_artifact_root
-from easycat.validation.redaction import redact_text
+from easycat.validation.redaction import REDACTED_TRANSCRIPT, redact_text
+
+# Free-form STT/agent/tool text that ``SessionJournalSink`` stores under generic
+# ``data`` keys.  None of these names are in ``redact_value``'s field-name
+# allowlist (``UNSAFE_TEXT_FIELDS``), so they would only get pattern-based
+# redaction and otherwise stream verbatim utterances — medical or account
+# details, say.  Every CLI surface that emits a journal ``data`` dict replaces
+# them wholesale with the shared transcript placeholder.
+#
+# They deliberately live here rather than in ``UNSAFE_TEXT_FIELDS``: that
+# allowlist governs redaction everywhere, including bundle export, where
+# ``journal_redaction="secrets"`` keeps this text on purpose so a bundle stays
+# replayable.  This is a *diagnostic-output* suppression list (gh 1102).
+FREE_TEXT_DATA_KEYS: tuple[str, ...] = (
+    "delta",
+    "note",
+    "original_text",
+    "prepared_text",
+    "result",
+    "stripped_text",
+    "text",
+    "text_spoken",
+    "transcript_text",
+)
+
+
+def redact_free_text_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Replace every known free-text key in a journal ``data`` dict in place."""
+    for key in FREE_TEXT_DATA_KEYS:
+        if key in data:
+            data[key] = REDACTED_TRANSCRIPT
+    return data
 
 
 def _format_ms(value: object) -> str:
