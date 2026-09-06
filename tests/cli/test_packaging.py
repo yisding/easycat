@@ -23,6 +23,7 @@ from easycat.cli.scaffold._schema import available_templates
 from easycat.cli.scaffold.init import _template_file_names
 from scripts.check_wheel_size import MAX_WHEEL_BYTES
 from tests._release_artifacts import release_artifact_offenders
+from tests._wheel_build import build_wheel
 
 pytestmark = pytest.mark.integration_local
 
@@ -47,23 +48,7 @@ _WHEEL_EXEMPT_TEMPLATE_FILES: frozenset[str] = frozenset()
 @pytest.fixture(scope="module")
 def built_wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Build easycat's wheel once and return its path."""
-    uv = shutil.which("uv")
-    if uv is None:  # pragma: no cover — CI without uv is out of scope
-        pytest.skip("`uv` binary not on PATH")
-    out_dir = tmp_path_factory.mktemp("wheel")
-    root = _project_root()
-    proc = subprocess.run(
-        [uv, "build", "--wheel", "-o", str(out_dir)],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:  # pragma: no cover — diagnostic path
-        pytest.skip(f"`uv build` failed:\n{proc.stderr}")
-    wheels = list(out_dir.glob("easycat-*.whl"))
-    assert len(wheels) == 1, f"expected one wheel, got {wheels}"
-    return wheels[0]
+    return build_wheel(tmp_path_factory.mktemp("wheel"))
 
 
 @pytest.fixture(scope="module")
