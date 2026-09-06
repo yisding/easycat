@@ -7,6 +7,7 @@ import collections
 import logging
 import sqlite3
 import threading
+from pathlib import Path
 from typing import Protocol
 
 import pytest
@@ -769,7 +770,7 @@ class TestReadonlyStageSlices:
         with pytest.raises(sqlite3.OperationalError, match="locked"):
             view.slice_by_stage("stt")
 
-    def test_litestream_wrapper_delegates_slice_by_stage(self, tmp_path):
+    def test_litestream_wrapper_delegates_slice_by_stage(self, tmp_path: Path) -> None:
         # Without the delegator ``JournalView.filter_by_stage`` sees no
         # ``slice_by_stage`` on the wrapper and deserializes every record
         # instead of using the inner journal's stage indexes (gh 1026).
@@ -801,20 +802,32 @@ class TestReadonlyStageSlices:
             assert [r.name for r in j.slice_by_stage("tts")] == ["other"]
             assert j.slice_by_stage("missing") == []
 
-            # ``JournalView`` must reach the indexed path, not the read() scan.
-            calls: list[str] = []
-            original = j.read
+            # ``JournalView`` must reach the indexed path, not a record scan.
+            # Both layers are watched: tracking only the wrapper's ``read``
+            # would still pass for an implementation that scanned through
+            # ``j._inner.read``.
+            reads: list[str] = []
+            indexed: list[str] = []
+            inner_slice_by_stage = j._inner.slice_by_stage
 
-            def _tracked(*args, **kwargs):
-                calls.append("read")
-                return original(*args, **kwargs)
+            def _tracked_read(start: int = 0, limit: int | None = None) -> list[JournalRecord]:
+                reads.append("read")
+                raise AssertionError("filter_by_stage must not fall back to a record scan")
 
-            j.read = _tracked  # type: ignore[method-assign]
+            def _tracked_slice_by_stage(stage_name: str) -> list[JournalRecord]:
+                indexed.append(stage_name)
+                return inner_slice_by_stage(stage_name)
+
+            j.read = _tracked_read  # type: ignore[method-assign]
+            j._inner.read = _tracked_read  # type: ignore[method-assign]
+            j._inner.slice_by_stage = _tracked_slice_by_stage  # type: ignore[method-assign]
+
             assert [r.name for r in JournalView(j).filter_by_stage("stt")] == [
                 "direct",
                 "observed",
             ]
-            assert calls == []
+            assert reads == []
+            assert indexed == ["stt"]
         finally:
             j.close()
 
