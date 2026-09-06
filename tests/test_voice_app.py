@@ -215,6 +215,70 @@ def test_session_local_with_server_policy_field_succeeds(
     assert not hasattr(config, "port")
 
 
+# ── resolve_config() parity (DX1-1) ───────────────────────────────────
+#
+# ``resolve_config`` is the preflight/inspection peer of ``run``/``session``;
+# these characterize that its preview matches what construction actually
+# receives, without pulling in any provider SDK.
+
+
+def test_resolve_config_preview_matches_the_config_create_session_receives(
+    fake_create_session: list[EasyConfig],
+) -> None:
+    import easycat.voice_app as voice_app_module
+
+    app = VoiceApp(agent="a", stt="openai/realtime", tts="openai")
+    preview = app.resolve_config("local")
+    app.session("local")
+    built = fake_create_session[0]
+
+    for field_name in voice_app_module._FORWARDED_CONFIG_FIELDS:
+        assert getattr(preview, field_name) == getattr(built, field_name), field_name
+    assert type(preview.transport) is type(built.transport)
+    assert preview.smart_turn == built.smart_turn
+    assert preview.echo_cancellation == built.echo_cancellation
+
+
+def test_resolve_config_is_repeatable_and_does_not_mutate_the_app() -> None:
+    app = VoiceApp(agent="a", stt="openai/realtime", tts="openai")
+    kwargs_before = dict(app._config_kwargs)
+
+    preview_1 = app.resolve_config("local")
+    preview_2 = app.resolve_config("local")
+
+    assert app._config_kwargs == kwargs_before
+    assert preview_1 is not preview_2
+    assert type(preview_1.stt) is type(preview_2.stt)
+    assert type(preview_1.tts) is type(preview_2.tts)
+    assert preview_1.smart_turn == preview_2.smart_turn
+    assert preview_1.echo_cancellation == preview_2.echo_cancellation
+
+
+@pytest.mark.parametrize("mode", ["browser", "websocket", "twilio", "telnyx"])
+def test_resolve_config_matches_the_per_connection_factory(mode: str) -> None:
+    from easycat.transports._webrtc_config import WebRTCTransportConfig
+    from easycat.transports.telnyx_media import TelnyxTransportConfig
+    from easycat.transports.twilio_media import TwilioTransportConfig
+    from easycat.transports.websocket import WebSocketTransportConfig
+
+    transport = {
+        "browser": WebRTCTransportConfig,
+        "websocket": WebSocketTransportConfig,
+        "twilio": TwilioTransportConfig,
+        "telnyx": TelnyxTransportConfig,
+    }[mode]()
+
+    app = VoiceApp(agent="a", stt="openai/realtime", tts="openai")
+    from_resolve = app.resolve_config(mode, transport=transport)
+    from_factory = app._per_connection_factory(mode)(transport)
+
+    for field_name in ("stt", "tts", "vad", "debug"):
+        assert getattr(from_resolve, field_name) == getattr(from_factory, field_name), field_name
+    assert from_resolve.echo_cancellation == from_factory.echo_cancellation
+    assert from_resolve.smart_turn == from_factory.smart_turn
+    assert type(from_resolve.transport) is type(from_factory.transport)
+
+
 @pytest.mark.parametrize("mode", ["browser", "websocket", "twilio", "ws", "phone"])
 def test_session_rejects_multi_session_modes(mode: str) -> None:
     app = VoiceApp(agent="a")
