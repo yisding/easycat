@@ -347,6 +347,7 @@ async def consume_agent_stream(
     abort_event: asyncio.Event | None = None,
     is_active: Callable[[], bool] | None = None,
     on_tts_replacement_conflict: Callable[[], Awaitable[None]] | None = None,
+    consumer_gone: Callable[[], bool] | None = None,
 ) -> AgentStreamResult:
     """Consume an :class:`AgentBridgeEvent` stream and queue TTS payloads.
 
@@ -373,6 +374,7 @@ async def consume_agent_stream(
         abort_event=abort_event,
         is_active=is_active,
         on_tts_replacement_conflict=on_tts_replacement_conflict,
+        consumer_gone=consumer_gone,
     )
     return await consumer.run(stream_factory)
 
@@ -399,6 +401,7 @@ class _AgentStreamConsumer:
         abort_event: asyncio.Event | None,
         is_active: Callable[[], bool] | None,
         on_tts_replacement_conflict: Callable[[], Awaitable[None]] | None,
+        consumer_gone: Callable[[], bool] | None = None,
     ) -> None:
         self._cancel_token = cancel_token
         self._tts_queue = tts_queue
@@ -408,6 +411,7 @@ class _AgentStreamConsumer:
         self._abort_event = abort_event
         self._is_active_callback = is_active
         self._on_tts_replacement_conflict = on_tts_replacement_conflict
+        self._consumer_gone_callback = consumer_gone
         self._buffer = _SentenceStreamBuffer(
             tts_queue=tts_queue,
             prepare_tts_payload=prepare_tts_payload,
@@ -640,12 +644,22 @@ class _AgentStreamConsumer:
         # blocks forever waiting for the stop signal.  Use a blocking ``put``
         # here — backpressure resolves as the consumer drains.
         #
-        # On cancellation / error the TTS task may have been cancelled
+        # On cancellation / error the TTS task *may* have been cancelled
         # alongside this producer (barge-in), leaving no consumer to make
         # room.  A blocking put on a full queue would then hang in this
-        # finally block, so fall back to a non-blocking put and swallow
-        # ``QueueFull`` (the consumer is gone, so the sentinel is moot).
-        if stream_succeeded:
+        # finally block, so that case falls back to a non-blocking put and
+        # swallows ``QueueFull`` — the consumer is gone, so the sentinel is
+        # moot.
+        #
+        # But the agent-failure/timeout path cancels only this producer: the
+        # consumer is still alive and draining.  Dropping the sentinel there
+        # left it blocked on ``queue.get()`` forever — no BotStoppedSpeaking,
+        # no IDLE transition, and the turn never finalized on a quiet line
+        # (gh 1063).  So the fallback is used only when the consumer really
+        # is gone; otherwise the sentinel is delivered with the same blocking
+        # put the success branch uses, and backpressure resolves as the
+        # consumer drains.
+        if stream_succeeded or not self._consumer_is_gone():
             await self._tts_queue.put(None)
         else:
             try:
@@ -660,4 +674,14 @@ class _AgentStreamConsumer:
 
     def _is_active(self) -> bool:
         callback = self._is_active_callback
+        return callback is None or callback()
+
+    def _consumer_is_gone(self) -> bool:
+        """Whether the TTS consumer has stopped, or is being torn down.
+
+        Without a callback the caller has not published a consumer, so the
+        conservative answer is "gone": that keeps the historical
+        non-blocking behaviour for any caller that has not opted in.
+        """
+        callback = self._consumer_gone_callback
         return callback is None or callback()

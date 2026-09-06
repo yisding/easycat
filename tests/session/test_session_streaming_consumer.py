@@ -426,6 +426,50 @@ async def test_consume_agent_stream_sentinel_skipped_when_consumer_stopped():
     assert result.interrupted is True
 
 
+async def test_consume_agent_stream_sentinel_waits_when_the_consumer_is_alive():
+    """A live consumer must still get the stop sentinel off a full queue.
+
+    The agent-failure/timeout path cancels only the producer, so the
+    ``QueueFull`` fallback's premise ("the consumer already stopped") does not
+    hold there: dropping the sentinel left the consumer blocked on
+    ``queue.get()`` forever and the turn never finalized (gh 1063).
+    """
+    from easycat.session._streaming import consume_agent_stream
+
+    cancel_token = CancelToken()
+    turn = TurnContext(turn_id="t1", cancel_token=cancel_token)
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue(maxsize=1)
+    tts_queue.put_nowait(TTSInput(text="already here"))
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        cancel_token.cancel()
+        yield AgentBridgeEvent(kind="done", text="final")
+
+    producer = asyncio.create_task(
+        consume_agent_stream(
+            _stream,
+            cancel_token=cancel_token,
+            tts_queue=tts_queue,
+            emit=AsyncMock(),
+            prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+            strip_md=False,
+            turn=turn,
+            consumer_gone=lambda: False,
+        )
+    )
+
+    # The producer is parked on the blocking put rather than dropping the
+    # sentinel; draining one slot lets it through.
+    await asyncio.sleep(0.05)
+    assert not producer.done()
+    assert await tts_queue.get() is not None
+
+    result = await asyncio.wait_for(producer, timeout=2.0)
+
+    assert result.interrupted is True
+    assert await asyncio.wait_for(tts_queue.get(), timeout=1.0) is None
+
+
 async def _run_streaming_payloads(deltas: list[str], *, strip_md: bool) -> list[tuple[str, bool]]:
     """Drive *deltas* through the consumer and return (text, is_final) payloads."""
     from easycat.session._streaming import consume_agent_stream

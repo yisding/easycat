@@ -3937,6 +3937,66 @@ async def test_run_streaming_agent_records_total_latency_metric() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_timeout_delivers_the_stop_sentinel_on_a_full_queue() -> None:
+    """The agent-failure path cancels only the producer (gh 1063).
+
+    ``_finish`` used to deliver the stop sentinel with ``put_nowait`` on any
+    non-success path, on the premise that the consumer had been cancelled
+    alongside the producer.  That premise holds for barge-in but not for an
+    agent error/timeout, where ``_await_agent_task`` cancels the agent task
+    only.  With the 64-slot payload queue full at that instant the sentinel
+    was silently dropped, ``_synthesize_queued_payloads`` blocked forever on
+    ``queue.get()``, and ``run_streaming_agent`` never returned: no
+    BotStoppedSpeaking, no IDLE, and the turn stuck in BOT_SPEAKING on a
+    quiet line.
+    """
+
+    class _VerboseSlowAgent(_TestBridgeBase):
+        async def run(self, text: str) -> str:
+            return ""
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            # More sentences than the queue holds, so the producer ends up
+            # backpressured on a full queue when the timeout fires.
+            for index in range(200):
+                yield AgentBridgeEvent(kind="text_delta", text=f"Sentence {index}. ")
+            await asyncio.sleep(10)
+            yield AgentBridgeEvent(kind="done", text="")
+
+    class _SlowTTS(FakeTTS):
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            # TTS is slower than the LLM, so the queue stays full.
+            await asyncio.sleep(0.02)
+            self.synthesized_texts.append(payload.text)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+
+    session = Session(
+        _config(
+            agent=AgentRunner(_VerboseSlowAgent()),
+            tts=_SlowTTS(),
+            timeout_config=TimeoutConfig(agent_timeout=0.15),
+        )
+    )
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, lambda e: errors.append(e))
+
+    session._turn = TurnContext("turn-sentinel", CancelToken())
+    await asyncio.wait_for(
+        session._turn_runner.run_streaming_agent("hello", token=None),
+        timeout=20,
+    )
+
+    assert any(e.stage == ErrorStage.AGENT for e in errors)
+    assert session._turn_manager.state == TurnManagerState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_agent_timeout_emits_error() -> None:
     """Hitting the agent timeout emits an Error event."""
 
