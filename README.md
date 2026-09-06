@@ -7,8 +7,10 @@ LlamaAgents, Remote Responses API, or your own async workflow.
 ### Quickstart
 
 `VoiceApp` is the beginner and product-level entry point: give it your agent,
-then explicitly choose where it runs. The README, first example, feature ladder,
-and default scaffold all use this same shape:
+then explicitly choose where it runs. The README, first example, and feature
+ladder all use this same shape; the default scaffold builds the same app inside
+an importable `make_app()` so its tests can import it without opening a
+microphone:
 
 ```python
 from agents import Agent
@@ -166,8 +168,9 @@ easycat bundles list                # discover captured runs and journals
 package requirement and extras, required environment variables, optional
 environment knobs, generated files, and copyable
 create/preflight/check/fix/docs/json-schema/run commands. Add `--json` for the
-machine-readable catalog. A generated default app
-uses the same `VoiceApp(...).run("local")` shape as the quickstart.
+machine-readable catalog. A generated default app builds the
+same `VoiceApp(...).run("local")` shape as the quickstart, behind an importable
+`make_app()` and an `if __name__ == "__main__":` guard.
 
 Use the [CLI reference](docs/cli.md) for every command family, `easycat docs`
 for audience-specific routes, and `easycat explain json-schema` for the stable

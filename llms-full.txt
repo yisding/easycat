@@ -103,6 +103,7 @@ easycat init my-agent
 easycat init my-agent --easycat-git URL --easycat-git-rev REV
 easycat doctor --json
 easycat doctor --env-file .env --json
+easycat doctor --manifest easycat.toml --profile default --json
 easycat docs
 easycat docs --verbose
 easycat docs --audience learners

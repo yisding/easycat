@@ -19,6 +19,7 @@ easycat doctor           # check API keys, optional extras, provider reachabilit
 easycat doctor --json    # emit machine-readable environment checks
 easycat doctor --env-file .env
 easycat doctor --env-file .env --json # emit checks with project .env loaded
+easycat doctor --manifest easycat.toml --profile default --json # diagnose the selected profile
 easycat doctor --fix               # explicitly create repairable local state
 ```
 
@@ -39,6 +40,57 @@ same rules; Git credentials belong in a credential helper or SSH agent.
 requirements. Network liveness is not credential validation. The default run
 does not create journal directories; `--fix` owns repair mutations.
 
+With `--manifest`, `doctor` diagnoses the same selected profile `plan`
+resolves: it reports the credential, install extra, and manifest reference each
+selected role needs, and skips checks the selection does not use — a browser
+profile is not asked for a microphone. Resolution is static: the profile's
+application module is never imported or run and no provider is called. A
+manifest typo aborts the run with the same coded error `plan` prints; rerun bare
+`easycat doctor` for machine-only checks. `--manifest`/`--profile` and
+`--provider` are two incompatible scoping mechanisms and cannot be combined.
+
+Every JSON check row carries a `probe` class so the boundary between static
+reading and live probing is machine-readable: `static` (declared metadata,
+environment variables, module availability), `import`, `filesystem`,
+`hardware`, and `network` (one bounded two-second unauthenticated request per
+configured provider). The envelope's `probes` object reports which classes
+actually ran.
+
+### From a failed doctor to a first run
+
+A fresh checkout, from the first red run to a green one. `easycat init`
+scaffolds an application, not a server manifest, so step 2 writes the
+`easycat.toml` the rest of the sequence diagnoses:
+
+```bash
+easycat init my-agent && cd my-agent          # 1. scaffold the project
+cat > easycat.toml <<'TOML'                   # 2. declare the profile to serve
+[project]
+name = "my-agent"
+
+[voice.default]
+transport = "webrtc"
+stt = "openai"
+tts = "openai"
+TOML
+easycat doctor --manifest easycat.toml --json # 3. fails: EASYCAT_E203, no credential
+cp .env.example .env                          # 4. fill in the real key, then save
+easycat doctor --manifest easycat.toml --env-file .env --json # 5. fails: EASYCAT_E202
+# 6. apply each failing row's `fix` field, then:
+uv sync
+easycat doctor --manifest easycat.toml --env-file .env --json # 7. green
+easycat plan --manifest easycat.toml          # 8. the same selection, role by role
+```
+
+Step 6 is whatever the failing rows' `fix` fields name — here, adding `webrtc`
+and `silero-vad` to the `easycat[...]` extras in the project's own
+`pyproject.toml`. A project scaffolded by `easycat init` pins its `easycat`
+dependency in `[tool.uv.sources]` (EasyCat is unpublished), so the fix edits
+that list and then runs `uv sync` — never `uv add`, which would drop the pin. A
+project that depends on a published `easycat` gets the registry guidance
+instead. `doctor --manifest` classifies the dependency source of the directory
+holding the manifest, so the fix is right even when you run it from elsewhere.
+
 ## Running an application or playground
 
 ```bash
@@ -53,10 +105,13 @@ easycat plan --manifest easycat.toml --profile production --json
 Without `--manifest`, `serve` starts EasyCat's bundled playground agent. It does
 not import a `VoiceApp` from the current directory. With a manifest, it builds
 the selected `VoiceServer` profile. `plan` resolves the same provider and
-capability inputs without starting the server. Roles the session does not build
-are reported as `off` — a `vad` role, for example, when the STT declares
-`native_endpointing` and owns turn boundaries — so their install extras are not
-counted as blocking gaps.
+capability inputs without starting the server — and
+`easycat doctor --manifest easycat.toml --profile default` diagnoses that same
+selection against the local machine, so the two describe one selection
+mechanism rather than two. Roles the session does not build are reported as
+`off` — a `vad` role, for example, when the STT declares `native_endpointing`
+and owns turn boundaries — so their install extras are not counted as blocking
+gaps by either command.
 
 ## Documentation and error lookup
 

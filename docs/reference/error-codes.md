@@ -165,8 +165,8 @@ for the fix text.
 
 **Required project environment variable is missing or invalid: {var}**
 
-- **Cause:** The current EasyCat scaffold declares this environment variable as a startup requirement, but doctor found it unset, still set to an example placeholder, or invalid for its declared use.
-- **Fix:** Copy `.env.example` to `.env`, replace every required placeholder with the real project value, and rerun `easycat doctor --env-file .env`.
+- **Cause:** The selected EasyCat project (its `[tool.easycat.scaffold]` table or its `easycat.toml` profile) declares this environment variable as a startup requirement, but doctor found it unset, still set to an example placeholder, or invalid for its declared use.
+- **Fix:** Copy `.env.example` to `.env`, replace every required placeholder with the real project value, and rerun `easycat doctor --env-file .env` (or `easycat doctor --manifest easycat.toml --env-file .env`).
 - **Example:** `easycat doctor --env-file .env`
 - **Related:** [EASYCAT_E203](#easycat_e203)
 
