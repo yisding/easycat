@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import sys
 import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol, Self, TextIO
+
+logger = logging.getLogger(__name__)
 
 
 class PushToTalkSession(Protocol):
@@ -33,8 +37,93 @@ class _LineReader(Protocol):
     def close(self) -> None: ...
 
 
+# Bytes pulled per ``os.read``; also the chunk size of the constructor-time
+# adoption below.
+_READ_SIZE = 4096
+# Universal-newline terminators, matching what ``TextIOWrapper`` translated.
+_CR = 0x0D
+
+
+def _find_line_end(buffer: bytes) -> int:
+    """Index of the first ``\r`` or ``\n`` in *buffer*, or ``-1``."""
+    cr = buffer.find(b"\r")
+    lf = buffer.find(b"\n")
+    if cr < 0:
+        return lf
+    if lf < 0:
+        return cr
+    return min(cr, lf)
+
+
+def _adopt_buffered_text(stream: TextIO, fd: int) -> bytes:
+    """Take input an earlier buffered read already pulled off *fd*.
+
+    A ``TextIOWrapper`` that has been read before (an application calling
+    ``input()`` or ``readline()`` ahead of push-to-talk) can hold decoded
+    characters that ``os.read`` will never see: those bytes already left the
+    kernel and sit in the wrapper.  Claim them once, at construction, so the
+    reader starts with the complete picture and owns the fd from there.
+
+    A terminal is skipped on purpose.  Canonical-mode reads never cross a line
+    boundary, so a TTY wrapper cannot be holding a pending line, and flipping
+    ``O_NONBLOCK`` on a descriptor shared with the parent shell is a hazard
+    worth not taking for a case that cannot arise.
+
+    Best-effort throughout: any failure leaves the reader to start from an
+    empty buffer, which is exactly the pre-existing behaviour.
+    """
+    try:
+        if os.isatty(fd):
+            return b""
+        import fcntl
+
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    except (OSError, ImportError, ValueError):
+        return b""
+
+    chunks: list[str] = []
+    try:
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        # Drained to exhaustion on purpose: stopping at a cap would leave text
+        # in the wrapper that ``os.read`` can never reach, which is the very
+        # bug this helper exists to prevent.  The reads are non-blocking, so
+        # the loop ends the moment nothing more is immediately available.
+        while True:
+            chunk = stream.read(_READ_SIZE)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except Exception:
+        logger.debug("Could not adopt buffered stdin text", exc_info=True)
+    finally:
+        try:
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+        except OSError:  # pragma: no cover - the fd was valid moments ago
+            logger.debug("Could not restore stdin blocking mode", exc_info=True)
+
+    pending = "".join(chunks)
+    if not pending:
+        return b""
+    return pending.encode(stream.encoding or "utf-8", "replace")
+
+
 class _SelectorLineReader:
-    """Read selectable stdin without blocking the event-loop thread."""
+    """Read selectable stdin without blocking the event-loop thread.
+
+    Reads raw bytes with :func:`os.read` and splits lines itself rather than
+    calling ``stream.readline()``.  A buffered ``TextIOWrapper`` slurps every
+    readable byte into its own userspace buffer, so type-ahead (two quick
+    Enters) left the second line invisible to ``add_reader``: the fd reported
+    no data, the callback never fired again, and every later toggle lagged a
+    keypress (gh 1006).  Owning the buffer keeps kernel readiness and pending
+    bytes in sync.
+
+    Anything the stream had buffered before construction is adopted first, so
+    switching to fd reads cannot strand input an earlier read had already
+    pulled out of the kernel.
+    """
+
+    _READ_SIZE = _READ_SIZE
 
     def __init__(
         self,
@@ -48,19 +137,68 @@ class _SelectorLineReader:
         self._pending: deque[bool | Exception] = deque()
         self._ready = asyncio.Event()
         self._registered = False
+        # A CR ended the previous chunk: a single LF opening the next one is
+        # the other half of that terminator, not an empty line.
+        self._skip_lf = False
+        self._buffer = _adopt_buffered_text(stream, fd)
+        self._publish_complete_lines()
         loop.add_reader(fd, self._on_readable)
         self._registered = True
 
+    def _publish_complete_lines(self) -> None:
+        """Report one line per universal-newline terminator in the buffer.
+
+        ``TextIOWrapper`` translated bare ``\r`` and ``\r\n`` into ``\n``, so
+        splitting bytes on ``\n`` alone would strand CR-terminated input (a tty
+        with ``ICRNL`` off sends ``\r`` for Enter) and never toggle.
+
+        A CR at the end of the buffer is reported immediately and its LF half,
+        should one follow, is swallowed on the next read -- the same carry an
+        incremental newline decoder keeps.  Holding the CR back until the next
+        byte disambiguated it would instead make every CR-only keypress lag by
+        one, which is the very bug this reader exists to fix.
+        """
+        while self._buffer:
+            if self._skip_lf:
+                self._skip_lf = False
+                if self._buffer[:1] == b"\n":
+                    self._buffer = self._buffer[1:]
+                    continue
+            index = _find_line_end(self._buffer)
+            if index < 0:
+                return
+            end = index + 1
+            if self._buffer[index] == _CR:
+                if end < len(self._buffer):
+                    if self._buffer[end : end + 1] == b"\n":
+                        end += 1
+                else:
+                    self._skip_lf = True
+            self._buffer = self._buffer[end:]
+            self._publish(True)
+
     def _on_readable(self) -> None:
         try:
-            got_line = bool(self._stream.readline())
+            data = os.read(self._fd, self._READ_SIZE)
+        except (BlockingIOError, InterruptedError):
+            # Spurious readability on a non-blocking fd, or a signal raced the
+            # read; the reader stays armed for the next callback.
+            return
         except Exception as exc:  # noqa: BLE001 intentional boundary or best-effort cleanup
             self.close()
             self._publish(exc)
             return
-        if not got_line:
+        if not data:
+            # EOF. A trailing unterminated line is still a line, matching
+            # ``readline()``'s behaviour, and is reported before the close.
             self.close()
-        self._publish(got_line)
+            if self._buffer:
+                self._buffer = b""
+                self._publish(True)
+            self._publish(False)
+            return
+        self._buffer += data
+        self._publish_complete_lines()
 
     def _publish(self, result: bool | Exception) -> None:
         self._pending.append(result)

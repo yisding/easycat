@@ -7,7 +7,11 @@ from typing import Self
 
 import pytest
 
-from easycat.push_to_talk import run_stdin_push_to_talk, run_stdin_push_to_talk_session
+from easycat.push_to_talk import (
+    _SelectorLineReader,
+    run_stdin_push_to_talk,
+    run_stdin_push_to_talk_session,
+)
 
 
 class _FakeSession:
@@ -75,9 +79,6 @@ class _RaisingSelectable:
     def fileno(self) -> int:
         return self._fd
 
-    def readline(self) -> str:
-        raise self.error
-
 
 async def test_run_stdin_push_to_talk_toggles_turns_from_enter_presses() -> None:
     session = _FakeSession()
@@ -136,6 +137,282 @@ async def test_run_stdin_push_to_talk_reads_selectable_pipe() -> None:
 
     assert session.actions == ["start", "end"]
     assert output[-1] == "  [stdin closed - exiting]"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_delivers_type_ahead_without_eof() -> None:
+    """Two quick Enters must both toggle while the pipe stays open (gh 1006).
+
+    The sibling test above closes the write end immediately, so EOF
+    re-triggers readability and masks a swallowed second line.  Here the pipe
+    stays open: a buffered ``readline()`` would leave the second Enter stuck
+    in the ``TextIOWrapper`` with the fd reporting no data.
+    """
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as stream:
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                os.write(write_fd, b"\n\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+
+                # A partial line stays pending until its newline arrives.
+                os.write(write_fd, b"partial")
+                await asyncio.sleep(0)
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(), timeout=0.1)
+                os.write(write_fd, b"\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_adopts_text_already_buffered_by_the_stream() -> None:
+    """Input an earlier buffered read pulled off the fd must not be stranded.
+
+    An application that calls ``input()`` / ``readline()`` before starting
+    push-to-talk leaves the following lines in the ``TextIOWrapper``'s decoded
+    buffer — already out of the kernel, so ``os.read`` can never see them.
+    """
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as stream:
+            os.write(write_fd, b"consumed\npending-one\npending-two\n")
+            # The prior read pulls *everything* into the wrapper's buffer.
+            assert stream.readline() == "consumed\n"
+
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                # Nothing was fabricated beyond the two buffered lines.
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(), timeout=0.1)
+                # ...and the fd path still works afterwards.
+                os.write(write_fd, b"live\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_adoption_holds_a_partial_buffered_line() -> None:
+    """A buffered partial line waits for its newline instead of firing early."""
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as stream:
+            os.write(write_fd, b"consumed\npart")
+            assert stream.readline() == "consumed\n"
+
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(), timeout=0.1)
+                os.write(write_fd, b"ial\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_leaves_the_fd_blocking_after_adoption() -> None:
+    """The O_NONBLOCK flip used to adopt buffered text must be reverted."""
+    import fcntl
+
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as stream:
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                flags = fcntl.fcntl(read_fd, fcntl.F_GETFL)
+                assert not flags & os.O_NONBLOCK
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_skips_adoption_for_a_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TTY never buffers a pending line, and must not be flipped to O_NONBLOCK.
+
+    Canonical-mode reads cannot cross a line boundary, so the adoption has
+    nothing to find — and the descriptor is shared with the parent shell.
+    """
+    import fcntl
+
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    touched: list[int] = []
+    real_fcntl = fcntl.fcntl
+
+    def _tracked(fd: int, op: int, *args: object):
+        if op == fcntl.F_SETFL:
+            touched.append(fd)
+        return real_fcntl(fd, op, *args)
+
+    monkeypatch.setattr("fcntl.fcntl", _tracked)
+    monkeypatch.setattr(os, "isatty", lambda fd: fd == read_fd)
+    try:
+        with os.fdopen(read_fd) as stream:
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            reader.close()
+    finally:
+        os.close(write_fd)
+
+    assert touched == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_adopts_every_buffered_chunk() -> None:
+    """Adoption must empty the stream, not stop after one read or a cap.
+
+    Anything left behind sits where ``os.read`` can never reach it -- the
+    exact loss this helper exists to prevent -- and the writer stays open
+    here so no EOF can paper over it.
+    """
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    # Comfortably more than one ``_READ_SIZE`` chunk, and more than one
+    # ``TextIOWrapper`` chunk, while still fitting the pipe buffer.
+    lines = 8000
+    try:
+        with os.fdopen(read_fd) as stream:
+            os.write(write_fd, b"consumed\n" + b"x\n" * lines)
+            assert stream.readline() == "consumed\n"
+
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                for _ in range(lines):
+                    assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(), timeout=0.1)
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (b"\r\r", 2),
+        (b"\r\n\r\n", 2),
+        (b"a\rb\nc\r\n", 3),
+    ],
+    ids=["bare-cr", "crlf", "mixed"],
+)
+async def test_selectable_reader_honours_universal_newlines(payload: bytes, expected: int) -> None:
+    """CR and CRLF terminate a line too, as ``TextIOWrapper`` used to translate.
+
+    A tty with ``ICRNL`` off sends ``\r`` for Enter; splitting on ``\n`` alone
+    would leave it buffered and the toggle would never fire.
+    """
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as stream:
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                os.write(write_fd, payload)
+                for _ in range(expected):
+                    assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                # A CRLF must not be counted twice.
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(), timeout=0.1)
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_carries_a_split_crlf_across_reads() -> None:
+    """A CR ending one read toggles at once; its LF half is swallowed next.
+
+    Holding the CR back until the next byte disambiguated it would make every
+    CR-only keypress lag by one -- the bug this reader exists to fix.
+    """
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as stream:
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                os.write(write_fd, b"one\r")
+                # No lag: the CR toggles immediately.
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+
+                # The LF that completes the CRLF is not a second line.
+                os.write(write_fd, b"\ntwo\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(), timeout=0.1)
+
+                # A genuine blank line after a CR-terminated one still counts.
+                os.write(write_fd, b"three\r")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                os.write(write_fd, b"\n\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(), timeout=0.1)
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_reports_unterminated_tail_then_eof() -> None:
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd) as stream:
+        reader = _SelectorLineReader(stream, loop, read_fd)
+        try:
+            os.write(write_fd, b"tail")
+            os.close(write_fd)
+            assert await asyncio.wait_for(reader.read(), timeout=1) is True
+            assert await asyncio.wait_for(reader.read(), timeout=1) is False
+        finally:
+            reader.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_run_stdin_push_to_talk_toggles_on_type_ahead() -> None:
+    session = _FakeSession()
+    output: list[str] = []
+    read_fd, write_fd = os.pipe()
+
+    async def _drive() -> None:
+        with os.fdopen(read_fd) as stream:
+            await run_stdin_push_to_talk(session, input_stream=stream, print_fn=output.append)
+
+    try:
+        task = asyncio.create_task(_drive())
+        os.write(write_fd, b"\n\n")
+        for _ in range(200):
+            if session.actions == ["start", "end"]:
+                break
+            await asyncio.sleep(0.005)
+        assert session.actions == ["start", "end"]
+    finally:
+        os.close(write_fd)
+        await asyncio.wait_for(task, timeout=1)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
@@ -204,9 +481,17 @@ async def test_add_reader_failure_uses_thread_fallback(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
-async def test_selector_reader_propagates_read_failure() -> None:
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selector_reader_propagates_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     read_fd, write_fd = os.pipe()
     error = RuntimeError("stdin failed")
+
+    def _raising_read(fd: int, size: int) -> bytes:
+        raise error
+
+    monkeypatch.setattr("easycat.push_to_talk.os.read", _raising_read)
     try:
         os.write(write_fd, b"x")
         with pytest.raises(RuntimeError, match="stdin failed") as exc_info:
@@ -220,6 +505,36 @@ async def test_selector_reader_propagates_read_failure() -> None:
         assert exc_info.value is error
     finally:
         os.close(read_fd)
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selector_reader_stays_armed_after_transient_read_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A spurious wakeup on a non-blocking fd must not end the reader."""
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    real_read = os.read
+    calls: list[int] = []
+
+    def _flaky_read(fd: int, size: int) -> bytes:
+        calls.append(fd)
+        if len(calls) == 1:
+            raise BlockingIOError
+        return real_read(fd, size)
+
+    monkeypatch.setattr("easycat.push_to_talk.os.read", _flaky_read)
+    try:
+        with os.fdopen(read_fd) as stream:
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                os.write(write_fd, b"\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                assert len(calls) >= 2
+            finally:
+                reader.close()
+    finally:
         os.close(write_fd)
 
 
