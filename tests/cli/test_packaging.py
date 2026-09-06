@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from easycat.cli.scaffold._schema import available_templates
+from easycat.cli.scaffold.init import _template_file_names
 from scripts.check_wheel_size import MAX_WHEEL_BYTES
 from tests._release_artifacts import release_artifact_offenders
 
@@ -34,25 +36,12 @@ def _project_root() -> Path:
     raise RuntimeError("could not locate project root")
 
 
-_EXPECTED_TEMPLATES: tuple[str, ...] = (
-    "openai-agents",
-    "provider",
-    "pydantic-ai",
-    "pydantic-ai-workflow",
-    "telnyx-phone",
-    "text-chat",
-    "twilio-phone",
-    "webrtc-browser",
-)
-_EXPECTED_FILES: tuple[str, ...] = (
-    "agent.py",
-    "pyproject.toml",
-    "README.md",
-    "AGENTS.md",
-    "tests/test_agent.py",
-    ".env.example",
-    ".gitignore",
-)
+# Derived, never hand-listed: a hand list silently missed ``provider-stt`` and
+# ``provider-tts`` entirely, and would miss every support module a template
+# gains later.  If a build-backend exclusion ever makes a template file
+# legitimately absent from the wheel, add it to a named, commented exception
+# set here — do not reinstate a hand list.
+_WHEEL_EXEMPT_TEMPLATE_FILES: frozenset[str] = frozenset()
 
 
 @pytest.fixture(scope="module")
@@ -121,7 +110,7 @@ def test_wheel_stays_within_deliberate_size_budget(built_wheel: Path) -> None:
     assert built_wheel.stat().st_size <= MAX_WHEEL_BYTES
 
 
-@pytest.mark.parametrize("template", _EXPECTED_TEMPLATES)
+@pytest.mark.parametrize("template", sorted(available_templates()))
 def test_wheel_ships_template_directory(built_wheel: Path, template: str) -> None:
     members = _wheel_members(built_wheel)
     prefix = f"easycat/cli/scaffold/templates/{template}/"
@@ -129,13 +118,23 @@ def test_wheel_ships_template_directory(built_wheel: Path, template: str) -> Non
     assert found, f"template {template} not in wheel"
 
 
-@pytest.mark.parametrize("template", _EXPECTED_TEMPLATES)
-@pytest.mark.parametrize("fname", _EXPECTED_FILES)
-def test_wheel_ships_template_file(built_wheel: Path, template: str, fname: str) -> None:
-    """The dotfile-critical test: .env.example and .gitignore must land."""
-    members = _wheel_members(built_wheel)
-    expected = f"easycat/cli/scaffold/templates/{template}/{fname}"
-    assert expected in members, f"{expected} missing from wheel"
+@pytest.mark.parametrize("template", sorted(available_templates()))
+def test_wheel_ships_every_template_file(built_wheel: Path, template: str) -> None:
+    """The dotfile-critical test: .env.example and .gitignore must land.
+
+    Expectations come from the scaffold source, so a template that gains a
+    support module is covered without editing this file.
+    """
+    members = set(_wheel_members(built_wheel))
+    expected = {
+        f"easycat/cli/scaffold/templates/{template}/{fname}"
+        for fname in _template_file_names(template)
+        if fname not in _WHEEL_EXEMPT_TEMPLATE_FILES
+    }
+    assert expected, f"template {template} generates no files"
+
+    missing = sorted(expected - members)
+    assert not missing, f"missing from wheel: {missing}"
 
 
 def test_wheel_ships_twilio_phone_server(built_wheel: Path) -> None:
