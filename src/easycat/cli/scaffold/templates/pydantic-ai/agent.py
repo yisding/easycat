@@ -1,17 +1,25 @@
 """Voice agent built on PydanticAI."""
 
-from datetime import datetime
-
 from easycat import EasyConfig, run
 from pydantic_ai import Agent
 
-agent = Agent("openai:gpt-4.1-mini", system_prompt="$AGENT_INSTRUCTIONS")
+from tools import current_time
+
+AGENT_NAME = "$AGENT_NAME"
+INSTRUCTIONS = "$AGENT_INSTRUCTIONS"
 
 
-@agent.tool_plain
-def current_time() -> str:
-    """Return the current local time as HH:MM."""
-    return datetime.now().astimezone().strftime("%H:%M")
+def make_agent() -> Agent:
+    """Build this project's agent; tests import it, so keep it side-effect free."""
+    return Agent(
+        "openai:gpt-4.1-mini", name=AGENT_NAME, system_prompt=INSTRUCTIONS, tools=[current_time]
+    )
 
 
-run(EasyConfig.mic(agent=agent, **__EASYCAT_CONFIG_EXTRA__))  # noqa: F821
+def make_config() -> EasyConfig:
+    """Wire the agent into a voice config. No audio device opens until run()."""
+    return EasyConfig.mic(agent=make_agent(), **__EASYCAT_CONFIG_EXTRA__)  # noqa: F821
+
+
+if __name__ == "__main__":
+    run(make_config())

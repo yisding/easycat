@@ -1,8 +1,11 @@
 # $PROJECT_NAME
 
 Voice agent built on PydanticAI. Listens on your local microphone, speaks
-through your local speakers. Ships with one working tool (`current_time`) so
-you can see tool use in action on the first run.
+through your local speakers. Ships with one working tool (`current_time`, a
+plain function in `tools.py`) so you can see tool use in action on the very
+first run. `agent.py` builds the agent in `make_agent()` and wires it in
+`make_config()`; importing it starts nothing, so the tests can import the
+real app.
 
 ## Install
 
@@ -51,18 +54,19 @@ Ctrl-C to quit.
 
 ## Check
 
-After editing `agent.py`, run the local lint/syntax check:
+After editing `agent.py` or `tools.py`, run the local lint/syntax check:
 
 ```bash
-uv run ruff check agent.py
+uv run ruff check agent.py tools.py
 ```
 
 If Ruff reports an auto-fixable issue, run
-`uv run ruff check --fix agent.py` and then re-run the check.
+`uv run ruff check --fix agent.py tools.py` and then re-run the check.
 
-Then run the offline agent tests — no API keys or network needed
-(`tests/test_agent.py` exercises the real turn pipeline with a stub
-agent; see `AGENTS.md` for the testing-and-evals ladder):
+Then run the offline agent tests — no API keys, no network, no microphone
+(`tests/test_agent.py` calls `tools.py` for real, asserts `agent.py`'s wiring,
+and drives EasyCat's real text and audio pipelines with a scripted stand-in for
+the model; see `AGENTS.md` for the testing-and-evals ladder):
 
 ```bash
 uv run pytest
@@ -70,10 +74,12 @@ uv run pytest
 
 ## Next steps
 
-- **Change the personality:** edit `system_prompt=...` in `agent.py`.
-- **Add more tools:** decorate with `@voice_agent.tool_plain` (or
-  `@voice_agent.tool` if you need the run context) and PydanticAI will
-  dispatch based on the request.
+- **Change the personality:** edit the `INSTRUCTIONS` constant that
+  `make_agent()` passes as `system_prompt` in `agent.py`.
+- **Add more tools:** add a plain function to `tools.py` and list it in the
+  `tools=[...]` argument of `Agent(...)` inside `make_agent()`, so the
+  generated test can call it directly. PydanticAI dispatches based on the
+  request.
 - **Swap the model:** change `"openai:gpt-4.1-mini"` to another model string
   PydanticAI supports, then add the matching API key and provider extra if
   that provider is not part of the default PydanticAI install. For example:
@@ -87,7 +93,7 @@ uv run pytest
   It shows a two-specialist `on_user_turn(...)` workflow that EasyCat
   adapts directly.
 - **Debug a session:** pass `debug="full", record_to=".easycat/runs"` to
-  `EasyConfig.mic(...)`. EasyCat writes a SQLite journal under
+  `EasyConfig.mic(agent=make_agent(), ...)`. EasyCat writes a SQLite journal under
   `.easycat/journals/` and a timestamped `RunBundle` under `.easycat/runs/`; inspect
   the journal with `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
   Debug bundles can contain raw transcripts, tool arguments, provider payloads,
