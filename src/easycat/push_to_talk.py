@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 import threading
@@ -28,10 +29,67 @@ class ManagedPushToTalkSession(PushToTalkSession, Protocol):
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None: ...
 
 
+# Cap the constructor-time adoption so a stream that is being written to
+# continuously cannot spin the drain instead of arming the reader.
+_MAX_ADOPTED_CHARS = 1 << 20
+
+logger = logging.getLogger(__name__)
+
+
 class _LineReader(Protocol):
     async def read(self) -> bool: ...
 
     def close(self) -> None: ...
+
+
+_READ_SIZE = 4096
+
+
+def _adopt_buffered_text(stream: TextIO, fd: int) -> bytes:
+    """Take input an earlier buffered read already pulled off *fd*.
+
+    A ``TextIOWrapper`` that has been read before (an application calling
+    ``input()`` or ``readline()`` ahead of push-to-talk) can hold decoded
+    characters that ``os.read`` will never see: those bytes already left the
+    kernel and sit in the wrapper.  Claim them once, at construction, so the
+    reader starts with the complete picture and owns the fd from there.
+
+    A terminal is skipped on purpose.  Canonical-mode reads never cross a line
+    boundary, so a TTY wrapper cannot be holding a pending line, and flipping
+    ``O_NONBLOCK`` on a descriptor shared with the parent shell is a hazard
+    worth not taking for a case that cannot arise.
+
+    Best-effort throughout: any failure leaves the reader to start from an
+    empty buffer, which is exactly the pre-existing behaviour.
+    """
+    try:
+        if os.isatty(fd):
+            return b""
+        import fcntl
+
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    except (OSError, ImportError, ValueError):
+        return b""
+
+    pending = ""
+    try:
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        while len(pending) < _MAX_ADOPTED_CHARS:
+            chunk = stream.read(_READ_SIZE)
+            if not chunk:
+                break
+            pending += chunk
+    except Exception:
+        logger.debug("Could not adopt buffered stdin text", exc_info=True)
+    finally:
+        try:
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+        except OSError:  # pragma: no cover - the fd was valid moments ago
+            logger.debug("Could not restore stdin blocking mode", exc_info=True)
+
+    if not pending:
+        return b""
+    return pending.encode(stream.encoding or "utf-8", "replace")
 
 
 class _SelectorLineReader:
@@ -44,9 +102,13 @@ class _SelectorLineReader:
     no data, the callback never fired again, and every later toggle lagged a
     keypress (gh 1006).  Owning the buffer keeps kernel readiness and pending
     bytes in sync.
+
+    Anything the stream had buffered before construction is adopted first, so
+    switching to fd reads cannot strand input an earlier read had already
+    pulled out of the kernel.
     """
 
-    _READ_SIZE = 4096
+    _READ_SIZE = _READ_SIZE
 
     def __init__(
         self,
@@ -57,12 +119,18 @@ class _SelectorLineReader:
         self._stream = stream
         self._loop = loop
         self._fd = fd
-        self._buffer = b""
         self._pending: deque[bool | Exception] = deque()
         self._ready = asyncio.Event()
         self._registered = False
+        self._buffer = _adopt_buffered_text(stream, fd)
+        self._publish_complete_lines()
         loop.add_reader(fd, self._on_readable)
         self._registered = True
+
+    def _publish_complete_lines(self) -> None:
+        while b"\n" in self._buffer:
+            _line, _, self._buffer = self._buffer.partition(b"\n")
+            self._publish(True)
 
     def _on_readable(self) -> None:
         try:
@@ -85,9 +153,7 @@ class _SelectorLineReader:
             self._publish(False)
             return
         self._buffer += data
-        while b"\n" in self._buffer:
-            _line, _, self._buffer = self._buffer.partition(b"\n")
-            self._publish(True)
+        self._publish_complete_lines()
 
     def _publish(self, result: bool | Exception) -> None:
         self._pending.append(result)

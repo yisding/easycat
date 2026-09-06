@@ -7,7 +7,11 @@ from typing import Self
 
 import pytest
 
-from easycat.push_to_talk import run_stdin_push_to_talk, run_stdin_push_to_talk_session
+from easycat.push_to_talk import (
+    _SelectorLineReader,
+    run_stdin_push_to_talk,
+    run_stdin_push_to_talk_session,
+)
 
 
 class _FakeSession:
@@ -144,8 +148,6 @@ async def test_selectable_reader_delivers_type_ahead_without_eof() -> None:
     stays open: a buffered ``readline()`` would leave the second Enter stuck
     in the ``TextIOWrapper`` with the fd reporting no data.
     """
-    from easycat.push_to_talk import _SelectorLineReader
-
     loop = asyncio.get_running_loop()
     read_fd, write_fd = os.pipe()
     try:
@@ -170,9 +172,113 @@ async def test_selectable_reader_delivers_type_ahead_without_eof() -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
-async def test_selectable_reader_reports_unterminated_tail_then_eof() -> None:
-    from easycat.push_to_talk import _SelectorLineReader
+async def test_selectable_reader_adopts_text_already_buffered_by_the_stream() -> None:
+    """Input an earlier buffered read pulled off the fd must not be stranded.
 
+    An application that calls ``input()`` / ``readline()`` before starting
+    push-to-talk leaves the following lines in the ``TextIOWrapper``'s decoded
+    buffer — already out of the kernel, so ``os.read`` can never see them.
+    """
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as stream:
+            os.write(write_fd, b"consumed\npending-one\npending-two\n")
+            # The prior read pulls *everything* into the wrapper's buffer.
+            assert stream.readline() == "consumed\n"
+
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+                # Nothing was fabricated beyond the two buffered lines.
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(), timeout=0.1)
+                # ...and the fd path still works afterwards.
+                os.write(write_fd, b"live\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_adoption_holds_a_partial_buffered_line() -> None:
+    """A buffered partial line waits for its newline instead of firing early."""
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as stream:
+            os.write(write_fd, b"consumed\npart")
+            assert stream.readline() == "consumed\n"
+
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.read(), timeout=0.1)
+                os.write(write_fd, b"ial\n")
+                assert await asyncio.wait_for(reader.read(), timeout=1) is True
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_leaves_the_fd_blocking_after_adoption() -> None:
+    """The O_NONBLOCK flip used to adopt buffered text must be reverted."""
+    import fcntl
+
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as stream:
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            try:
+                flags = fcntl.fcntl(read_fd, fcntl.F_GETFL)
+                assert not flags & os.O_NONBLOCK
+            finally:
+                reader.close()
+    finally:
+        os.close(write_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_skips_adoption_for_a_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TTY never buffers a pending line, and must not be flipped to O_NONBLOCK.
+
+    Canonical-mode reads cannot cross a line boundary, so the adoption has
+    nothing to find — and the descriptor is shared with the parent shell.
+    """
+    import fcntl
+
+    loop = asyncio.get_running_loop()
+    read_fd, write_fd = os.pipe()
+    touched: list[int] = []
+    real_fcntl = fcntl.fcntl
+
+    def _tracked(fd: int, op: int, *args: object):
+        if op == fcntl.F_SETFL:
+            touched.append(fd)
+        return real_fcntl(fd, op, *args)
+
+    monkeypatch.setattr("fcntl.fcntl", _tracked)
+    monkeypatch.setattr(os, "isatty", lambda fd: fd == read_fd)
+    try:
+        with os.fdopen(read_fd) as stream:
+            reader = _SelectorLineReader(stream, loop, read_fd)
+            reader.close()
+    finally:
+        os.close(write_fd)
+
+    assert touched == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
+async def test_selectable_reader_reports_unterminated_tail_then_eof() -> None:
     loop = asyncio.get_running_loop()
     read_fd, write_fd = os.pipe()
     with os.fdopen(read_fd) as stream:
@@ -306,8 +412,6 @@ async def test_selector_reader_stays_armed_after_transient_read_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A spurious wakeup on a non-blocking fd must not end the reader."""
-    from easycat.push_to_talk import _SelectorLineReader
-
     loop = asyncio.get_running_loop()
     read_fd, write_fd = os.pipe()
     real_read = os.read
