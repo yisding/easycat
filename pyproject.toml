@@ -529,6 +529,7 @@ module = [
     "easycat.stages.*",
     "easycat.session.*",
     "easycat.integrations.*",
+    "easycat.planning.*",
     "easycat.validation._lane_harness.*",
     "easycat.validation._live_runner.*",
     "easycat.debugger._records.*",
@@ -613,6 +614,21 @@ pytest_add_cli_args = [
 [tool.importlinter]
 root_package = "easycat"
 exclude_type_checking_imports = true
+
+# Configuration (construction) and planning (preview) are peers, not layers:
+# ``easycat.planning`` must not import ``easycat.config`` (importing
+# ``easycat.config`` pulls ``_factory`` and therefore ``Session``, which would
+# make the side-effect-free planner drag the whole construction path in), and
+# ``easycat.config`` must not import ``easycat.planning`` (the planner is the
+# diagnostic projection *over* configuration). The pure decisions both make live
+# in the stdlib-only leaf ``easycat._pipeline_decisions``, below both.
+[[tool.importlinter.contracts]]
+name = "Configuration and planning do not import each other"
+type = "independence"
+modules = [
+    "easycat.config",
+    "easycat.planning",
+]
 
 # STT / TTS / VAD are independent provider families with no direct cross-imports.
 # transports/telephony are DELIBERATELY excluded: they are genuinely

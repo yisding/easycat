@@ -262,7 +262,7 @@ def test_credential_free_provider_supports_shortcuts_factory_plan_and_metadata(
 
 def test_registered_stt_capabilities_drive_endpointing_and_planner() -> None:
     from easycat.config.easy import _stt_uses_native_endpointing
-    from easycat.planning.provider_plan import _select_catalog_role
+    from easycat.planning._resolution import _decide_catalog_role
 
     register_stt_provider(
         "fakestt",
@@ -274,12 +274,12 @@ def test_registered_stt_capabilities_drive_endpointing_and_planner() -> None:
     config = FakeSTTConfig(api_key="k")
 
     assert _stt_uses_native_endpointing(config) is True
-    selection = _select_catalog_role("stt", config, catalog=STT_CATALOG)
+    selection = _decide_catalog_role("stt", config, catalog=STT_CATALOG)
     assert selection.capabilities == frozenset({"native_endpointing", "word_timestamps"})
 
 
 def test_registered_stt_capability_resolver_can_vary_by_config_or_model() -> None:
-    from easycat.planning.provider_plan import _select_catalog_role
+    from easycat.planning._resolution import _decide_catalog_role
 
     def resolve_capabilities(config: object, model: str | None) -> frozenset[str]:
         selected_model = config.model if isinstance(config, FakeSTTConfig) else model
@@ -306,7 +306,7 @@ def test_registered_stt_capability_resolver_can_vary_by_config_or_model() -> Non
     assert STT_CATALOG.capabilities_for("fakestt", model="other-native") == frozenset(
         {"native_endpointing", "word_timestamps"}
     )
-    assert _select_catalog_role("stt", native, catalog=STT_CATALOG).capabilities == frozenset(
+    assert _decide_catalog_role("stt", native, catalog=STT_CATALOG).capabilities == frozenset(
         {"native_endpointing", "word_timestamps"}
     )
 
