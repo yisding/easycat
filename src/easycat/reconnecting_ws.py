@@ -14,7 +14,7 @@ import random
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NoReturn
 
 import websockets
 from websockets.asyncio.client import ClientConnection
@@ -221,6 +221,10 @@ class ReconnectingWebSocket:
         # send()/recv() fail fast rather than waiting on a reconnect that
         # isn't happening.
         self._ever_connected = False
+        # Set by ``expect_peer_close()`` while an end-of-stream is in flight,
+        # so the peer's own close is read as the completion of it rather than
+        # as a drop to reconnect from.
+        self._expecting_peer_close = False
         # How long send()/recv() wait for an in-progress reconnect before
         # giving up. Bounded so a write (or a best-effort cancel frame) does
         # not stall the pipeline for a full backoff budget; if the reconnect
@@ -230,6 +234,29 @@ class ReconnectingWebSocket:
     @property
     def is_connected(self) -> bool:
         return self._ws is not None and self._ws.close_code is None
+
+    def expect_peer_close(self) -> None:
+        """Declare that the peer's next close ends the stream, and is expected.
+
+        Some protocols end with the *server* closing: Deepgram terminates the
+        socket after delivering the results and metadata that follow a client
+        ``CloseStream``.  ``recv_iter`` otherwise treats every
+        ``ConnectionClosed`` as a transient drop whenever an ``on_reconnect``
+        hook exists, so that documented shutdown opened a fresh connection
+        just to tear it down, emitted reconnect events plus a spurious
+        provider error, and left the receive task alive until the close
+        timeout expired — about five seconds of dead latency at the end of
+        every turn (gh 1066).
+
+        Reconnecting into a socket that is already being shut down cannot help
+        under *any* close code, so once this is set no close reconnects.  An
+        abnormal close is still recorded as an abnormal death, so a server
+        that dies mid-drain is not silently mistaken for a clean finish.
+
+        Idempotent, and cleared by the next successful connect so a reused
+        wrapper never inherits a stale expectation.
+        """
+        self._expecting_peer_close = True
 
     @property
     def died_abnormally(self) -> bool:
@@ -392,6 +419,8 @@ class ReconnectingWebSocket:
         self._last_connect_attempts = 0
         self._reconnect_attempts_exhausted = None
         self._reconnect_exhaustion_reason = None
+        # A fresh socket has no end-of-stream in flight yet.
+        self._expecting_peer_close = False
 
     def _retain_connection_for_close(self, connection: ClientConnection) -> None:
         """Record cleanup ownership once, comparing connections by identity."""
@@ -700,6 +729,11 @@ class ReconnectingWebSocket:
         self._connected.clear()
         if self._closed:
             return False
+        # Checked before ``on_disconnect``: an expected end-of-stream close is
+        # not the provider "becoming unreachable mid-call", and reporting it as
+        # one made every non-persistent turn end with a spurious EASYCAT_E304.
+        if self._expecting_peer_close:
+            return self._finish_expected_peer_close(exc)
 
         if self._on_disconnect is not None:
             await self._invoke_disconnect_callback(self._on_disconnect, exc)
@@ -708,21 +742,7 @@ class ReconnectingWebSocket:
 
         close_code = self._connection_closed_code(exc)
         if self._on_reconnect is None:
-            logger.warning(
-                "WebSocket connection lost (code=%s). No on_reconnect callback "
-                "configured; propagating ConnectionClosed for a clean restart.",
-                close_code,
-            )
-            if not isinstance(exc, websockets.exceptions.ConnectionClosedOK):
-                # Only an abnormal mid-stream death is a terminal failure worth
-                # reporting (gh 994). A graceful peer close reaches this branch
-                # too, via ``_normal_close_exception``; flagging that as an
-                # abnormal death would make every clean stream end surface a
-                # spurious EASYCAT_E305. No reconnect was attempted either way,
-                # so the attempt count is 0.
-                self._mark_reconnect_exhausted(0, "no on_reconnect callback")
-            self._ws = None
-            raise exc
+            self._propagate_unrecoverable_drop(exc, close_code)
         if remaining_reconnects == 0:
             logger.error(
                 "WebSocket connection lost (code=%s). Reconnect budget exhausted; "
@@ -759,6 +779,44 @@ class ReconnectingWebSocket:
             self._ws = None
             return False
         return True
+
+    def _finish_expected_peer_close(
+        self,
+        exc: websockets.exceptions.ConnectionClosed,
+    ) -> bool:
+        """End ``recv_iter`` for a close the caller declared expected.
+
+        See :meth:`expect_peer_close`. Reconnecting into a socket that is
+        already being shut down cannot help under any close code, so this is
+        terminal either way — but an abnormal close is still recorded so a
+        server that dies mid-drain is not mistaken for a clean finish.
+        """
+        if not isinstance(exc, websockets.exceptions.ConnectionClosedOK):
+            self._mark_reconnect_exhausted(0, "peer closed abnormally during end-of-stream")
+        self._ws = None
+        return False
+
+    def _propagate_unrecoverable_drop(
+        self,
+        exc: websockets.exceptions.ConnectionClosed,
+        close_code: int | None,
+    ) -> NoReturn:
+        """Re-raise a drop that no ``on_reconnect`` hook can recover from."""
+        logger.warning(
+            "WebSocket connection lost (code=%s). No on_reconnect callback "
+            "configured; propagating ConnectionClosed for a clean restart.",
+            close_code,
+        )
+        if not isinstance(exc, websockets.exceptions.ConnectionClosedOK):
+            # Only an abnormal mid-stream death is a terminal failure worth
+            # reporting (gh 994). A graceful peer close reaches this branch
+            # too, via ``_normal_close_exception``; flagging that as an
+            # abnormal death would make every clean stream end surface a
+            # spurious EASYCAT_E305. No reconnect was attempted either way,
+            # so the attempt count is 0.
+            self._mark_reconnect_exhausted(0, "no on_reconnect callback")
+        self._ws = None
+        raise exc
 
     @staticmethod
     def _connection_closed_code(exc: websockets.exceptions.ConnectionClosed) -> int | None:

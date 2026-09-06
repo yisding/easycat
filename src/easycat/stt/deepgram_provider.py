@@ -406,6 +406,14 @@ class DeepgramSTT(WebSocketSTTBase):
             await self._finish_persistent_turn()
             return
         if self._ws is not None:
+            # Deepgram answers ``CloseStream`` with the remaining results and
+            # metadata and then terminates the socket itself.  Declare that
+            # close expected before sending, so ``recv_iter`` reads it as the
+            # end of the stream instead of a transient drop: the drain-first
+            # close below would otherwise wait out the whole ``close_timeout``
+            # while a pointless replacement connection was opened and a
+            # spurious provider error raised, on every turn (gh 1066).
+            self._ws.expect_peer_close()
             await self._send_json_control({"type": "CloseStream"}, label="CloseStream")
 
         await self._close_active_websocket()

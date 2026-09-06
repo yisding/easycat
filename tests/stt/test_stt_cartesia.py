@@ -136,6 +136,52 @@ def _error_msg(code: str = "invalid_input", status_code: int = 400) -> str:
     )
 
 
+async def _no_reconnect_backoff(delay: float) -> None:
+    """Fail a test that reaches the reconnect backoff instead of waiting it out."""
+    raise AssertionError(f"unexpected reconnect backoff of {delay}s")
+
+
+class ServerClosingMockWebSocket:
+    """Socket that terminates itself after ``close``, as Cartesia does.
+
+    ``MockWebSocket`` raises ``StopAsyncIteration`` without setting
+    ``close_code``, so ``recv_iter`` returns cleanly and the reconnect path is
+    never exercised — the real ``websockets`` client sets ``close_code`` on a
+    server close (gh 1066).
+    """
+
+    _STOP = object()
+
+    def __init__(self, messages: list[str | bytes] | None = None) -> None:
+        self.sent: list[bytes | str] = []
+        self.close_code: int | None = None
+        self.close_reason: str | None = None
+        self._queue: asyncio.Queue[str | bytes | object] = asyncio.Queue()
+        for message in messages or []:
+            self._queue.put_nowait(message)
+
+    async def send(self, data: bytes | str) -> None:
+        self.sent.append(data)
+        if data == "close":
+            self._queue.put_nowait(json.dumps({"type": "done"}))
+            self._queue.put_nowait(self._STOP)
+
+    async def close(self) -> None:
+        self._queue.put_nowait(self._STOP)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str | bytes:
+        message = await self._queue.get()
+        if message is self._STOP:
+            self.close_code = 1000
+            self.close_reason = "server closed after close"
+            raise StopAsyncIteration
+        assert isinstance(message, (str, bytes))
+        return message
+
+
 def _make_cartesia_stt(
     messages: list[str | bytes] | None = None,
     *,
@@ -244,6 +290,39 @@ async def test_cartesia_finalize_sends_finalize_text():
     assert not any(_is_json_object(s) for s in text_sent)
 
     await stt.end_stream()
+
+
+async def test_cartesia_close_does_not_reconnect_or_stall(monkeypatch):
+    """Cartesia's expected end-of-session close must be terminal (gh 1066).
+
+    ``_connect_websocket`` defaults to a no-op ``on_reconnect`` hook so a
+    transient drop reconnects, and ``recv_iter`` treated *any*
+    ``ConnectionClosed`` — a graceful code-1000 close included — as such a
+    drop. The server closing after acking ``close`` therefore opened a
+    replacement socket just to tear it down and left the receive task alive
+    until the whole close timeout expired, on every turn.
+    """
+    connects = 0
+
+    async def mock_connect(url: str, **kwargs) -> ServerClosingMockWebSocket:
+        nonlocal connects
+        connects += 1
+        return ServerClosingMockWebSocket([_transcript_msg("hello", is_final=True)])
+
+    errors: list[Error] = []
+    bus = EventBus()
+    bus.subscribe(Error, errors.append)
+    stt = CartesiaSTT(CartesiaSTTConfig(api_key="k", ws_connect=mock_connect, event_bus=bus))
+    monkeypatch.setattr("easycat.reconnecting_ws.asyncio.sleep", _no_reconnect_backoff)
+
+    events = await asyncio.wait_for(
+        collect_stt_events(stt, make_audio_chunks(generate_pcm_sine(duration_ms=100))),
+        timeout=2,
+    )
+
+    assert [e.text for e in events] == ["hello"]
+    assert connects == 1, "the expected close must not open a replacement socket"
+    assert errors == [], f"no provider error is warranted here: {errors}"
 
 
 async def test_cartesia_commit_segment_before_start_returns_false():
