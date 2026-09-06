@@ -170,6 +170,12 @@ them. Multi-word audience filters accept hyphens or underscores, so
   [journal durability contract](../src/easycat/runtime/DURABILITY.md) for
   persistence, recovery, and storage layout. Run `just guard-ops` when editing
   these operator-facing pages.
+- Hardening a deployment or reporting a vulnerability: read the
+  [security policy](../SECURITY.md) for private reporting, supported versions,
+  and the index of security-relevant configuration (bearer-token auth and the
+  non-loopback bind guard, per-caller isolation, telephony webhook trust, and
+  journal redaction). Use `uv run easycat docs --audience operators` (or
+  `--audience operators --json`) to list the operator routes it points at.
 - Validating a change: run `uv run easycat validate quick`, inspect
   `uv run easycat validate report .easycat/validation/latest.json`, or use the
   matching JSON lanes (`uv run easycat validate quick --json`,

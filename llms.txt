@@ -51,6 +51,7 @@ Source: https://github.com/yisding/easycat
 - [Public API](https://github.com/yisding/easycat/blob/main/docs/public-api.md) — for maintainers: Review the stable import surface before changing exports.
 - [Provider contracts](https://github.com/yisding/easycat/blob/main/tests/contracts/README.md) — for provider maintainers: Maintain offline provider, protocol, cassette, and bridge contract coverage.
 - [Extending providers](https://github.com/yisding/easycat/tree/main/docs/extending) — for provider maintainers: Build custom STT, TTS, VAD, transport, and agent-bridge providers out of tree and verify conformance.
+- [Security policy](https://github.com/yisding/easycat/blob/main/SECURITY.md) — for operators: Report a vulnerability privately, see which versions are supported, and find the hardening guidance for a deployment.
 - [Contributing](https://github.com/yisding/easycat/blob/main/CONTRIBUTING.md) — for contributors: Follow the development loop, docs/onboarding guards, and validation slices.
 - [Deployment](https://github.com/yisding/easycat/blob/main/docs/deployment/docker.md) — for operators: Package the WebSocket example for container deployment.
 - [Production servers](https://github.com/yisding/easycat/blob/main/docs/deployment/production-servers.md) — for operators: Run multi-client WebSocket, WebRTC, WebTransport, and Twilio servers with one isolated EasyCat session per client or call.
