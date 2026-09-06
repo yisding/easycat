@@ -97,6 +97,11 @@ def test_plan_error_redacts_a_secret_shaped_manifest_value(
 # ── DX2 PR2: the coded ``issues`` array on every plan surface ──────────
 
 
+#: The three keys ``json_envelope`` stamps on every command payload; the plan
+#: body keys are everything else.
+_ENVELOPE_KEYS = frozenset({"schema_version", "command", "status"})
+
+
 def _present(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
     """Make ``provider_plan._module_available`` report *modules* present.
 
@@ -137,7 +142,11 @@ def test_plan_json_adds_issues_without_changing_existing_keys(
 
     payload = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
 
-    assert {
+    # EQUALITY, not containment: a renamed, dropped, or accidentally-added
+    # top-level key is exactly the regression this test is named for, and the
+    # server-side half of the same contract
+    # (``test_plan_payload_shares_the_cli_body_keys``) is pinned this strongly.
+    assert set(payload) - _ENVELOPE_KEYS == {
         "profile",
         "selected",
         "missing_env",
@@ -146,7 +155,8 @@ def test_plan_json_adds_issues_without_changing_existing_keys(
         "blocking_errors",
         "has_blocking_errors",
         "issues",
-    } <= set(payload)
+    }
+    assert _ENVELOPE_KEYS <= set(payload)
     assert payload["blocking_errors"] == ["missing_env:DEEPGRAM_API_KEY"]
     assert payload["has_blocking_errors"] is True
     assert payload["selected"]["stt"]["required_env"] == "DEEPGRAM_API_KEY"
@@ -195,6 +205,61 @@ def test_plan_human_output_names_code_and_fix(
     assert "Fix:" in output
 
 
+def test_plan_human_output_survives_bracketed_fields_and_fixes(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-3b: Rich must not eat ``[voice.default]`` or ``easycat[webrtc]``.
+
+    Both DX2 headline shapes carry square brackets, which Rich reads as style
+    tags unless every interpolation is escaped. Unescaped, the E202 row prints
+    the copy-pasteable command ``uv add 'easycat'`` — which installs EasyCat
+    WITHOUT the extra the row is about — and the E602 row loses its field
+    entirely.
+    """
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text(
+        '[project]\nname = "plan-cli"\n\n[voice.default]\ntransport = "twilio"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    _absent(monkeypatch, "twilio")
+    _present(monkeypatch, "onnxruntime")
+
+    output = " ".join(cli.invoke(app, ["plan", "--manifest", str(manifest)]).stdout.split())
+
+    # The missing-extra row's fix must stay installable verbatim.
+    assert "EASYCAT_E202 telephony (transport):" in output
+    assert "uv add 'easycat[telephony]'" in output
+    # The incomplete-selection row must keep its manifest-table field.
+    assert "EASYCAT_E602 [voice.default] (-):" in output
+    assert "`[voice.default]`" in output
+
+
+def test_plan_human_output_does_not_crash_on_a_bracket_shaped_detail(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-3c: a closing-tag-shaped substring must not raise ``MarkupError``."""
+    from easycat.errors import SetupIssue
+
+    manifest = _write_manifest(tmp_path, "")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    _present(monkeypatch, "aiortc", "livekit", "onnxruntime")
+    monkeypatch.setattr(
+        selection,
+        "plan_issues",
+        lambda _plan: [
+            SetupIssue(code="EASYCAT_E602", reason="incomplete_selection", field="[/]", detail="x")
+        ],
+    )
+
+    result = cli.invoke(app, ["plan", "--manifest", str(manifest)])
+
+    assert result.exit_code == 0
+    assert "EASYCAT_E602 [/] (-): x" in " ".join(result.stdout.split())
+
+
 def test_plan_reports_an_incomplete_phone_profile(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -217,6 +282,10 @@ def test_plan_reports_an_incomplete_phone_profile(
     incomplete = [i for i in payload["issues"] if i["reason"] == "incomplete_selection"]
     assert [issue["code"] for issue in incomplete] == ["EASYCAT_E602"]
     assert "TWILIO_STREAM_TOKEN_SECRET" in incomplete[0]["detail"]
+    # The fix must address THIS defect, not E602's code-wide "pick a known
+    # transport" advice — the transport is already valid.
+    assert "token = 'bearer-env:TWILIO_STREAM_TOKEN_SECRET'" in incomplete[0]["fix"]
+    assert "needs a known `transport`" not in incomplete[0]["fix"]
 
 
 def test_plan_exit_code_is_zero_with_blocking_errors(

@@ -122,6 +122,22 @@ def selection_issue(exc: BaseException, *, profile: str, path: str | None = None
     )
 
 
+def _redacted(issue: SetupIssue) -> SetupIssue:
+    """Return *issue* with ``detail``/``fix`` passed through ``redact_value``.
+
+    :meth:`SetupIssue.from_error` and :meth:`SetupIssue.from_code` cannot redact
+    (``errors.py`` is a stdlib-only leaf), yet every issue built here reaches an
+    HTTP body through ``VoiceServer.plan_payload``. A defect's ``detail``
+    interpolates the manifest's own text, so a future defect rule that quotes a
+    manifest VALUE must not be one edit away from putting a secret on ``/plan``.
+    Applying the redactor here — not at each call site — keeps the documented
+    "every string on ``/plan`` is redacted" property true by construction.
+    """
+    from easycat.validation.redaction import redact_value
+
+    return replace(issue, detail=redact_value(issue.detail), fix=redact_value(issue.fix))
+
+
 def plan_selected_profile(
     voice_profile: VoiceProfile,
     *,
@@ -167,18 +183,23 @@ def build_manifest_plan(
       ``/health/ready`` at all.
 
     Side-effect-free: never resolves the agent reference, never constructs a
-    provider, never reads a referenced secret's value.
+    provider, never reads a referenced secret's value. Every defect issue is
+    built through :func:`_redacted`, so the ``issues`` array this plan feeds —
+    ``easycat plan --json`` and the authenticated ``/plan`` body alike — carries
+    only redacted strings.
     """
     env = dict(environ) if environ is not None else dict(os.environ)
     selected_profile = voice_profile if voice_profile is not None else manifest.profile(profile)
     plan = plan_selected_profile(selected_profile, profile=profile, environ=env)
 
     defects: list[SetupIssue] = [
-        SetupIssue.from_error(
-            defect,
-            reason="incomplete_selection",
-            field=f"[voice.{profile}]",
-            severity="blocking",
+        _redacted(
+            SetupIssue.from_error(
+                defect,
+                reason="incomplete_selection",
+                field=f"[voice.{profile}]",
+                severity="blocking",
+            )
         )
         for defect in manifest.profile_defects(profile)
     ]
@@ -189,13 +210,15 @@ def build_manifest_plan(
             "blocking" if requirement.field.startswith("[voice.") else "warning"
         )
         defects.append(
-            SetupIssue.from_code(
-                EASYCAT_E604,
-                reason="unset_reference",
-                field=requirement.var,
-                severity=severity,
-                reference=requirement.reference,
-                var=requirement.var,
+            _redacted(
+                SetupIssue.from_code(
+                    EASYCAT_E604,
+                    reason="unset_reference",
+                    field=requirement.var,
+                    severity=severity,
+                    reference=requirement.reference,
+                    var=requirement.var,
+                )
             )
         )
     return replace(plan, defects=tuple(defects))

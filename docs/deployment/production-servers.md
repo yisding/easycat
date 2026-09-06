@@ -416,12 +416,17 @@ seven keys `easycat plan --json` emits — `profile`, `selected`, `missing_env`,
 (`EASYCAT_E203`, `EASYCAT_E202`, `EASYCAT_E604`, `EASYCAT_E602`, `EASYCAT_E104`),
 a content-free `reason` (`missing_env`, `missing_extra`, `unset_reference`,
 `incomplete_selection`, `unresolvable_profile`), a `severity` of `blocking` or
-`warning`, and any of `field`, `role`, `detail`, and `fix`. Every string is
-redacted, so a secret-shaped manifest value cannot reach the body. When the
-profile cannot be resolved at all, `blocking_errors[0]` keeps its
+`warning`, and any of `field`, `role`, `detail`, and `fix`. No secret-shaped
+manifest value can reach the body: every manifest-derived `detail`/`fix` is
+passed through the redactor, and the remaining strings are planner catalog
+metadata — env-var names, install extras, role names — never manifest values.
+When the profile cannot be resolved at all, `blocking_errors[0]` keeps its
 `plan_unresolvable: ` prefix and the coded message follows it;
 `/capabilities` keeps its `profile`/`roles`/`all_capabilities` shape and adds
-the same `issues` entry instead of dropping the reason.
+the same `issues` entry instead of dropping the reason. On `/plan` the `issues`
+key is always present (an empty array when nothing is wrong); on
+`/capabilities` it appears **only** when the profile cannot be resolved, so read
+it there with a default (`body.get("issues", [])`).
 
 `/health/ready` is **red when the selected profile is statically incomplete**,
 not only when a credential or extra is missing: a phone (`twilio`/`telnyx`)

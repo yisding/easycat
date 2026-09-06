@@ -2444,14 +2444,40 @@ def test_selected_app_role_for_env_names_the_needing_role(
     assert selected.role_for_env("DEEPGRAM_API_KEY") == "stt"
     assert selected.role_for_env("OPENAI_API_KEY") == "tts"
     assert selected.role_for_env("TWILIO_WS_PORT") == ""
-    assert selected.code_for_env("DEEPGRAM_API_KEY") == "EASYCAT_E210"
 
 
-def test_selected_app_codes_a_manifest_reference_var_as_e604() -> None:
+def test_env_code_prefers_the_planner_issue_over_the_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """U-3b: a planner-coded var stamps the row; an unknown var keeps *fallback*."""
+    _pin_extras(monkeypatch)
+    manifest_path = _write_manifest(
+        tmp_path, 'transport = "webrtc"\nstt = "deepgram"\ntts = "openai"'
+    )
+    manifest = load_manifest(manifest_path)
+    selected = selected_app_from_manifest(
+        manifest, manifest.profile("default"), "default", environ={}
+    )
+
+    env_code = doctor_module._env_code
+    assert env_code(selected, "DEEPGRAM_API_KEY", fallback="EASYCAT_E210") == "EASYCAT_E203"
+    assert env_code(selected, "TWILIO_WS_PORT", fallback="EASYCAT_E210") == "EASYCAT_E210"
+    assert env_code(None, "DEEPGRAM_API_KEY", fallback="EASYCAT_E203") == "EASYCAT_E203"
+
+
+def test_env_code_codes_a_manifest_reference_var_as_e604() -> None:
+    """U-3c: a ``bearer-env:`` reference var the planner made no issue for.
+
+    ``_env_code`` is the ONLY owner of this rule now, so it is asserted through
+    the function production calls rather than through a ``SelectedApp``
+    accessor no check row reads.
+    """
     selected = SelectedApp(source="manifest", reference_vars=frozenset({"SRV_TOK"}))
 
-    assert selected.code_for_env("SRV_TOK") == "EASYCAT_E604"
-    assert selected.code_for_env("OTHER") == "EASYCAT_E210"
+    env_code = doctor_module._env_code
+    assert env_code(selected, "SRV_TOK", fallback="EASYCAT_E203") == "EASYCAT_E604"
+    assert env_code(selected, "SRV_TOK", fallback="EASYCAT_E210") == "EASYCAT_E604"
+    assert env_code(selected, "OTHER", fallback="EASYCAT_E210") == "EASYCAT_E210"
 
 
 def test_doctor_selected_app_check_functions_are_pure(

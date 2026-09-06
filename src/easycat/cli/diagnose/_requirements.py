@@ -112,10 +112,6 @@ class SelectedApp:
                 return role.role
         return ""
 
-    def code_for_env(self, var: str) -> str:
-        """``"EASYCAT_E604"`` for a manifest-bound reference var, else E210."""
-        return "EASYCAT_E604" if var in self.reference_vars else "EASYCAT_E210"
-
     def issue_for_env(self, var: str) -> SetupIssue | None:
         """The planner issue backing an env-var row, if the planner made one.
 

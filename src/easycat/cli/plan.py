@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import typer
+from rich.markup import escape
 
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_json, json_envelope, stdout_console
@@ -52,9 +53,17 @@ def _render_human(plan: Any, issues: Sequence[SetupIssue]) -> None:
         if issue.severity != "blocking":
             continue
         role = issue.role or "-"
-        stdout_console.print(f"  [red]{issue.code}[/] {issue.field} ({role}): {issue.detail}")
+        # ``escape`` on EVERY interpolation, like doctor's renderer: a field is
+        # ``[voice.<profile>]`` and a fix quotes ``uv add 'easycat[webrtc]'``,
+        # both of which Rich would otherwise eat as style tags — printing a
+        # copy-pasteable command that installs the wrong thing, or raising
+        # ``MarkupError`` on a lone ``[/]``-shaped substring.
+        stdout_console.print(
+            f"  [red]{escape(issue.code)}[/] {escape(issue.field)} "
+            f"({escape(role)}): {escape(issue.detail)}"
+        )
         if issue.fix:
-            stdout_console.print(f"    Fix: {issue.fix}")
+            stdout_console.print(f"    Fix: {escape(issue.fix)}")
 
 
 @cli_command

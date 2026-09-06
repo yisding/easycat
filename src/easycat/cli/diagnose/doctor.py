@@ -1134,8 +1134,8 @@ def check_selection_defects(selected: SelectedApp | None) -> list[CheckResult]:
     It deliberately does NOT emit rows for ``reason == "unset_reference"``: every
     manifest reference var is already in ``SelectedApp.required_env``, so
     ``check_env_vars`` emits one ``env_<var>`` row for it with
-    ``code=selected.code_for_env(var)`` -> ``"EASYCAT_E604"``. Emitting here too
-    would produce two rows for one cause.
+    ``code=_env_code(selected, var, fallback=...)`` -> ``"EASYCAT_E604"``.
+    Emitting here too would produce two rows for one cause.
     """
     if selected is None:
         return []

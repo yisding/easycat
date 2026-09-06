@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from easycat.errors import (
     EASYCAT_E203,
     EASYCAT_E205,
     EASYCAT_E501,
+    EASYCAT_E602,
     REGISTRY,
     EasyCatError,
     EasyConfigError,
@@ -90,6 +92,54 @@ def test_rendered_message_carries_fix_and_explain_hint() -> None:
     fix = err.rendered_fix()
     assert fix is not None
     assert "Choose a new name" in fix
+
+
+def test_factory_fix_override_replaces_the_registry_text_everywhere() -> None:
+    """U-8: ``fix=`` is the one reserved factory kwarg, and it is not context.
+
+    A code that spans several defect shapes (E602) can only carry generic
+    registry advice; a raiser that knows the exact defect overrides it, and the
+    SAME string must then reach ``str(exc)``, ``rendered_fix()``, and
+    ``SetupIssue.from_error``'s ``fix`` — the byte-identity contract.
+    """
+    override = "Add token = 'bearer-env:TW_TOK' to `[voice.default]`."
+    err = EASYCAT_E602(path="easycat.toml", problem="no token", fix=override)
+
+    assert err.rendered_fix() == override
+    assert f"Fix: {override}" in str(err)
+    assert "fix" not in err.context
+    assert err.context == {"path": "easycat.toml", "problem": "no token"}
+
+    issue = SetupIssue.from_error(err, reason="incomplete_selection")
+    assert issue.fix == override
+
+    # The registry entry itself is untouched: ``easycat explain`` still shows
+    # the code-level documentation.
+    assert "needs a known `transport`" in REGISTRY["EASYCAT_E602"].fix
+    assert EASYCAT_E602(path="p", problem="q").rendered_fix() == REGISTRY["EASYCAT_E602"].fix
+
+
+def test_phone_profile_defect_fix_is_actionable_on_every_surface(tmp_path: Path) -> None:
+    """U-9: plan/doctor/startup all read one fix that names the missing token."""
+    from easycat.project import load_manifest
+
+    manifest_path = tmp_path / "easycat.toml"
+    manifest_path.write_text(
+        '[project]\nname = "phone"\n\n[voice.default]\ntransport = "twilio"\n',
+        encoding="utf-8",
+    )
+    manifest = load_manifest(manifest_path)
+
+    (defect,) = manifest.profile_defects("default")
+    fix = defect.rendered_fix()
+    assert fix is not None
+    assert "token = 'bearer-env:TWILIO_STREAM_TOKEN_SECRET'" in fix
+    assert "needs a known `transport`" not in fix
+
+    with pytest.raises(EasyCatError) as raised:
+        manifest.to_easyconfig("default", resolve_agent=False)
+    assert raised.value.code == "EASYCAT_E602"
+    assert raised.value.rendered_fix() == fix
 
 
 def test_rendered_message_unknown_code_is_bare() -> None:
@@ -286,7 +336,7 @@ class _SameCause:
     plan_role: str = ""
     doctor_row: str = ""
     raises: bool = False
-    startup_module: tuple[str, str] | None = None
+    startup_extra_module: str = ""
 
 
 _SAME_CAUSE_CASES: tuple[_SameCause, ...] = (
@@ -306,10 +356,13 @@ _SAME_CAUSE_CASES: tuple[_SameCause, ...] = (
         plan_field="webrtc",
         plan_role="transport",
         doctor_row="extra_webrtc",
-        # ``require_module`` is what the WebRTC transport calls at connection
-        # time. The probe name is a module that CANNOT exist, so this asserts
-        # the same code in a dev lane and in an extras lane alike.
-        startup_module=("easycat_missing_aiortc_probe", "webrtc"),
+        # The startup column drives the REAL WebRTC call site
+        # (``_webrtc_audio.OutboundAudioSource.create_track`` ->
+        # ``require_module("aiortc", extra="webrtc", …)``) with ``aiortc``
+        # forced absent, so dropping ``extra=`` there — which would make the
+        # startup error uncoded — turns this row red. A synthetic module name
+        # would prove only what E-7 already proves.
+        startup_extra_module="aiortc",
     ),
     _SameCause(
         id="invalid-provider-stt",
@@ -338,6 +391,28 @@ _SAME_CAUSE_CASES: tuple[_SameCause, ...] = (
         doctor_row="env_tw_tok",
     ),
 )
+
+
+def _hide_module(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
+    """Make the REAL ``require_module`` see *module* as not installed.
+
+    Patches the seam ``easycat._extras.require_module`` itself consults —
+    ``sys.modules`` plus ``importlib.util.find_spec`` — rather than stubbing
+    ``require_module``, so the production call site's own ``extra=`` argument is
+    what the assertion reads. Identical in the credential-free lane and in an
+    extras lane that really has ``aiortc`` installed.
+    """
+    import importlib.util
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.delitem(sys.modules, module, raising=False)
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *args, **kwargs: (
+            None if name == module else real_find_spec(name, *args, **kwargs)
+        ),
+    )
 
 
 def _force_modules(monkeypatch: pytest.MonkeyPatch, absent: tuple[str, ...]) -> None:
@@ -400,21 +475,24 @@ def test_same_cause_reports_one_code(
     )
     doctor_payload = json.loads(diagnosed.stdout)
     if case.raises:
+        assert diagnosed.exit_code != 0
         assert doctor_payload["code"] == case.code
     else:
+        assert diagnosed.exit_code == 1
         row = next(r for r in doctor_payload["checks"] if r["name"] == case.doctor_row)
         assert row["status"] == "fail"
         assert row["code"] == case.code
         assert row.get("role", "") == case.plan_role
 
     # ── startup surface ──
-    if case.startup_module is not None:
-        module_name, extra = case.startup_module
-        from easycat._extras import require_module
+    if case.startup_extra_module:
+        from easycat.transports._webrtc_audio import OutboundAudioSource
 
+        _hide_module(monkeypatch, case.startup_extra_module)
         with pytest.raises(ImportError) as import_info:
-            require_module(module_name, extra=extra)
+            OutboundAudioSource().create_track()
         assert import_info.value.code == case.code  # type: ignore[attr-defined]
+        assert import_info.value.context["extra"] == "webrtc"  # type: ignore[attr-defined]
     else:
         with pytest.raises(EasyCatError) as raise_info:
             load_manifest(manifest_path).to_easyconfig("default", resolve_agent=False)

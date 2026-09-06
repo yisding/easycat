@@ -103,6 +103,38 @@ def test_blocking_manifest_defects_reach_blocking_errors() -> None:
     assert plan.has_blocking_errors is True
 
 
+def test_manifest_defect_issues_are_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """U-11: every ``issues[]`` string reaching ``/plan`` goes through the redactor.
+
+    ``SetupIssue.from_error`` structurally cannot redact (``errors.py`` is a
+    stdlib-only leaf), so ``build_manifest_plan`` must. Pinned against a defect
+    whose message quotes a manifest value, which is the shape a future defect
+    rule would add.
+    """
+    from easycat.errors import EASYCAT_E602
+    from easycat.project.manifest import ProjectManifest
+
+    secret = "sk-live-secret-token-abcdef1234567890"
+    manifest = parse_manifest(
+        {"project": {"name": "sel"}, "voice": {"default": {"transport": "websocket"}}}
+    )
+    monkeypatch.setattr(
+        ProjectManifest,
+        "profile_defects",
+        lambda _self, _profile="default": (
+            EASYCAT_E602(path="easycat.toml", problem=f"token {secret!r} is literal", fix=secret),
+        ),
+    )
+
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+
+    (defect,) = plan.defects
+    assert secret not in defect.detail
+    assert secret not in defect.fix
+    assert "[REDACTED_SECRET]" in defect.detail
+    assert "[REDACTED_SECRET]" in defect.fix
+
+
 def test_plan_issues_attribute_gaps_to_pipeline_roles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

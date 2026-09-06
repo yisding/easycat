@@ -35,10 +35,23 @@ class EasyCatError(Exception):
     module produce instances of this class.
     """
 
-    def __init__(self, error_code: str, message: str, **context: Any) -> None:
+    #: Per-instance fix text. ``None`` means "use the registry entry's fix".
+    #: Class-level so subclasses that bypass ``__init__`` (``EasyConfigError``)
+    #: still read a defined attribute.
+    _fix: str | None = None
+
+    def __init__(
+        self,
+        error_code: str,
+        message: str,
+        *,
+        fix: str | None = None,
+        **context: Any,
+    ) -> None:
         self.code = error_code
         self.message = message
         self.context = context
+        self._fix = fix
         super().__init__(self._render())
 
     def _render(self) -> str:
@@ -57,7 +70,20 @@ class EasyCatError(Exception):
         return f"{base}\n  Fix: {fix}\n  Run `easycat explain {self.code}` for details."
 
     def rendered_fix(self) -> str | None:
-        """Return this error's registry fix with context applied, if registered."""
+        """Return this error's fix: the per-instance override, else the registry's.
+
+        A registry ``fix`` is written for a whole code, so a code that covers
+        several defect shapes (``EASYCAT_E602`` spans "unknown transport" and
+        "phone profile with no token") can only offer the generic instruction.
+        A raiser that knows the exact defect passes ``fix=`` to the factory and
+        the SAME string then reaches every surface: ``str(exc)`` at startup,
+        ``easycat plan``/``easycat doctor``, and ``SetupIssue.from_error``'s
+        ``fix`` — so the byte-identity contract still holds. ``easycat explain
+        <code>`` keeps showing the registry text, which is the code-level
+        documentation.
+        """
+        if self._fix is not None:
+            return self._fix
         entry = REGISTRY.get(self.code)
         if entry is None:
             return None
@@ -243,6 +269,11 @@ def register(
     The returned factory accepts arbitrary kwargs which are (a) used as
     ``str.format()`` substitutions on ``headline`` when present and
     (b) attached as the ``context`` on the produced :class:`EasyCatError`.
+
+    ``fix`` is the one RESERVED kwarg: it overrides the registry's fix text on
+    that instance (see :meth:`EasyCatError.rendered_fix`) instead of becoming a
+    substitution or a ``context`` entry. No registered ``headline``/``fix``
+    template references ``{fix}``, so nothing is shadowed.
     """
     entry = ErrorEntry(code, headline, cause, fix, example, list(related or []))
     if code in REGISTRY:
@@ -250,13 +281,14 @@ def register(
     REGISTRY[code] = entry
 
     def factory(**ctx: Any) -> EasyCatError:
+        fix_override: str | None = ctx.pop("fix", None)
         try:
             message = headline.format(**ctx)
         except KeyError as exc:
             raise RuntimeError(
                 f"{code}: headline template missing substitution for {exc}"
             ) from exc
-        return EasyCatError(code, message, **ctx)
+        return EasyCatError(code, message, fix=fix_override, **ctx)
 
     factory.__name__ = code
     factory.__qualname__ = code

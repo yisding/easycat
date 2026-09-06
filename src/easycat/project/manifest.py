@@ -186,12 +186,24 @@ class ProjectManifest:
                 if spec.transport == "telnyx"
                 else "TWILIO_STREAM_TOKEN_SECRET"
             )
+            # ``fix=`` overrides E602's registry text, which is written for the
+            # code as a whole ("each `[voice.<profile>]` needs a known
+            # `transport`") and would tell an operator to change a transport
+            # that is already valid. The override reaches EVERY surface —
+            # ``to_easyconfig``'s raise, ``easycat plan``, ``easycat doctor``,
+            # and ``/plan``'s ``issues[].fix`` — because they all read
+            # ``rendered_fix()``.
             return (
                 EASYCAT_E602(
                     path=str(self.source_path or "easycat.toml"),
                     problem=(
                         f"phone profile {profile!r} requires a token reference; "
                         f"set token = 'bearer-env:{token_env_var}'"
+                    ),
+                    fix=(
+                        f"Add token = 'bearer-env:{token_env_var}' to "
+                        f"`[voice.{profile}]`, then export {token_env_var} with the "
+                        "shared secret your carrier's stream webhook sends."
                     ),
                 ),
             )
