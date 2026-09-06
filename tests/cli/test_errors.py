@@ -337,6 +337,11 @@ class _SameCause:
     doctor_row: str = ""
     raises: bool = False
     startup_extra_module: str = ""
+    # When set, plan's ``issues[].fix`` and doctor's row ``fix`` must both equal
+    # the code's registry text byte-for-byte. Only rows whose fix is pure
+    # catalog text opt in: ``EASYCAT_E202``'s doctor fix is deliberately
+    # ``install_fix(extra)`` so it respects the project's dependency source.
+    registry_fix: str = ""
 
 
 _SAME_CAUSE_CASES: tuple[_SameCause, ...] = (
@@ -384,11 +389,20 @@ _SAME_CAUSE_CASES: tuple[_SameCause, ...] = (
         doctor_row="selection_incomplete_selection",
     ),
     _SameCause(
+        # The var name is deliberately ``*_TOKEN``: the redactor's key/value
+        # rule matches ``TOKEN=`` case-insensitively, so a name like ``TW_TOK``
+        # would silently dodge the regression this row pins (catalog text
+        # rewritten into a falsely-redacted, non-copy-pasteable ``export`` line
+        # on plan only, while doctor printed the intact string).
         id="unset-reference",
-        body='transport = "twilio"\ntoken = "bearer-env:TW_TOK"\n',
+        body='transport = "twilio"\ntoken = "bearer-env:TW_STREAM_TOKEN"\n',
         code="EASYCAT_E604",
-        plan_field="TW_TOK",
-        doctor_row="env_tw_tok",
+        plan_field="TW_STREAM_TOKEN",
+        doctor_row="env_tw_stream_token",
+        registry_fix=(
+            "Export the variable before serving (`export TW_STREAM_TOKEN=...`), "
+            "or use a `.env` file and verify with `easycat doctor --env-file .env`."
+        ),
     ),
 )
 
@@ -447,7 +461,7 @@ def test_same_cause_reports_one_code(
     _register_commands()
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.setenv("NO_COLOR", "1")
-    for var in ("DEEPGRAM_API_KEY", "TW_TOK"):
+    for var in ("DEEPGRAM_API_KEY", "TW_STREAM_TOKEN"):
         monkeypatch.delenv(var, raising=False)
     _force_modules(monkeypatch, case.absent)
     manifest_path = tmp_path / "easycat.toml"
@@ -467,6 +481,8 @@ def test_same_cause_reports_one_code(
         assert issue["code"] == case.code
         assert issue.get("role", "") == case.plan_role
         assert issue["fix"]
+        if case.registry_fix:
+            assert issue["fix"] == case.registry_fix
         assert plan_payload["has_blocking_errors"] is True
 
     # ── doctor surface ──
@@ -483,6 +499,11 @@ def test_same_cause_reports_one_code(
         assert row["status"] == "fail"
         assert row["code"] == case.code
         assert row.get("role", "") == case.plan_role
+        if case.registry_fix:
+            # One cause, one code, and — where the fix is catalog text — one
+            # STRING. A surface that scrubs or rewrites it diverges here.
+            assert row["fix"] == case.registry_fix
+            assert issue["fix"] == row["fix"]
 
     # ── startup surface ──
     if case.startup_extra_module:

@@ -135,6 +135,37 @@ def test_manifest_defect_issues_are_redacted(monkeypatch: pytest.MonkeyPatch) ->
     assert "[REDACTED_SECRET]" in defect.fix
 
 
+def test_unset_reference_issue_keeps_the_registry_text_verbatim() -> None:
+    """An ``unset_reference`` issue is catalog text, so the redactor must not touch it.
+
+    ``redact_value``'s key/value rule matches ``TOKEN=``/``SECRET=``/``KEY=``
+    case-insensitively and consumes to the next separator, so scrubbing
+    ``EASYCAT_E604``'s ``export {var}=...`` fix rewrites the placeholder — and
+    the closing backtick and paren — into ``[REDACTED_SECRET],``. That both
+    breaks the copy-pasteable command and makes ``easycat plan`` disagree with
+    ``easycat doctor`` about the identical cause. The var name here is chosen to
+    match that rule; ``parse_auth_reference`` guarantees it cannot be a secret.
+    """
+    from easycat.errors import EASYCAT_E604
+
+    manifest = parse_manifest(
+        {
+            "project": {"name": "sel"},
+            "voice": {"default": {"transport": "twilio", "token": "bearer-env:TW_STREAM_TOKEN"}},
+        }
+    )
+
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+
+    (defect,) = plan.defects
+    expected = EASYCAT_E604(reference="bearer-env:TW_STREAM_TOKEN", var="TW_STREAM_TOKEN")
+    assert defect.reason == "unset_reference"
+    assert defect.detail == expected.message
+    assert defect.fix == expected.rendered_fix()
+    assert "REDACTED" not in defect.fix
+    assert "`export TW_STREAM_TOKEN=...`" in defect.fix
+
+
 def test_plan_issues_attribute_gaps_to_pipeline_roles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

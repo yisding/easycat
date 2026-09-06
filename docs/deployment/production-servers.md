@@ -417,9 +417,14 @@ seven keys `easycat plan --json` emits — `profile`, `selected`, `missing_env`,
 a content-free `reason` (`missing_env`, `missing_extra`, `unset_reference`,
 `incomplete_selection`, `unresolvable_profile`), a `severity` of `blocking` or
 `warning`, and any of `field`, `role`, `detail`, and `fix`. No secret-shaped
-manifest value can reach the body: every manifest-derived `detail`/`fix` is
-passed through the redactor, and the remaining strings are planner catalog
-metadata — env-var names, install extras, role names — never manifest values.
+manifest value can reach the body. The only issue whose text interpolates the
+manifest — `incomplete_selection` — is passed through the redactor; every other
+`detail`/`fix` is verbatim error-registry text over planner catalog metadata
+(env-var names, install extras, role names) and is left byte-identical to what
+`easycat doctor` prints for the same code, so a copy-pasteable fix stays
+copy-pasteable. An `unset_reference`'s variable name is safe to echo because
+`bearer-env:` parsing rejects a reference that is not a well-formed env-var
+name or that matches the shared secret detector.
 When the profile cannot be resolved at all, `blocking_errors[0]` keeps its
 `plan_unresolvable: ` prefix and the coded message follows it;
 `/capabilities` keeps its `profile`/`roles`/`all_capabilities` shape and adds

@@ -130,8 +130,13 @@ def _redacted(issue: SetupIssue) -> SetupIssue:
     HTTP body through ``VoiceServer.plan_payload``. A defect's ``detail``
     interpolates the manifest's own text, so a future defect rule that quotes a
     manifest VALUE must not be one edit away from putting a secret on ``/plan``.
-    Applying the redactor here — not at each call site — keeps the documented
-    "every string on ``/plan`` is redacted" property true by construction.
+
+    Apply it ONLY where a manifest value can actually reach the string. The
+    redactor is a pattern scrubber, not a formatter: registry catalog text that
+    contains a ``NAME=...`` placeholder is rewritten into a falsely-redacted,
+    non-copy-pasteable instruction whenever ``NAME`` looks credential-ish. So an
+    issue whose ``detail``/``fix`` is pure catalog text over provably non-secret
+    inputs must be appended WITHOUT this wrapper.
     """
     from easycat.validation.redaction import redact_value
 
@@ -183,10 +188,22 @@ def build_manifest_plan(
       ``/health/ready`` at all.
 
     Side-effect-free: never resolves the agent reference, never constructs a
-    provider, never reads a referenced secret's value. Every defect issue is
-    built through :func:`_redacted`, so the ``issues`` array this plan feeds —
-    ``easycat plan --json`` and the authenticated ``/plan`` body alike — carries
-    only redacted strings.
+    provider, never reads a referenced secret's value.
+
+    Redaction is applied to the MANIFEST-DERIVED issue only. A
+    ``profile_defects`` entry interpolates the manifest's own text (its
+    ``source_path``, and a future rule could quote a value), so it is built
+    through :func:`_redacted`. The ``unset_reference`` issue is not: it is built
+    from ``requirement.var`` / ``requirement.reference``, which
+    ``parse_auth_reference`` (``project/schema.py``) has already proved cannot
+    carry a secret — the reference must be ``bearer-env:`` plus a well-formed
+    env-var NAME and must not match the shared secret detector. Its
+    ``detail``/``fix`` are therefore pure ``EASYCAT_E604`` catalog text, and
+    passing catalog text through the redactor CORRUPTS it: the fix's
+    ``export {var}=...`` placeholder matches the redactor's key/value rule for
+    any var named ``*TOKEN*``/``*SECRET*``/``*KEY*``, which would both mangle
+    the copy-pasteable command and make ``easycat plan`` disagree with
+    ``easycat doctor`` about the identical ``EASYCAT_E604`` cause.
     """
     env = dict(environ) if environ is not None else dict(os.environ)
     selected_profile = voice_profile if voice_profile is not None else manifest.profile(profile)
@@ -209,16 +226,17 @@ def build_manifest_plan(
         severity: Literal["blocking", "warning"] = (
             "blocking" if requirement.field.startswith("[voice.") else "warning"
         )
+        # NOT wrapped in ``_redacted`` — see this function's docstring: the
+        # inputs are provably non-secret and the output is catalog text the
+        # redactor would corrupt.
         defects.append(
-            _redacted(
-                SetupIssue.from_code(
-                    EASYCAT_E604,
-                    reason="unset_reference",
-                    field=requirement.var,
-                    severity=severity,
-                    reference=requirement.reference,
-                    var=requirement.var,
-                )
+            SetupIssue.from_code(
+                EASYCAT_E604,
+                reason="unset_reference",
+                field=requirement.var,
+                severity=severity,
+                reference=requirement.reference,
+                var=requirement.var,
             )
         )
     return replace(plan, defects=tuple(defects))
