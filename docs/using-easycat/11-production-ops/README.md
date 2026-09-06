@@ -166,6 +166,23 @@ The checkpoint constructs both a serving and draining `VoiceServerHealth` and
 proves only the first is ready. During rollout or shutdown, fail readiness
 before closing listeners so the ingress converges away from the instance.
 
+### `warmup` moves cost out of the first call
+
+`warmup=True` (the default) runs provider warmup hooks when a session starts,
+so model loading, connection setup, and first-call initialisation happen before
+audio flows rather than inside the caller's first turn:
+
+```python
+EasyConfig(agent=agent, warmup=True)   # the default; set False to opt out
+```
+
+It matters here because readiness and warmup answer adjacent questions. Warmup
+is per session, not per process: it makes the *first turn* of each session fast,
+which is exactly the turn a caller judges you on. Turn it off only when you have
+measured that a warmup path costs more at session start than it saves in the
+first turn — a batch worker creating many short-lived sessions is the plausible
+case.
+
 ## Metrics are bounded; journals are forensic
 
 Server metrics include request count/duration, rejected sessions, active
