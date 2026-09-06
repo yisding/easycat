@@ -169,10 +169,14 @@ def _elevenlabs_response(message: str | bytes) -> tuple[str | None, bool]:
 
 
 def _cartesia_response(message: str | bytes) -> tuple[str | None, bool]:
-    message_type = _json_message(message).get("type")
-    if message_type == "done":
-        return (None, True)
-    if message_type != "finalize":
+    # Cartesia's client commands are raw text messages, not JSON envelopes
+    # (gh 1065); audio arrives as binary frames. ``finalize`` flushes the
+    # buffered audio and leaves the session open; ``close`` ends it.
+    if not isinstance(message, str):
+        return (None, False)
+    if message == "close":
+        return (json.dumps({"type": "done"}), True)
+    if message != "finalize":
         return (None, False)
     return (
         json.dumps(
@@ -182,7 +186,7 @@ def _cartesia_response(message: str | bytes) -> tuple[str | None, bool]:
                 "is_final": True,
             }
         ),
-        True,
+        False,
     )
 
 
