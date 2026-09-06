@@ -2,18 +2,21 @@
 
 from easycat import EasyConfig, run
 from pydantic_ai import Agent
+from pydantic_ai.models import Model
 
 from tools import current_time
 
 AGENT_NAME = "$AGENT_NAME"
 INSTRUCTIONS = "$AGENT_INSTRUCTIONS"
+MODEL = "openai:gpt-4.1-mini"
 
 
-def make_agent() -> Agent:
-    """Build this project's agent; tests import it, so keep it side-effect free."""
-    return Agent(
-        "openai:gpt-4.1-mini", name=AGENT_NAME, system_prompt=INSTRUCTIONS, tools=[current_time]
-    )
+def make_agent(model: Model | str = MODEL) -> Agent:
+    """Build this project's agent; tests import it, so keep it side-effect free.
+
+    PydanticAI resolves ``model`` here, inside ``Agent(...)``, so tests inject a stub.
+    """
+    return Agent(model, name=AGENT_NAME, system_prompt=INSTRUCTIONS, tools=[current_time])
 
 
 def make_config() -> EasyConfig:

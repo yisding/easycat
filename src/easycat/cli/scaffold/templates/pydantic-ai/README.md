@@ -80,7 +80,8 @@ uv run pytest
   `tools=[...]` argument of `Agent(...)` inside `make_agent()`, so the
   generated test can call it directly. PydanticAI dispatches based on the
   request.
-- **Swap the model:** change `"openai:gpt-4.1-mini"` to another model string
+- **Swap the model:** change the `MODEL` constant (`"openai:gpt-4.1-mini"`,
+  the default `make_agent()` argument) to another model string
   PydanticAI supports, then add the matching API key and provider extra if
   that provider is not part of the default PydanticAI install. For example:
   `uv add "pydantic-ai[groq]<2"` for stable v1. To move to the stable v2

@@ -56,9 +56,9 @@ def test_agent_wires_its_instructions_and_tools() -> None:
     assert [tool.name for tool in agent.tools] == ["connection_help"]
     # make_config() is not exercised here: unlike VoiceApp, EasyConfig
     # validates credentials at construction time (not just at run()), so
-    # calling it with no API key set would fail this offline test. The
-    # rendered kwargs' provider names are proven against real providers by
-    # the repo-side test that builds EasyConfig with a credential present.
+    # calling it with no API key set would fail this offline test. Put a real
+    # key in .env and run `uv run --env-file .env python agent.py` to exercise
+    # make_config() for real.
 
 
 def test_two_turns_share_one_session() -> None:

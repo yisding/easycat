@@ -55,33 +55,42 @@ def test_pick_specialist_routes_by_keyword(text: str, expected: str) -> None:
 
 def test_agent_wires_its_specialists() -> None:
     pytest.importorskip("pydantic_ai", reason="run `uv sync` to install pydantic-ai")
+    from pydantic_ai.models.test import TestModel
+
     from agent import PROMPT, make_specialists, make_workflow
 
     assert not re.fullmatch(r"\$[A-Z_]+", PROMPT)
-    specialists = make_specialists()
-    assert set(specialists) == {"billing", "technical"}
-    workflow = make_workflow()
-    assert set(workflow.specialists) == {"billing", "technical"}
+    # TestModel is injected, not overridden afterwards: PydanticAI resolves
+    # "openai:..." inside Agent(...), so make_specialists() with no argument
+    # needs a real key even to build. Injecting the stub keeps this key-free.
+    assert set(make_specialists(TestModel())) == {"billing", "technical"}
+    assert set(make_workflow(TestModel()).specialists) == {"billing", "technical"}
     # make_config() is not exercised here: unlike VoiceApp, EasyConfig
     # validates credentials at construction time (not just at run()), so
-    # calling it with no API key set would fail this offline test. The
-    # rendered kwargs' provider names are proven against real providers by
-    # the repo-side test that builds EasyConfig with a credential present.
+    # calling it with no API key set would fail this offline test. Put a real
+    # key in .env and run `uv run --env-file .env python agent.py` to exercise
+    # make_config() for real.
 
 
-def test_workflow_uses_a_deterministic_test_model() -> None:
+def test_workflow_routes_each_turn_to_the_specialist_it_picked() -> None:
     pytest.importorskip("pydantic_ai", reason="run `uv sync` to install pydantic-ai")
     from pydantic_ai.models.test import TestModel
 
     from agent import make_workflow
 
-    workflow = make_workflow()
+    workflow = make_workflow(TestModel())
+    # Each stand-in answers with its own name, so an inverted router or a
+    # swapped specialist key changes which reply comes back.
     with (
-        workflow.specialists["billing"].override(model=TestModel()),
-        workflow.specialists["technical"].override(model=TestModel()),
+        workflow.specialists["billing"].override(model=TestModel(custom_output_text="billing")),
+        workflow.specialists["technical"].override(
+            model=TestModel(custom_output_text="technical")
+        ),
     ):
-        result = asyncio.run(workflow.on_user_turn("I need a refund"))
-    assert result
+        billed = asyncio.run(workflow.on_user_turn("I need a refund"))
+        fixed = asyncio.run(workflow.on_user_turn("my browser audio is broken"))
+    assert billed == "billing"
+    assert fixed == "technical"
 
 
 def test_two_turns_share_one_session() -> None:

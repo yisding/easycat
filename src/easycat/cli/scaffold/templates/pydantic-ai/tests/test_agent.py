@@ -44,31 +44,33 @@ def test_current_time_tool_speaks_hh_mm() -> None:
 
 def test_agent_wires_its_instructions_and_tools() -> None:
     pytest.importorskip("pydantic_ai", reason="run `uv sync` to install pydantic-ai")
+    from pydantic_ai.messages import SystemPromptPart
+    from pydantic_ai.models.test import TestModel
+
     from agent import AGENT_NAME, INSTRUCTIONS, make_agent
 
     # Substitution happened: no bare "$PLACEHOLDER" survived. A dollar sign
     # inside your own name or instructions is text, and stays legal here.
     assert not re.fullmatch(r"\$[A-Z_]+", AGENT_NAME)
     assert not re.fullmatch(r"\$[A-Z_]+", INSTRUCTIONS)
-    agent = make_agent()
+    # TestModel is injected, not overridden afterwards: PydanticAI resolves
+    # "openai:..." inside Agent(...), so make_agent() with no argument needs a
+    # real key even to build. Injecting the stub is what keeps this key-free.
+    agent = make_agent(TestModel())
     assert agent.name == AGENT_NAME
+
+    # TestModel calls every registered tool and echoes the result, so dropping
+    # tools=[current_time] from make_agent() fails here; the request it sent
+    # carries the system prompt only if INSTRUCTIONS was wired in.
+    result = asyncio.run(agent.run("what time is it?"))
+    assert "current_time" in result.output
+    parts = [part for message in result.all_messages() for part in message.parts]
+    assert [p.content for p in parts if isinstance(p, SystemPromptPart)] == [INSTRUCTIONS]
     # make_config() is not exercised here: unlike VoiceApp, EasyConfig
     # validates credentials at construction time (not just at run()), so
-    # calling it with no API key set would fail this offline test. The
-    # rendered kwargs' provider names are proven against real providers by
-    # the repo-side test that builds EasyConfig with a credential present.
-
-
-def test_agent_uses_a_deterministic_test_model() -> None:
-    pytest.importorskip("pydantic_ai", reason="run `uv sync` to install pydantic-ai")
-    from pydantic_ai.models.test import TestModel
-
-    from agent import make_agent
-
-    agent = make_agent()
-    with agent.override(model=TestModel()):
-        result = asyncio.run(agent.run("what time is it?"))
-    assert result.output
+    # calling it with no API key set would fail this offline test. Put a real
+    # key in .env and run `uv run --env-file .env python agent.py` to exercise
+    # make_config() for real.
 
 
 def test_two_turns_share_one_session() -> None:

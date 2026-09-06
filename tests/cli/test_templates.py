@@ -71,8 +71,8 @@ _LINE_BUDGETS: dict[str, int] = {
     "provider": 25,
     "provider-stt": 25,
     "provider-tts": 25,
-    "pydantic-ai": 25,
-    "pydantic-ai-workflow": 45,
+    "pydantic-ai": 28,
+    "pydantic-ai-workflow": 46,
     "text-chat": 25,
     "twilio-phone": 13,
     "telnyx-phone": 13,
@@ -1109,6 +1109,55 @@ def test_pydantic_templates_keep_first_code_readable() -> None:
     assert workflow_tools.index("TECH_TERMS") < workflow_tools.index("def pick_specialist")
 
 
+_PYDANTIC_MODEL_FACTORIES: dict[str, tuple[str, ...]] = {
+    "pydantic-ai": ("make_agent",),
+    "pydantic-ai-workflow": ("make_specialists", "make_workflow"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_PYDANTIC_MODEL_FACTORIES))
+def test_pydantic_templates_inject_the_model_so_offline_tests_need_no_key(name: str) -> None:
+    """PydanticAI resolves the model *inside* ``Agent(...)``, not at run time.
+
+    ``Agent("openai:gpt-4.1-mini", ...)`` raises ``openai.OpenAIError: Missing
+    credentials`` whenever ``OPENAI_API_KEY`` is unset or empty, so a generated
+    test that called the factory with no argument would fail a user's very
+    first ``uv run pytest`` — the run this scaffold advertises as key-free.
+    No lane in this repo installs ``pydantic_ai``, so the generated test's own
+    ``importorskip`` hides that everywhere it could be observed: this static
+    guard is the standing proof, until PR3's wheel lane executes it for real.
+    """
+    factories = _PYDANTIC_MODEL_FACTORIES[name]
+    agent_py = (_template_dir(name) / "agent.py").read_text(encoding="utf-8")
+
+    assert 'MODEL = "openai:' in agent_py, f"{name}/agent.py must name the model in a constant"
+    assert 'Agent("openai:' not in agent_py, (
+        f"{name}/agent.py builds an Agent from a model string that needs a key to resolve"
+    )
+    defined = {
+        node.name: node for node in ast.parse(agent_py).body if isinstance(node, ast.FunctionDef)
+    }
+    for factory in factories:
+        args = defined[factory].args
+        assert [arg.arg for arg in args.args] == ["model"], (
+            f"{name}/{factory}() must take an injectable model"
+        )
+        assert args.defaults and ast.unparse(args.defaults[0]) == "MODEL"
+
+    test_py = (_template_dir(name) / "tests" / "test_agent.py").read_text(encoding="utf-8")
+    assert "TestModel" in test_py
+    for node in ast.walk(ast.parse(test_py)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in factories
+        ):
+            assert node.args or node.keywords, (
+                f"{name}: the generated test calls {node.func.id}() with no model, so "
+                "PydanticAI would need a real API key just to construct it"
+            )
+
+
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_debug_guidance_points_to_public_inspect_cli(name: str) -> None:
     """Structural check only — exact narrative phrasing is not hard-locked here."""
@@ -1759,28 +1808,32 @@ _T11_TEMPLATES: frozenset[str] = frozenset(_LINE_BUDGETS) - {
     "provider-tts",
 }
 # Keywords that build a provider/config object rather than naming a provider
-# string (so ``ast.literal_eval`` must never be asked to evaluate them), plus
-# ``provider``, which selects the *transport* preset (``EasyConfig.phone``)
-# rather than an stt/tts backend and so has no place in an ``EasyConfig.mic``
-# call.
-_CONFIG_BUILDER_EXCLUDED_KWARGS: frozenset[str] = frozenset(
-    {"agent", "transport", "telephony", "provider"}
-)
+# string, so ``ast.literal_eval`` must never be asked to evaluate them.
+# ``provider`` stays in: it names the telephony vendor as a plain string and
+# ``EasyConfig.phone`` — the preset the telnyx template really calls — needs it.
+_CONFIG_BUILDER_EXCLUDED_KWARGS: frozenset[str] = frozenset({"agent", "transport", "telephony"})
 
 
-def _config_builder_call(tree: ast.Module) -> ast.Call | None:
-    """Find the ``VoiceApp(...)`` or ``EasyConfig(...)``/``EasyConfig.<preset>(...)`` call."""
+def _config_builder_call(tree: ast.Module) -> tuple[ast.Call, str] | None:
+    """Find the config-building call and the ``EasyConfig`` preset it uses.
+
+    Returns the call node plus the preset name so the caller can rebuild the
+    config through the *same* preset the template really calls
+    (``EasyConfig.browser`` for webrtc-browser, ``EasyConfig.phone`` for
+    telnyx-phone).  A bare ``VoiceApp(...)``/``EasyConfig(...)`` has no preset
+    attribute; ``mic`` is the equivalent local-audio default those two build.
+    """
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         if isinstance(node.func, ast.Name) and node.func.id in {"VoiceApp", "EasyConfig"}:
-            return node
+            return node, "mic"
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id == "EasyConfig"
         ):
-            return node
+            return node, node.func.attr
     return None
 
 
@@ -1802,7 +1855,8 @@ def test_rendered_app_kwargs_resolve_to_real_providers(
 
     ``VoiceApp(...)``/``EasyConfig(...)`` validate field *names* only, so this
     is the value-level half: it parses (never imports) the rendered app and
-    feeds the literal kwargs to ``EasyConfig.mic`` plus the provider planner.
+    feeds the literal kwargs to the template's own ``EasyConfig`` preset plus
+    the provider planner.
     """
     from easycat.config import EasyConfig
     from easycat.planning.provider_plan import build_provider_plan
@@ -1826,15 +1880,23 @@ def test_rendered_app_kwargs_resolve_to_real_providers(
     filename = _CONFIG_BUILDER_FILE.get(name, "agent.py")
     rendered = _render_text((_template_dir(name) / filename).read_text(encoding="utf-8"), mapping)
 
-    call = _config_builder_call(ast.parse(rendered))
-    assert call is not None, f"{name}/{filename} builds no VoiceApp/EasyConfig call"
+    found = _config_builder_call(ast.parse(rendered))
+    assert found is not None, f"{name}/{filename} builds no VoiceApp/EasyConfig call"
+    call, preset = found
     kwargs = {
         kw.arg: ast.literal_eval(kw.value)
         for kw in call.keywords
         if kw.arg is not None and kw.arg not in _CONFIG_BUILDER_EXCLUDED_KWARGS
     }
 
-    config = EasyConfig.mic(agent=NoopAgent(), **kwargs)
+    # The template's own preset, not a hard-coded ``mic``: this is what proves
+    # ``EasyConfig.browser(...)`` builds with the ``webrtc`` extra absent (the
+    # config object opens no transport) and that ``EasyConfig.phone(...)``
+    # accepts the telnyx server's rendered kwargs.
+    assert hasattr(EasyConfig, preset), (
+        f"{name}/{filename} calls an unknown preset EasyConfig.{preset}(...)"
+    )
+    config = getattr(EasyConfig, preset)(agent=NoopAgent(), **kwargs)
     plan = build_provider_plan(config)
     if "stt" in kwargs:
         assert plan.selected["stt"].provider == str(kwargs["stt"]).split("/")[0]

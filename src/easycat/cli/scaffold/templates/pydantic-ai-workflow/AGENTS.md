@@ -23,13 +23,16 @@ uv run easycat docs                           # Maintained docs routes
 ## Testing and evals
 
 `tests/test_agent.py` runs offline: `tools.py`'s `pick_specialist(...)` router
-runs for real, `agent.py`'s wiring (specialists, `EasyConfig` fields) is
-asserted as built behind `pytest.importorskip("pydantic_ai")`, and
+runs for real, `agent.py`'s wiring (the two specialists and the one each turn
+routes to) is asserted as built behind `pytest.importorskip("pydantic_ai")`
+with a `TestModel` injected into `make_specialists(...)`, and
 `ScriptedReasoning` stands in for the specialists while EasyCat's real turn
 machinery (the send_text path, the audio pipeline, journal, and latency
-metrics) runs end to end. A green run means the app is wired and the pipeline
-is healthy; it says nothing about live model quality — an offline stub cannot
-decide which specialist a model would pick. Build on it with the helpers in
+metrics) runs end to end. `make_config()` is not called offline: `EasyConfig`
+validates credentials at construction, so the offline test stops at the
+workflow. A green run means the app is wired and the pipeline is healthy; it
+says nothing about live model quality — an offline stub cannot decide which
+specialist a model would pick. Build on it with the helpers in
 `easycat.debug.testing`:
 
 - `run_text_turn(agent_or_config, "...")` drives one real text turn

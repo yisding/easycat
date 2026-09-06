@@ -2,10 +2,12 @@
 
 from easycat import EasyConfig, run
 from pydantic_ai import Agent
+from pydantic_ai.models import Model
 
 from tools import pick_specialist
 
 PROMPT = "$AGENT_INSTRUCTIONS"
+MODEL = "openai:gpt-4.1-mini"
 
 
 class SupportWorkflow:
@@ -19,21 +21,20 @@ class SupportWorkflow:
         return str((await self.specialists[key].run(text)).output)
 
 
-def make_specialists() -> dict[str, Agent]:
-    """Build this workflow's specialist agents; tests import it, so keep it side-effect free."""
+def make_specialists(model: Model | str = MODEL) -> dict[str, Agent]:
+    """Build this workflow's specialists; keep it side-effect free.
+
+    PydanticAI resolves ``model`` here, inside ``Agent(...)``, so tests inject a stub.
+    """
     return {
-        "billing": Agent(
-            "openai:gpt-4.1-mini", system_prompt=f"{PROMPT} Handle invoices and plans."
-        ),
-        "technical": Agent(
-            "openai:gpt-4.1-mini", system_prompt=f"{PROMPT} Handle setup and audio."
-        ),
+        "billing": Agent(model, system_prompt=f"{PROMPT} Handle invoices and plans."),
+        "technical": Agent(model, system_prompt=f"{PROMPT} Handle setup and audio."),
     }
 
 
-def make_workflow() -> SupportWorkflow:
+def make_workflow(model: Model | str = MODEL) -> SupportWorkflow:
     """Build this project's workflow; tests import it, so keep it side-effect free."""
-    return SupportWorkflow(make_specialists())
+    return SupportWorkflow(make_specialists(model))
 
 
 def make_config() -> EasyConfig:

@@ -77,8 +77,11 @@ uv run pytest
 
 - **Change the routing:** edit `pick_specialist(...)` in `tools.py`, so the
   generated test can call it directly.
-- **Add a specialist:** add another `Agent(...)` to the dict `make_specialists()`
-  returns and a matching branch in `pick_specialist(...)`.
+- **Add a specialist:** add another `Agent(model, ...)` to the dict
+  `make_specialists()` returns and a matching branch in `pick_specialist(...)`.
+- **Swap the model:** change the `MODEL` constant (`"openai:gpt-4.1-mini"`, the
+  default `make_specialists()` argument) to another model string PydanticAI
+  supports, then add the matching API key and provider extra.
 - **Persist richer state:** add fields to `SupportWorkflow`; EasyCat will keep
   calling the same workflow object each turn.
 - **Swap STT providers:** add `stt="deepgram/flux"` to the

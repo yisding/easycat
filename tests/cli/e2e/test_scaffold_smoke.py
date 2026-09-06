@@ -383,7 +383,10 @@ def test_scaffold_offline_tests_fail_when_routing_behavior_breaks(
         check=False,
     )
     assert proc.returncode != 0, "a broken router did not fail the generated tests"
+    # Both halves must be sensitive: the SDK-free unit test *and* the pipeline
+    # test that drives the router through EasyCat's real turn machinery.
     assert "test_pick_specialist_routes_by_keyword" in proc.stdout
+    assert "test_two_turns_share_one_session" in proc.stdout
 
 
 def test_scaffold_app_wiring_tests_skip_cleanly_without_the_agent_sdk(
