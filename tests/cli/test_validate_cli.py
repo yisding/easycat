@@ -197,6 +197,54 @@ def test_validate_quick_cli_show_output_streams_captured_logs(
     assert "pytest stderr" in result.stderr
 
 
+def test_validate_quick_cli_show_output_survives_non_utf8_captured_logs(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A captured log holding non-UTF-8 bytes must not fail the run (gh 1108).
+
+    Slices capture child stdout/stderr byte-for-byte, so a tool emitting
+    cp1252/latin-1 text leaves a log that is not valid UTF-8. A strict
+    ``read_text`` raised ``UnicodeDecodeError`` *after* the validation had
+    already completed, turning a finished run into a traceback.
+    """
+    stdout_path = tmp_path / "run" / "stdout.log"
+    stderr_path = tmp_path / "run" / "stderr.log"
+    report_path = tmp_path / "run" / "report.json"
+    stdout_path.parent.mkdir()
+    # Valid text plus a byte no UTF-8 decoder accepts.
+    stdout_path.write_bytes(b"pytest stdout\n\xff\xfe latin1 tail\n")
+    stderr_path.write_bytes(b"pytest stderr\n\x92smart quote\n")
+
+    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:
+        run = _validation_run(
+            artifacts={
+                "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
+                "stderr": ArtifactRef(kind="stderr", path=str(stderr_path)),
+                "report": ArtifactRef(kind="validation_report", path=str(report_path)),
+            }
+        )
+        report_path.write_text(run.to_json(), encoding="utf-8")
+        return ValidationRunResult(
+            run=run,
+            run_dir=stdout_path.parent,
+            report_path=report_path,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("easycat.cli.validate.run_validation_slice", fake_run_validation_slice)
+
+    result = cli.invoke(app, ["validate", "quick", "--show-output"])
+
+    assert result.exit_code == 0
+    # The decodable part still reaches the operator; the rest is replaced.
+    assert "pytest stdout" in result.stdout
+    assert "latin1 tail" in result.stdout
+    assert "quick: pass" in result.stdout
+    assert "pytest stderr" in result.stderr
+
+
 def test_validate_quick_cli_json_show_output_keeps_stdout_parseable(
     cli: CliRunner,
     tmp_path: Path,

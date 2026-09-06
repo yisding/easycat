@@ -171,6 +171,32 @@ flowchart TD
     MANAGER --> ACTIVE
 ```
 
+### Manifest-driven serving
+
+`VoiceServer.from_app(...)` is the programmatic entrance. There is a second,
+declarative one: [`project/`](../../src/easycat/project/) parses `easycat.toml`
+into a `ProjectManifest`, and `easycat serve --manifest` builds a `VoiceServer`
+from a named voice profile without any application Python.
+
+`ProjectManifest` exposes exactly three things downstream callers need, and each
+one encodes a rule:
+
+- `to_easyconfig(profile)` — converts one profile to the `EasyConfig` the serve
+  helpers build per-connection sessions from, resolving the
+  `python:module:function` agent reference and the transport shortcut.
+- `resolve_auth()` — resolves the `[server] auth` reference (`bearer-env:NAME`)
+  to a `BearerTokenAuth` by reading the environment **at call time**, so a token
+  never lives on the manifest object.
+- `to_redacted_dict()` — the JSON-safe dump used by logs, `--json`, and the
+  `/manifest` route; every value goes through `redact_value` and the auth field
+  shows the `bearer-env:NAME` reference, never a resolved token.
+
+[`project/loader.py`](../../src/easycat/project/loader.py) owns discovery and
+validation, and its contract is to **validate without importing heavy provider
+or runtime SDKs** — so `EasyConfig`, `create_session`, and `BearerTokenAuth` are
+imported lazily inside the methods that need them. A manifest can therefore be
+checked in CI, or by `easycat plan` (§5.5), without an installed provider stack.
+
 WebSocket and WebRTC share the same gate and active-session map. A WebRTC-only
 load therefore counts against the same server capacity and drain behavior as
 WebSocket clients. `CapacityGate` also owns graceful stop workers, its
@@ -243,7 +269,7 @@ consume model memory, sockets, file descriptors, or paid resources. Stream
 tokens must not be minted before authenticating the request that asks for
 them.
 
-## 7.7 WebSocket and WebRTC
+## 7.7 WebSocket, WebRTC, and WebTransport
 
 The WebSocket transport implementation lives in
 [`transports/websocket.py`](../../src/easycat/transports/websocket.py). Server
@@ -287,6 +313,41 @@ flowchart TD
 WebRTC libraries are optional and loaded lazily at the route/feature boundary.
 `import easycat.server` must not require aiohttp or aiortc.
 
+### WebTransport
+
+WebTransport is the third network transport and follows the same two-layer
+split:
+
+- [`transports/webtransport.py`](../../src/easycat/transports/webtransport.py)
+  owns `WebTransportTransportConfig` and the per-connection
+  `WebTransportTransport`.
+- [`server/webtransport.py`](../../src/easycat/server/webtransport.py) owns
+  `serve_webtransport_config_sessions()` /
+  `run_webtransport_config_server()`, which construct one transport and one
+  session per accepted HTTP/3 CONNECT — the same per-connection factory
+  contract as the WebSocket and WebRTC paths.
+
+Two properties are specific to it and worth knowing before reading the module:
+
+- **Auth cannot use a header from a browser.** A browser cannot set
+  `Authorization` on an HTTP/3 CONNECT, so the query-token path
+  (`allow_query_token=True`) is not a convenience here the way it is for
+  WebSocket — it is the only browser-reachable option. The default bind is
+  loopback and a public bind without a token is refused, same as the other
+  serve paths (§7.6).
+- **Backpressure reads a private aioquic attribute.** Bounding stalled-client
+  memory requires aioquic's per-stream send-buffer size, which aioquic does not
+  expose publicly. Server startup preflights that access path and refuses to
+  bind against an incompatible aioquic release rather than silently losing the
+  bound. Treat a failure there as a dependency-compatibility problem.
+
+`aioquic` lives behind the optional `webtransport` extra and is loaded lazily,
+so `import easycat.server` must not require it. The operator-facing deployment
+requirements (UDP/443 ingress, certificates, load-balancer support) are in
+[production-servers.md](../deployment/production-servers.md#webtransport-servers),
+and `examples/webtransport_server.py` plus
+`examples/webtransport_browser_client.html` are the runnable pair.
+
 ## 7.8 Twilio, Telnyx, and Telephony
 
 [`telephony/server.py`](../../src/easycat/telephony/server.py) runs two
@@ -328,11 +389,24 @@ mirrors the same two-listener shape for Telnyx Call Control v2:
   `start.media_format`.
 
 TwiML/token orchestration belongs above the transport. Per-call DTMF,
-voicemail, outbound state, screening, compliance, and session actions are
-wired through `TelephonyConfig` and helpers under
-[`telephony/`](../../src/easycat/telephony), not duplicated on the server
+voicemail, IVR navigation, outbound state, screening, compliance, number
+health, and session actions are wired through `TelephonyConfig` and helpers
+under [`telephony/`](../../src/easycat/telephony), not duplicated on the server
 config. Telnyx session actions use native Call Control commands (transfer,
 send DTMF, hangup) instead of TwiML redirects.
+
+[`telephony/ivr.py`](../../src/easycat/telephony/ivr.py) is the outbound
+counterpart to screening: `IVRNavigator` traverses a callee's phone menu before
+the conversation starts. Two heuristics bracket the traversal —
+`classify_ivr_prompt()` recognizes "press 1 for…" style prompts, and
+`detect_human_after_ivr()` decides when a person has picked up — while an agent
+callback chooses each action. `_ivr_decision.py` parses that callback's result
+into a validated `IVRAgentDecision` rather than trusting model output: DTMF
+output is validated (`telephony/dtmf.py`) before it becomes
+`twiml_play_digits`, and prompt waits are bounded by an
+`Epoch`/`Lease`-guarded timer member so a stale menu cannot drive a later
+decision. `retry.py`, `number_health.py`, and `call_state.py` carry the
+surrounding outbound-campaign policy.
 
 The transport must filter stale/wrong stream frames and label trusted inbound
 STT tracks so downstream telephony classifiers do not confuse bot/outbound

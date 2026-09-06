@@ -2091,6 +2091,10 @@ class Session:
             finally:
                 await prompt_cleanup
 
+        # Fence before the STT-ownership raise below: a queued action must not
+        # outlive its cancelled turn even when provider cleanup is deferred.
+        await self._fence_session_actions("turn cancelled")
+
         if stt_cleanup_complete is False:
             raise RuntimeError(
                 "STT provider cleanup remains lifecycle-owned; retry cancellation after it settles"
@@ -2207,6 +2211,7 @@ class Session:
         await self._turn_runner.cancel_preemptive_generation()
         stt_cleanup_complete = await self._stt_committer.cancel(turn)
         await self._tts_scheduler.finish_turn_cancel(tts_task)
+        await self._fence_session_actions("session state reset")
         if stt_cleanup_complete is False:
             raise RuntimeError(
                 "STT provider cleanup remains lifecycle-owned; "
@@ -2232,13 +2237,24 @@ class Session:
         """Execute any session actions queued by agent tools during this turn.
 
         Returns ``True`` if any executor signalled that the session should stop.
+
+        Actions are popped one at a time so the not-yet-executed remainder stays
+        *in the queue* while each executor runs.  Popping the whole queue into a
+        local list up front meant a cancellation during any executor's ``await``
+        silently discarded the rest — two queued actions (``send_sms`` then
+        ``end_call``) collapsed to one with no execution, no
+        ``SessionActionFailed`` and no journal record.  Whatever is left when a
+        turn is cancelled is now fenced by :meth:`_fence_session_actions`
+        (gh 1099).
         """
         should_stop = False
         if self._session_actions is None or not self._session_actions.has_pending:
             return should_stop
 
-        actions = self._session_actions.drain(preserve_no_interrupt=True)
-        for action in actions:
+        while True:
+            action = self._session_actions.pop_next()
+            if action is None:
+                break
             await self._emit(SessionActionRequested(action=action))
             executor = self._find_action_executor(action)
             if executor is None:
@@ -2272,6 +2288,40 @@ class Session:
             )
 
         return should_stop
+
+    async def _fence_session_actions(self, reason: str) -> None:
+        """Discard the cancelled turn's queued actions, with a record for each.
+
+        Session actions are queued by *one* turn's agent tools and were only
+        ever drained by ``finalize_speaking_turn``, which runs when a turn
+        settles normally.  Every cancellation path left them behind, so an
+        ``end_call`` requested during turn A fired after some later, unrelated
+        turn C finalized — or never, if no further turn settled.  Worse, a
+        stranded ``no_interrupt=True`` action kept
+        ``CancelOrchestrator.for_barge_in`` returning ``False`` on *every*
+        subsequent barge-in: the caller could not interrupt the bot again for
+        the rest of the call (gh 1099).
+
+        Dropping rather than executing is deliberate: the turn that requested
+        the action was cancelled, so its intent is stale — a caller who just
+        barged in should not have the call ended on them. Each dropped action
+        emits ``SessionActionFailed`` so the decision is visible in the journal
+        instead of silent, and ``drain`` without ``preserve_no_interrupt``
+        clears the barge-in guard in the same operation.
+        """
+        actions = self._session_actions
+        if actions is None or not actions.has_pending:
+            # Still clear a guard left set by an already-drained action.
+            if actions is not None:
+                actions.clear_no_interrupt()
+            return
+        for action in actions.drain():
+            await self._emit(
+                SessionActionFailed(
+                    action=action,
+                    error=f"session action dropped: {reason}",
+                )
+            )
 
     def _find_action_executor(self, action: SessionAction) -> SessionActionExecutor | None:
         for executor in self._action_executors:

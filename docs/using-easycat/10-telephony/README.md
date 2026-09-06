@@ -353,10 +353,11 @@ design a production call policy.
 
 > Why are both webhook signatures and stream tokens needed?
 
-They establish different properties. The signature authenticates Twilio on
-both HTTP control requests and the WebSocket handshake. The one-time stream
-token proves that the connection came from TwiML this app accepted and blocks
-replay when the `start` frame arrives.
+They establish different properties, at different boundaries. The signature
+authenticates Twilio's **HTTP** request — Twilio does not sign the media
+WebSocket handshake, so a signature cannot cover it. The one-time stream token
+is the media-WebSocket boundary: it proves the connection came from TwiML this
+app accepted, and blocks replay when the `start` frame arrives.
 
 > Can outbound DTMF be written into the Media Stream?
 

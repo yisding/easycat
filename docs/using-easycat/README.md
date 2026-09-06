@@ -39,25 +39,25 @@ chapter in the [voice-pipeline ladder](../teaching/).
 
 ## The ladder
 
-Each available chapter is a self-contained folder with a narrative
-`README.md`, a runnable `main.py`, and exercises. Follow-up PRs publish one
-coherent rung at a time; planned rows make the destination visible without
-pretending unfinished lessons are runnable.
+Every chapter is a self-contained folder with a narrative `README.md`, a
+runnable `main.py`, and exercises. The ladder is complete: all twelve rungs
+below are published and runnable, so read them in order or jump to the feature
+you need.
 
-| # | Chapter | EasyCat features | Status |
-|---|---|---|---|
-| 0 | [`00-first-voice-app`](./00-first-voice-app/) | `VoiceApp`, automatic pipeline wiring, and the local runtime | Available |
-| 1 | [`01-runtime-modes`](./01-runtime-modes/) | Browser, WebSocket, local, and Twilio runtime modes | Available |
-| 2 | [`02-providers-and-voices`](./02-providers-and-voices/) | STT/TTS provider specs, voices, and environment preflight | Available |
-| 3 | [`03-conversation-controls`](./03-conversation-controls/) | VAD, smart turn, interruption, push-to-talk, noise reduction, and AEC | Available |
-| 4 | [`04-tools-actions`](./04-tools-actions/) | Agent tools, tool events, session actions, and pronunciation rules | Available |
-| 5 | [`05-agent-bridges`](./05-agent-bridges/) | OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, and custom bridges | Available |
-| 6 | [`06-session-control`](./06-session-control/) | `EasyConfig`, `Session`, events, text turns, and lifecycle | Available |
-| 7 | [`07-observability`](./07-observability/) | Journals, bundles, inspect, replay, diff, and the debugger | Available |
-| 8 | [`08-testing-evals`](./08-testing-evals/) | Offline turns, assertions, evals, and latency budgets | Available |
-| 9 | [`09-multi-caller`](./09-multi-caller/) | Per-connection factories, authentication, limits, and supervision | Available |
-| 10 | [`10-telephony`](./10-telephony/) | Twilio streams, outbound calls, screening, IVR, and call control | Available |
-| 11 | [`11-production-ops`](./11-production-ops/) | Validation, deployment, durability, metrics, and production teardown | Available |
+| # | Chapter | EasyCat features |
+|---|---|---|
+| 0 | [`00-first-voice-app`](./00-first-voice-app/) | `VoiceApp`, automatic pipeline wiring, and the local runtime |
+| 1 | [`01-runtime-modes`](./01-runtime-modes/) | Browser, WebSocket, local, and Twilio runtime modes |
+| 2 | [`02-providers-and-voices`](./02-providers-and-voices/) | STT/TTS provider specs, voices, and environment preflight |
+| 3 | [`03-conversation-controls`](./03-conversation-controls/) | VAD, smart turn, interruption, push-to-talk, noise reduction, and AEC |
+| 4 | [`04-tools-actions`](./04-tools-actions/) | Agent tools, tool events, session actions, and pronunciation rules |
+| 5 | [`05-agent-bridges`](./05-agent-bridges/) | OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, the Remote Responses API, and custom bridges |
+| 6 | [`06-session-control`](./06-session-control/) | `EasyConfig`, `Session`, events, text turns, and lifecycle |
+| 7 | [`07-observability`](./07-observability/) | Journals, bundles, inspect, replay, diff, and the debugger |
+| 8 | [`08-testing-evals`](./08-testing-evals/) | Offline turns, assertions, evals, and latency budgets |
+| 9 | [`09-multi-caller`](./09-multi-caller/) | Per-connection factories, authentication, limits, and supervision |
+| 10 | [`10-telephony`](./10-telephony/) | Twilio streams, outbound calls, screening, IVR, and call control |
+| 11 | [`11-production-ops`](./11-production-ops/) | Validation, deployment, durability, metrics, and production teardown |
 
 ## Prerequisites
 

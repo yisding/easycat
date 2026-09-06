@@ -209,3 +209,43 @@ async def test_session_composes_phonetic_and_phone_processors() -> None:
     assert tts.payloads[0].format == "plain"
     assert "shi-vawn" in tts.payloads[0].text
     assert "4 ... 1 ... 5" in tts.payloads[0].text
+
+
+# ── Spoken terms are literal, not re.sub templates (gh 1101) ─────
+
+
+def _spoken(replacements: dict[str, str], text: str) -> str:
+    processor = PhoneticReplacementProcessor(replacements=replacements)
+    return processor.process(TTSInput(text=text), is_final=True, is_streaming=False).text
+
+
+def test_phonetic_replacement_treats_a_backslash_spoken_term_literally() -> None:
+    """A backslash in a pronunciation must reach TTS as itself (gh 1101).
+
+    The spoken term used to be passed straight to ``re.sub`` as a replacement
+    *template*, so ``"\\alpha"`` emitted a BEL control character mid-sentence
+    and ``"\\1"`` injected the matched source text.
+    """
+    assert _spoken({"alpha": "\\alpha"}, "use the alpha function") == "use the \\alpha function"
+    assert "\x07" not in _spoken({"alpha": "\\alpha"}, "use the alpha function")
+    assert _spoken({"beta": "\\beta"}, "the beta path") == "the \\beta path"
+
+
+def test_phonetic_replacement_does_not_expand_group_references() -> None:
+    assert _spoken({"alpha": "\\1"}, "the alpha function") == "the \\1 function"
+    assert _spoken({"alpha": "\\g<0>"}, "the alpha function") == "the \\g<0> function"
+
+
+def test_phonetic_replacement_survives_an_invalid_escape() -> None:
+    """``"\\d"`` used to raise, and the fail-open handler then dropped the
+    processor for every later payload — one bad entry disabled all
+    pronunciations."""
+    assert _spoken({"alpha": "\\d"}, "the alpha function") == "the \\d function"
+    assert _spoken({"alpha": "back\\"}, "the alpha function") == "the back\\ function"
+
+
+def test_phonetic_replacement_keeps_independent_terms_independent() -> None:
+    """Each term substitutes its own spoken form (no late-binding capture)."""
+    result = _spoken({"alpha": "AL-fuh", "beta": "BAY-tuh"}, "alpha then beta")
+
+    assert result == "AL-fuh then BAY-tuh"

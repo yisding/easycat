@@ -177,9 +177,22 @@ entry points include:
   `run_command`, `check_command`, `fix_command`, `next_step_commands`,
   `command_note` -
                          `easycat init NAME --json`
-  `environment`, `checks` - `easycat doctor --json`; each check row has
-                         `name`, `status`, and `detail`, and may include
-                         `code` and `fix` when the check fails
+  `environment`, `checks`, `selection`, `probes` - `easycat doctor --json`;
+                         each check row has `name`, `status`, and `detail`,
+                         plus `requirement` and `probe` (`static` = declared
+                         metadata, env vars, and module availability;
+                         `import` = imports an optional module;
+                         `filesystem` = touches local disk; `hardware` =
+                         touches audio hardware; `network` = one bounded
+                         unauthenticated probe), and may include `code`
+                         and `fix` when the check fails, `field` naming the
+                         env var, install extra, or manifest path the row is
+                         about, and `role` when the row belongs to a selected
+                         pipeline role;
+                         `selection` appears when a scaffold table or
+                         `--manifest`/`--profile` scopes the run to one app;
+                         `probes` reports which probe classes ran; `fixes`
+                         appears with `--fix`
   `validation`, `report_path`, `exit_code` -
                          `easycat validate quick --json`,
                          `easycat validate contracts --json`,
@@ -327,6 +340,13 @@ said-wrong — the bot answered, but the answer was wrong.
                                         (pin a regression as a test)
   Read:  docs/testing-and-evals.md
   Topic: easycat explain journal
+
+green-doctor-wont-start — `easycat doctor` is green but the app will
+not start.
+  Run:   easycat doctor --manifest easycat.toml --profile <name>
+         easycat plan --manifest easycat.toml
+  Read:  docs/cli.md
+  Topic: easycat explain E602
 
 crashed — the session errored or the agent raised.
   Run:   easycat inspect PATH --issues

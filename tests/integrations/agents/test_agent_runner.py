@@ -470,6 +470,103 @@ def test_replace_last_assistant_text_with_no_history_is_noop():
     assert runner.history == []
 
 
+# ── Turn-boundary guard on the shadow history (gh 1100) ──────────
+
+
+class _NeverDoneBridge(ExternalAgentBridge):
+    """Streams text and never yields ``done`` — the mid-stream barge-in shape."""
+
+    def __init__(self) -> None:
+        self.interruptions: list[str] = []
+        self.replacements: list[str] = []
+
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        yield AgentBridgeEvent(kind="text_delta", text="partial")
+        await asyncio.Event().wait()  # pragma: no cover - never completes
+
+    def apply_interruption(self, delivered_text, mode, recorder=None, caused_by_signal_id=None):
+        self.interruptions.append(delivered_text)
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        self.replacements.append(text)
+
+
+class _OneTurnBridge(ExternalAgentBridge):
+    """Completes one turn so the runner mirrors it into shadow history."""
+
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        yield AgentBridgeEvent(kind="text_delta", text="turn one reply")
+        yield AgentBridgeEvent(kind="done", text="turn one reply")
+
+    def apply_interruption(self, delivered_text, mode, recorder=None, caused_by_signal_id=None):
+        pass
+
+    def replace_last_assistant_text(self, text: str) -> None:
+        pass
+
+
+async def _start_and_abandon(runner: AgentRunner, text: str) -> None:
+    """Begin a turn, consume one event, then close the stream mid-flight."""
+    stream = runner.invoke(AgentTurnInput.from_text(text), _recorder())
+    await stream.__anext__()
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_interruption_leaves_the_previous_turn_intact():
+    """A barge-in before ``done`` must not rewrite turn N-1 (gh 1100).
+
+    A wrapped bridge is only mirrored into ``_history`` after its ``done``
+    event, so an interrupted turn leaves the shadow history ending at the
+    *previous* turn. The unguarded backward scan then replaced that turn's
+    fully delivered reply with the interrupted turn's partial text — or with
+    ``""``, the common pre-audio barge-in case.
+    """
+    runner = AgentRunner(_OneTurnBridge())
+    await _drain(runner, "first question")
+    assert runner.history == [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "turn one reply"},
+    ]
+
+    # Swap in a bridge whose turn never completes, then interrupt it.
+    runner._agent = _NeverDoneBridge()
+    await _start_and_abandon(runner, "second question")
+    runner.apply_interruption("", CancellationMode.IMMEDIATE_STOP)
+
+    # Turn one's delivered reply survives untouched.
+    assert runner.history == [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "turn one reply"},
+    ]
+    # The inner bridge, which owns authoritative state, is still told.
+    assert runner._agent.interruptions == [""]
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_replace_last_assistant_text_leaves_history_intact():
+    runner = AgentRunner(_OneTurnBridge())
+    await _drain(runner, "first question")
+    runner._agent = _NeverDoneBridge()
+    await _start_and_abandon(runner, "second question")
+
+    runner.replace_last_assistant_text("cleaned")
+
+    assert runner.history[-1] == {"role": "assistant", "content": "turn one reply"}
+    assert runner._agent.replacements == ["cleaned"]
+
+
+@pytest.mark.asyncio
+async def test_interruption_after_done_still_truncates_its_own_turn():
+    """The common barge-in-during-playback case must keep working."""
+    runner = AgentRunner(_OneTurnBridge())
+    await _drain(runner, "first question")
+
+    runner.apply_interruption("turn one", CancellationMode.IMMEDIATE_STOP)
+
+    assert runner.history[-1] == {"role": "assistant", "content": "turn one..."}
+
+
 @pytest.mark.asyncio
 async def test_append_interruption_note_adds_system_entry():
     runner = AgentRunner(EchoAgent())

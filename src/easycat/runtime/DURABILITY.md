@@ -1,5 +1,14 @@
 # Journal Durability Guarantees
 
+This page is the single source for the journal's numeric guarantees — the
+batch-commit window, the `PRAGMA synchronous` setting, and the per-backend
+crash-recovery matrix. The deployment guides
+([docker.md](../../../docs/deployment/docker.md),
+[production-servers.md](../../../docs/deployment/production-servers.md)) link
+here for those numbers instead of restating them, so a change to
+`SqliteJournal._batch_commit_interval_s` / `_batch_commit_records` in
+[`journal_sql.py`](journal_sql.py) is one prose edit, not three.
+
 Maintenance check: after changing journal persistence, recovery, storage
 layout, or teardown semantics, run
 `uv run pytest tests/runtime/test_sqlite_journal.py`.

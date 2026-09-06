@@ -224,7 +224,9 @@ depends on whether replication runs outside or inside the app container.
 
 Ships WAL segments continuously (about every second) to object storage,
 bounding the kernel-crash loss window to the replication interval instead of
-the OS dirty-page writeback window.
+the OS dirty-page writeback window — see
+[DURABILITY.md](../../src/easycat/runtime/DURABILITY.md) for what the
+application-crash and kernel-crash windows actually are.
 
 The `litestream` binary itself is **not** bundled in this image (keeping the
 runtime stage minimal). `LitestreamSqliteJournal` degrades to plain SQLite
@@ -281,11 +283,13 @@ EASYCAT_LIBSQL_AUTH_TOKEN=...
 ```
 
 Sync interval defaults to 10s (`EASYCAT_JOURNAL_LIBSQL_SYNC_INTERVAL_S`).
-libSQL does **not** implement this framework's crash-recovery/crash-dump
-promotion (see DURABILITY.md's "Backend support" section) — prefer
-`sqlite+litestream` when crash-recovery semantics on reused session ids
-matter (using either Litestream topology above), and reach for libSQL when a
-managed remote-replica target outweighs that gap.
+Which backends implement crash-recovery / crash-dump promotion, and what
+libSQL does instead, is stated once in
+[DURABILITY.md's "Backend support" section](../../src/easycat/runtime/DURABILITY.md#backend-support)
+— read it before choosing. In short: prefer `sqlite+litestream` (using either
+Litestream topology above) when crash-recovery semantics on reused session ids
+matter, and reach for libSQL when a managed remote-replica target outweighs
+that gap.
 
 ## Scraping metrics
 

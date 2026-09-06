@@ -699,6 +699,24 @@ class OutboundCallStateMachine:
             await self._transition(OutboundCallState.RINGING)
 
     async def _on_answered(self, event: CallAnswered) -> None:
+        if event.direction == "inbound":
+            # The inbound media transports emit ``CallAnswered`` too, "for a
+            # consistent inbound + outbound lifecycle", and ``_matches_active_call``
+            # accepts any SID while ``_call_sid`` is empty — which it always is on
+            # a fresh inbound session. Adopting the call closed the classification
+            # gate and started both timers for a call this manager never placed:
+            # nothing resolves an inbound classification (AMD and fusion events
+            # are outbound-only, and ``_handle_classifying_stt_final`` defers to
+            # fusion), so every utterance was buffered for the full
+            # ``detection_timeout_s`` and the caller heard silence; then at
+            # ``max_call_duration_s`` the machine journaled a bogus
+            # ``CallEnded(disposition="max_duration")`` for the still-live call
+            # (gh 1098).
+            logger.debug(
+                "Ignoring inbound CallAnswered for %s; this manager tracks outbound calls",
+                event.call_sid,
+            )
+            return
         if not self._matches_active_call(event.call_sid):
             return
         if self._state in {OutboundCallState.INITIATING, OutboundCallState.RINGING}:

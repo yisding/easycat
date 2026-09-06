@@ -82,6 +82,8 @@ def test_scoped_production_reports_distinguish_credentials_from_liveness(
         "status": "ok",
         "detail": "openai network reachable (HTTP 401); credential validity not checked",
         "requirement": "required",
+        "field": "OPENAI_API_KEY",
+        "probe": "network",
     }
     assert requests and requests[0][0] == "https://api.openai.com/v1"
     assert "headers" not in requests[0][1]

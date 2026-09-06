@@ -322,9 +322,11 @@ For public Telnyx deployments:
 journal per session under `EasyConfig.data_dir` when set, otherwise
 `EASYCAT_DATA_DIR` (default `.easycat`) — see
 [`src/easycat/runtime/DURABILITY.md`](../../src/easycat/runtime/DURABILITY.md)
-for the exact durability guarantees and storage layout. Records are committed
-in bounded batches (100 ms / 100 records, plus every turn boundary), and the
-SQLite WAL is auto-checkpointed during long calls; persistent journal work is
+for the exact durability guarantees and storage layout — that page owns the
+batch-commit window, the `PRAGMA synchronous` setting, and the per-backend
+crash-recovery matrix, so this page does not restate the numbers. In outline:
+records commit in bounded batches plus at every turn boundary, the SQLite WAL
+is auto-checkpointed during long calls, and persistent journal work is
 offloaded from the live audio loop. That promise only holds if the resolved
 data directory is a **persistent** path: a container without a
 volume mounted there, or a process directory that gets wiped on redeploy,
@@ -369,6 +371,13 @@ plain WebSocket-only servers such as `run_websocket_config_server()` do not
 serve an HTTP endpoint at all, so they can only be probed at the TCP level
 (see docker.md's ["Container health checks"](docker.md#container-health-checks)
 for the concrete `HEALTHCHECK` wiring and its `EASYCAT_HEALTH_URL` switch).
+
+The pre-deploy preflight for the same selection `/health/ready` evaluates is
+`easycat doctor --manifest easycat.toml --profile <name>`: it diagnoses the
+credential, install extra, and manifest reference every selected role needs
+against the target machine, statically — the profile's application module is
+never imported or run and no provider is called. See
+[the CLI reference](../cli.md#first-run-and-scaffolding).
 
 **Metrics scraping.** `VoiceServer`'s `GET /metrics` is a read-only, PII-safe
 JSON snapshot of in-process counters/gauges — poll it directly without an

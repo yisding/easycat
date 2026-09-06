@@ -34,6 +34,14 @@ from easycat.planning.provider_plan import (
     Role,
     build_provider_plan,
 )
+from easycat.planning.selection import (
+    build_manifest_plan,
+    load_selected_profile,
+    plan_issues,
+    plan_selected_profile,
+    selection_error,
+    selection_issue,
+)
 from easycat.planning.transport_registry import (
     BUILTIN_BACKEND_ROLES,
     EXTRA_PROBE_MODULE,
@@ -49,5 +57,11 @@ __all__ = [
     "ProviderSelection",
     "Role",
     "RoleBackend",
+    "build_manifest_plan",
     "build_provider_plan",
+    "load_selected_profile",
+    "plan_issues",
+    "plan_selected_profile",
+    "selection_error",
+    "selection_issue",
 ]

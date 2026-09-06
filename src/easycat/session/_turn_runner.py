@@ -238,6 +238,7 @@ class TurnRunner:
         self._is_gated = wiring.is_gated
         self._agent = wiring.agent
         self._drain_session_actions = wiring.drain_session_actions
+        self._fence_session_actions = wiring.fence_session_actions
         self._caller_id_system_message = wiring.caller_id_system_message
         self._cancel_turn = wiring.cancel_turn
         self._cut_off_tts_for_text_replacement = wiring.cut_off_tts_for_text_replacement
@@ -735,6 +736,12 @@ class TurnRunner:
         budget is logged rather than allowed to stall the live turn
         indefinitely.
         """
+        # A superseded turn's queued session actions are stale for the same
+        # reason its agent output is: the caller spoke again.  Drop them here so
+        # a later, unrelated turn's finalize cannot execute them, and so a
+        # stranded ``no_interrupt`` guard cannot suppress barge-in for the rest
+        # of the call (gh 1099).
+        await self._fence_session_actions("turn superseded")
         current = asyncio.current_task()
         pending = {task for task in tasks if not task.done() and task is not current}
         if not pending:
@@ -1340,9 +1347,28 @@ class TurnRunner:
                 st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
                 break
             if self._tts.is_playback_suppressed:
+                # Discard and keep draining rather than leaving the loop.
+                # ``cancel_tts_playback`` deliberately cancels neither the
+                # shared token nor ``active_turn_task``, precisely so an
+                # in-flight agent stream can keep producing text — so the
+                # producer keeps awaiting a *blocking* ``queue.put``.  Breaking
+                # out left nobody reading once the one-shot drain in
+                # ``_consume_tts_payloads`` had run: the 64-slot queue filled,
+                # the producer wedged in ``put``, and with it
+                # ``run_streaming_agent``'s shielded wait and
+                # ``_settle_turn_after_tts``'s ``agent_output_settled`` wait —
+                # a three-way stall ending in a spurious ``AgentTimeoutError``
+                # after 30s, or hanging forever with no agent timeout.
+                # Draining to the sentinel is what makes the documented
+                # "produce text which will simply not be synthesized" contract
+                # true (gh 1104).
+                #
+                # Suppression is only cleared by admitting a *new* turn, at
+                # which point the ``_streaming_turn_is_current`` check above
+                # breaks first — so this turn can never resume synthesizing.
                 st.first_tts_lifecycle_ready.set()
                 st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
-                break
+                continue
 
             if not st.synth_started:
                 # Snapshot the gate state at first-payload time and reuse it in

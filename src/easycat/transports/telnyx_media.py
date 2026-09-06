@@ -508,6 +508,17 @@ class _TelnyxProtocolMixin:
         self._negotiated_sample_rate = config.audio_format.sample_rate
         self._inbound_resampler = PCM16StreamResampler(config.audio_format.sample_rate)
 
+    def _owns_connection(self, ws: ServerConnection) -> bool:
+        """Whether *ws* may still tear down the single connection slot.
+
+        True when *ws* is the active connection, or when the slot is empty (a
+        send-path error already released it and no replacement has claimed
+        it).  Callers must re-evaluate this after every ``await`` that can
+        suspend across a reconnect (gh 1103).
+        """
+        current = self._current_ws()
+        return current is ws or current is None
+
     def _current_ws(self) -> ServerConnection | None:
         """Return the active Telnyx WebSocket connection (or ``None``)."""
         raise NotImplementedError
@@ -580,24 +591,36 @@ class _TelnyxProtocolMixin:
         a send-path error and no newer client has claimed it. A newer client
         owning the slot is left untouched — the prerequisite reconnect-race
         guard, kept in the single shared copy.
+
+        The guard is re-evaluated *after* the awaited ``CallEnded`` emit, not
+        only before it.  That emit awaits real subscribers — the journal sink,
+        and application ``CallEnded`` handlers that may do network I/O — so a
+        carrier reconnect can complete its ``start`` frame during the
+        suspension and legitimately claim the slot.  Tearing down
+        unconditionally on resume then wiped the *replacement* connection's
+        state and enqueued a sentinel against it, with no error logged.
+        ``websocket.py`` is immune only because it re-checks at execution time;
+        this does the same (gh 1103).
         """
-        if self._current_ws() is ws or self._current_ws() is None:
-            await self._expire_pending_marks()
-            await self._emit_call_ended_once()
-            tail = self._inbound_resampler.finish()
-            if tail:
-                self._enqueue_chunk(
-                    AudioChunk(data=tail, format=self._audio_format),
-                    context="Telnyx",
-                )
-            self._reset_connection_state()
-            self._client_connected.clear()
-            self._stream_id = None
-            self._call_control_id = None
-            self._answered_at = None
-            self._diagnostics.reset()
-            self._enqueue_sentinel()
-        # else: a newer client owns the connection -> leave it alone.
+        if not self._owns_connection(ws):
+            return  # A newer client owns the connection -> leave it alone.
+        await self._expire_pending_marks()
+        await self._emit_call_ended_once()
+        if not self._owns_connection(ws):
+            return  # A replacement claimed the slot during the awaits above.
+        tail = self._inbound_resampler.finish()
+        if tail:
+            self._enqueue_chunk(
+                AudioChunk(data=tail, format=self._audio_format),
+                context="Telnyx",
+            )
+        self._reset_connection_state()
+        self._client_connected.clear()
+        self._stream_id = None
+        self._call_control_id = None
+        self._answered_at = None
+        self._diagnostics.reset()
+        self._enqueue_sentinel()
 
     async def _handle_message(self, raw: str) -> None:
         """Route a Telnyx JSON message to the appropriate handler."""
@@ -755,6 +778,11 @@ class _TelnyxProtocolMixin:
                     call_sid=call_control_id,
                     answered_by="human",
                     session_id=self._easycat_session_id,
+                    # Marked inbound so the outbound call-state machine does not
+                    # adopt this call: it would close its classification gate and
+                    # start its max-duration timer for a call it never placed
+                    # (gh 1098).
+                    direction="inbound",
                 )
             )
 
@@ -1046,9 +1074,13 @@ class TelnyxTransport(_TelnyxProtocolMixin, ServerTransportBase):
             # then skips its emit. The once-only flag makes the finally's emit
             # a no-op afterwards.
             await self._emit_call_ended_once()
-            self._ws = None
-            self._stream_id = None
-            self._client_connected.clear()
+            # Re-checked after the emit: it awaits real subscribers, so a
+            # reconnect can claim the slot during that suspension and this
+            # clear would otherwise destroy the replacement's state (gh 1103).
+            if self._owns_connection(ws):
+                self._ws = None
+                self._stream_id = None
+                self._client_connected.clear()
             return False
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
@@ -1090,9 +1122,11 @@ class TelnyxTransport(_TelnyxProtocolMixin, ServerTransportBase):
             # ``CallEnded`` before releasing the slot to a replacement
             # connection (see the reconnect-race note there).
             await self._emit_call_ended_once()
-            self._ws = None
-            self._stream_id = None
-            self._client_connected.clear()
+            # Ownership re-check after the awaited emit; see ``_send_media_frames``.
+            if self._owns_connection(ws):
+                self._ws = None
+                self._stream_id = None
+                self._client_connected.clear()
             raise RuntimeError("Cannot send Telnyx mark: Telnyx disconnected") from None
         self._pending_marks[name] = None
         return name

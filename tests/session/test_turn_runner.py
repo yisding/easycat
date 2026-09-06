@@ -3937,6 +3937,70 @@ async def test_run_streaming_agent_records_total_latency_metric() -> None:
 
 
 @pytest.mark.asyncio
+async def test_suppressed_playback_keeps_draining_a_streaming_producer() -> None:
+    """``cancel_tts_playback`` must not wedge a still-streaming agent (gh 1104).
+
+    Its docstring promises "any in-flight agent stream can continue producing
+    text (which will simply not be synthesized)", and it deliberately cancels
+    neither the shared token nor ``active_turn_task``.  But the TTS consumer
+    *exited* on the suppression flag, so once the one-shot drain in
+    ``_consume_tts_payloads`` had run nobody read the queue again: the 64-slot
+    queue filled, the producer blocked in ``queue.put``, and with it
+    ``run_streaming_agent``'s shielded wait and ``_settle_turn_after_tts``'s
+    ``agent_output_settled`` wait — a three-way stall that ended in a spurious
+    ``AgentTimeoutError``.
+    """
+    suppressed = asyncio.Event()
+
+    class _LongStreamingAgent(_TestBridgeBase):
+        async def run(self, text: str) -> str:
+            return ""
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            # Well past the 64-slot payload queue, all produced *after*
+            # playback was suppressed.
+            await suppressed.wait()
+            for index in range(200):
+                yield AgentBridgeEvent(kind="text_delta", text=f"Sentence {index}. ")
+            yield AgentBridgeEvent(kind="done", text="")
+
+    session = Session(
+        _config(
+            agent=AgentRunner(_LongStreamingAgent()),
+            timeout_config=TimeoutConfig(agent_timeout=5.0),
+        )
+    )
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, lambda e: errors.append(e))
+
+    session._turn = TurnContext("turn-suppressed", CancelToken())
+    turn_task = asyncio.create_task(session._turn_runner.run_streaming_agent("hello", token=None))
+    await asyncio.sleep(0)
+
+    await session.cancel_tts_playback()
+    assert session._tts_scheduler.is_playback_suppressed is True
+    suppressed.set()
+
+    # The turn settles on the producer's own sentinel, well inside the timeout.
+    await asyncio.wait_for(turn_task, timeout=10)
+
+    assert not [e for e in errors if isinstance(e.exception, AgentTimeoutError)], (
+        "a suppressed-playback turn must not time out the agent"
+    )
+    # Nothing was synthesized while suppressed...
+    assert session._config.tts.synthesized_texts == []
+    # ...but the discarded payloads are still recorded for interruption
+    # estimation, exactly as the single-payload break path used to record one.
+    assert session._turn_manager.state == TurnManagerState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_agent_timeout_delivers_the_stop_sentinel_on_a_full_queue() -> None:
     """The agent-failure path cancels only the producer (gh 1063).
 

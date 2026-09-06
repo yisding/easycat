@@ -194,6 +194,26 @@ Normal bundles are PII-bearing by design. Do not attach them to public issues
 or send them to third parties merely because a CLI summary redacted its
 terminal output.
 
+### Decide at record time, not at share time
+
+Everything above redacts on the way *out*. `journal_redaction=` decides what
+gets written in the first place:
+
+```python
+EasyConfig(agent=agent, debug="full", journal_redaction="pii")
+```
+
+`"secrets"` (the default) strips credentials while keeping the transcripts,
+prompts, and audio references that make a journal replayable — which is why the
+warning above exists. `"pii"` additionally and **irreversibly** redacts phone
+numbers, URLs, request IDs, home paths, prompts, and transcripts as records are
+written; nothing later can recover them, and replay fidelity drops accordingly.
+
+Pick per deployment, not per share: `"secrets"` where you own the data and need
+to debug real calls, `"pii"` where a journal may outlive its retention
+justification or reach people who should not see caller content. See
+[observability](../../observability.md) for the full field-by-field behaviour.
+
 Continue with [the exercises](./EXERCISES.md) to inspect JSON fields, filter a
 replay, and distinguish diagnostic output from the source artifact.
 

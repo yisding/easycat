@@ -182,6 +182,38 @@ into a successor turn.
 If both branches fail, the session emits an `ExceptionGroup`-backed pipeline
 error so neither cause disappears.
 
+### Stage timeouts
+
+Each of the three slow stages has its own deadline, in
+[`timeouts.py`](../../src/easycat/timeouts.py): `TimeoutConfig` carries
+`stt_timeout` (10s), `agent_timeout` (30s), and `tts_first_byte_timeout` (5s),
+and `validate()` re-checks them at every runtime build boundary because the
+dataclass is mutable. Each expiry raises its own coded error —
+`STTTimeoutError`, `AgentTimeoutError`, `TTSTimeoutError` — so a stalled turn
+names the stage that stalled.
+
+Two of the wrappers are more than `asyncio.wait_for`:
+
+- `with_agent_timeout` guards a **shielded** agent task, so the timeout does
+  not race the agent's own cleanup. `_await_agent_task` sets
+  `agent_stream_aborted` and cancels only the agent task on expiry — the TTS
+  consumer stays alive so a configured failure fallback can still be spoken
+  (§4.4).
+- `with_tts_timeout` is a **first-byte** deadline over an async iterator, not a
+  whole-synthesis budget. It arms until the first *non-empty audio* event;
+  marker and empty-audio events are still yielded but neither disarm nor reset
+  the original deadline, so a provider that emits markers promptly and audio
+  never does still times out.
+
+Consumers are `session/_stt_committer.py`, `_turn_runner.py`,
+`_tts_scheduler.py`, `_tts_synthesizer.py`,
+`integrations/agents/_agent_runner.py`, and `config/easy.py` (which surfaces
+`timeouts=` on `EasyConfig`). These are *stage* budgets and are distinct from
+the teardown budgets in
+[`teardown_budgets.py`](../../src/easycat/teardown_budgets.py) discussed in
+§2.6 — one bounds how long a stage may take to answer, the other bounds how
+long teardown may take to give up.
+
 ## 4.5 Streaming Text to Speech
 
 [`consume_agent_stream`](../../src/easycat/session/_streaming.py) separates

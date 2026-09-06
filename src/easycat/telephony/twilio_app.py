@@ -176,7 +176,17 @@ class TwilioCallSessionIndex:
 
 
 def bearer_token_matches(header: str | None, token: str) -> bool:
-    """Return whether an Authorization header matches without timing leaks."""
+    """Return whether an Authorization header matches without timing leaks.
+
+    Fails closed on an unconfigured token: with ``token == ""`` — which is what
+    ``TwilioAppSettings.call_api_token`` holds when ``TWILIO_CALL_API_TOKEN``
+    is unset — a bare ``Authorization: Bearer`` header would otherwise compare
+    equal and authenticate every such request. This mirrors
+    :func:`~easycat.telephony.twiml.validate_twilio_webhook_signature`, which
+    already returns ``False`` when its auth token is empty (gh 1105).
+    """
+    if not token:
+        return False
     scheme, separator, provided = (header or "").partition(" ")
     if separator != " " or scheme.lower() != "bearer":
         return False
