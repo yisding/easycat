@@ -268,6 +268,12 @@ class AgentRunner:
         self._config = config or AgentRunnerConfig()
         self._history: list[dict[str, str]] = []
         self._is_bridge = isinstance(agent, ExternalAgentBridge)
+        # Whether the turn currently in flight has been mirrored into
+        # ``_history``.  A wrapped bridge is only mirrored after its ``done``
+        # event, so a mid-stream barge-in leaves ``_history`` ending at the
+        # *previous* turn — and an unguarded interruption rewrite would then
+        # corrupt that turn's delivered reply (gh 1100).
+        self._current_turn_mirrored = False
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -380,6 +386,7 @@ class AgentRunner:
         prepared.committed = True
         self._history.append({"role": "user", "content": prepared.input_text})
         self._history.append({"role": "assistant", "content": response})
+        self._current_turn_mirrored = True
         recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
         yield AgentBridgeEvent(kind="text_delta", text=response)
@@ -401,6 +408,7 @@ class AgentRunner:
         ):
             return
 
+        self._current_turn_mirrored = False
         stream = (
             self._invoke_bridge(turn_input, recorder, cancel_token, commit_guard)
             if self._is_bridge
@@ -504,6 +512,7 @@ class AgentRunner:
         self._history.append({"role": "user", "content": turn_input.text})
         if assistant_text:
             self._history.append({"role": "assistant", "content": assistant_text})
+        self._current_turn_mirrored = True
 
     async def _invoke_simple(
         self,
@@ -560,6 +569,7 @@ class AgentRunner:
             self._close_simple_cursor(recorder, cursor, reason="stale")
             return
         self._history.append({"role": "assistant", "content": response})
+        self._current_turn_mirrored = True
         self._close_simple_cursor(recorder, cursor, committable=True)
 
         if cancel_token and cancel_token.is_cancelled:
@@ -613,10 +623,7 @@ class AgentRunner:
         # "..."), keeping interruption semantics consistent across the
         # apply_interruption contract.
         replacement = delivered_text + "..." if delivered_text else ""
-        for i in range(len(self._history) - 1, -1, -1):
-            if self._history[i].get("role") == "assistant":
-                self._history[i] = {"role": "assistant", "content": replacement}
-                break
+        self._rewrite_current_turn_assistant(replacement)
         if self._is_bridge:
             self._agent.apply_interruption(
                 delivered_text,
@@ -625,11 +632,38 @@ class AgentRunner:
                 caused_by_signal_id=caused_by_signal_id,
             )
 
+    def _rewrite_current_turn_assistant(self, replacement: str) -> str | None:
+        """Rewrite the in-flight turn's assistant entry, if it has one.
+
+        Two guards, because the shadow history is only *advisory* and lags the
+        wrapped bridge.  A bridge turn is mirrored after its ``done`` event, so
+        a barge-in that interrupts the stream leaves ``_history`` ending at the
+        previous turn: without ``_current_turn_mirrored`` the backward scan
+        rewrote turn N-1's fully delivered reply with turn N's partial text —
+        or with ``""``, the common pre-audio barge-in case (gh 1100).
+
+        The ``user`` stop mirrors what every real bridge already does
+        (``openai_agents.py``, ``langchain.py``, ``langgraph.py``,
+        ``pydantic_ai.py``): reaching the turn boundary without an assistant
+        reply means this turn produced no rewritable output, so the prior turn
+        must remain intact.
+
+        Returns the replaced content, or ``None`` when nothing was rewritten.
+        """
+        if not self._current_turn_mirrored:
+            return None
+        for i in range(len(self._history) - 1, -1, -1):
+            role = self._history[i].get("role")
+            if role == "user":
+                return None
+            if role == "assistant":
+                previous = self._history[i].get("content")
+                self._history[i] = {"role": "assistant", "content": replacement}
+                return previous
+        return None
+
     def replace_last_assistant_text(self, text: str) -> None:
-        for entry in reversed(self._history):
-            if entry.get("role") == "assistant":
-                entry["content"] = text
-                break
+        self._rewrite_current_turn_assistant(text)
         if self._is_bridge:
             self._agent.replace_last_assistant_text(text)
 
