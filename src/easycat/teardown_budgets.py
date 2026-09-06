@@ -50,6 +50,10 @@ SESSION_SUPERSEDED_STOP_TIMEOUT_S: Final = 0.5
 # Bound transport audio cutoff during barge-in cleanup.
 SESSION_BARGE_IN_CUTOFF_TIMEOUT_S: Final = 0.4
 
+# Drain a cancelled ``on_turn_ended`` before its successor runs the agent, so a
+# cancellation-resistant predecessor cannot overlap the next turn's ``run()``.
+SESSION_TURN_ENDED_PREDECESSOR_DRAIN_TIMEOUT_S: Final = 2.0
+
 # Bound graceful prompt wait during session stop.
 SESSION_GRACEFUL_PROMPT_TIMEOUT_S: Final = 5.0
 

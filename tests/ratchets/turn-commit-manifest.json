@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "Reviewed bug-audit lifecycle ownership and indexed AgentDelta replacement metadata",
+  "update_rationale": "gh 1024: on_turn_ended drains a superseded predecessor first, so the end_time commit is now post-await; the identity/activity guards are already re-checked after that await",
   "counts": {
     "categories": {
       "activity_commit": 5,
@@ -34,8 +34,8 @@
     },
     "suspensions": {
       "awaited": 40,
-      "post_await": 16,
-      "synchronous": 5
+      "post_await": 17,
+      "synchronous": 4
     }
   },
   "entries": [
@@ -98,7 +98,7 @@
     "turn_field_commit\tsession/_turn_runner.py\tTurnRunner._finalize_turn_transcript\tpost_await assign turn.stt_final_time\t61754bee83c8a747\t0\tturn_bookkeeping\tMutates bookkeeping retained on the shared TurnContext.\tidentity_activity",
     "turn_field_commit\tsession/_turn_runner.py\tTurnRunner._speak_agent_failure_fallback\tpost_await assign st.turn.first_tts_audio_time\t6eda2944ef955d49\t0\tturn_bookkeeping\tMutates bookkeeping retained on the shared TurnContext.\tidentity_activity",
     "turn_field_commit\tsession/_turn_runner.py\tTurnRunner._synthesize_queued_payloads\tpost_await assign st.turn.first_tts_audio_time\t6eda2944ef955d49\t0\tturn_bookkeeping\tMutates bookkeeping retained on the shared TurnContext.\tidentity_activity",
-    "turn_field_commit\tsession/_turn_runner.py\tTurnRunner.on_turn_ended\tsynchronous assign turn.end_time\t67ec56367a4d79e9\t0\tturn_bookkeeping\tMutates bookkeeping retained on the shared TurnContext.\tidentity_activity",
+    "turn_field_commit\tsession/_turn_runner.py\tTurnRunner.on_turn_ended\tpost_await assign turn.end_time\t67ec56367a4d79e9\t0\tturn_bookkeeping\tMutates bookkeeping retained on the shared TurnContext.\tidentity_activity",
     "turn_field_commit\tsession/_turn_runner.py\tTurnRunner.on_turn_publication\tpost_await assign turn.stt_has_uncommitted_audio\t70db579042829ada\t0\tturn_bookkeeping\tMutates bookkeeping retained on the shared TurnContext.\tidentity_activity"
   ]
 }
