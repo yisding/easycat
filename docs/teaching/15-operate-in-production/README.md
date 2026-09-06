@@ -723,7 +723,7 @@ Run easycat explain json-schema for CLI JSON.
   recorded tool frames unless you choose `--tool-policy stub` or
   `--tool-policy allow`; the CLI itself never invokes external tools.
 - **`uv run easycat latency <path>`** — summarise critical-path latency
-  percentiles (p50/p95/p99) for a bundle or SQLite journal, splitting the
+  percentiles (p50/p90/p95/p99) for a bundle or SQLite journal, splitting the
   pipeline dispatch wait from the model's first-token time so you can tell a
   slow pipeline from a slow model.
 - **`uv run easycat diff <path-a> <path-b>`** — diff two bundles turn by turn,

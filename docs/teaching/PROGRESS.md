@@ -14,13 +14,21 @@ are evidence to explain, not history to rewrite. Chapters 2-15 begin with a
 two-chapter-lag recall. At each phase boundary, pass all four integration criteria at
 4/4 before starting the next chapter card.
 
+Every card's **Prepare** and **Run** pair is the chapter's *hardware-free checkpoint*
+probe — it needs no microphone and no provider keys. That is deliberately a smaller
+install than the chapter's own `main.py`, whose prerequisites (extra provider markers,
+API keys, transport extras) live in each chapter README and are linked from every
+Prepare line. Follow the README when you run the chapter itself.
+
 ## Chapter 0 — Hello, Audio
 
 [Narrative](./00-hello-audio/) · [Exercises](./00-hello-audio/EXERCISES.md)
 
 - [ ] **Predict:** Which rates belong to the wire, pipeline/provider input, provider defaults, and
   WebRTC media boundaries?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra local --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra local --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./00-hello-audio/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/00-hello-audio/format_boundaries.py`.
 - [ ] **Find:** wire, provider-input, pipeline, config-default, and media roles use different
   rates.
@@ -31,7 +39,8 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 - [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
   self-check](./00-hello-audio/EXERCISES.md#self-check); record 3/3 with one attempt-evidence
   citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 0 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 0 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 1 — Echo
 
@@ -39,7 +48,9 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 
 - [ ] **Predict:** How many chunks will be accepted or rejected, and does matching `TransportLike`
   imply full `Transport` conformance?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra local --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra local --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./01-echo/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/01-echo/transport_contract_probe.py`.
 - [ ] **Find:** two chunks are accepted, one is rejected, and `version_info()` changes full
   conformance.
@@ -50,7 +61,8 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 - [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
   self-check](./01-echo/EXERCISES.md#self-check); record 3/3 with one attempt-evidence citation per
   answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 1 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 1 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 2 — Transcribe
 
@@ -61,7 +73,9 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
   repair.
 - [ ] **Predict:** When a partial revises `fifteen` to `fifty`, which effects may happen before
   `FINAL`, and which must wait?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./02-transcribe/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/02-transcribe/partial_policy_probe.py`.
 - [ ] **Find:** revised partials cancel speculation; only the final `fifty` commits the safe
   action.
@@ -72,7 +86,8 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 - [ ] **Retrieve:** pass all 6 numbered questions in [the closed-book
   self-check](./02-transcribe/EXERCISES.md#self-check); record 6/6 with one attempt-evidence
   citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 2 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 2 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 3 — Parrot, the Naive Way
 
@@ -83,7 +98,9 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
   repair.
 - [ ] **Predict:** Can either a 500 ms or 2,000 ms silence timeout avoid both false splits and
   added commit latency?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./03-parrot-naive/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/03-parrot-naive/timeout_policy_probe.py`.
 - [ ] **Find:** 500 ms fires 45 ms before the next word; 2,000 ms adds a 2,005 ms commit wait.
 - [ ] **Reflect:** State which timeout failure you would accept for a target conversation and why.
@@ -92,7 +109,8 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 - [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
   self-check](./03-parrot-naive/EXERCISES.md#self-check); record 5/5 with one attempt-evidence
   citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 3 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 3 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 4 — VAD + Pre-roll
 
@@ -103,7 +121,9 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
   repair.
 - [ ] **Predict:** Which frames disappear when pre-roll is disabled, and does the trigger frame
   itself remain?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./04-vad-preroll/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/04-vad-preroll/preroll_probe.py`.
 - [ ] **Find:** pre-roll restores both cached frames before trigger/live; disabling it starts at
   trigger.
@@ -113,7 +133,8 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 - [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
   self-check](./04-vad-preroll/EXERCISES.md#self-check); record 3/3 with one attempt-evidence
   citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 4 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 4 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 5 — The Blocking Agent
 
@@ -124,7 +145,9 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
   its evidence-backed repair.
 - [ ] **Predict:** Which sub-gap dominates first-audio latency, and does full TTS enqueue define
   when the user first hears audio?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./05-blocking-agent/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/05-blocking-agent/gap_decomposition_probe.py`.
 - [ ] **Find:** 1,200 ms agent plus 450 ms TTS equals 1,650 ms total; full enqueue takes 800 ms.
 - [ ] **Reflect:** Point to the milestone that defines first audio and explain why full enqueue is
@@ -134,7 +157,8 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 - [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
   self-check](./05-blocking-agent/EXERCISES.md#self-check); record 3/3 with one attempt-evidence
   citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 6 — Streaming Agent + Sentence TTS
 
@@ -145,7 +169,9 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
   evidence-backed repair.
 - [ ] **Predict:** Do per-sentence acceptance counts stay independent, and do they add up to the
   turn totals?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./06-streaming-agent/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/06-streaming-agent/tts_delivery_probe.py`.
 - [ ] **Find:** sentence delivery rows preserve acceptance separately and roll up to one matching
   turn.
@@ -156,7 +182,8 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 - [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
   self-check](./06-streaming-agent/EXERCISES.md#self-check); record 5/5 with one attempt-evidence
   citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 6 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 6 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 7 — Tools, Mid-stream
 
@@ -167,7 +194,9 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
   repair.
 - [ ] **Predict:** Does a fast tool need filler; when slow filler is rejected, which audio becomes
   first?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./07-tools/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/07-tools/filler_delivery_probe.py`.
 - [ ] **Find:** fast tools skip filler; rejected filler has zero accepted chunks and reply audio
   comes first.
@@ -178,7 +207,8 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 - [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
   self-check](./07-tools/EXERCISES.md#self-check); record 3/3 with one attempt-evidence citation
   per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 7 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 7 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 8 — Smart-turn
 
@@ -189,7 +219,9 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
   evidence-backed repair.
 - [ ] **Predict:** How do 200 ms early silence, 40 ms inference, and 800 ms fallback compare with
   the 800 ms VAD baseline?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./08-smart-turn/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/08-smart-turn/endpoint_wait_probe.py`.
 - [ ] **Find:** smart accept takes 240 ms, VAD 800 ms, and fallback 1,040 ms from three components.
 - [ ] **Reflect:** Name the component each path adds or skips and which path wins against the
@@ -199,7 +231,8 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 - [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
   self-check](./08-smart-turn/EXERCISES.md#self-check); record 5/5 with one attempt-evidence
   citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 8 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 8 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 9 — Interruption / Barge-in
 
@@ -210,7 +243,9 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
   evidence-backed repair.
 - [ ] **Predict:** Does the triggering speech event belong to the interrupted turn, and what must
   finish before the next STT stream?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./09-interruption/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/09-interruption/barge_in_turn_probe.py`.
 - [ ] **Find:** triggering speech remains unconsumed while bot cancellation precedes the next STT
   stream.
@@ -221,7 +256,8 @@ two-chapter-lag recall. At each phase boundary, pass all four integration criter
 - [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
   self-check](./09-interruption/EXERCISES.md#self-check); record 5/5 with one attempt-evidence
   citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 9 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 9 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Build phase review
 
@@ -247,7 +283,9 @@ Score the result against all four criteria below. Mark each criterion **pass** o
   evidence-backed repair.
 - [ ] **Predict:** What changes with aligned AEC reference audio, and what should fail when
   reference audio is missing or short?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./10-cleaning-signal/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py`.
 - [ ] **Find:** aligned reference audio changes RMS by -12.041 dB; missing or short references
   fail.
@@ -258,7 +296,8 @@ Score the result against all four criteria below. Mark each criterion **pass** o
 - [ ] **Retrieve:** pass all 4 numbered questions in [the closed-book
   self-check](./10-cleaning-signal/EXERCISES.md#self-check); record 4/4 with one attempt-evidence
   citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 10 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 10 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 11 — The Journal as Mental Model
 
@@ -269,7 +308,9 @@ Score the result against all four criteria below. Mark each criterion **pass** o
   evidence-backed repair.
 - [ ] **Predict:** How can marginal query counts distinguish an empty filter intersection from a
   misspelled turn?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./11-journal/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/11-journal/query_coverage_probe.py`.
 - [ ] **Find:** a zero-result intersection has marginal matches, while a misspelled turn has none.
 - [ ] **Reflect:** Use the marginal counts to decide whether to loosen a filter or fix an
@@ -279,7 +320,8 @@ Score the result against all four criteria below. Mark each criterion **pass** o
 - [ ] **Retrieve:** pass all 6 numbered questions in [the closed-book
   self-check](./11-journal/EXERCISES.md#self-check); record 6/6 with one attempt-evidence citation
   per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 11 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 11 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 12 — Evals + the Latency Budget
 
@@ -290,7 +332,9 @@ Score the result against all four criteria below. Mark each criterion **pass** o
   its evidence-backed repair.
 - [ ] **Predict:** Which bundle controls P95, and how far should P95 move when that bundle is
   removed?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./12-evals-and-latency/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py`.
 - [ ] **Find:** removing `turn_02_slow_agent.bundle` alone drops P95 by 1,260 ms.
 - [ ] **Reflect:** Explain why one slow bundle controls a small-sample percentile and what not to
@@ -300,7 +344,8 @@ Score the result against all four criteria below. Mark each criterion **pass** o
 - [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
   self-check](./12-evals-and-latency/EXERCISES.md#self-check); record 5/5 with one attempt-evidence
   citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 12 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 12 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Operate phase review
 
@@ -324,7 +369,9 @@ Score the result against all four criteria below. Mark each criterion **pass** o
   first answer and its evidence-backed repair.
 - [ ] **Predict:** How many cells result from two provider mixes × three transports, and which
   values stay fixed along each axis?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./13-swap-providers-and-transports/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/13-swap-providers-and-transports/matrix_probe.py`.
 - [ ] **Find:** two provider mixes cross three transport configs into six cells without changing
   axes.
@@ -336,7 +383,8 @@ Score the result against all four criteria below. Mark each criterion **pass** o
 - [ ] **Retrieve:** pass all 4 numbered questions in [the closed-book
   self-check](./13-swap-providers-and-transports/EXERCISES.md#self-check); record 4/4 with one
   attempt-evidence citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 13 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 13 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Chapter 14 — Bring your own agent
 
@@ -347,7 +395,9 @@ Score the result against all four criteria below. Mark each criterion **pass** o
   and its evidence-backed repair.
 - [ ] **Predict:** Can a plain workflow yield both reply text and a session action, and which
   bridge mode should it report?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./14-bring-your-own-agent/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/14-bring-your-own-agent/workflow_state_probe.py`.
 - [ ] **Find:** `MyWorkflow` yields a reply plus `EndCallAction`; the bridge reports deep mode.
 - [ ] **Reflect:** Trace the workflow yield into both reply and action without framework-specific
@@ -357,7 +407,8 @@ Score the result against all four criteria below. Mark each criterion **pass** o
 - [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
   self-check](./14-bring-your-own-agent/EXERCISES.md#self-check); record 5/5 with one
   attempt-evidence citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 14 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 14 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Generalise phase review
 
@@ -383,7 +434,9 @@ Score the result against all four criteria below. Mark each criterion **pass** o
   answer and its evidence-backed repair.
 - [ ] **Predict:** Which failures release manager slots, and does one stop failure prevent the peer
   stop?
-- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
+- [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
+  — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
+  [its prerequisites](./15-operate-in-production/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/15-operate-in-production/manager_probe.py`.
 - [ ] **Find:** failed starts release slots; stop-all records one error and still attempts both
   sessions.
@@ -394,7 +447,8 @@ Score the result against all four criteria below. Mark each criterion **pass** o
 - [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
   self-check](./15-operate-in-production/EXERCISES.md#self-check); record 3/3 with one
   attempt-evidence citation per answer.
-- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 15 --jobs 4 --show-evidence` and explain any mismatch.
+- [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 15 --jobs 4 --show-evidence`
+  and explain any mismatch.
 
 ## Ship phase review and finish the ladder
 

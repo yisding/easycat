@@ -403,7 +403,7 @@ No single score captures voice quality.
 - Manual spot-checks catch everything the above misses (prosody,
   emotion, audible clipping).
 
-A dashboard shows all six. A "quality score" that rolls them up
+A dashboard shows all five. A "quality score" that rolls them up
 hides exactly the regressions you care about.
 
 ## Try breaking it

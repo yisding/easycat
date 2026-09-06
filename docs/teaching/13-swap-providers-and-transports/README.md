@@ -61,6 +61,13 @@ the same graduation — lifecycle, event subscriptions, text turns, and
 debug bundles — see the
 [from-EasyConfig-to-Session guide](../../from-easyconfig-to-session.md).
 
+It is also the first chapter whose `agent=` value is an `agents.Agent`
+from the OpenAI Agents SDK — the `openai-agents` package the
+`quickstart` extra already installs. Treat it here as a black box that
+takes instructions and answers text; [chapter
+14](../14-bring-your-own-agent/) opens up the bridge layer that lets
+any framework, or your own async workflow, sit in the same slot.
+
 ## Prerequisites
 
 - [Chapters 0-12.](../)

@@ -21,11 +21,17 @@ and form your own answer before peeking.
 > it is evidence to explain after revealing hints, not an answer to rewrite.
 <!-- END auto:exercise-protocol -->
 
-## 1. Drop the sample rate to 8 kHz
+## 1. Sweep the sample rate
 
 **Task.** Change `SAMPLE_RATE` at the top of `main.py` to `8000`,
 re-record, and play back. Is speech still intelligible? What about
 music? (Try humming a song while the recording window is open.)
+
+Then repeat the same utterance at `4000` and `44100`, keeping a note of
+what you hear at each rate and the byte count each run reports. The
+self-check asks you to compare all four rates — 4 kHz, 8 kHz, the 16 kHz
+default, and 44.1 kHz — so record the two extremes here rather than
+reasoning about them from memory later.
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**

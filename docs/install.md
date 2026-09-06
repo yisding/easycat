@@ -120,6 +120,13 @@ Commands below are for this repository. In an application, use the equivalent
 | Smart Turn | `uv sync --extra smart-turn --group dev` |
 | Debugger UI | `uv sync --extra debugger --group dev` |
 
+The `deepgram`, `elevenlabs`, and `cartesia` extras install **nothing**. Those
+providers talk to their own WebSocket/HTTP APIs through the core `websockets` /
+`httpx` dependencies, so there is no vendor SDK to add. The extras exist as
+markers so tooling such as `easycat doctor` can enumerate the provider surface
+uniformly; naming one is harmless and makes intent explicit, but do not expect
+`uv sync --extra deepgram --group dev` to change your lockfile.
+
 Krisp is supplied outside the optional-dependency table:
 
 ```bash
