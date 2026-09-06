@@ -1,8 +1,11 @@
 # $PROJECT_NAME
 
 Voice agent built on the OpenAI Agents SDK. Listens on your local microphone,
-speaks through your local speakers. Ships with one working tool (`current_time`)
-so you can see tool use in action on the very first run.
+speaks through your local speakers. Ships with one working tool
+(`current_time`, a plain function in `tools.py`) so you can see tool use in
+action on the very first run. `agent.py` builds the agent in `make_agent()` and
+wires it in `make_app()`; importing it starts nothing, so the tests can import
+the real app.
 
 ## Install
 
@@ -51,18 +54,19 @@ Ctrl-C to quit.
 
 ## Check
 
-After editing `agent.py`, run the local lint/syntax check:
+After editing `agent.py` or `tools.py`, run the local lint/syntax check:
 
 ```bash
-uv run ruff check agent.py
+uv run ruff check agent.py tools.py
 ```
 
 If Ruff reports an auto-fixable issue, run
-`uv run ruff check --fix agent.py` and then re-run the check.
+`uv run ruff check --fix agent.py tools.py` and then re-run the check.
 
-Then run the offline agent tests — no API keys or network needed
-(`tests/test_agent.py` exercises the real turn pipeline with a stub
-agent; see `AGENTS.md` for the testing-and-evals ladder):
+Then run the offline agent tests — no API keys, no network, no microphone
+(`tests/test_agent.py` calls `tools.py` for real, asserts `agent.py`'s wiring,
+and drives EasyCat's real text and audio pipelines with a scripted stand-in for
+the model; see `AGENTS.md` for the testing-and-evals ladder):
 
 ```bash
 uv run pytest
@@ -70,11 +74,13 @@ uv run pytest
 
 ## Next steps
 
-- **Change the personality:** edit the `instructions=...` in `agent.py`.
-- **Add more tools:** decorate any function with `@function_tool` and pass it
-  in the `tools=[...]` list. The agent will pick the right tool based on the
-  user's request.
-- **Swap STT providers:** add `stt="deepgram/flux"` to `VoiceApp(...)`, add
+- **Change the personality:** edit the `INSTRUCTIONS` constant that
+  `make_agent()` passes to the agent in `agent.py`.
+- **Add more tools:** add a plain function to `tools.py`, then pass it through
+  `function_tool(...)` in `make_agent()`, so the generated test can call it
+  directly. The agent will pick the right tool based on the user's request.
+- **Swap STT providers:** add `stt="deepgram/flux"` to the `VoiceApp(...)` call
+  in `make_app()`, add
   `deepgram` to the `easycat[...]` dependency in `pyproject.toml`,
   run `uv sync`, and put `DEEPGRAM_API_KEY` in `.env`. Flux STT collapses
   VAD + STT + endpointing into one streaming connection for lower latency.
@@ -88,7 +94,7 @@ uv run pytest
   ```python
   VoiceApp(
       config=EasyConfig.mic(
-          agent=agent,
+          agent=make_agent(),
           debug="full",
           record_to=".easycat/runs",
       )

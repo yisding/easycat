@@ -65,7 +65,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ``agent.py`` line budget per template (counts *all* lines including blanks).
 _LINE_BUDGETS: dict[str, int] = {
-    "openai-agents": 16,
+    "openai-agents": 23,
     "provider": 12,
     "provider-stt": 12,
     "provider-tts": 12,
@@ -77,7 +77,18 @@ _LINE_BUDGETS: dict[str, int] = {
     "webrtc-browser": 14,
 }
 
+# Templates already migrated to the importable make_agent()/make_app() shape
+# with app-protecting generated tests.
+# PR2 deletes this; every guard below then parametrizes over sorted(_LINE_BUDGETS).
+_MIGRATED_TEMPLATES: frozenset[str] = frozenset({"openai-agents"})
+
+# Line budgets for the SDK-free support modules the migrated templates ship.
+_SUPPORT_FILE_BUDGETS: dict[str, dict[str, int]] = {
+    "openai-agents": {"tools.py": 10},
+}
+
 _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
+    "openai-agents": ("tools.py",),
     "provider": ("custom_vad.py", "test_custom_vad.py"),
     "provider-stt": ("custom_stt.py", "test_custom_stt.py"),
     "provider-tts": ("custom_tts.py", "test_custom_tts.py"),
@@ -621,20 +632,88 @@ def _uses_run_easyconfig_preset(source: str, preset: str) -> bool:
     return False
 
 
-def _uses_voice_app_local(source: str) -> bool:
-    tree = ast.parse(source)
+def _is_main_guard(node: ast.AST) -> bool:
+    """True for ``if __name__ == "__main__":``."""
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+    )
+
+
+def _returns_call_to(func: ast.FunctionDef, callee: str) -> bool:
     return any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "run"
-        and isinstance(node.func.value, ast.Call)
-        and isinstance(node.func.value.func, ast.Name)
-        and node.func.value.func.id == "VoiceApp"
-        and len(node.args) == 1
-        and isinstance(node.args[0], ast.Constant)
-        and node.args[0].value == "local"
+        isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == callee
+        for node in ast.walk(func)
+    )
+
+
+def _builds_voice_app_under_main_guard(source: str) -> bool:
+    """``make_app()`` returns the ``VoiceApp``; only ``__main__`` runs it."""
+    tree = ast.parse(source)
+
+    builds = any(
+        isinstance(node, ast.FunctionDef)
+        and node.name == "make_app"
+        and _returns_call_to(node, "VoiceApp")
         for node in ast.walk(tree)
     )
+    if not builds:
+        return False
+
+    guarded: set[int] = set()
+    for node in ast.walk(tree):
+        if not _is_main_guard(node):
+            continue
+        assert isinstance(node, ast.If)
+        for child in node.body:
+            guarded.update(id(inner) for inner in ast.walk(child))
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "run"
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "local"
+            and id(node) not in guarded
+        ):
+            return False
+
+    return True
+
+
+def _module_level_names(source: str) -> set[str]:
+    """Top-level ``def``/``class``/assignment names defined by *source*."""
+    names: set[str] = set()
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
+
+
+def _names_imported_from(source: str, modules: set[str]) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom) and node.module in modules:
+            names.update(alias.name for alias in node.names)
+    return names
 
 
 def _uses_async_with_create_text_session(source: str) -> bool:
@@ -668,6 +747,17 @@ def test_agent_py_within_budget(name: str) -> None:
     agent = _template_dir(name) / "agent.py"
     lines = agent.read_text(encoding="utf-8").splitlines()
     assert len(lines) <= budget, f"{name}/agent.py has {len(lines)} lines, budget is {budget}"
+
+
+@pytest.mark.parametrize("name", sorted(_SUPPORT_FILE_BUDGETS))
+def test_support_files_within_budget(name: str) -> None:
+    """SDK-free support modules stay small enough for a beginner to read."""
+    for filename, budget in _SUPPORT_FILE_BUDGETS[name].items():
+        path = _template_dir(name) / filename
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) <= budget, (
+            f"{name}/{filename} has {len(lines)} lines, budget is {budget}"
+        )
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
@@ -877,8 +967,12 @@ def test_voice_templates_use_canonical_preset_shape(name: str) -> None:
 
 def test_default_openai_agents_template_uses_voice_app_golden_path() -> None:
     agent = (_template_dir("openai-agents") / "agent.py").read_text(encoding="utf-8")
-    assert _uses_voice_app_local(agent)
+    assert _builds_voice_app_under_main_guard(agent)
     assert "EasyConfig" not in agent
+    assert "def make_agent()" in agent
+    assert "def make_app()" in agent
+    assert 'if __name__ == "__main__":' in agent
+    assert "from tools import current_time" in agent
 
     readme = (_template_dir("openai-agents") / "README.md").read_text(encoding="utf-8")
     assert "VoiceApp(...)" in readme
@@ -1262,7 +1356,13 @@ def test_template_readme_explains_local_source_block(name: str) -> None:
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_ships_offline_agent_tests(name: str) -> None:
-    """Every scaffold ships a key-free test exercising the real turn pipeline."""
+    """Every scaffold ships a key-free test exercising the real turn pipeline.
+
+    Placeholders, not dollar signs, are what must never survive into a
+    generated project: a migrated template's test asserts ``"$" not in
+    AGENT_NAME`` to catch an unrendered substitution, so the literal ``$``
+    is legitimate while a ``$PLACEHOLDER`` is not.
+    """
     source = (_template_dir(name) / "tests" / "test_agent.py").read_text(encoding="utf-8")
 
     assert "from easycat.debug.testing import" in source
@@ -1270,11 +1370,19 @@ def test_template_ships_offline_agent_tests(name: str) -> None:
     assert "assert_turn_completed" in source
     assert "assert_no_error" in source
     assert "assert_latency" in source
-    # Key-free by construction: a stub agent, never a live LLM client.
-    assert "StubAgent" in source
+    # Key-free by construction: a scripted stand-in, never a live LLM client.
     assert "OPENAI_API_KEY" not in source
+    if name in _MIGRATED_TEMPLATES:
+        # The generated test exercises the real app, not a private stub of it.
+        assert "StubAgent" not in source
+        assert "from tools import" in source
+        assert "from agent import" in source
+        assert "importorskip" in source
+    else:
+        assert "StubAgent" in source
     # No placeholders — the same file works in every rendered project.
-    assert "$" not in source
+    for placeholder in ("$AGENT_NAME", "$AGENT_INSTRUCTIONS", "$PROJECT_NAME"):
+        assert placeholder not in source
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
@@ -1342,3 +1450,234 @@ def test_telnyx_phone_template_authenticates_public_entrypoints() -> None:
     # one-time stream token compensates.
     assert "one-time stream token" in readme
     assert "NOT signed" in readme
+
+
+# ── Importable app factories (DX3) ───────────────────────────────
+
+_STUB_BOUNDARY_PHRASE = "says nothing about live model quality"
+
+
+@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+def test_template_entry_points_are_import_safe(name: str) -> None:
+    """Importing a generated entry point must start no audio and no server."""
+    cfg = InitConfig(
+        template=name,
+        agent_name="Support",
+        agent_instructions="Help the user with billing.",
+    )
+    mapping = _substitutions(cfg, project_name="demo")
+
+    for filename in ("agent.py", "server.py"):
+        path = _template_dir(name) / filename
+        if not path.is_file():
+            continue
+        tree = ast.parse(_render_text(path.read_text(encoding="utf-8"), mapping))
+        for node in tree.body:
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+                continue  # module docstring
+            if isinstance(node, ast.Import | ast.ImportFrom):
+                continue
+            if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if isinstance(node, ast.Assign | ast.AnnAssign):
+                assert not any(isinstance(sub, ast.Call) for sub in ast.walk(node)), (
+                    f"{name}/{filename} calls something at module scope"
+                )
+                continue
+            assert _is_main_guard(node), (
+                f"{name}/{filename} runs {ast.dump(node)[:60]}… at import time"
+            )
+
+
+@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+def test_template_tests_import_only_symbols_the_app_defines(name: str) -> None:
+    """Renaming or deleting a tested app symbol must fail here, SDK or not."""
+    template = _template_dir(name)
+    defined: set[str] = set()
+    for filename in ("agent.py", "tools.py"):
+        path = template / filename
+        if path.is_file():
+            defined |= _module_level_names(path.read_text(encoding="utf-8"))
+
+    test_source = (template / "tests" / "test_agent.py").read_text(encoding="utf-8")
+    imported = _names_imported_from(test_source, {"agent", "tools"})
+
+    assert imported <= defined, (
+        f"{name} test imports undefined names: {sorted(imported - defined)}"
+    )
+    assert {"make_agent"} <= imported
+
+
+@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+def test_template_offline_tests_cover_text_and_audio(name: str) -> None:
+    """A text-only pass may never stand in for audio-pipeline coverage."""
+    source = (_template_dir(name) / "tests" / "test_agent.py").read_text(encoding="utf-8")
+
+    assert "run_text_turns(" in source
+    assert "run_scripted_audio_turn(" in source
+
+
+@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+def test_template_offline_tests_name_their_stub_boundary(name: str) -> None:
+    """The stub boundary is stated in both the generated test and AGENTS.md."""
+    template = _template_dir(name)
+    test_source = (template / "tests" / "test_agent.py").read_text(encoding="utf-8")
+    docstring = ast.get_docstring(ast.parse(test_source)) or ""
+    agents_md = (template / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "stands in" in docstring
+    assert _STUB_BOUNDARY_PHRASE in docstring
+    assert "class ScriptedReasoning" in test_source
+    assert _STUB_BOUNDARY_PHRASE in agents_md
+    assert "ScriptedReasoning" in agents_md
+
+
+@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+def test_template_pytest_config_puts_the_project_on_sys_path(name: str) -> None:
+    """``uv run pytest`` uses the console script, which never prepends the cwd."""
+    cfg = InitConfig(
+        template=name,
+        agent_name="Support",
+        agent_instructions="Help the user with billing.",
+    )
+    mapping = _substitutions(cfg, project_name="demo")
+    rendered = _render_text(
+        (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8"), mapping
+    )
+
+    parsed = tomllib.loads(rendered)
+    assert parsed["tool"]["pytest"]["ini_options"]["pythonpath"] == ["."]
+
+
+def test_offline_scaffold_coverage_is_not_text_only() -> None:
+    """The provider on-ramps keep real audio-shaped contract coverage."""
+    provider_templates = {
+        "provider": ("test_custom_vad.py", "custom_vad.py", "VADProviderContractSuite"),
+        "provider-stt": ("test_custom_stt.py", "custom_stt.py", "STTProviderContractSuite"),
+        "provider-tts": ("test_custom_tts.py", "custom_tts.py", "TTSProviderContractSuite"),
+    }
+    assert set(provider_templates) <= set(available_templates())
+
+    for name, (test_file, module_file, suite) in provider_templates.items():
+        test_source = (_template_dir(name) / test_file).read_text(encoding="utf-8")
+        module_source = (_template_dir(name) / module_file).read_text(encoding="utf-8")
+        assert suite in test_source, f"{name}/{test_file} no longer subclasses {suite}"
+        assert "AudioChunk" in module_source, f"{name}/{module_file} no longer handles audio"
+
+
+@pytest.mark.parametrize(
+    ("template_source", "extra_kwargs", "expected"),
+    [
+        ("f(agent=agent, **__EASYCAT_CONFIG_EXTRA__)", "", "f(agent=agent)"),
+        ("f(agent=make_agent(), **__EASYCAT_CONFIG_EXTRA__)", "", "f(agent=make_agent())"),
+        (
+            "f(agent=make_agent(), **__EASYCAT_CONFIG_EXTRA__)",
+            'stt="deepgram/flux"',
+            'f(agent=make_agent(), stt="deepgram/flux")',
+        ),
+        (
+            "f(agent=SupportWorkflow(), **__EASYCAT_CONFIG_EXTRA__)",
+            "",
+            "f(agent=SupportWorkflow())",
+        ),
+        ("f(**__EASYCAT_CONFIG_EXTRA__)", "", "f()"),
+        ("f(**__EASYCAT_CONFIG_EXTRA__)", 'tts="openai"', 'f(tts="openai")'),
+        ("            **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n", "", ""),
+        (
+            "            **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n",
+            'stt="x"',
+            '            stt="x",\n',
+        ),
+    ],
+)
+def test_render_drops_the_config_sentinel_with_its_separator(
+    template_source: str, extra_kwargs: str, expected: str
+) -> None:
+    """The sentinel leaves with the separator that introduced it."""
+    rendered = _render_text(template_source, {"EASYCAT_CONFIG_EXTRA": extra_kwargs})
+
+    assert rendered == expected
+    assert ", )" not in rendered
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+@pytest.mark.parametrize("extra", ["", 'stt="deepgram/flux"', 'tts="openai"'])
+def test_rendered_templates_never_keep_a_dangling_separator(name: str, extra: str) -> None:
+    cfg = InitConfig(
+        template=name,
+        agent_name="Support",
+        agent_instructions="Help the user with billing.",
+        stt="deepgram/flux" if extra.startswith("stt") else None,
+        tts="openai" if extra.startswith("tts") else None,
+    )
+    mapping = _substitutions(cfg, project_name="demo")
+    for py_file in _template_dir(name).glob("*.py"):
+        rendered = _render_text(py_file.read_text(encoding="utf-8"), mapping)
+        assert ", )" not in rendered
+        ast.parse(rendered, filename=str(py_file))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {},
+        {"stt": "deepgram/flux"},
+        {"tts": "openai"},
+        {"mcp_servers": ["http://localhost:8931/mcp"]},
+    ],
+    ids=["defaults", "stt", "tts", "mcp"],
+)
+@pytest.mark.parametrize("name", sorted(_MIGRATED_TEMPLATES))
+def test_rendered_app_kwargs_resolve_to_real_providers(
+    name: str, overrides: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The kwargs the renderer emits must name providers that really resolve.
+
+    ``VoiceApp(...)`` validates field *names* only, so this is the value-level
+    half: it parses (never imports) the rendered app and feeds the literal
+    kwargs to ``EasyConfig.mic`` plus the provider planner.
+    """
+    from easycat.config import EasyConfig
+    from easycat.planning.provider_plan import build_provider_plan
+    from easycat.stubs import NoopAgent
+
+    for env_name in (
+        "OPENAI_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "CARTESIA_API_KEY",
+    ):
+        monkeypatch.setenv(env_name, "test-not-used")
+
+    cfg = InitConfig(
+        template=name,
+        agent_name="Support",
+        agent_instructions="Help the user with billing.",
+        **overrides,  # type: ignore[arg-type]
+    )
+    mapping = _substitutions(cfg, project_name="demo")
+    rendered = _render_text(
+        (_template_dir(name) / "agent.py").read_text(encoding="utf-8"), mapping
+    )
+
+    call = next(
+        node
+        for node in ast.walk(ast.parse(rendered))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "VoiceApp"
+    )
+    kwargs = {
+        kw.arg: ast.literal_eval(kw.value)
+        for kw in call.keywords
+        if kw.arg is not None and kw.arg != "agent"
+    }
+
+    config = EasyConfig.mic(agent=NoopAgent(), **kwargs)
+    plan = build_provider_plan(config)
+    if "stt" in kwargs:
+        assert plan.selected["stt"].provider == str(kwargs["stt"]).split("/")[0]
+    if "tts" in kwargs:
+        assert plan.selected["tts"].provider == str(kwargs["tts"]).split("/")[0]
+    if "mcp_servers" in kwargs:
+        assert list(config.mcp_servers or []) == list(kwargs["mcp_servers"])  # type: ignore[arg-type]

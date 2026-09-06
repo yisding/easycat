@@ -152,6 +152,7 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         optional_env=(),
         description="Local microphone/speaker voice agent.",
         base_extras=("openai-agents", "local"),
+        check_files=("agent.py", "tools.py"),
         expected_transport="local",
         supports_audio_config=True,
     ),
@@ -965,15 +966,20 @@ def _render_text(text: str, mapping: dict[str, str]) -> str:
         text = text.replace("$EASYCAT_SOURCES_BLOCK\n", "")
     rendered = Template(text).safe_substitute(mapping)
     extra_kwargs = mapping["EASYCAT_CONFIG_EXTRA"]
-    for indent in ("        ", "            "):
+    # Longest indent first: an 8-space pattern also matches inside a 12-space
+    # line and would leave four orphaned spaces behind when the sentinel drops.
+    for indent in ("            ", "        "):
         rendered = rendered.replace(
             f"{indent}**__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n",
             f"{indent}{extra_kwargs},\n" if extra_kwargs else "",
         )
+    # Drop the sentinel together with the separator that introduced it, so no
+    # dangling comma survives and the renderer needs no per-template knowledge.
+    rendered = rendered.replace(
+        ", **__EASYCAT_CONFIG_EXTRA__", f", {extra_kwargs}" if extra_kwargs else ""
+    )
     rendered = rendered.replace("**__EASYCAT_CONFIG_EXTRA__", extra_kwargs)
     rendered = rendered.replace("  # noqa: F821", "")
-    for agent_expr in ("agent", "voice_agent", "SupportWorkflow()"):
-        rendered = rendered.replace(f"agent={agent_expr}, )", f"agent={agent_expr})")
     return rendered
 
 
