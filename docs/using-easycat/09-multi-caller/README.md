@@ -91,8 +91,11 @@ clients, journals, capacity slots, or background tasks.
 Query-string tokens are off by default. They leak more easily through URLs,
 history, proxy logs, and analytics. Browsers cannot add an `Authorization`
 header to a native WebSocket handshake, so the standalone browser demo can opt
-into `allow_query_token=True` for loopback development. Prefer bearer headers
-and edge-issued credentials in production.
+in for loopback development by passing `allow_query_token=True` to
+`serve_websocket_sessions()` or `serve_websocket_config_sessions()` — it is a
+keyword argument on those helpers (and on `BearerTokenAuth`), not a field on
+`WebSocketSessionServerConfig`. Prefer bearer headers and edge-issued
+credentials in production.
 
 The simple helper reads `EASYCAT_WS_TOKEN` through its `EASYCAT_WS_*`
 environment defaults.
@@ -155,7 +158,7 @@ WebRTC:
 from easycat.server import BearerTokenAuth, VoiceServer, VoiceServerConfig
 
 server = VoiceServer.from_app(
-    app,
+    app,  # the VoiceApp you have been building since chapter 0
     VoiceServerConfig(
         host="0.0.0.0",
         port=8080,
