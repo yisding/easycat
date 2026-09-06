@@ -11,7 +11,7 @@ shares one vocabulary: journal records, read through the helpers in
 | Rung | What runs | Needs keys? | Catches |
 | --- | --- | --- | --- |
 | 1. Bundle fixtures | Assertions over a checked-in `RunBundle` | No | Regressions in recorded behavior |
-| 2. Text turns | One real agent-bridge turn via `send_text` (Noop audio) | No (stub agent) / yes (real agent) | Turn pipeline, tool calls, latency budgets |
+| 2. Text turns | One or more real agent-bridge turns via `send_text` (Noop audio) | No (stub agent) / yes (real agent) | Turn pipeline, tool calls, latency budgets |
 | 3. Metrics and judges | Percentiles, WER, barge-in F1, LLM-as-judge | Judge needs `OPENAI_API_KEY` | Conversational quality drift |
 | 4. Live audio | Full pipeline against real providers | Yes | Provider and audio-path integration |
 
@@ -50,7 +50,9 @@ from easycat.debug.testing import (
     assert_latency,
     assert_no_error,
     assert_turn_completed,
+    run_scripted_audio_turn,
     run_text_turn,
+    run_text_turns,
 )
 
 
@@ -60,14 +62,36 @@ async def test_agent_turn():
     assert_no_error(result, turn_id=result.turn_id)
     assert "open" in result.response.lower()
     assert_latency(result, max_ms=5000.0, percentile="p95")
+
+
+async def test_two_turns_on_one_session():
+    hello, followup = await run_text_turns(my_agent, ["hello", "and after that?"])
+    assert hello.turn_id != followup.turn_id
+    assert_latency([hello, followup], max_ms=5000.0, percentile="p95")
+
+
+async def test_the_audio_pipeline_reaches_the_agent():
+    result = await run_scripted_audio_turn(my_agent, transcript="hello")
+    assert_turn_completed(result, result.turn_id)
 ```
+
+`run_text_turns()` runs a whole scenario against one session, in order,
+and returns one `TurnResult` per input — the list goes straight into
+`assert_latency`. `run_scripted_audio_turn()` drives one turn through
+the real *audio* pipeline (transport → VAD → STT → agent → TTS) with
+scripted stub I/O: no microphone, no key, no network. Its audio is
+synthetic, so it checks pipeline wiring, not speech quality.
 
 `assert_latency` reuses the nearest-rank percentile code behind
 `easycat validate latency`, so a budget asserted in a unit test means
 the same thing as one enforced in a validation lane. Every scaffolded
 project ships this pattern as `tests/test_agent.py` — offline and
-key-free via a stub agent — plus an `AGENTS.md` documenting it; run it
-with `uv run pytest` inside the project. The repo's own coverage for
+key-free: the project's own `tools.py` runs for real, `agent.py`'s
+wiring is asserted as built, and a scripted stand-in for the model
+drives the text and audio pipelines — plus an `AGENTS.md` documenting
+it; run it with `uv run pytest` inside the project. A green run means
+the app is wired and the pipeline is healthy; it says nothing about
+live model quality, which is what rungs 3 and 4 are for. The repo's own coverage for
 these helpers lives in the debug test suite:
 
 ```bash

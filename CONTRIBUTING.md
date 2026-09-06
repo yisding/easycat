@@ -348,7 +348,11 @@ The same module also covers live text turns and evals (see the
 [testing and evals ladder](docs/testing-and-evals.md)):
 `run_text_turn` drives one real agent-bridge turn through `send_text` with
 Noop audio stages and returns a `TurnResult` — a `RecordSource` the
-assertion helpers above accept directly; `assert_latency` budgets turn
+assertion helpers above accept directly; `run_text_turns` runs a whole
+scenario against one session and returns one `TurnResult` per input;
+`run_scripted_audio_turn` drives one turn through the real audio pipeline
+with scripted stub I/O (no microphone, key or network — it checks pipeline
+wiring, not speech quality); `assert_latency` budgets turn
 latency with the validation percentile code; `assert_llm_judge` (with
 `extract_transcript` and the default `JUDGE_RUBRIC`) scores conversational
 quality, taking `judge=` for offline CI.

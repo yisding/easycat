@@ -168,22 +168,13 @@ async def _run_text_mode(mode: ConsoleMode, record_dir: Path) -> None:
 
 async def _run_voice_demo(record_dir: Path) -> None:
     """One scripted no-key turn through the full audio pipeline."""
-    from easycat import EasyConfig, TurnManagerConfig, create_session
+    from easycat import create_session
     from easycat.events import AgentFinal, STTFinal
-    from easycat.stubs import scripted_turn_providers
+    from easycat.stubs import scripted_turn_config
 
-    providers = scripted_turn_providers(
+    config = scripted_turn_config(
         transcript="Hello, EasyCat!",
         reply=lambda text: f"You said: {text} That was one scripted turn — no API keys.",
-    )
-    config = EasyConfig.mic(
-        transport=providers.transport,
-        vad=providers.vad,
-        stt=providers.stt,
-        agent=providers.agent,
-        tts=providers.tts,
-        turn_taking=TurnManagerConfig(end_of_turn_silence_ms=1),
-        debug="light",
         record_to=record_dir,
     )
     session = create_session(config)
