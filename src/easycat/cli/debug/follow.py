@@ -26,6 +26,12 @@ _FOLLOW_AUDIO_NAMES = frozenset(("tts_frame", "stt_audio_in"))
 # first such record per turn closes the critical-path milestone, so the
 # follow line flags it as a per-turn milestone landmark.
 _FOLLOW_TTS_FIRST = frozenset(("tts_frame", "tts_audio"))
+# Back-off between retries of a transient read failure.
+_RETRY_INTERVAL_S = 0.25
+# A live session creates the ``journal`` table moments after its file appears,
+# so a missing table is retried — but only this long. Past it the target is
+# reported as "not an EasyCat journal" instead of retried silently forever.
+_SCHEMA_WAIT_S = 5.0
 
 
 def _follow_audio_bar(record: Mapping[str, Any]) -> str:
@@ -147,6 +153,77 @@ async def _stream_follow(
         stdout_console.print(escape(_format_follow_line(record_dict)))
 
 
+def _is_missing_journal_table(exc: BaseException) -> bool:
+    """Whether *exc* means the file has no ``journal`` table (yet)."""
+    return "no such table" in str(exc).lower()
+
+
+def _not_a_journal(path: Any, detail: str) -> Exception:
+    from easycat.errors import EasyCatError
+
+    return EasyCatError(
+        "EASYCAT_E404",
+        f"Not an EasyCat journal: {path}",
+        path=str(path),
+        detail=detail,
+    )
+
+
+class _SchemaWaitBudget:
+    """Bounded tolerance for a target whose ``journal`` table is missing.
+
+    A live session creates its table moments after the file appears, so a
+    ``no such table`` failure is genuinely transient there.  A file that is
+    simply not a journal raises the same error forever, which used to hang the
+    tail in a silent 0.25s retry loop with no diagnostic and no give-up
+    (gh 1008).  The budget starts on the first such failure and, once spent,
+    reports the target as unusable.
+    """
+
+    def __init__(self, path: Any, *, announce: bool) -> None:
+        self._path = path
+        self._announce = announce
+        self._deadline: float | None = None
+
+    def observe(self, exc: BaseException) -> None:
+        """Raise once a missing table has persisted past the budget."""
+        if not _is_missing_journal_table(exc):
+            # Any other transient condition restarts the budget.
+            self._deadline = None
+            return
+        now = asyncio.get_running_loop().time()
+        if self._deadline is None:
+            self._deadline = now + _SCHEMA_WAIT_S
+            if self._announce:
+                self._announce = False
+                stderr_console.print(
+                    f"[yellow]No journal table yet; waiting up to "
+                    f"{_SCHEMA_WAIT_S:.0f}s for a writer.[/]"
+                )
+        elif now >= self._deadline:
+            raise _not_a_journal(self._path, str(exc)) from exc
+
+
+def _advance_resume(view: Any, cursor: list[int | None], resume: int | None) -> int | None:
+    """Resume point for the next attempt: one past the highest yielded record.
+
+    Keeping the original ``from_sequence`` would re-emit every already-printed
+    record (``--from-sequence 0``) or recompute ``latest_sequence + 1`` at
+    retry time and silently skip records written during the outage.
+    """
+    if cursor[0] is not None:
+        return cursor[0] + 1
+    if resume is not None:
+        return resume
+    # The first attempt never reached view.follow's internal cursor
+    # computation, so re-capture it here (gh 1045).
+    try:
+        cursor[0] = view._journal.latest_sequence  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 intentional boundary or best-effort cleanup
+        return resume
+    return (cursor[0] or 0) + 1
+
+
 async def _follow_with_retry(
     view: Any,
     *,
@@ -154,19 +231,20 @@ async def _follow_with_retry(
     errors_only: bool,
     turn_id: str | None,
     json_output: bool,
+    path: Any = None,
 ) -> None:
     """Drive :func:`_stream_follow`, resuming past records already streamed.
 
     Persistent SQLite journals are written by a separate live session, so a
     mid-stream ``FileNotFoundError`` / ``sqlite3.OperationalError`` (the writer
-    has not created the table yet, or the file is mid-rotation) is retried after
-    a short back-off.  The retry MUST resume from ``last_yielded + 1`` rather
-    than the original ``from_sequence``: keeping the original argument would
-    re-emit every already-printed record (``--from-sequence 0``) or recompute
-    ``latest_sequence + 1`` at retry time and silently skip records written
-    during the outage.  A shared ``cursor`` holder carries the highest yielded
-    sequence back out even when the generator unwinds via a propagating
-    exception rather than a normal return.
+    holds the lock, or the file is mid-rotation) is retried after a short
+    back-off.  A shared ``cursor`` holder carries the highest yielded sequence
+    back out even when the generator unwinds via a propagating exception rather
+    than a normal return.
+
+    Permanent failures are separated from transient ones (gh 1008): a file that
+    is not a SQLite database at all fails immediately, and a persistently
+    missing ``journal`` table fails once :class:`_SchemaWaitBudget` is spent.
     """
     cursor: list[int | None] = [None]
     resume = from_sequence
@@ -176,6 +254,7 @@ async def _follow_with_retry(
             cursor[0] = view._journal.latest_sequence  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001, S110
             pass
+    schema_budget = _SchemaWaitBudget(path, announce=not json_output)
     while True:
         try:
             await _stream_follow(
@@ -187,23 +266,13 @@ async def _follow_with_retry(
                 cursor=cursor,
             )
             return
-        except (FileNotFoundError, sqlite3.OperationalError):
-            if cursor[0] is not None:
-                resume = cursor[0] + 1
-            elif resume is None:
-                # First attempt never reached view.follow's internal cursor computation; re-capture
-                try:
-                    # Use initially captured value if available, else recompute (gh 1045).  # noqa: E501
-                    if cursor[0] is None:
-                        cursor[0] = view._journal.latest_sequence  # type: ignore[attr-defined]
-                        resume = (cursor[0] or 0) + 1  # type: ignore[operator]
-                except Exception:  # noqa: BLE001, S110
-                    pass
-            await asyncio.sleep(0.25)
+        except (FileNotFoundError, sqlite3.OperationalError) as exc:
+            schema_budget.observe(exc)
+            resume = _advance_resume(view, cursor, resume)
+            await asyncio.sleep(_RETRY_INTERVAL_S)
         except sqlite3.DatabaseError as exc:
-            from easycat.errors import EasyCatError
-
-            raise EasyCatError("EASYCAT_E104", "Not an easycat journal", details=str(exc)) from exc
+            # Not a SQLite database (or an unreadable one): permanent.
+            raise _not_a_journal(path, str(exc)) from exc
 
 
 def _record_to_follow_dict(record: Any) -> dict[str, Any]:
@@ -325,6 +394,7 @@ def follow_journal(
             errors_only=errors_only,
             turn_id=turn,
             json_output=json_output,
+            path=bundle_path,
         )
 
     # A bare Ctrl-C propagates out of ``asyncio.run`` as ``KeyboardInterrupt``;

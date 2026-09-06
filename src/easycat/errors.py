@@ -571,6 +571,26 @@ EASYCAT_E403 = register(
     related=["EASYCAT_E402"],
 )
 
+EASYCAT_E404 = register(
+    "EASYCAT_E404",
+    "Not an EasyCat journal: {path}",
+    cause=(
+        "The file is not a SQLite database, or it is a SQLite database "
+        "with no `journal` table. `easycat tail` retries a missing table "
+        "briefly — a live session creates it moments after the file "
+        "appears — then reports the target as unusable rather than "
+        "waiting forever."
+    ),
+    fix=(
+        "Point at a `.sqlite` journal written by a session with "
+        '`debug="light"` or `debug="full"` (by default under '
+        "`.easycat/journals/`). Use `easycat bundles show <path>` for an "
+        "exported ZIP bundle."
+    ),
+    example="easycat tail .easycat/journals/session-abc123.sqlite",
+    related=["EASYCAT_E207", "EASYCAT_E402"],
+)
+
 
 # ══════════════════════════════════════════════════════════════════
 # E5xx — CLI usage
@@ -704,6 +724,7 @@ __all__ = [
     "EASYCAT_E401",
     "EASYCAT_E402",
     "EASYCAT_E403",
+    "EASYCAT_E404",
     "EASYCAT_E501",
     "EASYCAT_E601",
     "EASYCAT_E602",
