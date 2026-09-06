@@ -755,6 +755,11 @@ class _TelnyxProtocolMixin:
                     call_sid=call_control_id,
                     answered_by="human",
                     session_id=self._easycat_session_id,
+                    # Marked inbound so the outbound call-state machine does not
+                    # adopt this call: it would close its classification gate and
+                    # start its max-duration timer for a call it never placed
+                    # (gh 1098).
+                    direction="inbound",
                 )
             )
 
