@@ -1340,9 +1340,28 @@ class TurnRunner:
                 st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
                 break
             if self._tts.is_playback_suppressed:
+                # Discard and keep draining rather than leaving the loop.
+                # ``cancel_tts_playback`` deliberately cancels neither the
+                # shared token nor ``active_turn_task``, precisely so an
+                # in-flight agent stream can keep producing text — so the
+                # producer keeps awaiting a *blocking* ``queue.put``.  Breaking
+                # out left nobody reading once the one-shot drain in
+                # ``_consume_tts_payloads`` had run: the 64-slot queue filled,
+                # the producer wedged in ``put``, and with it
+                # ``run_streaming_agent``'s shielded wait and
+                # ``_settle_turn_after_tts``'s ``agent_output_settled`` wait —
+                # a three-way stall ending in a spurious ``AgentTimeoutError``
+                # after 30s, or hanging forever with no agent timeout.
+                # Draining to the sentinel is what makes the documented
+                # "produce text which will simply not be synthesized" contract
+                # true (gh 1104).
+                #
+                # Suppression is only cleared by admitting a *new* turn, at
+                # which point the ``_streaming_turn_is_current`` check above
+                # breaks first — so this turn can never resume synthesizing.
                 st.first_tts_lifecycle_ready.set()
                 st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
-                break
+                continue
 
             if not st.synth_started:
                 # Snapshot the gate state at first-payload time and reuse it in
