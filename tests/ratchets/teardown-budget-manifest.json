@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "update_rationale": "gh 1024: the superseded on_turn_ended drain waits on every unfinished predecessor, not just the handle it replaced",
+  "update_rationale": "gh 1067: the off-Linux process-birth identity bounds its ps invocation",
   "counts": {
     "configurable": 29,
     "lifecycle_budget": 102,
-    "not_teardown": 34,
+    "not_teardown": 35,
     "protocol_local": 47
   },
   "entries": [
@@ -134,6 +134,7 @@
     "named_constant\tintegrations/agents/_agent_runner.py\tAgentRunnerConfig\tconstant timeout\t6efd731f838d7f2d\t0\tnot_teardown\tConfigures overall agent event latency.",
     "named_constant\tintegrations/agents/openai_agents.py\t<module>\tconstant _OPENAI_AGENTS_WARMUP_TIMEOUT_SECONDS\tda1cc5372bfac04e\t0\tnot_teardown\tBounds provider warmup rather than teardown.",
     "named_constant\tintegrations/agents/pydantic_ai.py\t<module>\tconstant _PYDANTIC_AI_WARMUP_TIMEOUT_SECONDS\t87b6a717add38016\t0\tnot_teardown\tBounds provider warmup rather than teardown.",
+    "named_constant\truntime/crash_sweep.py\t<module>\tconstant _PS_TIMEOUT_S\tca94f6f528f71c27\t0\tnot_teardown\tBounds the ps process-birth query, not a teardown or lifecycle deadline.",
     "named_constant\truntime/journal_sql.py\t_SqliteBatchCommitCoordinator\tconstant _deadlines\t172fefc1f90fca92\t0\tnot_teardown\tStores commit-scheduling deadlines.",
     "named_constant\truntime/scope.py\tRuntimeMemberPolicy\tconstant grace_deadline\t3906c6c4759f421a\t0\tconfigurable\tConfigures the member finish-to-cancel escalation budget from the cohort barrier.",
     "named_constant\truntime/scope.py\tRuntimeMemberPolicy\tconstant hard_deadline\t57ad3f9ab5aa3a56\t0\tconfigurable\tConfigures the member cancellation-to-survivor parking budget from the cohort barrier.",

@@ -25,8 +25,10 @@ from easycat.runtime.crash_sweep import (
     _crashed_state,
     _process_birth_identity,
     _process_start_token,
+    _process_start_wallclock,
     crash_dump_artifact_root,
     is_journal_live,
+    self_birth_identity,
     snapshot_crash_dump_artifacts,
 )
 from easycat.runtime.records import JournalRecordKind
@@ -666,6 +668,107 @@ def test_pid_reuse_does_not_keep_stale_owner_live(
     db_path = tmp_path / "journals" / "reused.sqlite"
     assert _crashed_state(db_path) == "crashed"
     assert is_journal_live(db_path) is False
+
+
+# ── Off-Linux process birth identity (gh 1067) ───────────────────
+
+
+@pytest.fixture
+def _no_proc_stat(monkeypatch: pytest.MonkeyPatch):
+    """Simulate a host without ``/proc/<pid>/stat`` (macOS, the BSDs)."""
+    monkeypatch.setattr("easycat.runtime.crash_sweep._process_start_token", lambda pid: None)
+    monkeypatch.setattr("easycat.runtime.crash_sweep._SELF_BIRTH_IDENTITY", None)
+
+
+def test_birth_identity_falls_back_to_wall_clock_start_without_proc(_no_proc_stat) -> None:
+    """Off-Linux the identity comes from ``ps -o lstart=`` (gh 1067).
+
+    ``_process_start_token`` reads ``/proc/<pid>/stat``, which does not exist
+    on macOS, so ``_process_birth_identity`` returned ``None`` there — and a
+    missing birth marker makes ``_has_live_pid`` read *any* live PID as the
+    original owner.
+    """
+    identity = _process_birth_identity(os.getpid())
+
+    assert identity is not None
+    assert identity.startswith("lstart:")
+    # The two forms are tagged, so a Linux marker can never be compared
+    # against a wall-clock one as if they were the same scheme.
+    assert ":" in identity
+
+
+def test_wall_clock_start_is_none_for_a_dead_pid() -> None:
+    assert _process_start_wallclock(_dead_pid()) is None
+
+
+def test_self_birth_identity_is_computed_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The off-Linux path spawns ``ps``, so the answer must be cached."""
+    calls: list[int] = []
+
+    def _counted(pid: int) -> str:
+        calls.append(pid)
+        return "lstart:Mon Jan  1 00:00:00 2035"
+
+    monkeypatch.setattr("easycat.runtime.crash_sweep._SELF_BIRTH_IDENTITY", None)
+    monkeypatch.setattr("easycat.runtime.crash_sweep._process_birth_identity", _counted)
+
+    assert self_birth_identity() == "lstart:Mon Jan  1 00:00:00 2035"
+    assert self_birth_identity() == "lstart:Mon Jan  1 00:00:00 2035"
+    assert calls == [os.getpid()]
+
+
+def test_recycled_pid_is_not_live_without_proc(tmp_path, _no_proc_stat) -> None:
+    """A stale marker plus a recycled PID must not read as live off-Linux.
+
+    Before the wall-clock fallback the marker was deleted rather than written
+    on these hosts, so ``_has_live_pid`` saw "PID alive, no birth row" and
+    answered True forever: reopening the session id raised
+    ``Journal is active in process N``, and the sweep skipped the crashed file.
+    """
+    journal = SqliteJournal("recycled", data_dir=tmp_path)
+    journal.append(kind=JournalRecordKind.EVENT, name="ev", session_id="recycled")
+    birth_row = journal._conn.execute(
+        "SELECT value FROM session_state WHERE key = 'live_pid_start'"
+    ).fetchone()
+    # The marker is written off-Linux now, instead of being deleted.
+    assert birth_row is not None and str(birth_row[0]).startswith("lstart:")
+
+    journal._conn.execute("COMMIT")
+    # Simulate the crash: this PID number is now some *other* live process.
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+        ("lstart:Mon Jan  1 00:00:00 2001",),
+    )
+    journal._conn.commit()
+    journal._conn.close()
+    journal._closed = True
+
+    db_path = tmp_path / "journals" / "recycled.sqlite"
+    assert is_journal_live(db_path) is False
+    assert _crashed_state(db_path) == "crashed"
+
+
+def test_recycled_pid_does_not_block_reopening_the_session_id(tmp_path, _no_proc_stat) -> None:
+    """The claim gate must let the same session id be reopened (gh 1067)."""
+    journal = SqliteJournal("reopen-me", data_dir=tmp_path)
+    journal.append(kind=JournalRecordKind.EVENT, name="ev", session_id="reopen-me")
+    journal._conn.execute("COMMIT")
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+        # A PID that is alive but is not the journal's owner.
+        (str(os.getppid()),),
+    )
+    journal._conn.execute(
+        "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
+        ("lstart:Mon Jan  1 00:00:00 2001",),
+    )
+    journal._conn.commit()
+    journal._conn.close()
+    journal._closed = True
+    journal_sql_module._clear_crash_sweep_states()
+
+    reopened = SqliteJournal("reopen-me", data_dir=tmp_path)
+    reopened.close()
 
 
 def test_sweep_promotes_crashed_orphan(tmp_path) -> None:

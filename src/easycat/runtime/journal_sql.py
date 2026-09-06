@@ -46,9 +46,9 @@ from easycat.runtime.artifacts import FilesystemArtifactStore
 from easycat.runtime.crash_sweep import (
     _copy_journal_to_crash_dump,
     _has_live_pid,
-    _process_birth_identity,
     discard_crash_dump,
     reserve_crash_dump_paths,
+    self_birth_identity,
     snapshot_crash_dump_artifacts,
     sweep_crashed_journals,
 )
@@ -1050,7 +1050,7 @@ class SqliteJournal(_SqlJournalBase):
             "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
             (str(os.getpid()),),
         )
-        process_birth = _process_birth_identity(os.getpid())
+        process_birth = self_birth_identity()
         if process_birth is not None:
             self._conn.execute(
                 "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
@@ -1511,7 +1511,7 @@ class LibsqlJournal(_SqlJournalBase):
             "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
             (str(os.getpid()),),
         )
-        process_birth = _process_birth_identity(os.getpid())
+        process_birth = self_birth_identity()
         if process_birth is not None:
             self._conn.execute(
                 "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid_start', ?)",
