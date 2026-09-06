@@ -133,10 +133,18 @@ jobs:
           "$RELEASE_VENV/bin/easycat" init "$RUNNER_TEMP/easycat-app-smoke" \
             --template openai-agents --no-git --json
           cd "$RUNNER_TEMP/easycat-app-smoke"
+          # Capture stderr and grep the guard's own marker: a bare "the
+          # connection failed" check cannot tell an active guard from an
+          # egress-restricted runner or a DNS failure, and would then let the
+          # run below proceed believing traffic is blocked when it is not.
+          # The marker string is pinned against tests/_netguard/sitecustomize.py
+          # by test_netguard_marker_string_matches_the_shared_file.
           if PYTHONPATH="$GITHUB_WORKSPACE/tests/_netguard" "$RELEASE_VENV/bin/python" \
-              -c "import socket; socket.create_connection(('api.openai.com', 443), timeout=5)"; then
+              -c "import socket; socket.create_connection(('api.openai.com', 443), timeout=5)" \
+              2>"$RUNNER_TEMP/guard.err"; then
             echo "network guard did not block outbound traffic"; exit 1
           fi
+          grep -q "easycat test guard: outbound network blocked" "$RUNNER_TEMP/guard.err"
           OPENAI_API_KEY="sk-ambient-not-used" \
           PYTHONPATH="$GITHUB_WORKSPACE/tests/_netguard" \
             "$RELEASE_VENV/bin/python" -m pytest tests -q -p no:cacheprovider

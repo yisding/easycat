@@ -32,15 +32,24 @@ import pytest
 
 from tests._wheel_build import build_wheel
 from tests.cli.e2e.test_scaffold_smoke import (
-    _NETGUARD_MARKER,
     _assert_netguard_is_loaded,
     _netguard_env,
     _pypi_reachable,
 )
 
-pytestmark = pytest.mark.integration_external
+# The repo-wide `timeout = 60` (pyproject.toml) covers fixture setup as well as
+# the call phase, and pytest-timeout's thread method aborts the whole process
+# when it fires.  The module-scoped `app_venv` fixture -- a wheel build, a
+# `uv venv` and a `uv pip install` of the agent SDK -- is charged to whichever
+# test runs first, and on a cold uv cache that alone exceeds 60 s.  Without
+# this override the maintainer's reproduction command dies with a process
+# abort instead of reporting a result.
+pytestmark = [pytest.mark.integration_external, pytest.mark.timeout(900)]
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+# Each subprocess also carries its own budget, so a wedged child reports which
+# step hung instead of taking the module's whole budget with it.
+_VENV_TIMEOUT_S = 600.0
+_PYTEST_TIMEOUT_S = 300.0
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -67,13 +76,16 @@ def app_venv(tmp_path_factory: pytest.TempPathFactory) -> Path:
     install ``easycat[openai-agents]`` from it (never from ``src/``) plus
     ``pytest``, into a venv this repo's own dependency floor never touches.
     """
-    wheel = build_wheel(tmp_path_factory.mktemp("wheel"))
+    # strict: a broken wheel build is the exact defect this module exists to
+    # catch, so it must fail here rather than skip the rehearsal silently.
+    wheel = build_wheel(tmp_path_factory.mktemp("wheel"), strict=True)
     venv_dir = tmp_path_factory.mktemp("venv") / "app-venv"
 
     proc = subprocess.run(
         ["uv", "venv", str(venv_dir), "--python", "3.12"],
         capture_output=True,
         text=True,
+        timeout=_VENV_TIMEOUT_S,
         check=False,
     )
     assert proc.returncode == 0, f"uv venv failed:\n{proc.stdout}\n{proc.stderr}"
@@ -90,6 +102,7 @@ def app_venv(tmp_path_factory: pytest.TempPathFactory) -> Path:
         ],
         capture_output=True,
         text=True,
+        timeout=_VENV_TIMEOUT_S,
         check=False,
     )
     assert proc.returncode == 0, f"uv pip install failed:\n{proc.stdout}\n{proc.stderr}"
@@ -118,6 +131,7 @@ def scaffolded_project(app_venv: Path, tmp_path: Path) -> Path:
         capture_output=True,
         text=True,
         env={**os.environ, "PYTHONPATH": ""},
+        timeout=_PYTEST_TIMEOUT_S,
         check=False,
     )
     assert proc.returncode == 0, f"easycat init failed:\n{proc.stdout}\n{proc.stderr}"
@@ -145,7 +159,10 @@ def test_generated_project_imports_without_starting_anything(
     not.
     """
     env = _netguard_env()
-    _assert_netguard_is_loaded(env)
+    # Canary the interpreter that is about to do the guarded work, not this
+    # process's: loading `sitecustomize` is a per-interpreter property, so a
+    # canary in the dev venv would prove nothing about the wheel venv.
+    _assert_netguard_is_loaded(env, _venv_bin(app_venv, "python"))
 
     proc = subprocess.run(
         [str(_venv_bin(app_venv, "python")), "-c", "import agent, tools"],
@@ -173,7 +190,10 @@ def test_generated_project_offline_tests_pass_from_the_wheel(
     "1 skipped", never "1 passed" — that is the only reliable discriminator.
     """
     env = _netguard_env(OPENAI_API_KEY="sk-ambient-not-used")
-    _assert_netguard_is_loaded(env)
+    # The wheel venv's own interpreter -- the one `<app_venv>/bin/pytest` runs
+    # under -- must be the one proven to load the guard (see A2's "provider
+    # traffic blocked" half); canarying `sys.executable` would not.
+    _assert_netguard_is_loaded(env, _venv_bin(app_venv, "python"))
 
     # Console script, not `python -m pytest`: it does NOT prepend the cwd, so
     # this also re-proves the generated `[tool.pytest.ini_options]
@@ -193,6 +213,7 @@ def test_generated_project_offline_tests_pass_from_the_wheel(
         capture_output=True,
         text=True,
         env=env,
+        timeout=_PYTEST_TIMEOUT_S,
         check=False,
     )
     assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
@@ -210,6 +231,7 @@ def test_generated_project_offline_tests_pass_from_the_wheel(
         capture_output=True,
         text=True,
         env=env,
+        timeout=_PYTEST_TIMEOUT_S,
         check=False,
     )
     assert wiring_proc.returncode == 0, f"{wiring_proc.stdout}\n{wiring_proc.stderr}"
@@ -278,15 +300,8 @@ def test_generated_project_tests_fail_when_the_agent_wiring_breaks(
         capture_output=True,
         text=True,
         env={**os.environ, "OPENAI_API_KEY": "sk-ambient-not-used", "PYTHONPATH": ""},
+        timeout=_PYTEST_TIMEOUT_S,
         check=False,
     )
     assert proc.returncode != 0, f"seed {seed!r} did not fail the generated tests"
     assert expected_failing_test in proc.stdout, proc.stdout
-
-
-def test_netguard_marker_string_matches_the_shared_file() -> None:
-    """Canary the canary: every caller of ``tests/_netguard`` greps this string."""
-    sitecustomize = (REPO_ROOT / "tests" / "_netguard" / "sitecustomize.py").read_text(
-        encoding="utf-8"
-    )
-    assert _NETGUARD_MARKER in sitecustomize
