@@ -201,25 +201,47 @@ async def test_cartesia_sends_audio_bytes():
     assert len(audio_sent) == len(chunks)
 
 
-async def test_cartesia_sends_done_on_end_stream():
+def _is_json_object(message: str) -> bool:
+    """Whether *message* is a JSON object rather than a bare text command."""
+    try:
+        return isinstance(json.loads(message), dict)
+    except ValueError:
+        return False
+
+
+async def test_cartesia_sends_close_text_on_end_stream():
+    """``close`` is the client's end-of-session command (gh 1065).
+
+    It flushes remaining audio and is acked with ``{"type": "done"}``.
+    ``done`` is the server's ack keyword, so sending it back left the
+    utterance tail untranscribed and the drain waiting out its full timeout.
+    """
     stt, ws = _make_cartesia_stt([])
 
     await stt.start_stream()
     await stt.end_stream()
 
-    json_sent = [json.loads(s) for s in ws.sent if isinstance(s, str)]
-    assert any(msg.get("type") == "done" for msg in json_sent)
+    text_sent = [s for s in ws.sent if isinstance(s, str)]
+    assert "close" in text_sent
+    # The control commands are raw text, never JSON envelopes.
+    assert not any(_is_json_object(s) for s in text_sent)
 
 
-async def test_cartesia_finalize_sends_finalize_frame():
+async def test_cartesia_finalize_sends_finalize_text():
+    """``finalize`` is a raw text message, not ``{"type": "finalize"}``.
+
+    The JSON form is not a command Cartesia recognizes, so the server never
+    flushed while ``commit_segment()`` still reported success (gh 1065).
+    """
     stt, ws = _make_cartesia_stt([])
     await stt.start_stream()
 
     result = await stt.commit_segment()
     assert result is True
 
-    json_sent = [json.loads(s) for s in ws.sent if isinstance(s, str)]
-    assert any(msg.get("type") == "finalize" for msg in json_sent)
+    text_sent = [s for s in ws.sent if isinstance(s, str)]
+    assert "finalize" in text_sent
+    assert not any(_is_json_object(s) for s in text_sent)
 
     await stt.end_stream()
 

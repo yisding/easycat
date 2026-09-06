@@ -165,15 +165,25 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         # reconnect attempt/success/failure events.
         await self._drain_emit_tasks()
 
-    async def _send_json_control(self, payload: dict[str, Any], *, label: str) -> bool:
+    async def _send_text_control(self, message: str, *, label: str) -> bool:
+        """Send one control frame as a raw text message.
+
+        Not every provider wraps its client commands in a JSON envelope:
+        Cartesia's STT socket defines ``finalize`` and ``close`` as bare text
+        messages.  Delivery is reported rather than raised — a control frame
+        lost to an already-closing socket is not a turn failure.
+        """
         if self._ws is None:
             return False
         try:
-            await self._ws.send(json.dumps(payload))
+            await self._ws.send(message)
         except Exception:
             logger.debug("Error sending %s", label, exc_info=True)
             return False
         return True
+
+    async def _send_json_control(self, payload: dict[str, Any], *, label: str) -> bool:
+        return await self._send_text_control(json.dumps(payload), label=label)
 
     async def _close_active_websocket(self, *, close_before_drain: bool = False) -> None:
         """Drain the receive loop, then close the underlying WebSocket.

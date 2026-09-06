@@ -194,12 +194,24 @@ class CartesiaSTT(WebSocketSTTBase):
 
     async def _on_commit_segment(self) -> bool:
         await self._flush_audio_resampler()
-        return await self._send_json_control({"type": "finalize"}, label="Cartesia finalize")
+        # Cartesia's client commands are raw *text* messages, not JSON
+        # envelopes: ``finalize`` flushes buffered audio mid-session and the
+        # server acks with ``{"type": "flush_done"}``.  A JSON
+        # ``{"type": "finalize"}`` frame is not that command, so the server
+        # never flushed while ``commit_segment()`` still reported success —
+        # mid-turn segment finalization was silently inert (gh 1065).
+        return await self._send_text_control("finalize", label="Cartesia finalize")
 
     async def _on_end(self) -> None:
         if self._ws is not None:
             await self._flush_audio_resampler()
-            await self._send_json_control({"type": "done"}, label="Cartesia done")
+            # ``close`` is the end-of-session command: it flushes the
+            # remaining audio, closes the session, and is acked with
+            # ``{"type": "done"}``.  ``done`` is the *server's* ack keyword
+            # and was never a valid client command, so the tail of the
+            # utterance went untranscribed and the drain waited out its whole
+            # timeout for an ack that could not arrive (gh 1065).
+            await self._send_text_control("close", label="Cartesia close")
 
         await self._close_active_websocket()
 
