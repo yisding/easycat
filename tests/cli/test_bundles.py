@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import hashlib
 import json
 import sqlite3
@@ -25,6 +26,7 @@ from easycat.cli.debug.follow import (
 )
 from easycat.debug.bundle import FORMAT_VERSION
 from easycat.debug.export import export_debug_bundle
+from easycat.errors import EasyCatError
 from easycat.runtime.records import ErrorInfo, JournalRecord, TimingInfo
 
 
@@ -557,6 +559,125 @@ async def test_follow_with_retry_resumes_past_yielded_sequence(capsys) -> None:
     # Every record appears exactly once — no duplicate and no gap across the
     # retry boundary.
     assert printed == [1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+async def test_follow_with_retry_keeps_waiting_for_a_writer_to_create_the_table() -> None:
+    """A table that appears shortly after the file does is still transient."""
+
+    class _LateSchemaView:
+        def __init__(self) -> None:
+            self._attempt = 0
+
+        async def follow(self, *, from_sequence: int | None, poll_interval: float):
+            del from_sequence, poll_interval
+            self._attempt += 1
+            if self._attempt < 3:
+                raise sqlite3.OperationalError("no such table: journal")
+                yield  # pragma: no cover - unreachable, keeps this a generator
+            yield {"sequence": 1, "name": "TurnStarted"}
+
+    view = _LateSchemaView()
+    await asyncio.wait_for(
+        _follow_with_retry(
+            view,
+            from_sequence=0,
+            errors_only=False,
+            turn_id=None,
+            json_output=True,
+            path="live.sqlite",
+        ),
+        timeout=5,
+    )
+
+    assert view._attempt == 3
+
+
+@pytest.mark.asyncio
+async def test_follow_with_retry_gives_up_on_a_schemaless_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A permanently missing ``journal`` table must not retry forever (gh 1008)."""
+    monkeypatch.setattr("easycat.cli.debug.follow._SCHEMA_WAIT_S", 0.05)
+
+    class _NeverSchemaView:
+        attempts = 0
+
+        async def follow(self, *, from_sequence: int | None, poll_interval: float):
+            del from_sequence, poll_interval
+            type(self).attempts += 1
+            raise sqlite3.OperationalError("no such table: journal")
+            yield  # pragma: no cover - unreachable, keeps this a generator
+
+    with pytest.raises(EasyCatError) as exc_info:
+        await asyncio.wait_for(
+            _follow_with_retry(
+                _NeverSchemaView(),
+                from_sequence=0,
+                errors_only=False,
+                turn_id=None,
+                json_output=True,
+                path="empty.sqlite",
+            ),
+            timeout=5,
+        )
+
+    assert exc_info.value.code == "EASYCAT_E404"
+    assert "empty.sqlite" in exc_info.value.message
+    assert _NeverSchemaView.attempts > 1
+
+
+@pytest.mark.asyncio
+async def test_follow_with_retry_fails_fast_on_a_corrupt_file() -> None:
+    """A file that is not a SQLite database at all is permanent, not a crash."""
+
+    class _CorruptView:
+        async def follow(self, *, from_sequence: int | None, poll_interval: float):
+            del from_sequence, poll_interval
+            raise sqlite3.DatabaseError("file is not a database")
+            yield  # pragma: no cover - unreachable, keeps this a generator
+
+    with pytest.raises(EasyCatError) as exc_info:
+        await _follow_with_retry(
+            _CorruptView(),
+            from_sequence=0,
+            errors_only=False,
+            turn_id=None,
+            json_output=True,
+            path="notadb.sqlite",
+        )
+
+    assert exc_info.value.code == "EASYCAT_E404"
+    assert exc_info.value.context["detail"] == "file is not a database"
+
+
+def test_journal_follow_on_a_schemaless_sqlite_file_exits_5(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: `easycat tail empty.sqlite` reports instead of hanging."""
+    monkeypatch.setattr("easycat.cli.debug.follow._SCHEMA_WAIT_S", 0.05)
+    target = tmp_path / "empty.sqlite"
+    target.touch()
+
+    result = cli.invoke(app, ["tail", str(target), "--json"])
+
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["code"] == "EASYCAT_E404"
+    assert payload["context"]["detail"] == "no such table: journal"
+
+
+def test_journal_follow_on_a_corrupt_sqlite_file_exits_5(cli: CliRunner, tmp_path: Path) -> None:
+    """A garbage file used to escape as a raw ``sqlite3.DatabaseError`` traceback."""
+    target = tmp_path / "notadb.sqlite"
+    target.write_bytes(b"garbage")
+
+    result = cli.invoke(app, ["tail", str(target), "--json"])
+
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["code"] == "EASYCAT_E404"
+    assert "not a database" in payload["context"]["detail"]
 
 
 def test_journal_follow_on_zip_bundle_exits_2(cli: CliRunner, tmp_path: Path) -> None:

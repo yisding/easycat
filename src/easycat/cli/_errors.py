@@ -40,6 +40,7 @@ _CODE_TO_EXIT: dict[str, int] = {
     "EASYCAT_E207": 1,
     "EASYCAT_E208": 1,
     "EASYCAT_E209": 1,
+    "EASYCAT_E404": 5,
     "EASYCAT_E501": 2,
 }
 
