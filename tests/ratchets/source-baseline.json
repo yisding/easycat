@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "rationale": "fix batch1 final lint and stt",
+  "rationale": "gh 1063: the TTS stop sentinel checks whether the consumer task is being torn down (Task.cancelling), so a barge-in cancel is not mistaken for a live consumer",
   "counts": {
     "cancelled_error_handler": 118,
     "epoch_field": 12,
     "gather_return_exceptions": 21,
     "raw_task_spawn": 17,
     "shield_loop": 5,
-    "task_cancelling": 52
+    "task_cancelling": 53
   },
   "entries": [
     "cancelled_error_handler\tconfig/_telephony_wiring.py\t_OutboundPipelineWiring._on_screening_response\texcept asyncio.CancelledError\t5cd2397f33959d65\t0",
@@ -205,6 +205,7 @@
     "task_cancelling\tsession/_turn_runner.py\tTurnRunner.cancel_preemptive_generation\tTask.cancelling\t4c4fd1cba5cfda47\t0",
     "task_cancelling\tsession/_turn_runner.py\tTurnRunner.cancel_preemptive_generation\tTask.cancelling\t76bb28a2decbfc6d\t0",
     "task_cancelling\tsession/_turn_runner.py\tTurnRunner.cancel_preemptive_generation\tTask.cancelling\t97b0e2d243884e98\t0",
+    "task_cancelling\tsession/_turn_runner.py\t_tts_consumer_is_gone\tTask.cancelling\tc003e705b28225cf\t0",
     "task_cancelling\tsession_manager.py\t_await_owned_stop\tTask.cancelling\t5cef200a01a56176\t0",
     "task_cancelling\tsession_manager.py\t_await_owned_stop\tTask.cancelling\t69ec3c7ed4421853\t0",
     "task_cancelling\tsession_manager.py\t_await_owned_stop\tTask.cancelling\t9b108507dc69f599\t0",
