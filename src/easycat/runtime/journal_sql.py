@@ -1224,6 +1224,10 @@ class LitestreamSqliteJournal:
                 urlsplit(self._replica_url).scheme or "replica",
             )
         try:
+            # ``shell=False`` with an argv list: no shell parses these, so an
+            # argument cannot be reinterpreted as a command and ``shlex.quote``
+            # would be meaningless here.  ``litestream_bin`` comes from
+            # ``shutil.which``, and ``argv_url`` is now credential-free.
             self._sidecar = subprocess.Popen(
                 [
                     litestream_bin,
