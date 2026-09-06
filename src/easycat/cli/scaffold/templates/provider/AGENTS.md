@@ -2,8 +2,10 @@
 
 Guidance for coding agents (and humans) working in this scaffolded
 EasyCat provider package. The custom provider lives in `custom_vad.py`;
-`agent.py` tries it in a live mic session with the agent named
-"$AGENT_NAME".
+`agent.py` wires it in `make_config()` and tries it in a live mic session
+with the agent named "$AGENT_NAME". Keep `agent.py` import-safe:
+`make_agent()` / `make_config()` build things, and only the
+`if __name__ == "__main__":` guard runs one.
 
 ## Commands
 
@@ -23,13 +25,22 @@ uv run easycat docs                           # Maintained docs routes
 
 `test_custom_vad.py` pins the provider contract: `EnergyVAD` must keep
 satisfying EasyCat's `VADProvider` Protocol and only emit events on
-speech-state transitions. `tests/test_agent.py` runs offline: a
-deterministic stub agent stands in for the LLM while EasyCat's real
-turn machinery (the send_text path, journal, and latency metrics) runs
-end to end. Build on it with the helpers in `easycat.debug.testing`:
+speech-state transitions. `tests/test_agent.py` runs offline: `register()`
+is confirmed to make the custom VAD selectable, `agent.py`'s wiring is
+asserted as built behind `pytest.importorskip("agents")`, and
+`ScriptedReasoning` stands in for the model while EasyCat's real turn
+machinery (the send_text path, the audio pipeline, journal, and latency
+metrics) runs end to end. A green run means the app is wired and the
+pipeline is healthy; it says nothing about live model quality. Build on
+it with the helpers in `easycat.debug.testing`:
 
 - `run_text_turn(agent_or_config, "...")` drives one real text turn
   and returns a journal-backed `TurnResult`.
+- `run_text_turns(agent_or_config, ["...", "..."])` runs several turns
+  against one session and returns one `TurnResult` per input.
+- `run_scripted_audio_turn(agent)` drives one turn through the real
+  audio pipeline with scripted stub I/O — it checks pipeline wiring,
+  not speech quality.
 - `assert_turn_completed` / `assert_no_error` / `assert_regex` /
   `assert_exact_match` / `assert_tool_called` check journal records —
   the same helpers work on exported debug bundles via `load_bundle`.

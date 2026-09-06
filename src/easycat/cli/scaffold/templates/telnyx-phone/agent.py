@@ -2,12 +2,12 @@
 
 from agents import Agent, function_tool
 
+from tools import take_message
 
-@function_tool
-def take_message(name: str, message: str) -> str:
-    """Record a caller message for later follow-up."""
-    return f"Message saved for {name}: {message}"
+AGENT_NAME = "$AGENT_NAME"
+INSTRUCTIONS = "$AGENT_INSTRUCTIONS"
 
 
 def make_agent() -> Agent:
-    return Agent(name="$AGENT_NAME", instructions="$AGENT_INSTRUCTIONS", tools=[take_message])
+    """Build this project's agent; tests and server.py import it, so keep it side-effect free."""
+    return Agent(name=AGENT_NAME, instructions=INSTRUCTIONS, tools=[function_tool(take_message)])

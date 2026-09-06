@@ -2,7 +2,9 @@
 
 Browser voice agent built on the OpenAI Agents SDK. It serves EasyCat's
 bundled WebRTC browser client, sends microphone audio from the page, and plays
-the agent's voice response back through the browser.
+the agent's voice response back through the browser. `agent.py` builds the
+agent in `make_agent()` and wires it in `make_config()`; importing it starts
+nothing, so the tests can import the real app.
 
 ## Install
 
@@ -55,18 +57,19 @@ Ctrl-C to quit.
 
 ## Check
 
-After editing `agent.py`, run the local lint/syntax check:
+After editing `agent.py` or `tools.py`, run the local lint/syntax check:
 
 ```bash
-uv run ruff check agent.py
+uv run ruff check agent.py tools.py
 ```
 
 If Ruff reports an auto-fixable issue, run
-`uv run ruff check --fix agent.py` and then re-run the check.
+`uv run ruff check --fix agent.py tools.py` and then re-run the check.
 
-Then run the offline agent tests — no API keys or network needed
-(`tests/test_agent.py` exercises the real turn pipeline with a stub
-agent; see `AGENTS.md` for the testing-and-evals ladder):
+Then run the offline agent tests — no API keys, no network, no microphone
+(`tests/test_agent.py` calls `tools.py` for real, asserts `agent.py`'s wiring,
+and drives EasyCat's real text and audio pipelines with a scripted stand-in for
+the model; see `AGENTS.md` for the testing-and-evals ladder):
 
 ```bash
 uv run pytest
@@ -74,17 +77,19 @@ uv run pytest
 
 ## Next steps
 
-- **Change the personality:** edit the `instructions=...` in `agent.py`.
-- **Add more tools:** decorate any function with `@function_tool` and pass it
-  in the `tools=[...]` list.
+- **Change the personality:** edit the `INSTRUCTIONS` constant that
+  `make_agent()` passes to the agent in `agent.py`.
+- **Add more tools:** add a plain function to `tools.py`, then pass it through
+  `function_tool(...)` in `make_agent()`, so the generated test can call it
+  directly.
 - **Swap STT providers:** add `stt="deepgram/flux"` to the
-  `EasyConfig.browser(...)` call, add `deepgram` to the `easycat[...]`
-  dependency in `pyproject.toml`, run `uv sync`, and put `DEEPGRAM_API_KEY`
-  in `.env`.
+  `EasyConfig.browser(...)` call in `make_config()`, add `deepgram` to the
+  `easycat[...]` dependency in `pyproject.toml`, run `uv sync`, and put
+  `DEEPGRAM_API_KEY` in `.env`.
 - **Deploy beyond localhost:** start from `examples/webrtc_server.py` for
   TURN server and HTTPS reverse-proxy settings.
 - **Debug a session:** pass `debug="full", record_to=".easycat/runs"` to
-  `EasyConfig.browser(...)`. EasyCat writes a SQLite journal under
+  `EasyConfig.browser(agent=make_agent(), ...)`. EasyCat writes a SQLite journal under
   `.easycat/journals/` and a timestamped `RunBundle` under `.easycat/runs/`; inspect
   the journal with `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
   Debug bundles can contain raw transcripts, tool arguments, provider payloads,

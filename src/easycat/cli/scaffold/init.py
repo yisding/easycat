@@ -165,6 +165,7 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         optional_env=(),
         description="Local voice agent using Pydantic AI.",
         base_extras=("pydantic-ai", "local"),
+        check_files=("agent.py", "tools.py"),
         expected_transport="local",
         supports_audio_config=True,
     ),
@@ -177,6 +178,7 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         optional_env=(),
         description="Local voice agent with a small workflow object.",
         base_extras=("pydantic-ai", "local"),
+        check_files=("agent.py", "tools.py"),
         expected_transport="local",
         supports_audio_config=True,
     ),
@@ -211,7 +213,7 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         run_command=(
             "uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000"
         ),
-        check_files=("agent.py", "server.py"),
+        check_files=("agent.py", "server.py", "tools.py"),
         expected_transport="twilio",
         supports_audio_config=True,
     ),
@@ -239,7 +241,7 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         run_command=(
             "uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000"
         ),
-        check_files=("agent.py", "server.py"),
+        check_files=("agent.py", "server.py", "tools.py"),
         expected_transport="telnyx",
         supports_audio_config=True,
     ),
@@ -252,6 +254,7 @@ _TEMPLATE_SPECS: dict[str, _TemplateSpec] = {
         optional_env=("TURN_SERVER_URL", "TURN_USERNAME", "TURN_CREDENTIAL"),
         description="Browser voice agent using WebRTC audio.",
         base_extras=("openai-agents", "webrtc"),
+        check_files=("agent.py", "tools.py"),
         expected_transport="webrtc",
         supports_audio_config=True,
     ),

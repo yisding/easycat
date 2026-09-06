@@ -31,6 +31,7 @@ target-version = "py311"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = '-m "not integration_live"'
+pythonpath = ["."]
 strict_markers = true
 markers = [
     "integration_live: tests requiring a real provider endpoint and credential",
