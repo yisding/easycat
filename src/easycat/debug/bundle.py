@@ -506,13 +506,25 @@ def discover_bundles(data_dir: str | None = None) -> list[Path]:
         search = data_path / subdir
         if search.exists():
             for f in search.iterdir():
-                if f.suffix in (
-                    ".zip",
-                    ".bundle",
-                    ".easycat-bundle",
-                    ".sqlite",
-                ) or f.name.endswith(".easycat-bundle"):
-                    bundles.append(f)
+                if not (
+                    f.suffix
+                    in (
+                        ".zip",
+                        ".bundle",
+                        ".easycat-bundle",
+                        ".sqlite",
+                    )
+                    or f.name.endswith(".easycat-bundle")
+                ):
+                    continue
+                # A dangling symlink, or a file the crash sweep promoted
+                # between this ``iterdir`` and the caller's ``stat()``, is not
+                # a bundle anyone can open. Dropping it here keeps every
+                # consumer from crashing on an entry that no longer resolves
+                # (gh 1107).
+                if not f.exists():
+                    continue
+                bundles.append(f)
     return sorted(bundles)
 
 

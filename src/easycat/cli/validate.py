@@ -279,12 +279,30 @@ def _streamable_log_path(path: Path, *, allowed_dir: Path) -> bool:
     return resolved_path.is_relative_to(resolved_dir)
 
 
+def _read_captured_log(path: Path) -> str:
+    """Read a captured child-process log, tolerating bytes it did not choose.
+
+    Slices capture stdout/stderr byte-for-byte, so a tool emitting cp1252 or
+    latin-1 text — or plain binary noise — leaves a log that is not valid
+    UTF-8. A strict read raised ``UnicodeDecodeError`` *after* the validation
+    run had already finished, turning a completed validation into a traceback,
+    so decode lossily instead and keep the streaming step non-fatal (gh 1108).
+    Mirrors ``_load_report_payload``'s ``(OSError, UnicodeError)`` handling.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeError:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"[could not read {path}: {exc}]\n"
+
+
 def _write_log_once(target: IO[str], path: Path, *, streamed_paths: set[Path]) -> None:
     key = _path_key(path)
     if key in streamed_paths:
         return
     streamed_paths.add(key)
-    _write_log(target, redact_runtime_secrets(path.read_text(encoding="utf-8")))
+    _write_log(target, redact_runtime_secrets(_read_captured_log(path)))
 
 
 def _path_key(path: Path) -> Path:

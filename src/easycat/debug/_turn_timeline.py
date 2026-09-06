@@ -281,7 +281,23 @@ def build_timeline(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _delta_ms(start_ns: int | None, end_ns: int | None) -> float | None:
+    """Milestone delta in ms, or ``None`` when it is not a measurable latency.
+
+    A backward wall-clock step between two records of the same turn (an NTP
+    correction, a VM or laptop suspend/resume) makes ``end_ns < start_ns``.
+    A negative latency is meaningless, and every consumer already handles
+    ``None`` — ``LatencyPercentileStats.from_values`` drops it, the per-turn
+    table renders it blank — whereas an unclamped negative reached
+    ``from_values`` and aborted the whole ``easycat latency`` summary with a
+    raw ``ValueError`` traceback (gh 1106).
+
+    ``None`` rather than ``build_timeline``'s ``max(0.0, ...)`` clamp on
+    purpose: a visual span needs a number to draw, but a reported measurement
+    should say "not measurable" instead of inventing a zero.
+    """
     if start_ns is None or end_ns is None:
+        return None
+    if end_ns < start_ns:
         return None
     return (end_ns - start_ns) / 1_000_000
 
