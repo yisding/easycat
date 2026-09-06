@@ -85,6 +85,20 @@ def _is_voice_app_call(node: ast.AST) -> bool:
     )
 
 
+def _voice_app_factory_names(tree: ast.AST) -> set[str]:
+    """Functions that return a ``VoiceApp(...)`` — the scaffold's ``make_app()``."""
+    factories: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if any(
+            isinstance(child, ast.Return) and _is_voice_app_call(child.value)
+            for child in ast.walk(node)
+        ):
+            factories.add(node.name)
+    return factories
+
+
 def _assigned_voice_app_names(tree: ast.AST) -> set[str]:
     app_names: set[str] = set()
     for node in ast.walk(tree):
@@ -100,6 +114,7 @@ def _assigned_voice_app_names(tree: ast.AST) -> set[str]:
 def _uses_voice_app_local(source: str) -> bool:
     tree = ast.parse(source)
     app_names = _assigned_voice_app_names(tree)
+    factories = _voice_app_factory_names(tree)
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -114,6 +129,14 @@ def _uses_voice_app_local(source: str) -> bool:
         if isinstance(receiver, ast.Name) and receiver.id in app_names:
             return True
         if _is_voice_app_call(receiver):
+            return True
+        # The scaffold builds the app in an importable factory, so the
+        # receiver is ``make_app()`` rather than a literal ``VoiceApp(...)``.
+        if (
+            isinstance(receiver, ast.Call)
+            and isinstance(receiver.func, ast.Name)
+            and receiver.func.id in factories
+        ):
             return True
 
     return False
