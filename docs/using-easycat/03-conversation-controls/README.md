@@ -122,6 +122,25 @@ retain the full grace period.
 Do not chase low latency by setting every silence value to zero. That makes a
 fast demo by cutting people off mid-thought.
 
+### Choosing a VAD backend
+
+`VADConfig(backend=...)` selects *which* detector runs. It defaults to
+`"auto"`, which tries Silero → FunASR → TEN → Krisp and uses the first one
+installed, so the profiles above need no backend at all. Name one explicitly
+when you need it pinned:
+
+```python
+VADConfig(backend="silero")   # or "funasr", "ten", "krisp"
+```
+
+The difference between `"auto"` and a named backend is failure behaviour, and
+that is the reason to care: `"auto"` walks the chain and settles for whatever
+is present, while a named backend **fails loudly** when it is not installed.
+Pin one in production so a missing extra is a startup error rather than a
+silently different detector. Silero ships with the `quickstart` extra; the
+others need `--extra funasr-vad`, `--extra ten-vad`, or a Krisp install (see
+[the install guide](../../install.md)).
+
 ## Smart turn asks whether the thought is complete
 
 VAD answers “did sound stop?” Smart turn answers “does the trailing audio sound
@@ -180,6 +199,64 @@ opt-in.
 Use `raw` only as a controlled comparison. If `clean` improves false VAD starts
 or transcript quality, keep it and verify latency on the hardware you will
 ship. If it does not, the simpler pipeline is easier to operate.
+
+### Choosing a noise-reduction backend
+
+`enable_noise_reduction=True` turns cleanup on with defaults. The
+`noise_reduction=` field selects the backend, the same shape as `vad=`:
+
+```python
+from easycat.noise_reduction import NoiseReducerConfig
+
+EasyConfig(
+    agent=agent,
+    noise_reduction=NoiseReducerConfig(backend="rnnoise", fallback_policy="error"),
+)
+```
+
+`backend="auto"` (the default) tries Krisp, then RNNoise, then falls back to a
+**passthrough** reducer that returns audio unchanged. That fallback is the trap
+worth knowing about: with the default `fallback_policy="passthrough"` a
+missing extra produces a warning and a pipeline that silently does no
+cleaning, so a deployment can look configured while doing nothing. Set
+`fallback_policy="error"` — or name a backend, which also fails loudly when it
+is missing — to make that a startup failure instead. RNNoise needs
+`--extra rnnoise`; Krisp is licensed separately.
+
+Echo cancellation follows the same pattern via `echo_cancellation=` and
+`EchoCancellationConfig`, with its own `fallback_policy`.
+
+## Two more turn-shaped knobs
+
+`greeting=` speaks one line as soon as the session starts, before the caller
+says anything:
+
+```python
+EasyConfig(agent=agent, greeting="Hi, you've reached support. How can I help?")
+```
+
+That matters for turn-taking, which is why it belongs in this chapter: the
+greeting is bot speech, so the interruption rules above apply to it — a caller
+who talks over the greeting barges in exactly as they would over any other
+reply. On a phone call a greeting is close to mandatory; a caller who hears
+silence assumes the line is dead.
+
+`timeouts=` bounds how long each slow stage may take before the turn is
+abandoned:
+
+```python
+from easycat.timeouts import TimeoutConfig
+
+EasyConfig(agent=agent, timeouts=TimeoutConfig(agent_timeout=15.0))
+```
+
+The defaults are 10s for STT, 30s for the agent, and 5s until TTS's first audio
+byte. These are *deadlines*, not the silence timers above: `end_of_turn_silence_ms`
+decides when the caller has finished speaking, while `agent_timeout` decides
+when to give up waiting for a reply. Pair a tightened `agent_timeout` with
+`on_agent_failure` (chapter 4) so the caller hears something when it fires.
+Every field is in the
+[EasyConfig field reference](../../reference/easyconfig.md).
 
 Continue with [the exercises](./EXERCISES.md) to compare timing and barge-in
 without changing providers or agent instructions.

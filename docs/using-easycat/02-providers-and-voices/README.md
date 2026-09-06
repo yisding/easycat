@@ -138,6 +138,49 @@ credential and reachability. `doctor` checks readiness; it does not make the
 billed STT/TTS request needed to judge transcription accuracy, voice quality,
 or end-to-end latency.
 
+Today `available_stt_providers()` returns `cartesia`, `deepgram`,
+`elevenlabs`, `openai`, and `openai-realtime`, and
+`available_tts_providers()` returns `cartesia`, `deepgram`, `elevenlabs`, and
+`openai`. The three profiles above demonstrate the mechanics with two of them;
+everything you learned applies unchanged to the rest.
+
+### Cartesia, as a worked fourth provider
+
+Cartesia appears in both registries, so it is a good check that you can read
+this chapter's rules and apply them to a provider whose profile you have not
+run:
+
+```bash
+uv sync --extra quickstart --extra cartesia --group dev
+export CARTESIA_API_KEY="..."
+uv run easycat doctor --provider cartesia
+```
+
+```python
+# Shortcut form — provider, then model.
+VoiceApp(agent=agent, stt="cartesia/ink-2", tts="cartesia/sonic-3")
+```
+
+```python
+# Typed form, for the provider-specific controls a shortcut cannot express.
+from easycat.stt.cartesia_provider import CartesiaSTTConfig
+from easycat.tts.cartesia_tts import CartesiaTTSConfig
+
+VoiceApp(
+    agent=agent,
+    stt=CartesiaSTTConfig(language="en"),
+    tts=CartesiaTTSConfig(voice_id="<a Cartesia voice id>", speed=1.0),
+)
+```
+
+Two provider-specific details the shortcut hides, both the kind of thing the
+typed config exists to surface: Cartesia's STT default is `ink-2`, which ships
+**built-in semantic turn detection**, so EasyCat leaves its own smart turn off
+for it (chapter 3 covers what that means); and `ink-2` is currently
+English-only, so a non-English `language` resolves to the multilingual
+`ink-whisper` instead. As with every provider here, model IDs are
+provider-owned — pin what you have tested.
+
 ## Specs are reusable; live providers are not
 
 The string and dataclass values in this chapter are provider *specifications*.

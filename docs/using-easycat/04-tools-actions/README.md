@@ -153,6 +153,53 @@ make that policy visible. Exact `pause_ms` timing requires `style="ssml"` and a
 provider whose input policy advertises native SSML; unsupported SSML tags are
 stripped before synthesis.
 
+### `strip_markdown` is the same boundary, one layer down
+
+An LLM that has been asked for a list will happily emit `**bold**` and
+`` `backticks` ``, and a TTS engine will read those characters aloud.
+`strip_markdown=True` removes markdown formatting from agent output before
+synthesis, in the same "changes speech, not meaning" position as the processors
+above:
+
+```python
+EasyConfig(agent=agent, strip_markdown=True)
+```
+
+It leaves history, tool results, and `AgentFinal` untouched, so a chat UI still
+shows the formatted text. Fenced and inline code keeps its *content* — only the
+delimiters go.
+
+## Reaching outside the process
+
+Two fields extend what an agent can reach and what happens when it fails.
+
+`mcp_servers=` passes MCP server URIs through to whichever agent bridge you are
+using, so tools hosted outside your process join the same tool surface the
+`@function_tool` decorators above create:
+
+```python
+EasyConfig(agent=agent, mcp_servers=["stdio://./my-mcp-server", "https://tools.example/mcp"])
+```
+
+Accepted schemes are `stdio://`, `sse://`, `http://`, and `https://`. The list
+is **frozen per session** — changing it mid-session is not supported — so
+treat it as deployment configuration, not runtime state. Remote tools are also
+a latency and trust boundary: a slow MCP call is inside the agent's turn budget
+(`timeouts.agent_timeout` from chapter 3), and a remote server sees whatever
+arguments the model chooses to send.
+
+`on_agent_failure=` decides what the caller hears when the agent raises or
+times out, instead of silence:
+
+```python
+EasyConfig(agent=agent, on_agent_failure="Sorry, I hit a problem. Say that again?")
+```
+
+It accepts fixed text or a callable taking the exception, so you can vary the
+line by failure type. Without it, an agent failure produces an `Error` event and
+no speech — fine for a headless worker, poor on a phone call, where a person is
+listening to nothing.
+
 Continue with [the exercises](./EXERCISES.md) to trace each boundary and add a
 tool without giving it control over the session.
 
