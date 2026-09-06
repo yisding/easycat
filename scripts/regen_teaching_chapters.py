@@ -831,7 +831,24 @@ def _progress_command_item(
     prefix: str = "",
     suffix: str = ".",
 ) -> str:
-    return f"- [ ] **{label}:** {prefix}`{command}`{suffix}"
+    head = f"- [ ] **{label}:** {prefix}`{command}`"
+    if len(head) + len(suffix) <= 99:
+        return f"{head}{suffix}"
+    # The command stays on one line: it has to remain copy-pasteable, and the
+    # worksheet guard matches it verbatim. Only the trailing prose wraps, as a
+    # lazy list continuation.
+    return (
+        head
+        + "\n"
+        + textwrap.fill(
+            suffix.strip(),
+            width=99,
+            initial_indent="  ",
+            subsequent_indent="  ",
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+    )
 
 
 def _render_phase_review(review: PhaseReview) -> list[str]:
@@ -930,6 +947,12 @@ def render_progress_worksheet() -> str:
         "are evidence to explain, not history to rewrite. Chapters 2-15 begin with a",
         "two-chapter-lag recall. At each phase boundary, pass all four integration criteria at",
         "4/4 before starting the next chapter card.",
+        "",
+        "Every card's **Prepare** and **Run** pair is the chapter's *hardware-free checkpoint*",
+        "probe — it needs no microphone and no provider keys. That is deliberately a smaller",
+        "install than the chapter's own `main.py`, whose prerequisites (extra provider markers,",
+        "API keys, transport extras) live in each chapter README and are linked from every",
+        "Prepare line. Follow the README when you run the chapter itself.",
     ]
     for chapter in discover_chapters():
         checkpoint = _offline_checkpoint_for(chapter)
@@ -965,6 +988,11 @@ def render_progress_worksheet() -> str:
                     "Prepare",
                     checkpoint["setup_command"],
                     prefix="from the repository root, run ",
+                    suffix=(
+                        " — enough for this card's hardware-free checkpoint. The chapter's "
+                        f"own `main.py` may need more; see [its prerequisites]"
+                        f"(./{chapter.slug}/#prerequisites)."
+                    ),
                 ),
                 _progress_command_item("Run", checkpoint["command"]),
                 _progress_item(

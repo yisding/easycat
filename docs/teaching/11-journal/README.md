@@ -55,7 +55,10 @@
 
 ## Prerequisites
 
-- [Chapters 0-10.](../) This is a consolidation chapter.
+- [Chapters 0-10.](../) This is a consolidation chapter — but see
+  "Minimum to skip the ladder" just below: readers arriving here from the
+  [starting-point table](../README.md#choose-a-starting-point) without a mic
+  or keys need only chapter 2.
 - `uv sync --group dev`. No API keys needed — everything is
   offline against pre-recorded bundles.
 
