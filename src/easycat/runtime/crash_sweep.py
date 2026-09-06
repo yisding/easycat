@@ -20,7 +20,9 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 from pathlib import Path
+from typing import Final
 
 from easycat.runtime._journal_lock import journal_file_claim
 from easycat.runtime._private_files import (
@@ -68,15 +70,90 @@ def _process_start_token(pid: int) -> str | None:
     return token if token.isdecimal() else None
 
 
+# ``ps`` should answer instantly; the bound exists so a wedged process table
+# cannot stall a journal open.
+_PS_TIMEOUT_S: Final = 2.0
+
+
+def _process_start_wallclock(pid: int) -> str | None:
+    """Return ``ps -o lstart=`` for *pid* on hosts without ``/proc/<pid>/stat``.
+
+    macOS and the BSDs expose no ``/proc``, so the Linux start-ticks token is
+    unavailable there.  ``ps -o lstart=`` reports an *absolute* wall-clock
+    start time, which needs no boot scoping to be unambiguous (unlike the
+    boot-relative ticks, which repeat across reboots).
+
+    Its one-second granularity is coarse, but a PID recycled inside the same
+    second as the crash it is compared against is not a case worth engineering
+    for — and the alternative is what this replaces: no identity at all, which
+    reads every recycled PID as the original owner.
+
+    Best-effort throughout: any failure returns ``None``, and the caller then
+    falls back to the conservative "assume live" answer that was the only
+    behaviour available off-Linux before.
+    """
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=_PS_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    # Collapse whitespace: ``lstart`` pads single-digit days ("Sep  5").
+    value = " ".join(result.stdout.split())
+    return value or None
+
+
 def _process_birth_identity(pid: int) -> str | None:
-    """Return a boot-scoped process start identity where the OS exposes one."""
+    """Return a process-birth identity that a recycled PID cannot forge.
+
+    Pairing the PID with the owning process's birth is what lets
+    :func:`_has_live_pid` tell "the original owner is still running" from "the
+    OS handed that number to somebody else".  Without one, a stale ``live_pid``
+    left by a crash permanently blocks reopening the same session id once the
+    number is recycled, and the crash sweep classifies the crashed journal as
+    live and never promotes it (gh 1067).
+
+    Linux reads ``/proc/<pid>/stat``'s boot-relative start ticks and scopes
+    them with the boot id.  Everywhere else falls back to ``ps -o lstart=``,
+    an absolute wall-clock start time that is already unambiguous.  The two
+    forms are tagged so they can never be compared across a platform change.
+    """
     start_token = _process_start_token(pid)
-    if start_token is None:
+    if start_token is not None:
+        boot_id = _boot_id()
+        if boot_id is None:
+            return None
+        return f"{boot_id}:{start_token}"
+    wallclock = _process_start_wallclock(pid)
+    if wallclock is None:
         return None
-    boot_id = _boot_id()
-    if boot_id is None:
-        return None
-    return f"{boot_id}:{start_token}"
+    return f"lstart:{wallclock}"
+
+
+_SELF_BIRTH_IDENTITY: tuple[int, str | None] | None = None
+
+
+def self_birth_identity() -> str | None:
+    """Cached :func:`_process_birth_identity` for the current process.
+
+    A process's own birth never changes, and the off-Linux path spawns ``ps``,
+    so the answer is computed once instead of on every journal open.  The
+    cache is keyed by PID so a forked child recomputes its own.
+    """
+    global _SELF_BIRTH_IDENTITY
+    pid = os.getpid()
+    cached = _SELF_BIRTH_IDENTITY
+    if cached is not None and cached[0] == pid:
+        return cached[1]
+    identity = _process_birth_identity(pid)
+    _SELF_BIRTH_IDENTITY = (pid, identity)
+    return identity
 
 
 def _pid_alive(pid: int) -> bool:
