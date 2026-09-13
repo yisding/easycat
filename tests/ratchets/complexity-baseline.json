@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "rationale": "fix: extract _clear_transport_playback reduces Session._cut_off_turn_playback below C901 threshold",
+  "rationale": "DX1: _validate delegates catalog lookup to one helper",
   "counts": {
-    "C901": 56,
+    "C901": 55,
     "PLR0912": 31,
     "PLR0915": 27
   },
@@ -28,7 +28,6 @@
     "src/easycat/cli/scaffold/init.py\tPLR0912\tinit",
     "src/easycat/cli/scaffold/init.py\tPLR0915\tinit",
     "src/easycat/config/easy.py\tC901\tEasyConfig.__post_init__",
-    "src/easycat/config/easy.py\tC901\tEasyConfig._validate",
     "src/easycat/config/easy.py\tC901\t_validate_common",
     "src/easycat/debug/_turn_timeline.py\tC901\tbuild_timeline",
     "src/easycat/debug/_turn_timeline.py\tC901\textract_turn_transcripts",

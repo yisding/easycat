@@ -9,6 +9,7 @@ import sys
 from typing import TYPE_CHECKING, Literal
 
 from easycat._env import is_truthy
+from easycat._pipeline_decisions import noise_reduction_enabled
 from easycat._signals import create_shutdown_event as _create_shutdown_event
 from easycat._signals import scoped_shutdown_signal_handlers as _shutdown_signal_handler_scope
 from easycat.echo_cancellation import EchoCancellationConfig
@@ -315,9 +316,13 @@ def _wired_summary(config: EasyConfig) -> str:
         echo_label += " (auto)"
 
     # Noise reduction is opt-in: a reducer is only wired when
-    # ``enable_noise_reduction`` is set or an explicit config is provided
-    # (mirrors the create_session gating in ``easycat.config``).
-    nr_on = config.enable_noise_reduction or config.noise_reduction is not None
+    # ``enable_noise_reduction`` is set or an explicit config is provided. This
+    # is literally the rule ``create_session`` applies — the same shared leaf
+    # function — so the banner cannot drift from what was actually wired.
+    nr_on = noise_reduction_enabled(
+        enable_noise_reduction=config.enable_noise_reduction,
+        noise_reduction=config.noise_reduction,
+    )
     nr_label = "on" if nr_on else "off"
 
     return (

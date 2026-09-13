@@ -15,6 +15,10 @@ from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from easycat._audio_utils import PCM16StreamResampler, to_mono, validate_pcm16_format
 from easycat._extras import require_module
+from easycat._pipeline_decisions import (
+    NOISE_REDUCER_INSTANCE_METHODS,
+    has_provider_shape,
+)
 from easycat._provider_catalog import ProviderCatalog
 from easycat.audio_format import AudioChunk, AudioFormat
 
@@ -477,7 +481,7 @@ def create_noise_reducer(config: Any = None) -> Any:
     """
     if isinstance(config, str):
         config = parse_noise_reducer_string(config)
-    if config is not None and callable(getattr(config, "process", None)):
+    if config is not None and has_provider_shape(config, NOISE_REDUCER_INSTANCE_METHODS):
         return config
     if _CATALOG.is_config_instance(config):
         return _CATALOG.create_from_config(config, event_bus=None)

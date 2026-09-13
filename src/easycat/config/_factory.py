@@ -27,6 +27,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
+from easycat._pipeline_decisions import auto_turn_from_stt_final as _auto_turn_from_stt_final
+from easycat._pipeline_decisions import (
+    echo_cancellation_enabled,
+    is_echo_canceller_instance,
+    is_noise_reducer_instance,
+    is_push_to_talk,
+    is_stt_provider_instance,
+    is_tts_provider_instance,
+    is_vad_provider_instance,
+    noise_reduction_enabled,
+)
 from easycat._provider_catalog import inject_event_bus
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
 from easycat.events import EventBus
@@ -60,7 +71,7 @@ from easycat.tts.factory import (
     create_tts_provider,
     create_tts_provider_from_config,
 )
-from easycat.turn_manager import TurnManagerConfig, TurnMode
+from easycat.turn_manager import TurnManagerConfig
 from easycat.vad import create_vad
 
 from .easy import (
@@ -166,10 +177,7 @@ def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
 
 
 def _is_stt_provider_instance(value: Any) -> bool:
-    return not isinstance(value, type) and all(
-        callable(getattr(value, name, None))
-        for name in ("start_stream", "send_audio", "commit_segment", "end_stream", "events")
-    )
+    return is_stt_provider_instance(value)
 
 
 def _create_stt(config: Any, event_bus: EventBus) -> Any:
@@ -181,9 +189,7 @@ def _create_stt(config: Any, event_bus: EventBus) -> Any:
 
 
 def _is_tts_provider_instance(value: Any) -> bool:
-    return not isinstance(value, type) and all(
-        callable(getattr(value, name, None)) for name in ("synthesize", "stop", "cancel")
-    )
+    return is_tts_provider_instance(value)
 
 
 def _create_tts(config: Any, event_bus: EventBus) -> Any:
@@ -195,9 +201,7 @@ def _create_tts(config: Any, event_bus: EventBus) -> Any:
 
 
 def _is_vad_provider_instance(value: Any) -> bool:
-    return not isinstance(value, type) and all(
-        callable(getattr(value, name, None)) for name in ("process", "configure")
-    )
+    return is_vad_provider_instance(value)
 
 
 def _create_vad(config: Any) -> Any:
@@ -207,7 +211,7 @@ def _create_vad(config: Any) -> Any:
 
 
 def _is_noise_reducer_instance(value: Any) -> bool:
-    return not isinstance(value, type) and callable(getattr(value, "process", None))
+    return is_noise_reducer_instance(value)
 
 
 def _resolve_noise_reducer(config: Any) -> Any:
@@ -217,9 +221,7 @@ def _resolve_noise_reducer(config: Any) -> Any:
 
 
 def _is_echo_canceller_instance(value: Any) -> bool:
-    return not isinstance(value, type) and all(
-        callable(getattr(value, name, None)) for name in ("process", "feed_reference")
-    )
+    return is_echo_canceller_instance(value)
 
 
 def _resolve_echo_canceller(config: Any) -> Any:
@@ -258,13 +260,14 @@ def _should_auto_turn_from_stt_final(config: EasyConfig) -> bool:
     """
     from .easy import _stt_uses_native_endpointing
 
-    if config.turn_taking.mode == TurnMode.PUSH_TO_TALK:
-        return False
-    if _normalized_smart_turn(config).enabled:
-        return False
-    if config.telephony and config.telephony.enable_voicemail_detector:
-        return False
-    return _stt_uses_native_endpointing(config.stt)
+    return _auto_turn_from_stt_final(
+        push_to_talk=is_push_to_talk(config.turn_taking.mode),
+        smart_turn_enabled=_normalized_smart_turn(config).enabled,
+        voicemail_detector_enabled=bool(
+            config.telephony and config.telephony.enable_voicemail_detector
+        ),
+        stt_native_endpointing=_stt_uses_native_endpointing(config.stt),
+    )
 
 
 def _validate_agent_shape(adapted: Any, *, wrap_agent: bool) -> None:
@@ -552,7 +555,10 @@ def _resolve_audio_pipeline(
         )
         noise_reducer = (
             _resolve_noise_reducer(noise_config_or_provider or NoiseReducerConfig())
-            if config.enable_noise_reduction or config.noise_reduction is not None
+            if noise_reduction_enabled(
+                enable_noise_reduction=config.enable_noise_reduction,
+                noise_reduction=config.noise_reduction,
+            )
             else None
         )
         if noise_reducer is not None:
@@ -568,10 +574,8 @@ def _resolve_audio_pipeline(
             rollback,
             _resolve_echo_canceller(echo_config_or_provider),
         )
-        enable_echo_cancellation = (
-            echo_config_or_provider.enabled
-            if isinstance(echo_config_or_provider, EchoCancellationConfig)
-            else False
+        enable_echo_cancellation = echo_cancellation_enabled(
+            echo_config_or_provider, config_cls=EchoCancellationConfig
         )
         pipeline = _AudioPipeline(
             stt=stt,

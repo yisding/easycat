@@ -529,6 +529,7 @@ module = [
     "easycat.stages.*",
     "easycat.session.*",
     "easycat.integrations.*",
+    "easycat.planning.*",
     "easycat.validation._lane_harness.*",
     "easycat.validation._live_runner.*",
     "easycat.debugger._records.*",
@@ -613,6 +614,35 @@ pytest_add_cli_args = [
 [tool.importlinter]
 root_package = "easycat"
 exclude_type_checking_imports = true
+
+# Configuration (construction) and planning (preview) are peers, not layers:
+# ``easycat.planning`` must not import ``easycat.config`` (importing
+# ``easycat.config`` pulls ``_factory`` and therefore ``Session``, which would
+# make the side-effect-free planner drag the whole construction path in), and
+# ``easycat.config`` must not import ``easycat.planning`` (the planner is the
+# diagnostic projection *over* configuration). The pure decisions both make live
+# in the stdlib-only leaf ``easycat._pipeline_decisions``, below both.
+[[tool.importlinter.contracts]]
+name = "Configuration and planning do not import each other"
+type = "independence"
+modules = [
+    "easycat.config",
+    "easycat.planning",
+]
+# `easycat.planning.selection` (the shared load -> plan -> coded-issue boundary
+# `easycat plan` / `easycat doctor` / `VoiceServer` share) legitimately loads a
+# manifest, and `ProjectManifest.to_easyconfig` holds a function-local
+# `easycat.config` import so a manifest can be turned into a session config.
+# That edge belongs to the PROJECT layer, not to planning: nothing on the
+# planning path calls `to_easyconfig` (the planner reads a `VoiceProfile`
+# directly, precisely so it never constructs an `EasyConfig`), and
+# `tests/planning/test_boundary.py` proves at runtime that importing
+# `easycat.planning` pulls no `easycat.config._factory`. Ignore the single
+# manifest -> config edge rather than the planning -> project one, so a DIRECT
+# planning -> config import is still a broken contract.
+ignore_imports = [
+    "easycat.project.manifest -> easycat.config",
+]
 
 # STT / TTS / VAD are independent provider families with no direct cross-imports.
 # transports/telephony are DELIBERATELY excluded: they are genuinely

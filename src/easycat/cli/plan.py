@@ -23,15 +23,15 @@ from easycat.cli._output import emit_json, json_envelope, stdout_console
 
 
 def _selection_to_dict(selection: Any) -> dict[str, Any]:
-    return {
-        "role": selection.role,
-        "provider": selection.provider,
-        "model": selection.model,
-        "config_type": selection.config_type,
-        "extra": selection.extra,
-        "required_env": selection.required_env,
-        "capabilities": sorted(selection.capabilities),
-    }
+    """Alias for :func:`easycat.planning.selection_to_dict`.
+
+    The projection itself lives next to ``ProviderSelection`` so the CLI and the
+    server's ``/plan`` payload cannot drift apart. Kept as a module-level name
+    because in-tree and out-of-tree callers reference it.
+    """
+    from easycat.planning import selection_to_dict
+
+    return selection_to_dict(selection)
 
 
 def _render_human(plan: Any) -> None:

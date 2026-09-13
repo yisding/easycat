@@ -474,8 +474,9 @@ def _custom_stt_capability_check(
 ) -> None:
     del built, config
     # D3: an injected STT should be tagged {"injected"} the same way an
-    # injected VAD/noise-reducer/AEC instance is (see _injected_selection);
-    # today it falls through to the empty capability set instead.
+    # injected VAD/noise-reducer/AEC instance is (see
+    # ``_resolution._injected_decision``); today it falls through to the empty
+    # capability set instead.
     assert plan.selected["stt"].capabilities == frozenset({"injected"})
 
 

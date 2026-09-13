@@ -26,7 +26,7 @@ from easycat.cli.diagnose._requirements import (
     selected_app_from_manifest,
 )
 from easycat.errors import EASYCAT_E202, REGISTRY, SetupIssue
-from easycat.planning import provider_plan
+from easycat.planning import _resolution
 from easycat.planning.selection import build_manifest_plan
 from easycat.project import load_manifest
 
@@ -1266,13 +1266,15 @@ def _write_manifest(
 def _pin_extras(monkeypatch: pytest.MonkeyPatch, *absent: str) -> None:
     """Pin planner module availability: everything present except *absent*.
 
-    Mirrors ``tests/planning/test_parity.py``'s ``_force_find_spec_none`` but
-    patches the single private seam every extra check flows through
-    (``provider_plan._module_available``), so no doctor test depends on which
-    extras happen to be installed in the running environment.
+    Patches the single private probe seam every extra check flows through
+    (``planning._resolution._default_module_available`` — the one resolution
+    binds lazily in ``ProbeEnvironment.from_process``), so no doctor test
+    depends on which extras happen to be installed in the running environment.
     """
     missing = set(absent)
-    monkeypatch.setattr(provider_plan, "_module_available", lambda module: module not in missing)
+    monkeypatch.setattr(
+        _resolution, "_default_module_available", lambda module: module not in missing
+    )
 
 
 def _checks(payload: dict[str, object]) -> dict[str, dict[str, object]]:

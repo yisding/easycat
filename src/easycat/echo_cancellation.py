@@ -19,6 +19,10 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
 
 from easycat._extras import require_module
+from easycat._pipeline_decisions import (
+    ECHO_CANCELLER_INSTANCE_METHODS,
+    has_provider_shape,
+)
 from easycat._provider_catalog import ProviderCatalog
 from easycat.audio_format import AudioChunk
 
@@ -292,11 +296,7 @@ def create_echo_canceller(config: Any = None) -> Any:
     """
     if isinstance(config, str):
         config = parse_echo_canceller_string(config)
-    if (
-        config is not None
-        and callable(getattr(config, "process", None))
-        and callable(getattr(config, "feed_reference", None))
-    ):
+    if config is not None and has_provider_shape(config, ECHO_CANCELLER_INSTANCE_METHODS):
         return config
     if _CATALOG.is_config_instance(config):
         return _CATALOG.create_from_config(config, event_bus=None)

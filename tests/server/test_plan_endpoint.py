@@ -23,7 +23,12 @@ from easycat.server import VoiceServer, VoiceServerConfig
 
 _HAS_AIOHTTP = aiohttp is not None
 
-pytestmark = pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
+#: Only the tests that actually drive an HTTP client need the extra. The
+#: ``plan_payload`` / ``capabilities_payload`` rows call plain sync methods on a
+#: ``VoiceServer``, so they MUST run in the credential-free lane — they are the
+#: only executing coverage of the server's copy of the per-role selection
+#: projection (``easycat.planning.selection_to_dict``).
+_requires_aiohttp = pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
 
 # A realistic secret-shaped token (``sk-...``, 24+ chars) for the token-leak
 # assertions so they exercise ``redact_value``'s value-policy safety net, not
@@ -107,7 +112,9 @@ def test_plan_payload_factory_only_server_is_empty() -> None:
 def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
-    monkeypatch.setattr("easycat.planning.provider_plan._extra_is_missing", lambda _extra: False)
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available", lambda _name: True
+    )
     server = VoiceServer.from_manifest(_write_manifest(tmp_path))
     payload = server.plan_payload()
     assert set(payload["selected"]) == {
@@ -121,12 +128,26 @@ def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     }
     assert payload["selected"]["transport"]["provider"] == "webrtc"
     assert payload["has_blocking_errors"] is False
+    # The server builds each role dict through ``easycat.planning``'s shared
+    # projection, so its keys are exactly the ones ``easycat plan --json``
+    # publishes (pinned in ``tests/planning/test_provider_plan.py``).
+    for role_payload in payload["selected"].values():
+        assert set(role_payload) == {
+            "role",
+            "provider",
+            "model",
+            "config_type",
+            "extra",
+            "required_env",
+            "capabilities",
+        }
     # No resolved token appears anywhere in the payload.
     import json
 
     assert _RESOLVED_TOKEN not in json.dumps(payload)
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_plan_route_returns_200(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -161,6 +182,7 @@ async def _text_of(
         return await resp.text()
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_plan_route_factory_only_returns_empty(
     client: aiohttp.ClientSession,
@@ -182,13 +204,16 @@ async def test_plan_route_factory_only_returns_empty(
 # ── /health/ready M6b wiring ─────────────────────────────────────────
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_ready_200_when_manifest_plan_clean(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
-    monkeypatch.setattr("easycat.planning.provider_plan._extra_is_missing", lambda _extra: False)
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available", lambda _name: True
+    )
     server = VoiceServer.from_manifest(_write_manifest(tmp_path))
     server.config.port = 0
     await server.start()
@@ -204,6 +229,7 @@ async def test_ready_200_when_manifest_plan_clean(
         await server.stop()
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_ready_503_when_plan_has_blocking_errors(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -254,6 +280,7 @@ def test_capabilities_payload_unresolvable_backend_is_empty(
     assert caps["all_capabilities"] == []
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_plan_and_capabilities_endpoints_200_when_unresolvable(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -280,6 +307,7 @@ async def test_plan_and_capabilities_endpoints_200_when_unresolvable(
         await server.stop()
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_ready_503_when_manifest_plan_unresolvable(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -307,6 +335,7 @@ async def test_ready_503_when_manifest_plan_unresolvable(
         await server.stop()
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_factory_only_keeps_m4_skipped_placeholders(
     client: aiohttp.ClientSession,

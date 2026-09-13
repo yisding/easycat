@@ -61,10 +61,11 @@ def _plan(**overrides: object) -> object:
     # incidentally blocked by the UNRELATED default vad="auto" backend missing
     # its silero-vad extra in this dev-group-only environment. An injected
     # instance is the neutral choice specifically because it takes the
-    # ``_injected_selection`` branch (capabilities={"injected"}, extra=None) and
-    # is not a BACKEND at all, so it stays gap-free under DX1-5's rules too —
-    # unlike vad="krisp", which is gap-free only because of D2, the very bug
-    # DX1-5 removes. A row that characterizes VAD itself overrides ``vad=``.
+    # ``_resolution._injected_decision`` branch (capabilities={"injected"},
+    # extra=None) and is not a BACKEND at all, so it stays gap-free under DX1-5's
+    # rules too — unlike vad="krisp", which is gap-free only because of D2, the
+    # very bug DX1-5 removes. A row that characterizes VAD itself overrides
+    # ``vad=``.
     kwargs: dict[str, object] = {
         "openai_api_key": "sk-test",
         "transport": WebSocketTransportConfig(),
@@ -97,7 +98,7 @@ def test_noise_reducer_auto_error_raises_when_pyrnnoise_missing() -> None:
         create_noise_reducer(NoiseReducerConfig(backend="auto", fallback_policy="error"))
 
     # ``auto`` only earns the "degrades_to_passthrough" capability when the
-    # policy is NOT "error" (``provider_plan._select_noise_reducer`` reads
+    # policy is NOT "error" (``_resolution._decide_noise_reducer`` reads
     # ``fallback_policy`` off the explicit config), so an auto+error reducer is a
     # genuine blocking gap on the same ``rnnoise`` extra its passthrough peer
     # only warns about.

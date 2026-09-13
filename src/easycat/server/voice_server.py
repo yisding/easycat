@@ -1248,19 +1248,12 @@ class VoiceServer:
                 "has_blocking_errors": True,
                 "manifest_loaded": True,
             }
+        from easycat.planning import selection_to_dict
+
         return {
             "profile": plan.profile,
             "selected": {
-                role: {
-                    "role": selection.role,
-                    "provider": selection.provider,
-                    "model": selection.model,
-                    "config_type": selection.config_type,
-                    "extra": selection.extra,
-                    "required_env": selection.required_env,
-                    "capabilities": sorted(selection.capabilities),
-                }
-                for role, selection in plan.selected.items()
+                role: selection_to_dict(selection) for role, selection in plan.selected.items()
             },
             "missing_env": list(plan.missing_env),
             "missing_extras": list(plan.missing_extras),

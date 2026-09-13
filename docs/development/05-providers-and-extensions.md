@@ -184,11 +184,24 @@ families remain independently importable.
 ### The static planner
 
 [`planning/`](../../src/easycat/planning/) is the catalog's most demanding
-consumer, and the reason several of the rules above exist.
-`build_provider_plan()` resolves all seven pipeline roles **without
-instantiating a provider or importing a heavy SDK**, then reports missing
-environment variables, missing extras, and incompatible provider/transport
-combinations. It backs `easycat plan` and the manifest preflight.
+consumer, and the reason several of the rules above exist. It resolves all seven
+pipeline roles **without instantiating a provider or importing a heavy SDK**,
+then reports missing environment variables, missing extras, and incompatible
+provider/transport combinations. It backs `easycat plan` and the manifest
+preflight.
+
+The roles are decided exactly once, in the private
+[`planning/_resolution.py`](../../src/easycat/planning/_resolution.py), against
+an injected `ProbeEnvironment` (the "is this module importable?" / "is this env
+var set?" answers, passed in as data rather than read from the interpreter, so a
+test can state an environment instead of monkeypatching one). Resolution returns
+a typed `ResolvedConfiguration` carrying every role decision plus the pipeline
+booleans; `build_provider_plan()` is then a pure projection of that result into
+the public `ProviderPlan`. The pure decisions the planner shares with
+`create_session` — the live-provider duck checks, the noise-reduction switch and
+the STT-native-endpointing turn policy — live one layer lower again, in the
+stdlib-only leaf
+[`_pipeline_decisions.py`](../../src/easycat/_pipeline_decisions.py).
 
 "Side-effect-free" is a hard constraint, not an aspiration, and it shapes the
 implementation:
@@ -198,7 +211,7 @@ implementation:
   raise `EASYCAT_E203`, and constructs a config;
 - missing extras are detected with `importlib.util.find_spec`, not
   `require_module`, which imports;
-- the catalog factories are imported lazily inside `build_provider_plan`, so
+- the catalog factories are imported lazily inside `_resolution._catalogs()`, so
   `import easycat.planning` itself stays free of provider SDK imports.
 
 STT/TTS and registered third-party providers read their metadata from
