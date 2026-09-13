@@ -24,6 +24,14 @@ but ``ProviderCatalog.discover()`` and ``probe_module_for_extra`` reach installe
 entry points and therefore execute third-party module-level code — the one
 documented side effect on the planning path.
 
+A role ``create_session`` builds NOTHING for is reported ``provider="off"``
+with ``capabilities={"disabled"}`` and no extra, so its install extra is not a
+blocking gap. That covers a disabled ``noise_reducer`` and — mirroring
+``create_session``'s stage-skip decision
+(:func:`easycat._pipeline_decisions.vad_stage_enabled`) — the ``vad`` role when
+the STT declares ``native_endpointing`` and nothing (smart turn, push-to-talk,
+the voicemail detector) takes endpointing back from it.
+
 The planner-vs-``create_session`` PARITY TEST is the required gate: the
 manifest/plan readiness checks may only ship once parity is green.
 

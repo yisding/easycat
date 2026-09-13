@@ -10,12 +10,10 @@ provider constructor is RECORDED (never executed for real) via
 ``tests/planning/_recording.py``, so every row runs on the dev group with no
 ``pytest.importorskip``.
 
-Three divergences are live at this revision and characterized here as
+Two divergences are still live at this revision and characterized here as
 ``xfail(strict=True)``, so the PR that fixes each one MUST delete its marker
 or the suite fails:
 
-* **D1** (``native_endpointing_stt``) — a native-endpointing STT disables the
-  VAD stage at construction, but the planner still selects a VAD and blocks.
 * **D2** (``commercial_backend_without_sdk_*``) — a selected backend whose
   commercial SDK is absent has no pip extra, so it is never a blocking gap.
   These two rows cannot compare constructed values at all (construction raises
@@ -26,6 +24,11 @@ or the suite fails:
   described as a provider with no capabilities, indistinguishable from a
   known-capability-free provider (an injected VAD/noise/AEC gets
   ``{"injected"}``).
+
+**D1** (``native_endpointing_stt``) is FIXED: the planner now reports the
+``vad`` role ``off`` when the STT owns endpointing, matching the stage
+``create_session`` skips, so a VAD extra is no longer a blocking gap for a
+deployment that starts fine. The row asserts both halves and carries no marker.
 
 D4 (a registered third-party AEC config or injected AEC instance reports
 ``enable_echo_cancellation=False`` although a canceller was built) is
@@ -377,10 +380,23 @@ def _native_endpointing_stt(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:
 def _native_endpointing_checks_vad_skipped(
     plan: ProviderPlan, built: ConstructedInputs, config: EasyConfig
 ) -> None:
-    del plan, config
+    del config
     assert built.vad is None
     assert built.enable_vad is False
     assert built.auto_turn_from_stt_final is True
+    # DX1-D1: the planner used to select ``silero`` here and block readiness on
+    # ``silero-vad`` for a session that builds no VAD at all. It now mirrors the
+    # skipped stage, so the extra is not a gap. (This row carried an
+    # ``xfail(strict=True)`` until the fix landed.)
+    assert plan.selected["vad"].provider == "off"
+    assert plan.selected["vad"].capabilities == frozenset({"disabled"})
+    assert plan.selected["vad"].extra is None
+    assert "silero-vad" not in plan.missing_extras
+    # The headline symptom of D1, on the ``EasyConfig`` path the design states
+    # the repro as: readiness flipped from blocked to ready for a session that
+    # already started fine. The row's websocket + deepgram + openai config pulls
+    # no other extra, so this holds whatever is installed.
+    assert plan.has_blocking_errors is False
 
 
 def _native_endpointing_overridden_by_smart_turn(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:
@@ -421,13 +437,61 @@ def _native_endpointing_overridden_by_voicemail(monkeypatch: pytest.MonkeyPatch)
     )
 
 
+def _native_endpointing_overridden_by_late_smart_turn_bool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> EasyConfig:
+    """``smart_turn = True`` assigned AFTER construction — a bool, not a config.
+
+    ``EasyConfig.smart_turn`` is typed ``SmartTurnConfig | bool | None`` and
+    ``create_session`` re-normalizes it in ``_validate_for_session``, so this is
+    a supported spelling that builds a VAD. A planner reading the raw attribute
+    saw ``getattr(True, "enabled", False)`` -> ``False`` and reported the role
+    ``off``. The construction-time ``smart_turn=True`` row above cannot catch
+    that: ``__post_init__`` has already turned it into a ``SmartTurnConfig``.
+    """
+    config = _native_endpointing_overridden_by_smart_turn(monkeypatch)
+    config.smart_turn = True
+    return config
+
+
+def _native_endpointing_overridden_by_late_sensitivity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> EasyConfig:
+    """``smart_turn_sensitivity`` assigned AFTER construction.
+
+    ``_normalize_smart_turn_config`` forces ``enabled=True`` whenever a
+    sensitivity is set, so the VAD comes back even though ``smart_turn`` still
+    holds the ``enabled=False`` default this transport/STT pair resolved.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    config = EasyConfig(
+        stt="deepgram/flux-general-en",
+        transport=WebSocketTransportConfig(),
+        agent=_Agent(),
+        debug="off",
+    )
+    assert config.smart_turn.enabled is False
+    config.smart_turn_sensitivity = 0.7
+    return config
+
+
 def _native_endpointing_checks_vad_built(
     plan: ProviderPlan, built: ConstructedInputs, config: EasyConfig
 ) -> None:
-    del plan, config
+    del config
     assert built.vad is not None
     assert built.enable_vad is True
     assert built.auto_turn_from_stt_final is False
+    # A skipped VAD must never hide a live one: the override takes endpointing
+    # back from the STT, so the plan has to describe the stage the session
+    # builds. Neither ``extra`` nor ``missing_extras`` is asserted here — both
+    # depend on whether the checkout installed ``silero-vad``; the fake-probe
+    # peer ``test_resolution.py::
+    # test_late_smart_turn_override_keeps_the_vad_role_and_its_extra`` pins the
+    # blocking gap deterministically.
+    assert plan.selected["vad"].provider == "auto"
+    assert "disabled" not in plan.selected["vad"].capabilities
 
 
 def _custom_instances(monkeypatch: pytest.MonkeyPatch) -> EasyConfig:
@@ -608,6 +672,14 @@ _ROWS: dict[str, _Row] = {
     "native_endpointing_overridden_by_voicemail": _Row(
         _native_endpointing_overridden_by_voicemail, checks=_native_endpointing_checks_vad_built
     ),
+    "native_endpointing_overridden_by_late_smart_turn_bool": _Row(
+        _native_endpointing_overridden_by_late_smart_turn_bool,
+        checks=_native_endpointing_checks_vad_built,
+    ),
+    "native_endpointing_overridden_by_late_sensitivity": _Row(
+        _native_endpointing_overridden_by_late_sensitivity,
+        checks=_native_endpointing_checks_vad_built,
+    ),
     "custom_instances": _Row(_custom_instances, checks=_custom_instances_checks),
     "custom_stt_reports_unknown_capabilities": _Row(
         _custom_stt_reports_unknown_capabilities, checks=_custom_stt_capability_check
@@ -636,11 +708,8 @@ _ROWS: dict[str, _Row] = {
 }
 
 _XFAIL_ROWS: dict[str, str] = {
-    "native_endpointing_stt": (
-        "D1: create_session skips the VAD stage for a native-endpointing STT "
-        "(built.vad is None) but the planner still selects a VAD and blocks "
-        "readiness on its extra."
-    ),
+    # DX1-D1 ``native_endpointing_stt`` used to live here; the planner now
+    # reports the skipped VAD stage, so the row asserts the fix instead.
     "custom_stt_reports_unknown_capabilities": (
         "D3: an injected STT is described with capabilities=frozenset(), "
         "indistinguishable from a known-capability-free provider, while an "
@@ -704,6 +773,43 @@ def test_preview_matches_constructed_values(case_id: str, monkeypatch: pytest.Mo
         import asyncio
 
         asyncio.run(built.session.stop(force=True))
+
+
+def test_native_endpointing_profile_reports_vad_off() -> None:
+    """DX1-D1, the operator-visible half: readiness for a manifest profile.
+
+    A manifest whose STT owns endpointing needs no VAD, so ``/health/ready``
+    must not block on a VAD extra. ``transport="websocket"`` on purpose: a
+    ``local`` profile blocks on the unrelated ``local`` extra in a
+    dev-group-only environment and would mask the assertion. The
+    ``deepgram/nova-2`` control proves the extra IS blocking for a profile that
+    does build a VAD, so the ``off`` verdict is not vacuous.
+    """
+    from easycat.planning._resolution import ProbeEnvironment
+    from easycat.planning.provider_plan import _plan_with_probe
+    from easycat.project.schema import VoiceProfile
+
+    probe = ProbeEnvironment.fake(
+        env={"DEEPGRAM_API_KEY": "dg-test", "OPENAI_API_KEY": "sk-test"},
+        unavailable=["onnxruntime", "ten_vad", "krisp_audio"],
+        default=True,
+    )
+
+    def _plan(stt: str) -> ProviderPlan:
+        return _plan_with_probe(
+            VoiceProfile(name="default", transport="websocket", stt=stt), probe=probe
+        )
+
+    control = _plan("deepgram/nova-2")
+    assert control.selected["vad"].provider == "auto"
+    assert "silero-vad" in control.missing_extras
+    assert control.has_blocking_errors is True
+
+    plan = _plan("deepgram/flux-general-en")
+    assert plan.selected["vad"].provider == "off"
+    assert plan.selected["vad"].capabilities == frozenset({"disabled"})
+    assert "silero-vad" not in plan.missing_extras
+    assert plan.has_blocking_errors is False
 
 
 def test_custom_instances_preserve_identity(monkeypatch: pytest.MonkeyPatch) -> None:

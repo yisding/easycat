@@ -198,13 +198,19 @@ What each metadata field feeds:
 | `env_var` | Optional `easycat doctor` credential check and auto-filled API key for `"yours/model"` shortcuts; omit for local/self-hosted providers |
 | `extra` | `easycat init` scaffold, to add the right install extra to a generated `pyproject.toml` |
 | `probe_module` | `/health/ready` import check for the installed extra; set this when the extra and Python module names differ |
-| `capabilities` | planner and session behavior; declare `native_endpointing` when STT finals own turn boundaries |
+| `capabilities` | planner and session behavior; declare `native_endpointing` when STT finals own turn boundaries — `easycat plan` then reports the `vad` role as `off` |
 | `capability_resolver` | model/config-dependent capabilities; returns a `frozenset[str]` that is combined with static capabilities |
 | `api_domains` | validation's redaction, to scrub your API host from exported debug bundles |
 
 When `native_endpointing` is declared, `EasyConfig` drives turns from STT
 FINAL events and disables its own VAD/smart-turn endpointing. Omit it when the
 provider expects EasyCat to commit segments.
+
+`easycat plan` and `/health/ready` report the same decision: the `vad` role
+comes back as `off` with the `disabled` capability, so a missing VAD install
+extra is **not** a blocking gap for that deployment. Set `smart_turn`,
+`turn_taking=TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK)`, or the voicemail
+detector to take endpointing back, and the VAD role — and its extra — return.
 
 For a credential-free local provider, omit `env_var`; shortcut parsing and the
 planner then construct the config without reading an API key:
