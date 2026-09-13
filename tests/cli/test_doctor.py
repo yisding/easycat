@@ -2046,8 +2046,17 @@ def test_doctor_json_rows_and_probe_summary_agree(
 
 
 def test_doctor_bare_run_still_reports_probe_classes(
-    cli: CliRunner, empty_env: None, no_network: None
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
 ) -> None:
+    # ``chdir`` like every other test in this section: ``"selection" not in
+    # payload`` otherwise depends on where pytest runs, because a discoverable
+    # ``easycat.toml`` or ``[tool.easycat.scaffold]`` in the working directory
+    # makes doctor emit a selection block.
+    monkeypatch.chdir(tmp_path)
     payload = json.loads(cli.invoke(app, ["doctor", "--json"]).stdout)
 
     assert "selection" not in payload

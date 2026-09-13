@@ -25,14 +25,13 @@ def _manifest(body: str, tmp_path: Path) -> Path:
 
 
 def _absent(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
-    """Make ``provider_plan._module_available`` report *modules* absent."""
+    """Pin extras availability TOTALLY: *modules* absent, everything else present.
+
+    Delegating the unnamed modules to the real ``find_spec`` would let another
+    lane's missing optional extra add an entry to a whole-collection assertion.
+    """
     absent = set(modules)
-    real = provider_plan._module_available
-    monkeypatch.setattr(
-        provider_plan,
-        "_module_available",
-        lambda module: False if module in absent else real(module),
-    )
+    monkeypatch.setattr(provider_plan, "_module_available", lambda module: module not in absent)
 
 
 def test_manifest_plan_defect_severity_is_scoped() -> None:
@@ -72,6 +71,51 @@ def test_manifest_plan_defect_severity_is_scoped() -> None:
     assert incomplete.reason == "incomplete_selection"
     assert incomplete.severity == "blocking"
     assert incomplete.field == "[voice.default]"
+
+
+def test_a_token_on_a_non_phone_profile_is_not_a_requirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``to_easyconfig`` only resolves ``token`` on a phone transport.
+
+    A ``token`` on a websocket/webrtc/local profile binds nothing, so counting
+    it as a required reference would report the profile blocked while
+    ``create_session`` starts it happily.
+    """
+    manifest = parse_manifest(
+        {
+            "project": {"name": "sel"},
+            "voice": {"default": {"transport": "websocket", "token": "bearer-env:WS_TOK"}},
+        }
+    )
+
+    _absent(monkeypatch)  # every extra present: the redness would be the token or nothing
+
+    assert manifest.profile_requirements() == ()
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+    assert plan.defects == ()
+    assert plan.has_blocking_errors is False
+
+
+def test_blocking_errors_keep_each_defect_reason() -> None:
+    """An unset reference is not an ``incomplete_selection``.
+
+    Both defects are blocking, but collapsing them onto one reason breaks the
+    documented ``incomplete_selection:[voice.<name>]`` shape and hides the
+    difference between an absent reference value and a structurally incomplete
+    profile.
+    """
+    manifest = parse_manifest(
+        {
+            "project": {"name": "sel"},
+            "voice": {"default": {"transport": "twilio", "token": "bearer-env:TW_TOK"}},
+        }
+    )
+
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+
+    assert "unset_reference:TW_TOK" in plan.blocking_errors()
+    assert "incomplete_selection:TW_TOK" not in plan.blocking_errors()
 
 
 def test_manifest_plan_drops_a_satisfied_reference() -> None:

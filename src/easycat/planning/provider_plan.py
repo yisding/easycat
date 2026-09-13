@@ -121,8 +121,12 @@ class ProviderPlan:
         """Return content-free blocking-error reasons (sorted, deduped).
 
         A blocking error is a missing required env var, a missing required
-        extra for a SELECTED role, or a ``blocking`` selection defect (an
-        ``incomplete_selection:[voice.<name>]`` reason). Warnings are NOT
+        extra for a SELECTED role, or a ``blocking`` selection defect. A defect
+        contributes its OWN ``reason:field`` pair — ``incomplete_selection:
+        [voice.<name>]`` for a structurally incomplete profile,
+        ``unset_reference:<VAR>`` for a configured ``bearer-env:`` reference
+        whose variable is unset — so a consumer can tell the two apart instead
+        of seeing every defect collapsed onto one reason. Warnings are NOT
         blocking. The reasons are deliberately content-free (role, env/extra
         name, or a manifest path — never a value) so they are safe to echo on
         ``/health/ready`` and to compare in the parity test.
@@ -131,7 +135,7 @@ class ProviderPlan:
         reasons.extend(f"missing_env:{var}" for var in self.missing_env)
         reasons.extend(f"missing_extra:{extra}" for extra in self.missing_extras)
         reasons.extend(
-            f"incomplete_selection:{issue.field}"
+            f"{issue.reason}:{issue.field}"
             for issue in self.defects
             if issue.severity == "blocking"
         )

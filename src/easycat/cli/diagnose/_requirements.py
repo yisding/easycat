@@ -261,7 +261,8 @@ def dependency_source(project_root: Path = Path()) -> DependencySource:
     ):
         return "none"
     tool = data.get("tool")
-    sources = tool.get("uv", {}).get("sources", {}) if isinstance(tool, dict) else {}
+    uv = tool.get("uv") if isinstance(tool, dict) else None
+    sources = uv.get("sources", {}) if isinstance(uv, dict) else {}
     pin = sources.get("easycat") if isinstance(sources, dict) else None
     if isinstance(pin, dict):
         if pin.get("git"):

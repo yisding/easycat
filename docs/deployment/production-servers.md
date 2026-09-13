@@ -404,9 +404,11 @@ as `checks.providers.status = "degraded"`. Neither body names a variable, an
 extra, or a manifest path.
 
 The blocking reasons behind that verdict use one `key:value` grammar —
-`missing_env:<VAR>`, `missing_extra:<extra>`, and the sibling
+`missing_env:<VAR>`, `missing_extra:<extra>`, `unset_reference:<VAR>` for a
+configured `bearer-env:` reference whose variable is unset, and the sibling
 `incomplete_selection:[voice.<name>]` token, which names a manifest path and
-never a value. They are what `ProviderPlan.blocking_errors()` returns, and they
+never a value. A defect keeps its own `reason`, so an absent reference value
+and a structurally incomplete profile stay distinguishable. They are what `ProviderPlan.blocking_errors()` returns, and they
 reach an operator through the authenticated `/plan` body's `blocking_errors`
 (and through `easycat plan --json`), not through the probe endpoints.
 

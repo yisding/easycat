@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from easycat.errors import SetupIssue
+    from easycat.planning import ProviderPlan
 
 
 def _selection_to_dict(selection: Any) -> dict[str, Any]:
@@ -43,7 +44,7 @@ def _selection_to_dict(selection: Any) -> dict[str, Any]:
     return selection_to_dict(selection)
 
 
-def _render_human(plan: Any, issues: Sequence[SetupIssue]) -> None:
+def _render_human(plan: ProviderPlan, issues: Sequence[SetupIssue]) -> None:
     stdout_console.print(f"[bold]Provider plan[/] (profile: {plan.profile})")
     for role, selection in plan.selected.items():
         extra = f" extra={selection.extra}" if selection.extra else ""
@@ -61,20 +62,23 @@ def _render_human(plan: Any, issues: Sequence[SetupIssue]) -> None:
         stdout_console.print(f"  [yellow]warnings:[/] {', '.join(plan.warnings)}")
     status = "blocked" if plan.has_blocking_errors else "ready"
     stdout_console.print(f"  [bold]status:[/] {status}")
-    # One coded row per blocking issue, in doctor's layout: the same code,
-    # field, role, and fix ``easycat doctor --manifest`` prints and ``/plan``
-    # returns, so one cause reads the same on every surface.
+    # One coded row per issue, in doctor's layout: the same code, field, role,
+    # and fix ``easycat doctor --manifest`` prints and ``/plan`` returns, so one
+    # cause reads the same on every surface. WARNING rows are printed too (in
+    # yellow, after the blocking ones — ``plan_issues`` already sorts blocking
+    # first): an unset ``[server] auth`` reference is warning-severity and is
+    # otherwise invisible here, so the default human output would print
+    # ``status: ready`` while ``--json`` reported the missing credential.
     for issue in issues:
-        if issue.severity != "blocking":
-            continue
         role = issue.role or "-"
+        color = "red" if issue.severity == "blocking" else "yellow"
         # ``escape`` on EVERY interpolation, like doctor's renderer: a field is
         # ``[voice.<profile>]`` and a fix quotes ``uv add 'easycat[webrtc]'``,
         # both of which Rich would otherwise eat as style tags — printing a
         # copy-pasteable command that installs the wrong thing, or raising
         # ``MarkupError`` on a lone ``[/]``-shaped substring.
         stdout_console.print(
-            f"  [red]{escape(issue.code)}[/] {escape(issue.field)} "
+            f"  [{color}]{escape(issue.code)}[/] {escape(issue.field)} "
             f"({escape(role)}): {escape(issue.detail)}"
         )
         if issue.fix:
@@ -91,7 +95,7 @@ def plan(
     profile: str = typer.Option(
         "default",
         "--profile",
-        help="Voice profile table to plan (for example, voice.default).",
+        help="Voice profile table to plan: the name after 'voice.' (for example, default).",
     ),
     json_output: bool = typer.Option(
         False,

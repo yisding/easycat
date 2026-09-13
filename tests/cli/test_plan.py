@@ -19,7 +19,13 @@ def test_plan_help_renders_profile_table_literally(cli: CliRunner) -> None:
 
     assert result.exit_code == 0
     assert "Voice profile table to plan" in help_text
-    assert "voice.default" in help_text
+    # The example must be the value ``--profile`` actually takes: profiles are
+    # keyed by the bare name, so ``--profile voice.default`` raises
+    # EASYCAT_E602 "unknown profile". It must also carry no square brackets —
+    # Rich reads them as style tags and eats them out of the rendered help,
+    # which is what "The to plan" guards against.
+    assert "for example, default" in help_text
+    assert "voice.default" not in help_text
     assert "The to plan" not in help_text
 
 
@@ -102,33 +108,20 @@ def test_plan_error_redacts_a_secret_shaped_manifest_value(
 _ENVELOPE_KEYS = frozenset({"schema_version", "command", "status"})
 
 
-def _present(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
-    """Make ``provider_plan._module_available`` report *modules* present.
+def _pin_extras(monkeypatch: pytest.MonkeyPatch, *absent: str) -> None:
+    """Pin extras availability TOTALLY at the planner's single private seam.
 
     Extras availability is environment-dependent, so a test about coded issues
     must pin it at the single private seam every extra check flows through.
+    Everything not named in *absent* reads as PRESENT — delegating the rest to
+    the real ``find_spec`` (the shape this file used to have) would let an
+    unrelated uninstalled extra add a row to an equality assertion, so a case
+    could only go red for the defect it is about in some lanes.
     """
     from easycat.planning import provider_plan
 
-    forced = set(modules)
-    real = provider_plan._module_available
-    monkeypatch.setattr(
-        provider_plan,
-        "_module_available",
-        lambda module: True if module in forced else real(module),
-    )
-
-
-def _absent(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
-    from easycat.planning import provider_plan
-
-    missing = set(modules)
-    real = provider_plan._module_available
-    monkeypatch.setattr(
-        provider_plan,
-        "_module_available",
-        lambda module: False if module in missing else real(module),
-    )
+    missing = set(absent)
+    monkeypatch.setattr(provider_plan, "_module_available", lambda module: module not in missing)
 
 
 def test_plan_json_adds_issues_without_changing_existing_keys(
@@ -138,7 +131,7 @@ def test_plan_json_adds_issues_without_changing_existing_keys(
     manifest = _write_manifest(tmp_path, 'stt = "deepgram"\n')
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
-    _present(monkeypatch, "aiortc", "livekit", "onnxruntime")
+    _pin_extras(monkeypatch)
 
     payload = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
 
@@ -169,7 +162,7 @@ def test_plan_issues_name_role_field_and_code(
     manifest = _write_manifest(tmp_path, 'stt = "deepgram"\n')
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
-    _absent(monkeypatch, "aiortc")
+    _pin_extras(monkeypatch, "aiortc")
 
     payload = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
     by_field = {issue["field"]: issue for issue in payload["issues"]}
@@ -194,7 +187,7 @@ def test_plan_human_output_names_code_and_fix(
     manifest = _write_manifest(tmp_path, 'stt = "deepgram"\n')
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
-    _present(monkeypatch, "aiortc", "livekit", "onnxruntime")
+    _pin_extras(monkeypatch)
 
     result = cli.invoke(app, ["plan", "--manifest", str(manifest)])
     output = " ".join(result.stdout.split())
@@ -203,6 +196,33 @@ def test_plan_human_output_names_code_and_fix(
     assert "status: blocked" in output
     assert "EASYCAT_E203 DEEPGRAM_API_KEY (stt):" in output
     assert "Fix:" in output
+
+
+def test_plan_human_output_renders_warning_issues(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-3d: a warning-severity issue must not vanish from the human output.
+
+    An unset ``[server] auth`` reference is warning-severity, so it never
+    reaches ``plan.warnings``. Dropped from the issue loop as well, the default
+    surface printed ``status: ready`` and nothing else while ``--json``
+    reported the missing server credential.
+    """
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text(
+        '[project]\nname = "plan-cli"\n\n[server]\nauth = "bearer-env:SRV_TOK"\n'
+        '\n[voice.default]\ntransport = "webrtc"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.delenv("SRV_TOK", raising=False)
+    monkeypatch.setenv("NO_COLOR", "1")
+    _pin_extras(monkeypatch)
+
+    output = " ".join(cli.invoke(app, ["plan", "--manifest", str(manifest)]).stdout.split())
+
+    assert "status: ready" in output
+    assert "EASYCAT_E604 SRV_TOK" in output
 
 
 def test_plan_human_output_survives_bracketed_fields_and_fixes(
@@ -223,8 +243,7 @@ def test_plan_human_output_survives_bracketed_fields_and_fixes(
     )
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.setenv("NO_COLOR", "1")
-    _absent(monkeypatch, "twilio")
-    _present(monkeypatch, "onnxruntime")
+    _pin_extras(monkeypatch, "twilio")
 
     output = " ".join(cli.invoke(app, ["plan", "--manifest", str(manifest)]).stdout.split())
 
@@ -245,7 +264,7 @@ def test_plan_human_output_does_not_crash_on_a_bracket_shaped_detail(
     manifest = _write_manifest(tmp_path, "")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.setenv("NO_COLOR", "1")
-    _present(monkeypatch, "aiortc", "livekit", "onnxruntime")
+    _pin_extras(monkeypatch)
     monkeypatch.setattr(
         selection,
         "plan_issues",
@@ -272,7 +291,7 @@ def test_plan_reports_an_incomplete_phone_profile(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     # Fake the phone extras present so the redness proves the missing TOKEN,
     # not a missing install extra.
-    _present(monkeypatch, "twilio", "onnxruntime")
+    _pin_extras(monkeypatch)
 
     payload = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
 
@@ -309,7 +328,7 @@ def test_plan_and_doctor_report_the_same_cause(
     manifest = _write_manifest(tmp_path, 'stt = "deepgram"\n')
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
-    _present(monkeypatch, "aiortc", "livekit", "onnxruntime")
+    _pin_extras(monkeypatch)
 
     planned = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
     diagnosed = json.loads(

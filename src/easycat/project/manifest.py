@@ -145,6 +145,12 @@ class ProjectManifest:
         Covers ``[server] auth`` and the profile's ``token``: the two
         reference-bearing fields ``build_provider_plan`` cannot see, because it
         receives a :class:`~easycat.project.schema.VoiceProfile`, not a manifest.
+
+        A profile ``token`` counts only on a PHONE transport. ``to_easyconfig``
+        resolves ``spec.token`` inside its ``preset == "phone"`` branch and
+        nowhere else, so a ``token`` on a websocket/webrtc/local profile binds
+        nothing: reporting it here would block ``plan`` and ``/health/ready``
+        on a manifest that starts fine.
         """
         spec = self.profile(profile)
         requirements: list[ProfileRequirement] = []
@@ -156,7 +162,7 @@ class ProjectManifest:
                     reference=self.server.auth.reference,
                 )
             )
-        if spec.token is not None:
+        if spec.token is not None and TRANSPORT_PRESET.get(spec.transport) == "phone":
             requirements.append(
                 ProfileRequirement(
                     var=spec.token.env_var,

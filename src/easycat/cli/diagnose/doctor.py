@@ -1415,7 +1415,8 @@ def doctor(
         None,
         "--profile",
         help=(
-            "Voice profile to diagnose (for example, voice.default). Implies manifest discovery."
+            "Voice profile to diagnose: the name after 'voice.' (for example, "
+            "default). Implies manifest discovery."
         ),
     ),
     fix: bool = typer.Option(
