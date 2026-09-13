@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from easycat.errors import (
     EASYCAT_E202,
@@ -24,7 +24,12 @@ from easycat.errors import (
     EasyCatError,
     SetupIssue,
 )
-from easycat.planning.provider_plan import _ROLE_ORDER, ProviderPlan, build_provider_plan
+from easycat.planning.provider_plan import (
+    _ROLE_ORDER,
+    ProviderPlan,
+    ProviderSelection,
+    build_provider_plan,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -117,6 +122,27 @@ def selection_issue(exc: BaseException, *, profile: str, path: str | None = None
     )
 
 
+def _redacted(issue: SetupIssue) -> SetupIssue:
+    """Return *issue* with ``detail``/``fix`` passed through ``redact_value``.
+
+    :meth:`SetupIssue.from_error` and :meth:`SetupIssue.from_code` cannot redact
+    (``errors.py`` is a stdlib-only leaf), yet every issue built here reaches an
+    HTTP body through ``VoiceServer.plan_payload``. A defect's ``detail``
+    interpolates the manifest's own text, so a future defect rule that quotes a
+    manifest VALUE must not be one edit away from putting a secret on ``/plan``.
+
+    Apply it ONLY where a manifest value can actually reach the string. The
+    redactor is a pattern scrubber, not a formatter: registry catalog text that
+    contains a ``NAME=...`` placeholder is rewritten into a falsely-redacted,
+    non-copy-pasteable instruction whenever ``NAME`` looks credential-ish. So an
+    issue whose ``detail``/``fix`` is pure catalog text over provably non-secret
+    inputs must be appended WITHOUT this wrapper.
+    """
+    from easycat.validation.redaction import redact_value
+
+    return replace(issue, detail=redact_value(issue.detail), fix=redact_value(issue.fix))
+
+
 def plan_selected_profile(
     voice_profile: VoiceProfile,
     *,
@@ -163,17 +189,34 @@ def build_manifest_plan(
 
     Side-effect-free: never resolves the agent reference, never constructs a
     provider, never reads a referenced secret's value.
+
+    Redaction is applied to the MANIFEST-DERIVED issue only. A
+    ``profile_defects`` entry interpolates the manifest's own text (its
+    ``source_path``, and a future rule could quote a value), so it is built
+    through :func:`_redacted`. The ``unset_reference`` issue is not: it is built
+    from ``requirement.var`` / ``requirement.reference``, which
+    ``parse_auth_reference`` (``project/schema.py``) has already proved cannot
+    carry a secret — the reference must be ``bearer-env:`` plus a well-formed
+    env-var NAME and must not match the shared secret detector. Its
+    ``detail``/``fix`` are therefore pure ``EASYCAT_E604`` catalog text, and
+    passing catalog text through the redactor CORRUPTS it: the fix's
+    ``export {var}=...`` placeholder matches the redactor's key/value rule for
+    any var named ``*TOKEN*``/``*SECRET*``/``*KEY*``, which would both mangle
+    the copy-pasteable command and make ``easycat plan`` disagree with
+    ``easycat doctor`` about the identical ``EASYCAT_E604`` cause.
     """
     env = dict(environ) if environ is not None else dict(os.environ)
     selected_profile = voice_profile if voice_profile is not None else manifest.profile(profile)
     plan = plan_selected_profile(selected_profile, profile=profile, environ=env)
 
     defects: list[SetupIssue] = [
-        SetupIssue.from_error(
-            defect,
-            reason="incomplete_selection",
-            field=f"[voice.{profile}]",
-            severity="blocking",
+        _redacted(
+            SetupIssue.from_error(
+                defect,
+                reason="incomplete_selection",
+                field=f"[voice.{profile}]",
+                severity="blocking",
+            )
         )
         for defect in manifest.profile_defects(profile)
     ]
@@ -183,6 +226,9 @@ def build_manifest_plan(
         severity: Literal["blocking", "warning"] = (
             "blocking" if requirement.field.startswith("[voice.") else "warning"
         )
+        # NOT wrapped in ``_redacted`` — see this function's docstring: the
+        # inputs are provably non-secret and the output is catalog text the
+        # redactor would corrupt.
         defects.append(
             SetupIssue.from_code(
                 EASYCAT_E604,
@@ -215,6 +261,46 @@ def degraded_extra_roles(plan: ProviderPlan) -> list[tuple[str, str]]:
         if separator and role and extra:
             pairs.append((role, extra))
     return pairs
+
+
+def selection_to_dict(selection: ProviderSelection) -> dict[str, Any]:
+    """The ONE ``ProviderSelection`` -> JSON shape.
+
+    Keys, order, and value types are what ``easycat plan --json`` and the
+    server's ``/plan`` body have always emitted: ``role``, ``provider``,
+    ``model``, ``config_type``, ``extra``, ``required_env``, ``capabilities``
+    (sorted list). Both surfaces call this, so the shape has one owner.
+    """
+    return {
+        "role": selection.role,
+        "provider": selection.provider,
+        "model": selection.model,
+        "config_type": selection.config_type,
+        "extra": selection.extra,
+        "required_env": selection.required_env,
+        "capabilities": sorted(selection.capabilities),
+    }
+
+
+def plan_body(plan: ProviderPlan) -> dict[str, Any]:
+    """The seven shared ``/plan`` + ``plan --json`` keys, in one place.
+
+    ``{profile, selected, missing_env, missing_extras, warnings,
+    blocking_errors, has_blocking_errors}``. The CLI spreads it into its
+    envelope; ``VoiceServer.plan_payload`` adds ``manifest_loaded`` on top.
+    Both then add ``issues`` from :func:`plan_issues`.
+    """
+    return {
+        "profile": plan.profile,
+        "selected": {
+            role: selection_to_dict(selection) for role, selection in plan.selected.items()
+        },
+        "missing_env": list(plan.missing_env),
+        "missing_extras": list(plan.missing_extras),
+        "warnings": list(plan.warnings),
+        "blocking_errors": list(plan.blocking_errors()),
+        "has_blocking_errors": plan.has_blocking_errors,
+    }
 
 
 def plan_issues(plan: ProviderPlan) -> tuple[SetupIssue, ...]:
@@ -299,8 +385,10 @@ __all__ = [
     "build_manifest_plan",
     "degraded_extra_roles",
     "load_selected_profile",
+    "plan_body",
     "plan_issues",
     "plan_selected_profile",
     "selection_error",
     "selection_issue",
+    "selection_to_dict",
 ]

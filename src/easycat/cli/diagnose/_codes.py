@@ -188,11 +188,23 @@ entry points include:
                          and `fix` when the check fails, `field` naming the
                          env var, install extra, or manifest path the row is
                          about, and `role` when the row belongs to a selected
-                         pipeline role;
+                         pipeline role; a row's `code`, `field`, and `role`
+                         match the `easycat plan --json` issue for the same
+                         cause;
                          `selection` appears when a scaffold table or
                          `--manifest`/`--profile` scopes the run to one app;
                          `probes` reports which probe classes ran; `fixes`
                          appears with `--fix`
+  `profile`, `selected`, `missing_env`, `missing_extras`, `warnings`,
+  `blocking_errors`, `has_blocking_errors`, `issues` -
+                         `easycat plan --json`; each issue has `code`,
+                         `reason` (`missing_env`, `missing_extra`,
+                         `unset_reference`, `incomplete_selection`, or
+                         `unresolvable_profile`), `severity`
+                         (`blocking` or `warning`), and any of `field`,
+                         `role`, `detail`, `fix`; the server's authenticated
+                         `GET /plan` returns the same keys plus
+                         `manifest_loaded`
   `validation`, `report_path`, `exit_code` -
                          `easycat validate quick --json`,
                          `easycat validate contracts --json`,

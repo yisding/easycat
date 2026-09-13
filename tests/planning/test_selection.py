@@ -25,14 +25,13 @@ def _manifest(body: str, tmp_path: Path) -> Path:
 
 
 def _absent(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
-    """Make ``provider_plan._module_available`` report *modules* absent."""
+    """Pin extras availability TOTALLY: *modules* absent, everything else present.
+
+    Delegating the unnamed modules to the real ``find_spec`` would let another
+    lane's missing optional extra add an entry to a whole-collection assertion.
+    """
     absent = set(modules)
-    real = provider_plan._module_available
-    monkeypatch.setattr(
-        provider_plan,
-        "_module_available",
-        lambda module: False if module in absent else real(module),
-    )
+    monkeypatch.setattr(provider_plan, "_module_available", lambda module: module not in absent)
 
 
 def test_manifest_plan_defect_severity_is_scoped() -> None:
@@ -74,6 +73,51 @@ def test_manifest_plan_defect_severity_is_scoped() -> None:
     assert incomplete.field == "[voice.default]"
 
 
+def test_a_token_on_a_non_phone_profile_is_not_a_requirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``to_easyconfig`` only resolves ``token`` on a phone transport.
+
+    A ``token`` on a websocket/webrtc/local profile binds nothing, so counting
+    it as a required reference would report the profile blocked while
+    ``create_session`` starts it happily.
+    """
+    manifest = parse_manifest(
+        {
+            "project": {"name": "sel"},
+            "voice": {"default": {"transport": "websocket", "token": "bearer-env:WS_TOK"}},
+        }
+    )
+
+    _absent(monkeypatch)  # every extra present: the redness would be the token or nothing
+
+    assert manifest.profile_requirements() == ()
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+    assert plan.defects == ()
+    assert plan.has_blocking_errors is False
+
+
+def test_blocking_errors_keep_each_defect_reason() -> None:
+    """An unset reference is not an ``incomplete_selection``.
+
+    Both defects are blocking, but collapsing them onto one reason breaks the
+    documented ``incomplete_selection:[voice.<name>]`` shape and hides the
+    difference between an absent reference value and a structurally incomplete
+    profile.
+    """
+    manifest = parse_manifest(
+        {
+            "project": {"name": "sel"},
+            "voice": {"default": {"transport": "twilio", "token": "bearer-env:TW_TOK"}},
+        }
+    )
+
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+
+    assert "unset_reference:TW_TOK" in plan.blocking_errors()
+    assert "incomplete_selection:TW_TOK" not in plan.blocking_errors()
+
+
 def test_manifest_plan_drops_a_satisfied_reference() -> None:
     manifest = parse_manifest(
         {
@@ -88,8 +132,8 @@ def test_manifest_plan_drops_a_satisfied_reference() -> None:
     assert plan.defects == ()
 
 
-def test_manifest_plan_defects_do_not_block_yet() -> None:
-    """PR1 is behavior-preserving for readiness; PR2 owns ``blocking_errors``."""
+def test_blocking_manifest_defects_reach_blocking_errors() -> None:
+    """V-1's unit half: a phone profile with no token cannot report READY."""
     manifest = parse_manifest(
         {"project": {"name": "sel"}, "voice": {"default": {"transport": "twilio"}}}
     )
@@ -99,7 +143,71 @@ def test_manifest_plan_defects_do_not_block_yet() -> None:
     )
 
     assert plan.defects
-    assert all(not reason.startswith("incomplete") for reason in plan.blocking_errors())
+    assert "incomplete_selection:[voice.default]" in plan.blocking_errors()
+    assert plan.has_blocking_errors is True
+
+
+def test_manifest_defect_issues_are_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """U-11: every ``issues[]`` string reaching ``/plan`` goes through the redactor.
+
+    ``SetupIssue.from_error`` structurally cannot redact (``errors.py`` is a
+    stdlib-only leaf), so ``build_manifest_plan`` must. Pinned against a defect
+    whose message quotes a manifest value, which is the shape a future defect
+    rule would add.
+    """
+    from easycat.errors import EASYCAT_E602
+    from easycat.project.manifest import ProjectManifest
+
+    secret = "sk-live-secret-token-abcdef1234567890"
+    manifest = parse_manifest(
+        {"project": {"name": "sel"}, "voice": {"default": {"transport": "websocket"}}}
+    )
+    monkeypatch.setattr(
+        ProjectManifest,
+        "profile_defects",
+        lambda _self, _profile="default": (
+            EASYCAT_E602(path="easycat.toml", problem=f"token {secret!r} is literal", fix=secret),
+        ),
+    )
+
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+
+    (defect,) = plan.defects
+    assert secret not in defect.detail
+    assert secret not in defect.fix
+    assert "[REDACTED_SECRET]" in defect.detail
+    assert "[REDACTED_SECRET]" in defect.fix
+
+
+def test_unset_reference_issue_keeps_the_registry_text_verbatim() -> None:
+    """An ``unset_reference`` issue is catalog text, so the redactor must not touch it.
+
+    ``redact_value``'s key/value rule matches ``TOKEN=``/``SECRET=``/``KEY=``
+    case-insensitively and consumes to the next separator, so scrubbing
+    ``EASYCAT_E604``'s ``export {var}=...`` fix rewrites the placeholder — and
+    the closing backtick and paren — into ``[REDACTED_SECRET],``. That both
+    breaks the copy-pasteable command and makes ``easycat plan`` disagree with
+    ``easycat doctor`` about the identical cause. The var name here is chosen to
+    match that rule; ``parse_auth_reference`` guarantees it cannot be a secret.
+    """
+    from easycat.errors import EASYCAT_E604
+
+    manifest = parse_manifest(
+        {
+            "project": {"name": "sel"},
+            "voice": {"default": {"transport": "twilio", "token": "bearer-env:TW_STREAM_TOKEN"}},
+        }
+    )
+
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+
+    (defect,) = plan.defects
+    expected = EASYCAT_E604(reference="bearer-env:TW_STREAM_TOKEN", var="TW_STREAM_TOKEN")
+    assert defect.reason == "unset_reference"
+    assert defect.detail == expected.message
+    assert defect.fix == expected.rendered_fix()
+    assert "REDACTED" not in defect.fix
+    assert "`export TW_STREAM_TOKEN=...`" in defect.fix
 
 
 def test_plan_issues_attribute_gaps_to_pipeline_roles(

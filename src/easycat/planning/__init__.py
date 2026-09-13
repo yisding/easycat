@@ -37,10 +37,12 @@ from easycat.planning.provider_plan import (
 from easycat.planning.selection import (
     build_manifest_plan,
     load_selected_profile,
+    plan_body,
     plan_issues,
     plan_selected_profile,
     selection_error,
     selection_issue,
+    selection_to_dict,
 )
 from easycat.planning.transport_registry import (
     BUILTIN_BACKEND_ROLES,
@@ -60,8 +62,10 @@ __all__ = [
     "build_manifest_plan",
     "build_provider_plan",
     "load_selected_profile",
+    "plan_body",
     "plan_issues",
     "plan_selected_profile",
     "selection_error",
     "selection_issue",
+    "selection_to_dict",
 ]

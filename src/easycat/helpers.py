@@ -24,15 +24,41 @@ FeedbackMode = Literal["auto", "on", "off"]
 
 
 def require_env(name: str) -> str:
-    """Load a required environment variable or exit with a clear message."""
+    """Load a required environment variable or exit with a clear message.
+
+    The raised ``SystemExit`` carries the same ``EASYCAT_Exxx`` ``easycat
+    doctor`` and ``easycat plan`` report for this cause — ``EASYCAT_E203`` for a
+    known provider credential, ``EASYCAT_E210`` for any other project variable —
+    under ``easycat_code`` / ``easycat_context`` and as an exception note.
+    """
     value = os.getenv(name)
     if not value:
-        raise SystemExit(
+        err = SystemExit(
             f"{name} is required. Set it before running, for example: "
             f"export {name}=...; verify provider keys with `uv run easycat doctor`. "
             "With a project `.env`, run commands as `uv run --env-file .env ...` "
             "and verify with `uv run easycat doctor --env-file .env`."
         )
+        # NOT ``errors._attach_error_code``: that assigns ``exc.code``, which on
+        # a SystemExit is the EXIT PAYLOAD the interpreter prints and exits with
+        # — overwriting it would print "EASYCAT_E203" instead of the actionable
+        # hint and lose the message a scaffolded phone server's operator sees.
+        # The code goes under its own attribute (the one place in the tree where
+        # the attached-code convention differs) plus a note, leaving
+        # ``args``/``code`` intact. Both imports are inside this failure branch,
+        # so a successful ``require_env`` never triggers entry-point discovery.
+        from easycat._provider_registry import credential_env_vars
+        from easycat.errors import EASYCAT_E203, EASYCAT_E210
+
+        coded = (
+            EASYCAT_E203(var=name)
+            if name in set(credential_env_vars().values())
+            else EASYCAT_E210(var=name)
+        )
+        err.easycat_code = coded.code  # type: ignore[attr-defined]
+        err.easycat_context = coded.context  # type: ignore[attr-defined]
+        err.add_note(f"{coded.code}: {coded.message}")
+        raise err
     return value
 
 

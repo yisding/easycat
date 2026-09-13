@@ -110,6 +110,18 @@ capability inputs without starting the server — and
 selection against the local machine, so the two describe one selection
 mechanism rather than two.
 
+`plan --json` adds an `issues` array next to its existing keys. Each entry
+carries the stable `code` (`EASYCAT_E203` for a missing credential,
+`EASYCAT_E202` for a missing extra, `EASYCAT_E604` for an unset `bearer-env:`
+reference, `EASYCAT_E602` for an incomplete or unresolvable profile), a
+content-free `reason` token, a `severity` of `blocking` or `warning`, and any of
+`field`, `role`, `detail`, and `fix`. Those are the same `code`, `role`, and
+`fix` `easycat doctor --manifest easycat.toml` prints for the same cause, and
+the server's authenticated `GET /plan` returns the same array — so one missing
+key reads identically whether you plan it, diagnose it, or ask a running server.
+The human `plan` output prints the same coded line and its fix under the plan
+table.
+
 ## Documentation and error lookup
 
 ```bash
