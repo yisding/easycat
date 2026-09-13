@@ -136,3 +136,9 @@ def test_release_validation_generated_app_smoke_greps_the_guard_marker() -> None
     assert '2>"$RUNNER_TEMP/guard.err"' in step
     assert 'OPENAI_API_KEY="sk-ambient-not-used"' in step
     assert '"seeded-break target moved; update this step"' in step
+    # The SEEDED-BREAK run needs both controls too, not just the green run:
+    # this job's env carries a real OPENAI_API_KEY, so the two assertions above
+    # are satisfied by the green run alone and cannot catch a bare re-run here.
+    seeded = step[step.index("seeded-break target moved") :]
+    assert 'OPENAI_API_KEY="sk-ambient-not-used"' in seeded
+    assert 'PYTHONPATH="$GITHUB_WORKSPACE/tests/_netguard"' in seeded

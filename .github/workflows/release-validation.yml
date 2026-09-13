@@ -155,7 +155,14 @@ jobs:
           assert '"%H:%M"' in t, "seeded-break target moved; update this step"
           p.write_text(t.replace('"%H:%M"', '"%H hours"'))
           PY
-          if "$RELEASE_VENV/bin/python" -m pytest tests -q -p no:cacheprovider; then
+          # Same credential override and network guard as the green run above.
+          # Unlike ci.yml's peer, THIS job's env carries a real OPENAI_API_KEY
+          # (job-level `env:`), so leaving the seeded-break run bare would hand
+          # the live key and open egress to a generated suite whose whole point
+          # is that it needs neither.
+          if OPENAI_API_KEY="sk-ambient-not-used" \
+              PYTHONPATH="$GITHUB_WORKSPACE/tests/_netguard" \
+              "$RELEASE_VENV/bin/python" -m pytest tests -q -p no:cacheprovider; then
             echo "generated tests did not detect a broken app"; exit 1
           fi
       - name: Run installed wheel quick validation
