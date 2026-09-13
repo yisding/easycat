@@ -544,6 +544,45 @@ async def test_first_payload_holds_trailing_decimal_period_for_lookahead():
     assert "The estimate is 3." not in streaming
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "bug (#1133): _is_numeric_separator holds a trailing digit-preceded "
+        "'.'/'．' for lookahead but has no equivalent branch for a trailing "
+        "digit-preceded ','/'，', so a thousands-grouped number split across "
+        "two stream deltas right after the comma is shipped as two "
+        "disconnected TTS payloads instead of held and merged."
+    ),
+)
+async def test_first_payload_holds_trailing_numeric_comma_for_lookahead():
+    built = await _run_streaming_payloads(
+        ["The total is 1,", "234 items are ready."],
+        strip_md=False,
+    )
+    streaming = [text for text, is_final in built if not is_final]
+    assert streaming, "expected at least one mid-stream payload"
+    assert streaming[0] == "The total is 1,234 items are ready."
+    assert "The total is 1," not in streaming
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "bug (#1133): _has_trailing_numeric_separator recognizes a trailing "
+        "digit-preceded '.'/'．'/':' as a reason to recheck a pending markdown-"
+        "stripping buffer on the next plain delta (mirroring "
+        "_is_numeric_separator's streaming-lookahead branches) but omits ','/"
+        "'，', so even once _is_numeric_separator is fixed, the markdown-"
+        "stripping path can still skip the recheck that would re-run "
+        "split_first_clause after a trailing thousands-separator comma."
+    ),
+)
+def test_has_trailing_numeric_separator_recognizes_trailing_comma():
+    from easycat.session._streaming import _SentenceStreamBuffer
+
+    assert _SentenceStreamBuffer._has_trailing_numeric_separator("The total is 1,") is True
+
+
 async def test_first_payload_bounds_punctuation_free_opener():
     """A run-on opener reaches TTS without waiting for final stream flush."""
     built = await _run_streaming_payloads(
