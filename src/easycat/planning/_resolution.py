@@ -504,13 +504,36 @@ def _echo_canceller_decision(
 
 
 def _decide_echo_canceller(config: EasyConfig, *, catalog: Any) -> RoleDecision:
+    catalog.discover()
     cfg = config.echo_cancellation
     if catalog.is_config_instance(cfg):
         return _decide_catalog_role("echo_canceller", cfg, catalog=catalog)
     if isinstance(cfg, str):
-        provider, _model = split_shortcut(cfg)
+        # A shortcut STRING only survives to here when the caller mutated
+        # ``echo_cancellation`` after construction (``EasyConfig.__post_init__``
+        # parses it otherwise). Resolve it the way ``parse_echo_canceller_string``
+        # does — registered provider, then built-in backend — and RAISE on an
+        # unknown name for the same parity reason as ``_decide_vad`` /
+        # ``_decide_noise_reducer``: ``create_session`` rejects it with
+        # ``EASYCAT_E104``, so a CLEAN plan here would tell ``/plan`` and
+        # ``/health/ready`` that a config which crashes on the first connection
+        # is deployable.
+        provider, model = split_shortcut(cfg)
         if provider in catalog.providers:
             return _decide_catalog_role("echo_canceller", cfg, catalog=catalog)
+        if provider not in ECHO_CANCELLER_BACKENDS:
+            allowed = ", ".join(sorted(set(ECHO_CANCELLER_BACKENDS) | set(catalog.providers)))
+            raise ValueError(
+                f"Unknown echo canceller backend {provider!r} or registered provider. "
+                f"Expected one of: {allowed}."
+            )
+        if model is not None:
+            raise ValueError(f"Built-in echo canceller {provider!r} does not accept a model.")
+        # A built-in shortcut has no fallback-policy knob, so it always parses to
+        # the default ``passthrough`` policy (see ``parse_echo_canceller_string``).
+        return _echo_canceller_decision(
+            enabled=provider == "livekit", fallback_policy="passthrough", spec=cfg
+        )
     if cfg is not None and has_provider_shape(cfg, ECHO_CANCELLER_INSTANCE_METHODS):
         return _injected_decision("echo_canceller", cfg)
     # ``getattr``, NOT the ``isinstance`` rule of
