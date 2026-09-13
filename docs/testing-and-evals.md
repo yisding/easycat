@@ -79,17 +79,21 @@ async def test_the_audio_pipeline_reaches_the_agent():
 and returns one `TurnResult` per input — the list goes straight into
 `assert_latency`. `run_scripted_audio_turn()` drives one turn through
 the real *audio* pipeline (transport → VAD → STT → agent → TTS) with
-scripted stub I/O: no microphone, no key, no network. Its audio is
-synthetic, so it checks pipeline wiring, not speech quality.
+scripted stub I/O: no microphone, no provider extra, no network. Its
+audio is synthetic, so it checks pipeline wiring, not speech quality.
+The scripting covers the *audio* stages only — the agent you pass is
+used as given, so the turn is key-free exactly when that agent is (the
+templates pass a keyless stand-in; a real framework agent still calls
+its model).
 
 `assert_latency` reuses the nearest-rank percentile code behind
 `easycat validate latency`, so a budget asserted in a unit test means
-the same thing as one enforced in a validation lane. The default
-`openai-agents` scaffold ships this pattern as `tests/test_agent.py` —
-offline and key-free: the project's own `tools.py` runs for real,
-`agent.py`'s wiring is asserted as built, and a scripted stand-in for
-the model drives the text and audio pipelines. The remaining templates
-still ship the earlier stub-agent form and migrate in a follow-up. Every
+the same thing as one enforced in a validation lane. Every scaffolded
+template ships this pattern as `tests/test_agent.py` — offline and
+key-free: the project's own SDK-free logic (in `tools.py`, where the
+template has one) runs for real, `agent.py`'s wiring is asserted as
+built behind `pytest.importorskip`, and a scripted stand-in for the
+model drives the text and audio pipelines. Every
 scaffold ships an `AGENTS.md` documenting its tests; run them with
 `uv run pytest` inside the project. A green run means
 the app is wired and the pipeline is healthy; it says nothing about

@@ -3,12 +3,23 @@
 from agents import Agent, function_tool
 from easycat import EasyConfig, run
 
+from tools import connection_help
 
-@function_tool
-def connection_help() -> str:
-    """Return the local browser URL for this demo."""
-    return "Open http://localhost:8080 and allow microphone access."
+AGENT_NAME = "$AGENT_NAME"
+INSTRUCTIONS = "$AGENT_INSTRUCTIONS"
 
 
-agent = Agent(name="$AGENT_NAME", instructions="$AGENT_INSTRUCTIONS", tools=[connection_help])
-run(EasyConfig.browser(agent=agent, **__EASYCAT_CONFIG_EXTRA__))  # noqa: F821
+def make_agent() -> Agent:
+    """Build this project's agent; tests import it, so keep it side-effect free."""
+    return Agent(
+        name=AGENT_NAME, instructions=INSTRUCTIONS, tools=[function_tool(connection_help)]
+    )
+
+
+def make_config() -> EasyConfig:
+    """Wire the agent into a browser voice config. No transport opens until run()."""
+    return EasyConfig.browser(agent=make_agent(), **__EASYCAT_CONFIG_EXTRA__)  # noqa: F821
+
+
+if __name__ == "__main__":
+    run(make_config())
