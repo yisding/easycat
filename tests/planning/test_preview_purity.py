@@ -26,9 +26,13 @@ class _Agent:
 
 
 def _selection_to_dict(selection: object) -> dict[str, object]:
-    from easycat.cli.plan import _selection_to_dict as _to_dict
+    """The projection ``easycat plan --json`` and ``/plan`` both emit.
 
-    return _to_dict(selection)
+    Imported lazily so this module keeps its no-heavy-import shape.
+    """
+    from easycat.planning import selection_to_dict
+
+    return selection_to_dict(selection)
 
 
 # ── Repeated preview is pure ────────────────────────────────────────────

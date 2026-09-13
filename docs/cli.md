@@ -113,6 +113,12 @@ mechanism rather than two. Roles the session does not build are reported as
 and owns turn boundaries — so their install extras are not counted as blocking
 gaps by either command.
 
+`--json` reports the gap tuples `missing_env`, `missing_extras`, and
+`missing_backends`. `missing_backends` names a selected backend whose SDK is
+absent even though it has no pip extra, as `role:provider` (for example
+`vad:krisp`); like the other two it blocks the plan, because `create_session`
+raises for it.
+
 ## Documentation and error lookup
 
 ```bash

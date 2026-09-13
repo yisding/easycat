@@ -6,10 +6,11 @@ Loads an ``easycat.toml`` (discovery: ``--manifest`` / ``EASYCAT_MANIFEST`` /
 human output or the standard JSON envelope (``schema_version=1``).
 
 The planner is side-effect-free: it reports missing env vars / missing optional
-extras WITHOUT instantiating providers or importing a heavy SDK (it resolves the
-manifest ``VoiceProfile`` directly, so ``resolve_agent`` never runs). Manifest
-load/usage errors (``EASYCAT_E601`` / ``EASYCAT_E602``) flow through
-``handle_easycat_error`` via the :func:`cli_command` wrapper.
+extras / selected backends whose SDK is absent WITHOUT instantiating providers
+or importing a heavy SDK (it resolves the manifest ``VoiceProfile`` directly, so
+``resolve_agent`` never runs). Manifest load/usage errors (``EASYCAT_E601`` /
+``EASYCAT_E602``) flow through ``handle_easycat_error`` via the
+:func:`cli_command` wrapper.
 """
 
 from __future__ import annotations
@@ -20,18 +21,6 @@ import typer
 
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_json, json_envelope, stdout_console
-
-
-def _selection_to_dict(selection: Any) -> dict[str, Any]:
-    """Alias for :func:`easycat.planning.selection_to_dict`.
-
-    The projection itself lives next to ``ProviderSelection`` so the CLI and the
-    server's ``/plan`` payload cannot drift apart. Kept as a module-level name
-    because in-tree and out-of-tree callers reference it.
-    """
-    from easycat.planning import selection_to_dict
-
-    return selection_to_dict(selection)
 
 
 def _render_human(plan: Any) -> None:
@@ -48,6 +37,12 @@ def _render_human(plan: Any) -> None:
         stdout_console.print(f"  [red]missing env:[/] {', '.join(plan.missing_env)}")
     if plan.missing_extras:
         stdout_console.print(f"  [red]missing extras:[/] {', '.join(plan.missing_extras)}")
+    if plan.missing_backends:
+        # A selected backend the session cannot construct even though it needs no
+        # pip extra (a commercial SDK ships no PyPI package). Blocking, so it is
+        # printed in red next to its missing-extra sibling rather than as a
+        # warning.
+        stdout_console.print(f"  [red]missing backends:[/] {', '.join(plan.missing_backends)}")
     if plan.warnings:
         stdout_console.print(f"  [yellow]warnings:[/] {', '.join(plan.warnings)}")
     status = "blocked" if plan.has_blocking_errors else "ready"
@@ -75,33 +70,30 @@ def plan(
     """Resolve the provider/capability plan for a manifest profile.
 
     Reports the selected provider per role plus any missing env vars / missing
-    extras / incompatible-combo warnings — without instantiating providers.
+    extras / missing backends / incompatible-combo warnings — without
+    instantiating providers.
+
+    Source documentation only: ``easycat plan --help`` prints the one-line
+    ``_COMMAND_TEXT["plan"].help`` string that ``cli/_app.py`` registers the
+    command with, not this docstring. The operator-facing description of the gap
+    tuples lives in ``docs/cli.md``; the human renderer's own line is pinned by
+    ``tests/cli/test_plan.py::test_plan_human_output_prints_missing_backends``.
     """
     # Manifest load errors (E601/E602) and an unresolvable selection both raise
     # EasyCatError -> handled by the cli_command wrapper. The load/plan/coded-
     # error mapping is shared with ``easycat doctor`` (and, later, the server) so
     # one manifest typo cannot report three different faces.
+    from easycat.planning import plan_to_dict
     from easycat.planning.selection import load_selected_profile, plan_selected_profile
 
     _manifest, voice_profile = load_selected_profile(manifest, profile=profile)
     provider_plan = plan_selected_profile(voice_profile, profile=profile)
 
     if json_output:
-        emit_json(
-            json_envelope(
-                "plan",
-                profile=provider_plan.profile,
-                selected={
-                    role: _selection_to_dict(selection)
-                    for role, selection in provider_plan.selected.items()
-                },
-                missing_env=list(provider_plan.missing_env),
-                missing_extras=list(provider_plan.missing_extras),
-                warnings=list(provider_plan.warnings),
-                blocking_errors=list(provider_plan.blocking_errors()),
-                has_blocking_errors=provider_plan.has_blocking_errors,
-            )
-        )
+        # ``plan_to_dict`` is the one plan -> JSON projection; the server's
+        # ``/plan`` payload wraps the same dict, so a plan-level field cannot land
+        # on one surface and be forgotten on the other.
+        emit_json(json_envelope("plan", **plan_to_dict(provider_plan)))
         return
     _render_human(provider_plan)
 

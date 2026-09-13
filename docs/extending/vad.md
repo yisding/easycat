@@ -136,6 +136,11 @@ also accepts `extra`, `probe_module`, `capabilities`, optional `env_var`, and
 `api_domains`, matching the STT/TTS catalogs. Local VADs normally omit
 `env_var`; no dummy API key is required.
 
+A built-in or registered backend may declare a probe module so the planner can
+report it missing without a pip extra — the case for a commercial SDK that ships
+no PyPI package, where there is no extra to install and `easycat plan` would
+otherwise report a backend the session refuses to construct as ready.
+
 ## Verifying conformance
 
 ```python

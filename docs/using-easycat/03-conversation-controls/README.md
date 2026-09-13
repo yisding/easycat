@@ -130,7 +130,7 @@ installed, so the profiles above need no backend at all. Name one explicitly
 when you need it pinned:
 
 ```python
-VADConfig(backend="silero")   # or "funasr", "ten", "krisp"
+VADConfig(backend="silero")  # or "funasr", "ten", "krisp"
 ```
 
 The difference between `"auto"` and a named backend is failure behaviour, and

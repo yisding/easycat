@@ -70,7 +70,9 @@ class RoleBackend:
     ``extra`` is the optional pyproject install extra (``None`` when no extra is
     needed); ``required_env`` is the env var the backend needs (``None`` for the
     local/offline backends here); ``capabilities`` is the NET-NEW declared
-    capability set.
+    capability set; ``probe_module`` names the SDK a backend needs when it has
+    no pip extra at all (a commercial SDK), so the planner can still report that
+    ``create_session`` would refuse to build it.
     """
 
     config_type: str
@@ -87,6 +89,20 @@ class RoleBackend:
     # ``test_transport_aec_defaults_match_manifest_resolved_easyconfig`` so it
     # cannot silently drift from the preset. Ignored for non-transport roles.
     default_echo_cancellation_enabled: bool = False
+    # The importable module this backend needs even when it has NO pip extra; the
+    # planner reports a selected backend whose probe is absent as an unbuildable
+    # gap (``missing_backends``) rather than a missing extra. This mirrors the
+    # concept ``ProviderCatalog.probe_modules`` already exposes for registered
+    # providers. A backend that DOES declare an ``extra`` keeps the ordinary
+    # missing-extra path (its probe comes from :func:`probe_module_for_extra`), so
+    # this field is only read when ``extra is None``. ``None`` means the backend
+    # needs no import at all — see
+    # ``tests/planning/test_transport_registry.py::
+    # test_every_backend_without_an_extra_declares_a_probe_or_needs_none``, which
+    # lists the entries that legitimately need none. APPENDED last on purpose:
+    # ``RoleBackend`` is exported from ``easycat.planning.__all__``, so field
+    # ORDER is a compatibility surface for out-of-tree positional construction.
+    probe_module: str | None = None
 
 
 # ── TRANSPORT ────────────────────────────────────────────────────────
@@ -159,7 +175,9 @@ TRANSPORT_BACKENDS_BY_CONFIG_TYPE["WebTransportTransportConfig"] = RoleBackend(
 # Backends mirror ``vad/_base.py::VADBackend`` Literal. ``auto`` tries silero
 # first (its extra is the planner's reported extra for ``auto`` so a no-VAD
 # install is flagged); ``silero``/``funasr`` need an onnxruntime extra;
-# ``ten`` needs ``ten-vad``; ``krisp`` is a commercial SDK with no PyPI extra.
+# ``ten`` needs ``ten-vad``; ``krisp`` is a commercial SDK with no PyPI extra, so
+# it declares a ``probe_module`` instead and a missing SDK is reported as an
+# unbuildable backend rather than a missing extra.
 VAD_BACKENDS: dict[str, RoleBackend] = {
     "auto": RoleBackend(
         config_type="VADConfig",
@@ -184,6 +202,7 @@ VAD_BACKENDS: dict[str, RoleBackend] = {
     "krisp": RoleBackend(
         config_type="VADConfig",
         extra=None,
+        probe_module="krisp_audio",
         capabilities=frozenset({"endpointing", "commercial"}),
     ),
 }
@@ -193,7 +212,8 @@ DEFAULT_VAD = "auto"
 # ── NOISE_REDUCER ────────────────────────────────────────────────────
 #
 # Backends mirror ``noise_reduction.py::NoiseReducerBackend``. ``auto`` reports
-# the ``rnnoise`` extra (the open-source fallback); ``krisp`` is commercial.
+# the ``rnnoise`` extra (the open-source fallback); ``krisp`` is commercial and
+# declares a ``probe_module`` for the SDK it has no pip extra for.
 NOISE_REDUCER_BACKENDS: dict[str, RoleBackend] = {
     "auto": RoleBackend(
         config_type="NoiseReducerConfig",
@@ -208,6 +228,7 @@ NOISE_REDUCER_BACKENDS: dict[str, RoleBackend] = {
     "krisp": RoleBackend(
         config_type="NoiseReducerConfig",
         extra=None,
+        probe_module="krisp_audio",
         capabilities=frozenset({"noise_reduction", "commercial"}),
     ),
 }

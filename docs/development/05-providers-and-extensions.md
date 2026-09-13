@@ -186,8 +186,9 @@ families remain independently importable.
 [`planning/`](../../src/easycat/planning/) is the catalog's most demanding
 consumer, and the reason several of the rules above exist. It resolves all seven
 pipeline roles **without instantiating a provider or importing a heavy SDK**,
-then reports missing environment variables, missing extras, and incompatible
-provider/transport combinations. It backs `easycat plan` and the manifest
+then reports missing environment variables, missing extras, selected backends
+whose SDK is absent even without a pip extra, and incompatible provider/transport
+combinations. It backs `easycat plan` and the manifest
 preflight.
 
 The roles are decided exactly once, in the private

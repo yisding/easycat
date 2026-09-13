@@ -113,6 +113,9 @@ def test_plan_payload_factory_only_server_is_empty() -> None:
     payload = server.plan_payload()
     assert payload["selected"] == {}
     assert payload["has_blocking_errors"] is False
+    # The gap tuples are present and empty in EVERY branch, so ``/plan``'s
+    # top-level key set does not depend on which branch answered.
+    assert payload["missing_backends"] == []
 
 
 def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,6 +136,7 @@ def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         "echo_canceller",
     }
     assert payload["selected"]["transport"]["provider"] == "webrtc"
+    assert payload["missing_backends"] == []
     assert payload["has_blocking_errors"] is False
     # The server builds each role dict through ``easycat.planning``'s shared
     # projection, so its keys are exactly the ones ``easycat plan --json``
@@ -312,6 +316,61 @@ def test_ready_is_ready_for_a_native_endpointing_profile(
     assert native._manifest_readiness() == (True, ())
 
 
+async def test_ready_blocks_for_a_selected_backend_whose_sdk_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DX1-D2, the operator-visible half: readiness for an unbuildable backend.
+
+    Krisp ships no PyPI package, so ``VAD_BACKENDS["krisp"]`` declares no extra
+    and ``/health/ready`` reported READY on every machine without the commercial
+    SDK — while ``create_vad`` raises there on the first connection. The backend's
+    ``probe_module`` makes that a blocking gap of its own class.
+
+    ``transport = "websocket"`` so the profile pulls no unrelated extra, and the
+    probe seam is forced rather than trusted: a machine that HAS ``krisp_audio``
+    would otherwise make the control assertion vacuous.
+    """
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available",
+        lambda name: name != "krisp_audio",
+    )
+
+    blocked_dir = tmp_path / "blocked"
+    blocked_dir.mkdir()
+    server = VoiceServer.from_manifest(
+        _write_manifest(blocked_dir, vad="krisp", transport="websocket")
+    )
+    payload = server.plan_payload()
+    assert payload["selected"]["vad"]["provider"] == "krisp"
+    assert payload["missing_backends"] == ["vad:krisp"]
+    assert payload["missing_extras"] == []
+    assert "missing_backend:vad:krisp" in payload["blocking_errors"]
+    assert payload["has_blocking_errors"] is True
+    # The tuple ``VoiceServerHealth`` turns into the 200/503 verdict
+    # (``server/health.py`` reads ``plan_blocking_errors``). Asserted directly
+    # because the HTTP peers in this file need aiohttp, which the dev group does
+    # not install.
+    assert server._manifest_readiness() == (True, ("missing_backend:vad:krisp",))
+    health = await server.health()
+    assert "plan_has_blocking_errors" in health.readiness_failures()
+    assert health.is_ready() is False
+
+    # The control: the SAME profile on a machine that has the SDK is ready, so
+    # the verdict tracks the probe rather than the backend name.
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available", lambda _name: True
+    )
+    installed_dir = tmp_path / "installed"
+    installed_dir.mkdir()
+    installed = VoiceServer.from_manifest(
+        _write_manifest(installed_dir, vad="krisp", transport="websocket")
+    )
+    assert installed.plan_payload()["missing_backends"] == []
+    assert installed._manifest_readiness() == (True, ())
+
+
 def test_plan_payload_unresolvable_backend_returns_blocking_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -326,6 +385,10 @@ def test_plan_payload_unresolvable_backend_returns_blocking_errors(
     assert payload["selected"] == {}
     assert payload["manifest_loaded"] is True
     assert any("plan_unresolvable" in err for err in payload["blocking_errors"])
+    # The diagnostic branch an operator reaches for a red ``/health/ready``: a
+    # client reading ``payload["missing_backends"]`` must not get a KeyError here
+    # of all places.
+    assert payload["missing_backends"] == []
 
 
 def test_capabilities_payload_unresolvable_backend_is_empty(
