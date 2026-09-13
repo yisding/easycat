@@ -79,8 +79,12 @@ async def test_the_audio_pipeline_reaches_the_agent():
 and returns one `TurnResult` per input — the list goes straight into
 `assert_latency`. `run_scripted_audio_turn()` drives one turn through
 the real *audio* pipeline (transport → VAD → STT → agent → TTS) with
-scripted stub I/O: no microphone, no key, no network. Its audio is
-synthetic, so it checks pipeline wiring, not speech quality.
+scripted stub I/O: no microphone, no provider extra, no network. Its
+audio is synthetic, so it checks pipeline wiring, not speech quality.
+The scripting covers the *audio* stages only — the agent you pass is
+used as given, so the turn is key-free exactly when that agent is (the
+templates pass a keyless stand-in; a real framework agent still calls
+its model).
 
 `assert_latency` reuses the nearest-rank percentile code behind
 `easycat validate latency`, so a budget asserted in a unit test means
