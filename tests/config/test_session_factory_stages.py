@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from easycat import EasyConfig, create_session, create_text_session
+from easycat._provider_catalog import inject_event_bus
 from easycat.config import TextSessionConfig, _factory
+from easycat.noise_reduction import NoiseReducerConfig
 from easycat.runtime.artifacts import InMemoryArtifactStore
-from tests.config._helpers import _DummyAgent, _stub_audio_backends
+from easycat.stt.deepgram_provider import DeepgramSTTConfig
+from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
+from easycat.tts.openai_tts import OpenAITTSConfig
+from tests.config._helpers import (
+    _DummyAgent,
+    _IdentitySinkTransport,
+    _stub_audio_backends,
+)
+from tests.planning._recording import LEAF_CONSTRUCTOR_NAMES
 
 
 class _RollbackSTT:
@@ -296,3 +308,258 @@ def test_text_build_failure_rolls_back_acquired_journal(
     assert caught.value is factory_error
     journal.close.assert_called_once_with()
     assert artifact_store.close_calls == 1
+
+
+# ── decide-then-construct split ────────────────────────────────────────────
+
+# The eight leaf constructors of DX1 §5.3: the seven the planner's parity
+# recorder patches, read from its single list so a newly added leaf cannot be
+# forbidden here and left unrecorded there, plus the transport role wrapper the
+# recorder deliberately patches below instead of replacing.
+_LEAF_CONSTRUCTORS = (*LEAF_CONSTRUCTOR_NAMES, "_create_transport")
+
+
+def _forbid_leaf_constructors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every provider constructor `_factory` resolves explode when called."""
+
+    def _explode(name: str):
+        def _fail(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError(f"{name} must not run while deciding the pipeline")
+
+        return _fail
+
+    for name in _LEAF_CONSTRUCTORS:
+        monkeypatch.setattr(_factory, name, _explode(name))
+
+
+def _decision_config() -> EasyConfig:
+    return EasyConfig(
+        stt=OpenAIRealtimeSTTConfig(api_key="test-key"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        agent=_DummyAgent(),
+        enable_noise_reduction=True,
+    )
+
+
+def _field_snapshot(config: EasyConfig) -> dict[str, tuple[int, str]]:
+    """Snapshot every field by identity AND by a value that outlives the call.
+
+    The value half has to be captured eagerly as text: storing the live object
+    would compare it against itself afterwards, so the snapshot would only ever
+    detect *rebinding* a top-level field and would stay green through an
+    in-place write to a nested spec — the exact failure mode a mutating
+    ``inject_event_bus`` would cause (DX1 §7.4). A dataclass ``repr`` spells out
+    every field, so a nested write changes the snapshot;
+    ``test_field_snapshot_detects_in_place_mutation`` keeps that honest.
+    """
+    values = [(f.name, getattr(config, f.name)) for f in fields(config)]
+    return {name: (id(value), repr(value)) for name, value in values}
+
+
+def test_field_snapshot_detects_in_place_mutation() -> None:
+    """The mutation guard's snapshot must not be blind to nested writes.
+
+    Without this, ``test_decide_audio_pipeline_does_not_mutate_the_config``
+    could pass while a spec object was edited underneath it.
+    """
+    config = _decision_config()
+    before = _field_snapshot(config)
+
+    config.vad.min_speech_duration_ms += 1
+
+    assert _field_snapshot(config) != before
+
+
+def test_decide_audio_pipeline_allocates_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deciding the pipeline must not reach a single provider constructor."""
+    _forbid_leaf_constructors(monkeypatch)
+
+    decisions = _factory._decide_audio_pipeline(_decision_config())
+
+    assert isinstance(decisions, _factory._AudioDecisions)
+    assert decisions.enable_vad is True
+    assert decisions.enable_noise_reduction is True
+    assert isinstance(decisions.noise_spec, NoiseReducerConfig)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["vad_enabled", "vad_skipped", "defaulted_noise_reducer"],
+    ids=["vad_enabled", "vad_skipped", "defaulted_noise_reducer"],
+)
+def test_decide_audio_pipeline_does_not_mutate_the_config(case: str) -> None:
+    """The decision step reads the config; it never writes to it."""
+    if case == "vad_skipped":
+        config = EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            agent=_DummyAgent(),
+        )
+    elif case == "defaulted_noise_reducer":
+        config = _decision_config()
+        assert config.noise_reduction is None
+    else:
+        config = EasyConfig(
+            stt=OpenAIRealtimeSTTConfig(api_key="test-key"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            agent=_DummyAgent(),
+        )
+
+    before = _field_snapshot(config)
+    decisions = _factory._decide_audio_pipeline(config)
+    after = _field_snapshot(config)
+
+    assert after == before
+    assert decisions.enable_vad is (case != "vad_skipped")
+    if case == "vad_skipped":
+        assert decisions.vad_spec is None
+
+
+def test_decide_audio_pipeline_keeps_caller_object_identity() -> None:
+    """Injected providers reach the decisions by reference, never copied."""
+    stt = _RollbackSTT()
+    tts = _RollbackTTS()
+    vad = _ClosableVAD()
+    noise_reducer = _ClosableNoiseReducer()
+    echo_canceller = _ClosableEchoCanceller()
+    transport = _IdentitySinkTransport()
+    config = EasyConfig(
+        stt=stt,
+        tts=tts,
+        vad=vad,
+        noise_reduction=noise_reducer,
+        echo_cancellation=echo_canceller,
+        transport=transport,
+        agent=_DummyAgent(),
+    )
+
+    decisions = _factory._decide_audio_pipeline(config)
+
+    assert decisions.stt_spec is stt
+    assert decisions.tts_spec is tts
+    assert decisions.vad_spec is vad
+    assert decisions.noise_spec is noise_reducer
+    assert decisions.echo_spec is echo_canceller
+    assert decisions.transport_spec is transport
+    # D4, preserved: an injected canceller still reports the flag as False.
+    assert decisions.enable_echo_cancellation is False
+
+
+def test_decide_audio_pipeline_reads_the_monkeypatched_auto_turn_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The policy is reached through the module global tests already patch."""
+    monkeypatch.setattr(_factory, "_should_auto_turn_from_stt_final", lambda _config: True)
+
+    decisions = _factory._decide_audio_pipeline(_decision_config())
+
+    assert decisions.auto_turn_from_stt_final is True
+    assert decisions.enable_vad is False
+    assert decisions.vad_spec is None
+
+
+def test_defaulted_noise_reducer_spec_survives_bus_injection_unchanged() -> None:
+    """DX1 §7.4 invariant 1: the moved injection of a *defaulted* reducer config.
+
+    The split hands ``inject_event_bus`` a ``NoiseReducerConfig()`` the old
+    interleaved code built after injection. That reorder is only a no-op while
+    the dataclass declares no ``event_bus`` field — the day it gains one, the
+    wiring changes and this tripwire fires so the change is made deliberately.
+    """
+    decisions = _factory._decide_audio_pipeline(_decision_config())
+    assert isinstance(decisions.noise_spec, NoiseReducerConfig)
+
+    assert inject_event_bus(decisions.noise_spec, _factory.EventBus()) is decisions.noise_spec
+
+
+def test_construct_audio_pipeline_builds_a_vad_when_the_spec_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``enable_vad`` alone gates the stage; a None spec still builds a VAD.
+
+    A caller may leave ``vad`` unset while the stage runs, and the interleaved
+    code built a default VAD for it. Gating construction on ``vad_spec is not
+    None`` would silently drop the stage for those callers.
+    """
+    built: list[object] = []
+    vad = _ClosableVAD()
+
+    def record_create_vad(config: object) -> object:
+        built.append(config)
+        return vad
+
+    monkeypatch.setattr(_factory, "create_vad", record_create_vad)
+
+    decisions = _factory._decide_audio_pipeline(
+        EasyConfig(
+            stt=_RollbackSTT(),
+            tts=_RollbackTTS(),
+            vad=None,
+            transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
+        )
+    )
+    assert decisions.enable_vad is True
+    assert decisions.vad_spec is None
+
+    pipeline = _factory._construct_audio_pipeline(decisions, _factory.EventBus())
+
+    assert built == [None]
+    assert pipeline.vad is vad
+    assert pipeline.enable_vad is True
+
+
+def test_construct_audio_pipeline_rolls_back_before_it_reaches_the_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Construction order: vad and noise precede echo, and echo precedes transport.
+
+    Failing the *echo* step pins two orderings the existing transport-failure
+    test cannot see: the DSP resources built before it are already registered
+    for rollback, and the transport is never reached.
+    """
+    vad = _ClosableVAD()
+    noise_reducer = _ClosableNoiseReducer()
+    transports_built: list[object] = []
+
+    def fail_echo(_config: object) -> object:
+        raise RuntimeError("echo build failed")
+
+    monkeypatch.setattr(_factory, "_resolve_echo_canceller", fail_echo)
+    monkeypatch.setattr(
+        _factory,
+        "_create_transport",
+        lambda config, _event_bus: transports_built.append(config),
+    )
+
+    decisions = _factory._decide_audio_pipeline(
+        EasyConfig(
+            stt=_RollbackSTT(),
+            tts=_RollbackTTS(),
+            vad=vad,
+            noise_reduction=noise_reducer,
+            echo_cancellation=_ClosableEchoCanceller(),
+            agent=_DummyAgent(),
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="echo build failed"):
+        _factory._construct_audio_pipeline(decisions, _factory.EventBus())
+
+    assert vad.close_calls == 1
+    assert noise_reducer.close_calls == 1
+    assert transports_built == []
+
+
+def test_session_keeps_no_reference_to_the_decision_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The decision result stays on create_session's call stack."""
+    _stub_audio_backends(monkeypatch)
+
+    session = create_session(
+        EasyConfig(openai_api_key="test-key", agent=_DummyAgent(), debug="off")
+    )
+
+    assert not any(isinstance(value, _factory._AudioDecisions) for value in vars(session).values())
+    assert isinstance(session._easycat_config, SimpleNamespace)

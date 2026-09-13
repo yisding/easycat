@@ -37,6 +37,7 @@ from easycat._pipeline_decisions import (
     is_tts_provider_instance,
     is_vad_provider_instance,
     noise_reduction_enabled,
+    vad_stage_enabled,
 )
 from easycat._provider_catalog import inject_event_bus
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
@@ -439,6 +440,36 @@ class _DebugResources:
 
 
 @dataclass(frozen=True, slots=True)
+class _AudioDecisions:
+    """Everything :func:`create_session` decides before it allocates anything.
+
+    Holds the caller's own spec objects BY REFERENCE — never a copy — so an
+    injected provider keeps its identity and ownership. Local to
+    :func:`create_session`'s call stack: never assigned to ``Session``, the
+    journal, or a debug bundle. Secrets live on these specs; ``_safe_config_ns``
+    remains the only config snapshot a Session keeps.
+    """
+
+    # Gradual for the same reason as _AudioPipeline: the public factory accepts
+    # pre-built provider objects alongside the typed provider configs.
+    stt_spec: Any
+    tts_spec: Any
+    # The caller's vad spec, or None when the VAD stage is skipped. NOT an
+    # iff: this is also None when the caller left ``vad`` unset while the
+    # stage runs, in which case construction builds a default VAD. Branch on
+    # ``enable_vad`` — it is the only authority on whether the stage runs.
+    vad_spec: Any | None
+    # The reducer spec, defaulted when needed; None when reduction is off.
+    noise_spec: Any | None
+    echo_spec: Any
+    transport_spec: Any
+    auto_turn_from_stt_final: bool
+    enable_vad: bool
+    enable_noise_reduction: bool
+    enable_echo_cancellation: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _AudioPipeline:
     """Resolved provider instances and their derived runtime flags."""
 
@@ -531,51 +562,94 @@ def _register_close(rollback: ExitStack, resource: Any) -> Any:
     return resource
 
 
-def _resolve_audio_pipeline(
-    config: EasyConfig,
+def _decide_audio_pipeline(config: EasyConfig) -> _AudioDecisions:
+    """Resolve every audio-pipeline decision without constructing anything.
+
+    No provider construction, no SDK import, no env read, no network. The one
+    allocation is the ``NoiseReducerConfig()`` default below, a plain dataclass
+    and the same object the interleaved version built inline. The auto-turn
+    policy is reached through the MODULE-LEVEL
+    :func:`_should_auto_turn_from_stt_final` so an existing monkeypatch of that
+    name still governs the outcome — and so a caller handing in a bare
+    namespace never has ``turn_taking`` / ``smart_turn`` / ``telephony`` read
+    off it here.
+
+    Two ``inject_event_bus`` steps move relative to these decisions and both
+    are no-ops at this revision:
+
+    1. A *defaulted* ``NoiseReducerConfig`` now reaches ``inject_event_bus``
+       (it did not before, because the default was applied after injection).
+       ``NoiseReducerConfig`` declares no ``event_bus`` field, so injection
+       returns it unchanged. If that field is ever added, add a test in the
+       same change.
+    2. VAD injection becomes conditional on the stage running at all. The
+       discarded copy was already unobservable because ``inject_event_bus``
+       returns a ``dataclasses.replace`` copy and never mutates its argument.
+    """
+    auto_turn = _should_auto_turn_from_stt_final(config)
+    enable_vad = vad_stage_enabled(auto_turn_from_stt_final=auto_turn)
+    noise_on = noise_reduction_enabled(
+        enable_noise_reduction=config.enable_noise_reduction,
+        noise_reduction=config.noise_reduction,
+    )
+    # EasyConfig fills this default while preserving pre-built providers.
+    echo_spec = config.echo_cancellation
+    assert echo_spec is not None
+    return _AudioDecisions(
+        stt_spec=config.stt,
+        tts_spec=config.tts,
+        vad_spec=config.vad if enable_vad else None,
+        noise_spec=(config.noise_reduction or NoiseReducerConfig()) if noise_on else None,
+        echo_spec=echo_spec,
+        transport_spec=config.transport,
+        auto_turn_from_stt_final=auto_turn,
+        enable_vad=enable_vad,
+        enable_noise_reduction=noise_on,
+        enable_echo_cancellation=echo_cancellation_enabled(
+            echo_spec, config_cls=EchoCancellationConfig
+        ),
+    )
+
+
+def _construct_audio_pipeline(
+    decisions: _AudioDecisions,
     event_bus: EventBus,
 ) -> _AudioPipeline:
+    """Build the providers the decisions selected, rolling back on failure.
+
+    Construction order (stt → tts → vad → noise → echo → transport) is part of
+    the rollback contract: ``tests/config/test_session_factory_stages.py``
+    proves cleanup by failing the transport last.
+    """
     with ExitStack() as rollback:
-        stt = _create_stt(config.stt, event_bus)
-        tts = _create_tts(config.tts, event_bus)
-        auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
-        enable_vad = not auto_turn_from_stt_final
-        vad_config_or_provider = (
-            config.vad
-            if _is_vad_provider_instance(config.vad)
-            else inject_event_bus(config.vad, event_bus)
-        )
-        vad = (
-            _register_close(rollback, _create_vad(vad_config_or_provider)) if enable_vad else None
-        )
-        noise_config_or_provider = (
-            config.noise_reduction
-            if _is_noise_reducer_instance(config.noise_reduction)
-            else inject_event_bus(config.noise_reduction, event_bus)
-        )
-        noise_reducer = (
-            _resolve_noise_reducer(noise_config_or_provider or NoiseReducerConfig())
-            if noise_reduction_enabled(
-                enable_noise_reduction=config.enable_noise_reduction,
-                noise_reduction=config.noise_reduction,
+        stt = _create_stt(decisions.stt_spec, event_bus)
+        tts = _create_tts(decisions.tts_spec, event_bus)
+        vad = None
+        if decisions.enable_vad:
+            vad_config_or_provider = (
+                decisions.vad_spec
+                if _is_vad_provider_instance(decisions.vad_spec)
+                else inject_event_bus(decisions.vad_spec, event_bus)
             )
-            else None
-        )
-        if noise_reducer is not None:
-            _register_close(rollback, noise_reducer)
-        # EasyConfig fills this default while preserving pre-built providers.
+            vad = _register_close(rollback, _create_vad(vad_config_or_provider))
+        noise_reducer = None
+        if decisions.enable_noise_reduction:
+            noise_config_or_provider = (
+                decisions.noise_spec
+                if _is_noise_reducer_instance(decisions.noise_spec)
+                else inject_event_bus(decisions.noise_spec, event_bus)
+            )
+            noise_reducer = _resolve_noise_reducer(noise_config_or_provider)
+            if noise_reducer is not None:
+                _register_close(rollback, noise_reducer)
         echo_config_or_provider = (
-            config.echo_cancellation
-            if _is_echo_canceller_instance(config.echo_cancellation)
-            else inject_event_bus(config.echo_cancellation, event_bus)
+            decisions.echo_spec
+            if _is_echo_canceller_instance(decisions.echo_spec)
+            else inject_event_bus(decisions.echo_spec, event_bus)
         )
-        assert echo_config_or_provider is not None
         echo_canceller = _register_close(
             rollback,
             _resolve_echo_canceller(echo_config_or_provider),
-        )
-        enable_echo_cancellation = echo_cancellation_enabled(
-            echo_config_or_provider, config_cls=EchoCancellationConfig
         )
         pipeline = _AudioPipeline(
             stt=stt,
@@ -583,13 +657,25 @@ def _resolve_audio_pipeline(
             vad=vad,
             noise_reducer=noise_reducer,
             echo_canceller=echo_canceller,
-            transport=_create_transport(config.transport, event_bus),
-            auto_turn_from_stt_final=auto_turn_from_stt_final,
-            enable_vad=enable_vad,
-            enable_echo_cancellation=enable_echo_cancellation,
+            transport=_create_transport(decisions.transport_spec, event_bus),
+            auto_turn_from_stt_final=decisions.auto_turn_from_stt_final,
+            enable_vad=decisions.enable_vad,
+            enable_echo_cancellation=decisions.enable_echo_cancellation,
         )
         rollback.pop_all()
         return pipeline
+
+
+def _resolve_audio_pipeline(
+    config: EasyConfig,
+    event_bus: EventBus,
+) -> _AudioPipeline:
+    """Decide the audio pipeline, then construct it.
+
+    Kept as one name with the original signature because in-tree callers and
+    tests monkeypatch and call it directly.
+    """
+    return _construct_audio_pipeline(_decide_audio_pipeline(config), event_bus)
 
 
 def _resolve_agent(

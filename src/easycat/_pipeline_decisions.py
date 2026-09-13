@@ -11,8 +11,8 @@ construction, no SDK import, no env read, no network, no allocation.
 Consumers:
 
 * :mod:`easycat.config._factory` — construction. It calls the instance
-  predicates, :func:`noise_reduction_enabled`, :func:`echo_cancellation_enabled`
-  and :func:`auto_turn_from_stt_final`.
+  predicates, :func:`noise_reduction_enabled`, :func:`echo_cancellation_enabled`,
+  :func:`auto_turn_from_stt_final` and :func:`vad_stage_enabled`.
 * :mod:`easycat.planning._resolution` — preview. It calls the same instance
   predicates, :func:`noise_reduction_enabled`, :func:`is_push_to_talk`,
   :func:`auto_turn_from_stt_final` and :func:`vad_stage_enabled`.

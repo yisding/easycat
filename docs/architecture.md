@@ -446,7 +446,12 @@ projects the result into the public `ProviderPlan`), while `config/_factory.py`
 owns construction. The pure decisions both need — the live-provider predicates, the
 noise-reduction switch, and the STT-native-endpointing turn policy — live in the
 stdlib-only leaf `easycat._pipeline_decisions`, below both, and an Import Linter
-independence contract keeps the two layers from reaching for each other.
+independence contract keeps the two layers from reaching for each other. Inside
+`config/_factory.py` the same split runs again in the small:
+`_decide_audio_pipeline` resolves every audio-pipeline decision — which specs
+each role uses, whether the VAD stage runs, whether noise reduction is on —
+without constructing any provider, and `_construct_audio_pipeline` builds only what
+those decisions selected, inside the rollback boundary.
 
 ## Non-goals
 
