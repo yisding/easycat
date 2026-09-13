@@ -202,6 +202,31 @@ def plan_to_dict(plan: ProviderPlan) -> dict[str, Any]:
 # ── Projection ───────────────────────────────────────────────────────
 
 
+def disabled_role_required_env(decision: RoleDecision) -> str | None:
+    """The credential a DISABLED role still needs, or ``None``.
+
+    THE ONE owner of that rule; ``_resolution._finalize`` collects the gap from
+    it and :func:`_project_selection` keeps the field so the gap can be
+    attributed back to its role. Split across the two, the plan would report a
+    blocking ``missing_env:<VAR>`` that ``planning.selection.plan_issues``
+    (which pairs each role's ``required_env`` against ``missing_env``) could not
+    match to any role — a red ``/health/ready`` with no coded ``EASYCAT_E203``
+    row and no fix on ``easycat plan`` or ``easycat doctor``.
+
+    A role selected by a shortcut STRING is PARSED before either entry point
+    gets as far as deciding the stage is skipped: ``ProjectManifest._coerce_vad``
+    and ``EasyConfig._resolve_provider_shortcuts`` both call ``parse_vad_string``
+    -> ``ProviderCatalog.parse_string``, which raises ``EASYCAT_E203`` for a
+    registered provider whose ``env_var`` is unset. A typed config instance is
+    never re-parsed, so it genuinely needs nothing — hence the ``isinstance``
+    test rather than a blanket "always report it", which would block a
+    deployment ``create_session`` starts fine.
+    """
+    if not decision.required_env or not isinstance(decision.spec, str):
+        return None
+    return decision.required_env
+
+
 def _project_selection(decision: RoleDecision) -> ProviderSelection:
     """Narrow one resolved role decision to the public selection shape.
 
@@ -209,11 +234,15 @@ def _project_selection(decision: RoleDecision) -> ProviderSelection:
     caller's live provider object — is deliberately NOT copied across.
 
     A role the session builds NOTHING for is reported ``provider="off"`` with no
-    model, no extra, no required env var and ``capabilities={"disabled"}``,
-    whatever the resolver decided underneath. That is the shape a disabled
-    ``noise_reducer`` has shipped with since M6b; the ``vad`` role reuses it when
-    the STT owns endpointing, so a VAD extra is not a blocking gap for a
-    deployment ``create_session`` never asks for a VAD.
+    model, no extra and ``capabilities={"disabled"}``, whatever the resolver
+    decided underneath. That is the shape a disabled ``noise_reducer`` has
+    shipped with since M6b; the ``vad`` role reuses it when the STT owns
+    endpointing, so a VAD extra is not a blocking gap for a deployment
+    ``create_session`` never asks for a VAD.
+
+    ``required_env`` is the ONE field that can survive being disabled — see
+    :func:`disabled_role_required_env`. A disabled ``noise_reducer`` carries no
+    ``spec`` and no ``required_env``, so its shape is unchanged.
     """
     if not decision.enabled:
         return ProviderSelection(
@@ -222,7 +251,7 @@ def _project_selection(decision: RoleDecision) -> ProviderSelection:
             model=None,
             config_type=decision.config_type,
             extra=None,
-            required_env=None,
+            required_env=disabled_role_required_env(decision),
             capabilities=frozenset({"disabled"}),
         )
     return ProviderSelection(

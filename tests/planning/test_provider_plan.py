@@ -212,6 +212,33 @@ def test_unknown_vad_backend_still_raises_when_the_stage_is_skipped() -> None:
         )
 
 
+def test_unknown_echo_canceller_shortcut_raises_not_silent_passthrough() -> None:
+    # Regression: an unknown echo-canceller shortcut must NOT plan as the
+    # passthrough default. ``EasyConfig.__post_init__`` parses the string, so a
+    # shortcut only reaches the planner when the caller mutates the field
+    # afterwards -- and ``create_session`` then revalidates and raises
+    # EASYCAT_E104. A clean plan here would call that config deployable.
+    config = EasyConfig(stt="openai", tts="openai", agent=_Agent(), openai_api_key="sk-x")
+    config.echo_cancellation = "not-a-backend"
+    with pytest.raises(ValueError, match="Unknown echo canceller backend 'not-a-backend'"):
+        build_provider_plan(config, environ={"OPENAI_API_KEY": "x"})
+
+
+def test_builtin_echo_canceller_shortcut_selects_its_backend() -> None:
+    # ``parse_echo_canceller_string("livekit")`` yields an ENABLED config, so the
+    # planner must report the livekit backend (and its ``aec`` extra) rather than
+    # reading ``.enabled`` off the raw string and reporting passthrough.
+    config = EasyConfig(stt="openai", tts="openai", agent=_Agent(), openai_api_key="sk-x")
+    config.echo_cancellation = "livekit"
+    plan = build_provider_plan(config, environ={"OPENAI_API_KEY": "x"})
+    assert plan.selected["echo_canceller"].provider == "livekit"
+    assert plan.selected["echo_canceller"].extra == "aec"
+
+    config.echo_cancellation = "passthrough"
+    plan = build_provider_plan(config, environ={"OPENAI_API_KEY": "x"})
+    assert plan.selected["echo_canceller"].provider == "passthrough"
+
+
 def test_twilio_combo_emits_warning_not_blocking() -> None:
     plan = build_provider_plan(
         _profile(transport="twilio", stt="openai", tts="openai"),

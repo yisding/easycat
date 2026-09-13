@@ -39,7 +39,7 @@ from easycat._pipeline_decisions import (
     noise_reduction_enabled,
     vad_stage_enabled,
 )
-from easycat.planning.provider_plan import _ROLE_ORDER
+from easycat.planning.provider_plan import _ROLE_ORDER, disabled_role_required_env
 from easycat.planning.transport_registry import (
     AGENT_BACKENDS,
     DEFAULT_AGENT,
@@ -599,13 +599,36 @@ def _echo_canceller_decision(
 
 
 def _decide_echo_canceller(config: EasyConfig, *, catalog: Any) -> RoleDecision:
+    catalog.discover()
     cfg = config.echo_cancellation
     if catalog.is_config_instance(cfg):
         return _decide_catalog_role("echo_canceller", cfg, catalog=catalog)
     if isinstance(cfg, str):
-        provider, _model = split_shortcut(cfg)
+        # A shortcut STRING only survives to here when the caller mutated
+        # ``echo_cancellation`` after construction (``EasyConfig.__post_init__``
+        # parses it otherwise). Resolve it the way ``parse_echo_canceller_string``
+        # does — registered provider, then built-in backend — and RAISE on an
+        # unknown name for the same parity reason as ``_decide_vad`` /
+        # ``_decide_noise_reducer``: ``create_session`` rejects it with
+        # ``EASYCAT_E104``, so a CLEAN plan here would tell ``/plan`` and
+        # ``/health/ready`` that a config which crashes on the first connection
+        # is deployable.
+        provider, model = split_shortcut(cfg)
         if provider in catalog.providers:
             return _decide_catalog_role("echo_canceller", cfg, catalog=catalog)
+        if provider not in ECHO_CANCELLER_BACKENDS:
+            allowed = ", ".join(sorted(set(ECHO_CANCELLER_BACKENDS) | set(catalog.providers)))
+            raise ValueError(
+                f"Unknown echo canceller backend {provider!r} or registered provider. "
+                f"Expected one of: {allowed}."
+            )
+        if model is not None:
+            raise ValueError(f"Built-in echo canceller {provider!r} does not accept a model.")
+        # A built-in shortcut has no fallback-policy knob, so it always parses to
+        # the default ``passthrough`` policy (see ``parse_echo_canceller_string``).
+        return _echo_canceller_decision(
+            enabled=provider == "livekit", fallback_policy="passthrough", spec=cfg
+        )
     if cfg is not None and has_provider_shape(cfg, ECHO_CANCELLER_INSTANCE_METHODS):
         return _injected_decision("echo_canceller", cfg)
     # ``getattr``, NOT the ``isinstance`` rule of
@@ -890,9 +913,20 @@ def _finalize(
     for role in _ROLE_ORDER:
         decision = roles[role]
         if not decision.enabled:
-            # ``create_session`` builds nothing for a disabled role, so its
-            # credential, its extra and its SDK are not requirements of this
-            # deployment.
+            # ``create_session`` builds nothing for a disabled role, so neither
+            # its install EXTRA nor its SDK is a requirement of this deployment:
+            # the stage is skipped, so nothing is ever imported for it.
+            #
+            # Its CREDENTIAL can still be one — ``disabled_role_required_env``
+            # owns that rule, and ``_project_selection`` reads the SAME helper so
+            # the gap stays attributable to its role. Dropping it would report a
+            # CLEAN plan — a GREEN ``/health/ready`` — for a manifest whose every
+            # connection raises ``EASYCAT_E203`` out of ``_coerce_vad``, which is
+            # exactly the planner-vs-``create_session`` parity contract this
+            # module exists to keep.
+            disabled_env = disabled_role_required_env(decision)
+            if disabled_env and not probe.env.get(disabled_env):
+                missing_env.add(disabled_env)
             continue
         if decision.required_env and not probe.env.get(decision.required_env):
             missing_env.add(decision.required_env)
