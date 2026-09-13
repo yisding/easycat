@@ -578,7 +578,7 @@ async def test_unpunctuated_stt_final_keeps_full_endpoint_timeout() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", ["Wait...", "Wait…", 'Wait..."'])
+@pytest.mark.parametrize("text", ["Wait...", "Wait…", 'Wait..."', "Wait.."])
 async def test_ellipsis_does_not_shorten_endpoint_timeout(text: str) -> None:
     bus = EventBus()
     tm = TurnManager(
