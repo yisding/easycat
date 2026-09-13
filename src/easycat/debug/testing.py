@@ -180,8 +180,16 @@ async def run_scripted_audio_turn(
     Uses :func:`easycat.stubs.scripted_turn_config` — a scripted
     transport, VAD, STT and TTS around the caller's *agent* — so
     transport → VAD → STT → agent → TTS really runs with no microphone,
-    no API key, no provider extra and no network.  The audio is
-    synthetic: this checks pipeline wiring, not speech quality.
+    no provider extra and no network.  The audio is synthetic: this
+    checks pipeline wiring, not speech quality.
+
+    The AUDIO stages are what is scripted.  *agent* is passed through
+    untouched, so the turn is only key-free and offline when the agent
+    is: hand it a keyless stand-in (the scaffolded templates'
+    ``ScriptedReasoning``) and nothing leaves the process; hand it a
+    real framework agent and its bridge still needs that model's
+    credential and calls the model for real — billing the call when an
+    ambient key happens to be set.
 
     The returned ``latency_ms`` is the voice pipeline's
     turn-ended-to-first-TTS-audio interval (``turn_total_latency_ms``),

@@ -2,7 +2,9 @@
 
 Inbound phone agent for Telnyx Call Control. The FastAPI app answers calls at
 `/telnyx` and starts a WebSocket listener for each call's media stream; every
-call gets its own EasyCat session and the agent from `agent.py`.
+call gets its own EasyCat session and the agent from `agent.py`. `agent.py`
+builds the agent in `make_agent()`; importing it starts nothing, so the
+tests can import the real app.
 
 ## Install
 
@@ -84,15 +86,17 @@ Ctrl-C to quit.
 After editing the scaffold, run the local lint/syntax check:
 
 ```bash
-uv run ruff check agent.py server.py
+uv run ruff check agent.py server.py tools.py
 ```
 
 If Ruff reports an auto-fixable issue, run
-`uv run ruff check --fix agent.py server.py` and then re-run the check.
+`uv run ruff check --fix agent.py server.py tools.py` and then re-run the
+check.
 
-Then run the offline agent tests — no API keys or network needed
-(`tests/test_agent.py` exercises the real turn pipeline with a stub
-agent; see `AGENTS.md` for the testing-and-evals ladder):
+Then run the offline agent tests — no API keys, no network, no microphone
+(`tests/test_agent.py` calls `tools.py` for real, asserts `agent.py`'s wiring,
+and drives EasyCat's real text and audio pipelines with a scripted stand-in for
+the model; see `AGENTS.md` for the testing-and-evals ladder):
 
 ```bash
 uv run pytest
@@ -100,9 +104,11 @@ uv run pytest
 
 ## Next steps
 
-- **Change the call behavior:** edit `instructions=...` in `agent.py`.
-- **Add more tools:** decorate functions with `@function_tool` and pass them in
-  the `tools=[...]` list.
+- **Change the call behavior:** edit the `INSTRUCTIONS` constant that
+  `make_agent()` passes to the agent in `agent.py`.
+- **Add more tools:** add a plain function to `tools.py`, then pass it through
+  `function_tool(...)` in `make_agent()`, so the generated test can call it
+  directly.
 - **Swap STT providers:** add `stt="deepgram/flux"` to `EasyConfig.phone(...)`
   in `server.py`, add `deepgram` to the `easycat[...]` dependency in
   `pyproject.toml`, run `uv sync`, and put `DEEPGRAM_API_KEY` in `.env`.
