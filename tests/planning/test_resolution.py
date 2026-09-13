@@ -256,6 +256,135 @@ def test_profile_vad_role_is_disabled_when_the_stt_owns_endpointing() -> None:
     assert "silero-vad" not in resolved.missing_extras
 
 
+class _KeyedVADConfig:
+    """A registered third-party VAD config whose provider needs a credential."""
+
+
+class _KeyedVADProvider:
+    def configure(self, **_kwargs: object) -> None:  # pragma: no cover - never built
+        raise AssertionError("a skipped VAD stage must never be constructed")
+
+
+@pytest.fixture
+def keyed_vad_catalog():
+    """Register a credential-bearing VAD provider, then restore the catalog.
+
+    Every built-in VAD backend is local, so only an entry-point-registered
+    provider can carry a ``required_env`` — the case these two tests are about.
+    Same snapshot/restore shape as
+    ``tests/planning/test_resolution_parity.py::restore_provider_catalogs``.
+    """
+    from easycat.vad.factory import _CATALOG as vad_catalog
+    from easycat.vad.factory import register_vad_provider
+
+    tables = (
+        "providers",
+        "env_vars",
+        "extras",
+        "api_domains",
+        "probe_modules",
+        "capabilities",
+        "capability_resolvers",
+        "config_to_provider",
+    )
+    saved = {name: dict(getattr(vad_catalog, name)) for name in tables}
+    discovered = vad_catalog._discovered
+    register_vad_provider(
+        "keyedvad",
+        _KeyedVADProvider,
+        _KeyedVADConfig,
+        env_var="KEYED_VAD_API_KEY",
+        extra="keyed-vad",
+    )
+    yield
+    for name, entries in saved.items():
+        table = getattr(vad_catalog, name)
+        table.clear()
+        table.update(entries)
+    object.__setattr__(vad_catalog, "_discovered", discovered)
+
+
+def test_skipped_vad_still_reports_the_credential_its_shortcut_parses(
+    keyed_vad_catalog: None,
+) -> None:
+    """A disabled VAD drops its EXTRA, never the key ``_coerce_vad`` demands.
+
+    ``ProjectManifest._coerce_vad`` parses ``vad = "keyedvad"`` through
+    ``parse_vad_string`` -> ``ProviderCatalog.parse_string`` on EVERY connection,
+    raising ``EASYCAT_E203`` when the key is unset — it never gets as far as
+    noticing the STT owns endpointing. Skipping the credential along with the
+    stage would report ``/health/ready`` GREEN for a profile that fails every
+    connect.
+    """
+    from easycat.planning._resolution import resolve_from_profile
+
+    resolved = resolve_from_profile(
+        VoiceProfile(
+            name="default",
+            transport="websocket",
+            stt="deepgram/flux-general-en",
+            vad="keyedvad",
+        ),
+        probe=ProbeEnvironment.fake(env=_NATIVE_ENDPOINTING_ENV, default=False),
+    )
+
+    assert resolved.roles["vad"].enabled is False
+    # The credential survives the skip; the install extra does not.
+    assert "KEYED_VAD_API_KEY" in resolved.missing_env
+    assert "keyed-vad" not in resolved.missing_extras
+
+
+def test_a_skipped_role_credential_stays_attributable_to_its_role(
+    keyed_vad_catalog: None,
+) -> None:
+    """The surviving gap must reach ``issues[]``, not just ``blocking_errors``.
+
+    ``plan_issues`` pairs each selection's ``required_env`` against the plan's
+    ``missing_env``, so blanking ``required_env`` on the disabled selection
+    while still collecting the gap would give a RED ``/health/ready`` with no
+    coded ``EASYCAT_E203`` row and no fix on ``easycat plan`` / ``doctor``.
+    """
+    from easycat.planning.selection import plan_issues, plan_selected_profile
+
+    plan = plan_selected_profile(
+        VoiceProfile(
+            name="default",
+            transport="websocket",
+            stt="deepgram/flux-general-en",
+            vad="keyedvad",
+        ),
+        profile="default",
+        environ={"DEEPGRAM_API_KEY": "dg", "OPENAI_API_KEY": "sk"},
+    )
+
+    assert plan.selected["vad"].provider == "off"
+    assert plan.selected["vad"].extra is None
+    assert plan.selected["vad"].required_env == "KEYED_VAD_API_KEY"
+    assert plan.blocking_errors() == ("missing_env:KEYED_VAD_API_KEY",)
+    issue = next(i for i in plan_issues(plan) if i.field == "KEYED_VAD_API_KEY")
+    assert (issue.code, issue.role, issue.severity) == ("EASYCAT_E203", "vad", "blocking")
+
+
+def test_skipped_vad_from_a_typed_config_needs_no_credential(
+    keyed_vad_catalog: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half: a typed config is never re-parsed, so nothing is required.
+
+    Pins the narrow shape of the rule above — keeping the credential for EVERY
+    disabled role would block a deployment ``create_session`` starts fine.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-resolution-test")
+    resolved = resolve_from_easyconfig(
+        _config(stt="deepgram/flux-general-en", vad=_KeyedVADConfig()),
+        probe=ProbeEnvironment.fake(env=_NATIVE_ENDPOINTING_ENV, default=False),
+    )
+
+    assert resolved.roles["vad"].enabled is False
+    assert resolved.roles["vad"].required_env == "KEYED_VAD_API_KEY"
+    assert resolved.missing_env == ()
+    assert resolved.missing_extras == ()
+
+
 def test_resolution_reports_the_noise_and_aec_switches() -> None:
     off = resolve_from_easyconfig(_config(), probe=ProbeEnvironment.fake(default=True))
     assert off.enable_noise_reduction is False

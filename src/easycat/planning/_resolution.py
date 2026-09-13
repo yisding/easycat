@@ -37,7 +37,7 @@ from easycat._pipeline_decisions import (
     noise_reduction_enabled,
     vad_stage_enabled,
 )
-from easycat.planning.provider_plan import _ROLE_ORDER
+from easycat.planning.provider_plan import _ROLE_ORDER, disabled_role_required_env
 from easycat.planning.transport_registry import (
     AGENT_BACKENDS,
     DEFAULT_AGENT,
@@ -761,7 +761,19 @@ def _finalize(
         decision = roles[role]
         if not decision.enabled:
             # ``create_session`` builds nothing for a disabled role, so its
-            # credential and its extra are not requirements of this deployment.
+            # install EXTRA is not a requirement of this deployment: the stage is
+            # skipped, so no provider SDK is ever imported for it.
+            #
+            # Its CREDENTIAL can still be one — ``disabled_role_required_env``
+            # owns that rule, and ``_project_selection`` reads the SAME helper so
+            # the gap stays attributable to its role. Dropping it would report a
+            # CLEAN plan — a GREEN ``/health/ready`` — for a manifest whose every
+            # connection raises ``EASYCAT_E203`` out of ``_coerce_vad``, which is
+            # exactly the planner-vs-``create_session`` parity contract this
+            # module exists to keep.
+            disabled_env = disabled_role_required_env(decision)
+            if disabled_env and not probe.env.get(disabled_env):
+                missing_env.add(disabled_env)
             continue
         if decision.required_env and not probe.env.get(decision.required_env):
             missing_env.add(decision.required_env)
