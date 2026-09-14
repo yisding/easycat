@@ -77,7 +77,9 @@ def decode_pcm_mono(blob: bytes, *, sample_width: int, channels: int) -> list[in
         samples.byteswap()
     if channels == 1:
         return list(samples)
-    return [sum(samples[i : i + channels]) // channels for i in range(0, len(samples), channels)]
+    return [
+        round(sum(samples[i : i + channels]) / channels) for i in range(0, len(samples), channels)
+    ]
 
 
 __all__ = [
