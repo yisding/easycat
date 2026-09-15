@@ -110,6 +110,41 @@ class TestErrorInfo:
         assert info.children[1].message == "provider failed"
         assert info.children[1].notes == "provider=openai"
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "known bug: from_exception only matches 'site-packages' per physical "
+            "line, so the source/caret lines under a third-party File line break "
+            "the collapse run instead of folding into it (easycat#1139)"
+        ),
+    )
+    def test_from_exception_collapses_consecutive_third_party_frames(self, monkeypatch):
+        # A traceback line only contains "site-packages" on the ``File ...``
+        # line of a frame; the source line (and any caret-annotation line)
+        # that traceback.format_exception prints beneath it does not. Two
+        # consecutive third-party frames should still collapse to a single
+        # "...N third-party frame(s)..." marker, with none of the
+        # third-party source lines leaking into the journal record.
+        fake_traceback = [
+            "Traceback (most recent call last):\n",
+            '  File "/x/site-packages/httpx/_client.py", line 10, in get\n',
+            "    resp = self._pool.handle_request(req)\n",
+            "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+            '  File "/x/site-packages/httpcore/_sync.py", line 20, in handle_request\n',
+            "    raise exc from None\n",
+            "RuntimeError: boom\n",
+        ]
+        monkeypatch.setattr("traceback.format_exception", lambda *args, **kwargs: fake_traceback)
+
+        info = ErrorInfo.from_exception(RuntimeError("boom"))
+
+        assert info.traceback is not None
+        assert info.traceback.count("third-party frame(s)") == 1
+        assert "...2 third-party frame(s)...\n" in info.traceback
+        assert "handle_request(req)" not in info.traceback
+        assert "raise exc from None" not in info.traceback
+        assert "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" not in info.traceback
+
     def test_from_exception_captures_nested_exception_group_children(self):
         inner_left = ValueError("bad input")
         inner_right = RuntimeError("provider failed")
