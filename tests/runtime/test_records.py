@@ -143,6 +143,7 @@ class TestErrorInfo:
         assert "...2 third-party frame(s)...\n" in info.traceback
         assert "handle_request(req)" not in info.traceback
         assert "raise exc from None" not in info.traceback
+        assert "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" not in info.traceback
 
     def test_from_exception_captures_nested_exception_group_children(self):
         inner_left = ValueError("bad input")
