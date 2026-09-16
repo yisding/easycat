@@ -1708,6 +1708,62 @@ class TestTwilioStreamLifecycleRaces:
         new_ws.release.set()
 
     @pytest.mark.asyncio
+    async def test_handle_stop_does_not_clear_a_replacement_claimed_mid_emit(
+        self,
+    ) -> None:
+        """``_handle_stop``'s teardown needs the same re-check (gh 1103).
+
+        ``_finalize_after_receive`` and ``send_audio``'s error path both
+        re-evaluate connection ownership after the awaited ``CallEnded`` emit
+        before tearing down connection state. ``_handle_stop`` -- the normal,
+        non-error path taken when the carrier sends an explicit ``stop``
+        event -- awaits the very same ``_emit_call_ended_once()`` but never
+        re-checks afterward: it unconditionally clears ``stream_sid``/
+        ``call_sid`` and enqueues a sentinel. If a carrier reconnect lands a
+        new ``start`` frame for a different call while that emit is
+        suspended, the resumed ``_handle_stop`` wipes the *replacement*
+        call's state instead of the one that actually stopped.
+        """
+        bus = EventBus()
+        ended: list[str] = []
+        reconnect_done = asyncio.Event()
+        transport = TwilioTransport(event_bus=bus)
+
+        async def _slow_call_ended(event: CallEnded) -> None:
+            ended.append(event.call_sid)
+            if reconnect_done.is_set():
+                return
+            # Stand in for a handler doing network I/O: the carrier
+            # reconnects and completes its ``start`` frame for a new call
+            # while we are suspended here, inside _handle_stop's emit.
+            await transport._handle_message(_twilio_start_msg("STREAM2", "CALL2"))
+            reconnect_done.set()
+
+        bus.subscribe(CallEnded, _slow_call_ended)
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        assert transport.stream_sid == "STREAM1"
+
+        # STREAM1 is still active when this is sent, so the pre-await
+        # staleness check in _handle_stop passes; the reconnect only lands
+        # later, inside the awaited _emit_call_ended_once().
+        await transport._handle_message(_twilio_stop_msg(stream_sid="STREAM1"))
+        await transport._drain_emit_tasks()
+        assert reconnect_done.is_set(), "the race window was not exercised"
+
+        # The replacement's state must be intact and unpoisoned.
+        assert transport.stream_sid == "STREAM2"
+        assert transport.call_sid == "CALL2"
+        assert transport._in_queue.empty(), "a phantom sentinel was enqueued"
+        assert ended == ["CALL1"]
+
+        # ...and the replacement still carries audio.
+        mulaw_data = pcm16_to_mulaw(bytes(320), source_rate=8000)
+        for _ in range(4):
+            await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
+        assert transport._in_queue.get_nowait() is not None
+
+    @pytest.mark.asyncio
     async def test_send_error_does_not_clear_a_replacement_claimed_mid_emit(
         self,
     ) -> None:
