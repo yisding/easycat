@@ -663,3 +663,48 @@ async def test_telnyx_send_error_does_not_clear_a_replacement_claimed_mid_emit()
     assert transport._ws is new_ws
     assert transport._stream_id == "ST2"
     assert transport.has_client is True
+
+
+@pytest.mark.asyncio
+async def test_telnyx_handle_stop_does_not_clear_a_replacement_claimed_mid_emit() -> None:
+    """``_handle_stop``'s teardown needs the same re-check (gh 1103).
+
+    Unlike ``_finalize_after_receive`` and the send-path error handler,
+    ``_handle_stop`` -- the normal path taken when Telnyx sends an explicit
+    ``stop`` event -- awaited ``_expire_pending_marks()`` and
+    ``_emit_call_ended_once()`` and then unconditionally cleared
+    ``stream_id``/``call_control_id``. If a new ``start`` frame legitimately
+    replaces the stream while either await is suspended, the resumed
+    teardown wiped the *replacement* stream's state instead of the one that
+    actually stopped.
+    """
+    bus = EventBus()
+    ended: list[str] = []
+    reconnect_done = asyncio.Event()
+    transport = TelnyxTransport(event_bus=bus)
+    transport._ws = _DummyTelnyxWebSocket()
+
+    async def _slow_call_ended(event: CallEnded) -> None:
+        ended.append(event.call_sid)
+        if reconnect_done.is_set():
+            return
+        await transport._handle_message(_start_msg(stream_id="ST2", call_control_id="CC2"))
+        reconnect_done.set()
+
+    bus.subscribe(CallEnded, _slow_call_ended)
+
+    await transport._handle_message(_start_msg(stream_id="ST1", call_control_id="CC1"))
+    assert transport._stream_id == "ST1"
+
+    # ST1 is still active when this is sent, so the pre-await staleness
+    # check in _handle_stop passes; the reconnect only lands later, inside
+    # the awaited _expire_pending_marks()/_emit_call_ended_once().
+    stop = json.dumps({"event": "stop", "stop": {"stream_id": "ST1"}})
+    await transport._handle_message(stop)
+    await drain(transport)
+    assert reconnect_done.is_set(), "the race window was not exercised"
+
+    assert transport._stream_id == "ST2"
+    assert transport._call_control_id == "CC2"
+    assert transport._in_queue.empty(), "a phantom sentinel was enqueued"
+    assert ended == ["CC1"]
