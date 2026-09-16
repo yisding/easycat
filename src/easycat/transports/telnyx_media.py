@@ -851,9 +851,15 @@ class _TelnyxProtocolMixin:
                 AudioChunk(data=tail, format=self._audio_format),
                 context="Telnyx",
             )
-        # Mirror the outbound call manager lifecycle for inbound calls.
+        # Mirror the outbound call manager lifecycle for inbound calls. Both
+        # awaits below can suspend long enough for a new start frame to
+        # legitimately replace this stream (gh 1103) -- re-check before
+        # tearing down, instead of wiping the replacement's state.
+        stopped_stream_id = self._stream_id
         await self._expire_pending_marks()
         await self._emit_call_ended_once()
+        if self._stream_id != stopped_stream_id:
+            return  # A new stream claimed the slot during the awaits above.
         self._stream_id = None
         self._call_control_id = None
         self._answered_at = None
