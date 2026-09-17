@@ -72,12 +72,14 @@ def test_barge_in_milestone_ignores_second_window_after_clean_stop() -> None:
     """A second playback window's real barge-in must not be shadowed by the first.
 
     ``_barge_in_walls`` sets ``bot_speaking = True`` on ``bot_started_speaking``
-    but only clears it back to ``False`` inside the branch guarded by
-    ``user_speech_start is not None`` — so a playback window that ends cleanly
-    (the user never spoke during it) leaves ``bot_speaking`` stuck ``True``.
-    Any later, unrelated ``vad_start_speaking`` — even one long after the bot
-    went quiet and unrelated to any playback window — is then wrongly latched
-    in as "the" barge-in, shadowing the real one that follows.
+    but never resets it back to ``False`` anywhere in the function — a
+    ``bot_stopped_speaking`` record is only handled (and only returns) once
+    ``user_speech_start`` is already set, so a playback window that ends
+    cleanly (the user never spoke during it) is ignored and leaves
+    ``bot_speaking`` stuck ``True``. Any later, unrelated ``vad_start_speaking``
+    — even one long after the bot went quiet and unrelated to any playback
+    window — is then wrongly latched in as "the" barge-in, shadowing the real
+    one that follows.
     """
     records = [
         _rec(1, "bot_started_speaking", wall_ms=0),
