@@ -63,7 +63,11 @@ def test_barge_in_milestone_ignores_user_speech_before_bot_started() -> None:
     assert milestones["t1"]["user_speech_start_to_bot_stopped_ms"] is None
 
 
-@pytest.mark.xfail(strict=True, reason="_barge_in_walls never resets bot_speaking (see #issue)")
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="_barge_in_walls never resets bot_speaking (see #1143)",
+)
 def test_barge_in_milestone_ignores_second_window_after_clean_stop() -> None:
     """A second playback window's real barge-in must not be shadowed by the first.
 
