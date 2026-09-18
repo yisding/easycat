@@ -393,8 +393,19 @@ async def test_smart_turn_warmup_swallows_load_errors() -> None:
     await provider.warmup()
 
 
+class _SmartTurnDoubleLoadError(AssertionError):
+    """Raised only when the known gh-1145 double-load reproduces.
+
+    Scoping ``xfail`` to this exception (rather than to ``AssertionError`` or
+    the whole test) keeps an unrelated setup/synchronization failure -- a
+    ``wait_for`` timeout, a broken fixture -- reported as a real failure
+    instead of being silently absorbed as "the expected bug".
+    """
+
+
 @pytest.mark.asyncio
 @pytest.mark.xfail(
+    raises=_SmartTurnDoubleLoadError,
     strict=True,
     reason="gh-1145: _ensure_loaded() has no lock, so warmup() (which never "
     "touches _detect_semaphore) races a concurrent detect() and double-loads "
@@ -483,7 +494,8 @@ async def test_concurrent_warmup_and_detect_do_not_double_load_model(
     assert detect_result == SmartTurnResult(prediction=1, probability=0.87)
     # A correctly-synchronized _ensure_loaded() builds the session exactly
     # once; the race lets both warmup() and detect() build one each.
-    assert build_calls == [0], f"expected a single model load, got {build_calls}"
+    if build_calls != [0]:
+        raise _SmartTurnDoubleLoadError(f"expected a single model load, got {build_calls}")
 
 
 def test_predict_boundary_equal_threshold_is_incomplete() -> None:
