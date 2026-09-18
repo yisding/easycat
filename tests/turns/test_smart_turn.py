@@ -39,6 +39,53 @@ def _route_default_executor(
     monkeypatch.setattr(loop, "run_in_executor", run_in_executor)
 
 
+def _patch_fake_onnx_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    session_started: threading.Event,
+    release_session: threading.Event,
+) -> list[int]:
+    """Patch require_module/_WhisperFeatureExtractorNP with a fake ONNX runtime.
+
+    The fake ``InferenceSession`` blocks its *first* construction on
+    ``release_session`` (after signalling ``session_started``), so a test can
+    force two callers to race into ``_ensure_loaded()``.  Returns the list of
+    call ids in construction order.
+    """
+    build_calls: list[int] = []
+    build_lock = threading.Lock()
+
+    def fake_inference_session(model_path: str, sess_options: Any = None) -> SimpleNamespace:
+        with build_lock:
+            call_id = len(build_calls)
+            build_calls.append(call_id)
+        if call_id == 0:
+            session_started.set()
+            assert release_session.wait(timeout=_WORKER_EVENT_TIMEOUT)
+        return SimpleNamespace(id=call_id)
+
+    fake_ort = SimpleNamespace(
+        ExecutionMode=SimpleNamespace(ORT_SEQUENTIAL="sequential"),
+        GraphOptimizationLevel=SimpleNamespace(ORT_ENABLE_ALL="all"),
+        SessionOptions=lambda: SimpleNamespace(),
+        InferenceSession=fake_inference_session,
+    )
+
+    def fake_require_module(name: str, *, extra: str, purpose: str):
+        if name == "numpy":
+            return SimpleNamespace(zeros=lambda n, dtype=None: [0.0] * n, float32=float)
+        if name == "onnxruntime":
+            return fake_ort
+        raise AssertionError(f"unexpected module request: {name}")
+
+    monkeypatch.setattr("easycat.smart_turn.require_module", fake_require_module)
+    monkeypatch.setattr(
+        "easycat.smart_turn._WhisperFeatureExtractorNP",
+        lambda *, np, chunk_length: SimpleNamespace(id="fe"),
+    )
+    return build_calls
+
+
 def test_smart_turn_ensure_loaded_uses_numpy_and_onnxruntime_only(
     monkeypatch,
     tmp_path,
@@ -344,6 +391,111 @@ async def test_smart_turn_warmup_swallows_load_errors() -> None:
 
     # Returns cleanly despite the load raising.
     await provider.warmup()
+
+
+class _SmartTurnDoubleLoadError(AssertionError):
+    """Raised only when the known gh-1145 double-load reproduces.
+
+    Scoping ``xfail`` to this exception (rather than to ``AssertionError`` or
+    the whole test) keeps an unrelated setup/synchronization failure -- a
+    ``wait_for`` timeout, a broken fixture -- reported as a real failure
+    instead of being silently absorbed as "the expected bug".
+    """
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    raises=_SmartTurnDoubleLoadError,
+    strict=True,
+    reason="gh-1145: _ensure_loaded() has no lock, so warmup() (which never "
+    "touches _detect_semaphore) races a concurrent detect() and double-loads "
+    "the ONNX model",
+)
+async def test_concurrent_warmup_and_detect_do_not_double_load_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A racing warmup() and detect() on one instance must build the model once.
+
+    ``_ensure_loaded`` is a plain ``if self._session is not None: return``
+    check-then-act with no lock.  ``detect()`` serializes against other
+    ``detect()`` calls with ``_detect_semaphore``, but ``warmup()`` never
+    acquires that semaphore, so it provides no exclusion against a
+    concurrent ``detect()`` (e.g. a ``SmartTurnONNX`` instance shared across
+    more than one ``Session``).  Both can observe ``self._session is None``
+    and each construct their own ``ort.InferenceSession``, wasting a model
+    load and letting one overwrite the other's session/feature extractor.
+    """
+    loop = asyncio.get_running_loop()
+    # A third worker keeps the "did both callers enter _ensure_loaded()"
+    # poll below from queuing behind the two blocked/contended callers.
+    executor = ThreadPoolExecutor(max_workers=3)
+    _route_default_executor(loop, executor, monkeypatch)
+
+    session_started = threading.Event()
+    release_session = threading.Event()
+    both_entered = threading.Event()
+    entry_count = {"n": 0}
+    entry_lock = threading.Lock()
+    build_calls = _patch_fake_onnx_runtime(
+        monkeypatch, session_started=session_started, release_session=release_session
+    )
+
+    provider = SmartTurnONNX(model_path="unused.onnx", timeout_s=1.0)
+    # A non-fallback-shaped result, so a passing test proves detect()
+    # actually completed a real inference rather than coincidentally
+    # matching detect()'s own contention/timeout fallback.
+    provider._predict_sync = lambda audio: SmartTurnResult(  # type: ignore[method-assign]
+        prediction=1, probability=0.87
+    )
+    provider._chunks_to_float32_16k = lambda chunks: [0.0]  # type: ignore[method-assign]
+
+    real_ensure_loaded = provider._ensure_loaded
+
+    def tracking_ensure_loaded() -> None:
+        with entry_lock:
+            entry_count["n"] += 1
+            if entry_count["n"] == 2:
+                both_entered.set()
+        real_ensure_loaded()
+
+    provider._ensure_loaded = tracking_ensure_loaded  # type: ignore[method-assign]
+
+    chunk = AudioChunk(data=b"\0" * 640, format=PCM16_MONO_16K)
+
+    try:
+        warmup_task = asyncio.create_task(provider.warmup())
+        await asyncio.wait_for(
+            loop.run_in_executor(None, session_started.wait, _WORKER_EVENT_TIMEOUT),
+            timeout=_WORKER_EVENT_TIMEOUT,
+        )
+
+        # warmup()'s _ensure_loaded() is mid-build here, but since it never
+        # touches _detect_semaphore, detect() races in rather than waiting.
+        detect_task = asyncio.create_task(provider.detect([chunk]))
+        # Release only once *both* callers have entered _ensure_loaded().
+        # This is independent of whether detect() itself has finished, so
+        # it can't deadlock behind (or have its assertions coincidentally
+        # satisfied by) detect()'s own contention timeout once the race is
+        # fixed and detect() instead blocks briefly behind the shared load.
+        await asyncio.wait_for(
+            loop.run_in_executor(None, both_entered.wait, _WORKER_EVENT_TIMEOUT),
+            timeout=_WORKER_EVENT_TIMEOUT,
+        )
+        release_session.set()
+
+        detect_result = await asyncio.wait_for(detect_task, timeout=_WORKER_EVENT_TIMEOUT)
+        await asyncio.wait_for(warmup_task, timeout=_WORKER_EVENT_TIMEOUT)
+    finally:
+        # Unblock the held build even if an assertion/wait above failed
+        # before reaching release_session.set(), so shutdown can't hang.
+        release_session.set()
+        executor.shutdown(wait=True)
+
+    assert detect_result == SmartTurnResult(prediction=1, probability=0.87)
+    # A correctly-synchronized _ensure_loaded() builds the session exactly
+    # once; the race lets both warmup() and detect() build one each.
+    if build_calls != [0]:
+        raise _SmartTurnDoubleLoadError(f"expected a single model load, got {build_calls}")
 
 
 def test_predict_boundary_equal_threshold_is_incomplete() -> None:
