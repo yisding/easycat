@@ -346,6 +346,96 @@ async def test_smart_turn_warmup_swallows_load_errors() -> None:
     await provider.warmup()
 
 
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    reason="gh-1145: _ensure_loaded() has no lock, so warmup() (which never "
+    "touches _detect_semaphore) races a concurrent detect() and double-loads "
+    "the ONNX model",
+)
+async def test_concurrent_warmup_and_detect_do_not_double_load_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A racing warmup() and detect() on one instance must build the model once.
+
+    ``_ensure_loaded`` is a plain ``if self._session is not None: return``
+    check-then-act with no lock.  ``detect()`` serializes against other
+    ``detect()`` calls with ``_detect_semaphore``, but ``warmup()`` never
+    acquires that semaphore, so it provides no exclusion against a
+    concurrent ``detect()`` (e.g. a ``SmartTurnONNX`` instance shared across
+    more than one ``Session``).  Both can observe ``self._session is None``
+    and each construct their own ``ort.InferenceSession``, wasting a model
+    load and letting one overwrite the other's session/feature extractor.
+    """
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=2)
+    _route_default_executor(loop, executor, monkeypatch)
+
+    session_started = threading.Event()
+    release_session = threading.Event()
+    build_calls: list[int] = []
+    build_lock = threading.Lock()
+
+    def fake_inference_session(model_path: str, sess_options: Any = None) -> SimpleNamespace:
+        with build_lock:
+            call_id = len(build_calls)
+            build_calls.append(call_id)
+        if call_id == 0:
+            # Hold the first (warmup) build open long enough for a
+            # concurrent detect() to also observe `self._session is None`.
+            session_started.set()
+            assert release_session.wait(timeout=_WORKER_EVENT_TIMEOUT)
+        return SimpleNamespace(id=call_id)
+
+    fake_ort = SimpleNamespace(
+        ExecutionMode=SimpleNamespace(ORT_SEQUENTIAL="sequential"),
+        GraphOptimizationLevel=SimpleNamespace(ORT_ENABLE_ALL="all"),
+        SessionOptions=lambda: SimpleNamespace(),
+        InferenceSession=fake_inference_session,
+    )
+
+    def fake_require_module(name: str, *, extra: str, purpose: str):
+        if name == "numpy":
+            return SimpleNamespace(zeros=lambda n, dtype=None: [0.0] * n, float32=float)
+        if name == "onnxruntime":
+            return fake_ort
+        raise AssertionError(f"unexpected module request: {name}")
+
+    monkeypatch.setattr("easycat.smart_turn.require_module", fake_require_module)
+    monkeypatch.setattr(
+        "easycat.smart_turn._WhisperFeatureExtractorNP",
+        lambda *, np, chunk_length: SimpleNamespace(id="fe"),
+    )
+
+    provider = SmartTurnONNX(model_path="unused.onnx", timeout_s=1.0)
+    provider._predict_sync = lambda audio: SmartTurnResult(  # type: ignore[method-assign]
+        prediction=0, probability=0.0
+    )
+    provider._chunks_to_float32_16k = lambda chunks: []  # type: ignore[method-assign]
+
+    chunk = AudioChunk(data=b"\0" * 640, format=PCM16_MONO_16K)
+
+    try:
+        warmup_task = asyncio.create_task(provider.warmup())
+        await asyncio.wait_for(
+            loop.run_in_executor(None, session_started.wait, _WORKER_EVENT_TIMEOUT),
+            timeout=_WORKER_EVENT_TIMEOUT,
+        )
+        # warmup()'s _ensure_loaded() is mid-build here, but since it never
+        # touches _detect_semaphore, detect() races in with its own load
+        # rather than waiting.
+        detect_result = await provider.detect([chunk])
+        release_session.set()
+        await asyncio.wait_for(warmup_task, timeout=_WORKER_EVENT_TIMEOUT)
+    finally:
+        executor.shutdown(wait=True)
+
+    assert detect_result == SmartTurnResult(prediction=0, probability=0.0)
+    # A correctly-synchronized _ensure_loaded() builds the session exactly
+    # once; the race lets both warmup() and detect() build one each.
+    assert build_calls == [0], f"expected a single model load, got {build_calls}"
+
+
 def test_predict_boundary_equal_threshold_is_incomplete() -> None:
     """probability == threshold must classify as incomplete (strict-greater)."""
 
