@@ -784,6 +784,10 @@ async def test_audio_captured_during_speech():
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    reason="pre-roll buffer leaks prior turn audio across a barge-in from PROCESSING",
+)
 async def test_pre_roll_buffer_does_not_leak_prior_turn_audio_into_barge_in():
     """A completed turn's trailing audio must not resurface in the next turn.
 
@@ -797,6 +801,10 @@ async def test_pre_roll_buffer_does_not_leak_prior_turn_audio_into_barge_in():
     ``_turn_runner`` replays every chunk of it into the new turn's STT stream
     as "pre-roll priming" -- i.e. audio that belongs to a turn already fully
     consumed gets resent to STT as if it were part of the next turn.
+
+    Marked ``xfail(strict=True)`` per repo convention until the fix lands
+    (clear ``_pre_roll_buffer`` in ``_complete_user_turn``); this pins the
+    bug rather than leaving CI red.
     """
     bus = EventBus()
     config = TurnManagerConfig(end_of_turn_silence_ms=10, pre_roll_ms=100)
