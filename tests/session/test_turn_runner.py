@@ -385,6 +385,22 @@ class _FailingStreamingAgent(_TestBridgeBase):
         raise RuntimeError("agent unavailable")
 
 
+class _QuietStreamingAgent(_TestBridgeBase):
+    """Ends the turn without speaking (e.g. a silent tool-only reply)."""
+
+    async def run(self, text: str) -> str:
+        return ""
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder, cancel_token
+        yield AgentBridgeEvent(kind="done", text="")
+
+
 def _config(**overrides) -> SessionConfig:
     base = {
         "transport": FakeTransport(),
@@ -3043,6 +3059,34 @@ async def test_run_streaming_agent_action_drain_triggers_stop() -> None:
     await session._turn_runner.run_streaming_agent("hello", token=None)
 
     session.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_agent_quiet_turn_still_drains_actions() -> None:
+    """A queued action must still run when the agent speaks no text at all.
+
+    ``_settle_turn_after_tts`` only drains queued ``SessionActions`` (and
+    clears a stuck ``no_interrupt`` guard) through the ``st.synth_started``
+    branch, which requires a TTS payload to have actually been queued. An
+    agent that ends the call via a tool without also speaking a final line
+    (``invoke`` yields no ``text_delta``, only an empty ``done``) never
+    queues TTS audio, so ``synth_started`` stays ``False`` and the fallback
+    path in ``run_streaming_agent`` only resets turn-manager state -- the
+    pending ``end_call`` action, and its ``no_interrupt=True`` barge-in
+    guard, were silently orphaned forever.
+    """
+    actions = SessionActions()
+    actions.end_call(reason="done")
+    session = Session(_config(agent=_QuietStreamingAgent(), session_actions=actions))
+    session.stop = AsyncMock()
+    session._turn = TurnContext("turn-quiet", CancelToken())
+
+    result = await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    assert result == ""
+    session.stop.assert_awaited_once()
+    assert not actions.has_pending
+    assert not actions.no_interrupt
 
 
 @pytest.mark.asyncio
