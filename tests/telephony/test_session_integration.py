@@ -14,6 +14,7 @@ from easycat.config import OutboundCallConfig, TelephonyConfig
 from easycat.events import (
     CallAnswered,
     CallEnded,
+    CallFailed,
     CallRinging,
     CallScreening,
     EventBus,
@@ -471,6 +472,66 @@ class TestInboundCallIsNotAdoptedByOutboundMachine:
                 assert sm.state == OutboundCallState.CLASSIFYING, direction
             finally:
                 sm.stop()
+
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "gh 1153: _on_ended has no direction guard, unlike _on_answered's gh 1098 "
+            "fix. A fresh outbound machine (call_sid=='') adopts any inbound CallEnded "
+            "it sees on the shared bus and fires a bogus CallStateChanged to ENDED."
+        ),
+    )
+    async def test_inbound_ended_is_not_adopted_by_outbound_machine(self) -> None:
+        """An inbound call's own hangup must not be journaled as an outbound call ending.
+
+        The inbound media transports emit ``CallEnded`` on the same session bus
+        "for a consistent inbound + outbound lifecycle" (mirroring
+        ``CallAnswered``), but ``CallEnded`` carries no ``direction`` field.
+        ``_matches_active_call`` still accepts any SID while ``_call_sid`` is
+        empty -- which it always is for a machine that never placed a call --
+        so the outbound machine adopts the inbound hangup and transitions to
+        ENDED, corrupting anything downstream that consumes ``CallStateChanged``
+        (e.g. ``CallDispositionTracker``).
+        """
+        bus = EventBus()
+        state_changes: list[CallStateChanged] = []
+        bus.subscribe(CallStateChanged, state_changes.append)
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallEnded(call_sid="CA-inbound-hangup", duration_s=42.0))
+
+            assert sm.state == OutboundCallState.INITIATING
+            assert sm.call_sid == ""
+            assert state_changes == [], "a live inbound call must not be journaled as ended"
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "gh 1153: _on_failed has no direction guard, unlike _on_answered's gh 1098 "
+            "fix. A fresh outbound machine (call_sid=='') adopts any inbound CallFailed "
+            "it sees on the shared bus and fires a bogus CallStateChanged to ENDED."
+        ),
+    )
+    async def test_inbound_failed_is_not_adopted_by_outbound_machine(self) -> None:
+        """Same gap as ``CallEnded``, for the ``CallFailed`` lifecycle event."""
+        bus = EventBus()
+        state_changes: list[CallStateChanged] = []
+        bus.subscribe(CallStateChanged, state_changes.append)
+        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+        sm.start()
+        try:
+            await bus.emit(CallFailed(call_sid="CA-inbound-failed", reason="busy"))
+
+            assert sm.state == OutboundCallState.INITIATING
+            assert sm.call_sid == ""
+            assert state_changes == [], "a live inbound call must not be journaled as ended"
+        finally:
+            sm.stop()
 
     def test_inbound_transports_mark_their_call_answered_inbound(self) -> None:
         """Structural lock: both inbound media transports must set the marker."""
