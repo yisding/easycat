@@ -737,6 +737,18 @@ class OutboundCallStateMachine:
         await self._terminate_call(event.call_sid)
 
     async def _on_ended(self, event: CallEnded) -> None:
+        if event.direction == "inbound":
+            # Same gap as _on_answered's gh-1098 fix, for the terminal event:
+            # the inbound media transports emit CallEnded too, and
+            # _matches_active_call accepts any SID while _call_sid is empty --
+            # which it always is on a fresh inbound session -- so this
+            # never-placed machine adopted the inbound hangup and forced a
+            # bogus CallStateChanged to ENDED (gh 1153).
+            logger.debug(
+                "Ignoring inbound CallEnded for %s; this manager tracks outbound calls",
+                event.call_sid,
+            )
+            return
         if not self._matches_active_call(event.call_sid):
             return
         await self._terminate_call(event.call_sid)

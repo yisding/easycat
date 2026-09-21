@@ -445,12 +445,24 @@ class CallFailed(Event):
 
 @dataclass(frozen=True)
 class CallEnded(Event):
-    """Call terminated."""
+    """Call terminated.
+
+    ``direction`` mirrors :class:`CallAnswered`'s field: the inbound media
+    transports emit this event too, "for a consistent inbound + outbound
+    lifecycle", so :class:`~easycat.telephony.call_state.OutboundCallStateMachine`
+    needs to tell its own call's end apart from an unrelated inbound call's
+    hangup arriving on the same bus before this machine has adopted a call
+    (``call_sid`` empty). It is optional and defaults to ``None``
+    ("unspecified"), treated as outbound for compatibility with hand-driven
+    flows; an out-of-tree inbound transport should set ``direction="inbound"``
+    (gh 1153).
+    """
 
     call_sid: str
     duration_s: float | None = None
     disposition: str | None = None
     number: str | None = None
+    direction: Literal["inbound", "outbound"] | None = None
 
 
 # Error

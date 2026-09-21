@@ -27,7 +27,7 @@ import logging
 import math
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, ClassVar, cast, get_type_hints
+from typing import Any, ClassVar, Literal, cast, get_type_hints
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -212,8 +212,16 @@ async def emit_call_ended(
     answered_at: float | None,
     call_identity: Any | None,
     session_id: str | None,
+    direction: Literal["inbound", "outbound"] | None = None,
 ) -> None:
-    """Emit the once-per-call ``CallEnded`` event when a call id is known."""
+    """Emit the once-per-call ``CallEnded`` event when a call id is known.
+
+    ``direction`` mirrors the inbound marker :class:`CallAnswered` already
+    carries (gh 1098): the inbound media transports call this helper too,
+    "for a consistent inbound + outbound lifecycle", so
+    :class:`~easycat.telephony.call_state.OutboundCallStateMachine` needs it
+    to tell an inbound call's own hangup apart from its own (gh 1153).
+    """
     if event_bus is None or call_id is None:
         return
     duration = None
@@ -225,6 +233,7 @@ async def emit_call_ended(
             duration_s=duration,
             number=call_identity.caller_number if call_identity is not None else None,
             session_id=session_id,
+            direction=direction,
         )
     )
 

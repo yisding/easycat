@@ -14,7 +14,6 @@ from easycat.config import OutboundCallConfig, TelephonyConfig
 from easycat.events import (
     CallAnswered,
     CallEnded,
-    CallFailed,
     CallRinging,
     CallScreening,
     EventBus,
@@ -474,25 +473,28 @@ class TestInboundCallIsNotAdoptedByOutboundMachine:
                 sm.stop()
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "gh 1153: _on_ended has no direction guard, unlike _on_answered's gh 1098 "
-            "fix. A fresh outbound machine (call_sid=='') adopts any inbound CallEnded "
-            "it sees on the shared bus and fires a bogus CallStateChanged to ENDED."
-        ),
-    )
     async def test_inbound_ended_is_not_adopted_by_outbound_machine(self) -> None:
         """An inbound call's own hangup must not be journaled as an outbound call ending.
 
-        The inbound media transports emit ``CallEnded`` on the same session bus
-        "for a consistent inbound + outbound lifecycle" (mirroring
-        ``CallAnswered``), but ``CallEnded`` carries no ``direction`` field.
-        ``_matches_active_call`` still accepts any SID while ``_call_sid`` is
-        empty -- which it always is for a machine that never placed a call --
-        so the outbound machine adopts the inbound hangup and transitions to
-        ENDED, corrupting anything downstream that consumes ``CallStateChanged``
-        (e.g. ``CallDispositionTracker``).
+        gh 1153: the inbound media transports emit ``CallEnded`` on the same
+        session bus "for a consistent inbound + outbound lifecycle" (mirroring
+        ``CallAnswered``), and ``_matches_active_call`` accepts any SID while
+        ``_call_sid`` is empty -- which it always is for a machine that never
+        placed a call. Unguarded, the outbound machine would adopt the inbound
+        hangup and transition to ENDED, corrupting anything downstream that
+        consumes ``CallStateChanged`` (e.g. ``CallDispositionTracker``).
+        ``CallEnded.direction`` (mirroring ``CallAnswered``'s gh-1098 field)
+        and the matching guard in ``_on_ended`` close that gap.
+
+        Note: an analogous ``CallFailed`` gap does not exist in practice --
+        no inbound producer in this codebase ever emits ``CallFailed`` (it is
+        only raised by the outbound call-placement path in
+        ``telephony/outbound.py`` and ``telephony/telnyx.py``'s webhook
+        parser for a call that path itself placed), and ``_on_failed``'s
+        current unguarded behavior is exactly what ``test_outbound_busy`` /
+        ``test_outbound_no_answer`` (``tests/telephony/test_outbound_integration.py``)
+        intentionally rely on: an outbound call can legitimately fail before
+        ``CallInitiated`` ever sets ``call_sid``.
         """
         bus = EventBus()
         state_changes: list[CallStateChanged] = []
@@ -500,7 +502,9 @@ class TestInboundCallIsNotAdoptedByOutboundMachine:
         sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
         sm.start()
         try:
-            await bus.emit(CallEnded(call_sid="CA-inbound-hangup", duration_s=42.0))
+            await bus.emit(
+                CallEnded(call_sid="CA-inbound-hangup", duration_s=42.0, direction="inbound")
+            )
 
             assert sm.state == OutboundCallState.INITIATING
             assert sm.call_sid == ""
@@ -509,35 +513,35 @@ class TestInboundCallIsNotAdoptedByOutboundMachine:
             sm.stop()
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "gh 1153: _on_failed has no direction guard, unlike _on_answered's gh 1098 "
-            "fix. A fresh outbound machine (call_sid=='') adopts any inbound CallFailed "
-            "it sees on the shared bus and fires a bogus CallStateChanged to ENDED."
-        ),
-    )
-    async def test_inbound_failed_is_not_adopted_by_outbound_machine(self) -> None:
-        """Same gap as ``CallEnded``, for the ``CallFailed`` lifecycle event."""
-        bus = EventBus()
-        state_changes: list[CallStateChanged] = []
-        bus.subscribe(CallStateChanged, state_changes.append)
-        sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
-        sm.start()
-        try:
-            await bus.emit(CallFailed(call_sid="CA-inbound-failed", reason="busy"))
+    async def test_outbound_ended_still_terminates(self) -> None:
+        """The outbound path is unaffected, with or without an explicit direction.
 
-            assert sm.state == OutboundCallState.INITIATING
-            assert sm.call_sid == ""
-            assert state_changes == [], "a live inbound call must not be journaled as ended"
-        finally:
-            sm.stop()
+        Mirrors ``test_outbound_answered_still_classifies``: a legitimate
+        outbound call may end (or fail, per ``test_outbound_busy`` /
+        ``test_outbound_no_answer``) before ``CallInitiated`` ever set
+        ``call_sid``, so ``_on_ended`` must still adopt an un-marked or
+        explicitly outbound ``CallEnded``.
+        """
+        for direction in ("outbound", None):
+            bus = EventBus()
+            sm = OutboundCallStateMachine(bus, classification_timeout_s=60)
+            sm.start()
+            try:
+                await bus.emit(CallEnded(call_sid="CA-out", direction=direction))
+                assert sm.state == OutboundCallState.ENDED, direction
+                assert sm.call_sid == "CA-out", direction
+            finally:
+                sm.stop()
 
-    def test_inbound_transports_mark_their_call_answered_inbound(self) -> None:
-        """Structural lock: both inbound media transports must set the marker."""
+    def test_inbound_transports_mark_their_call_answered_and_ended_inbound(self) -> None:
+        """Structural lock: both inbound media transports must set the marker.
+
+        Covers both the gh-1098 ``CallAnswered`` marker and the gh-1153
+        ``CallEnded`` marker passed through ``emit_call_ended``.
+        """
         from pathlib import Path
 
         root = Path(__file__).resolve().parents[2] / "src" / "easycat" / "transports"
         for name in ("twilio_media.py", "telnyx_media.py"):
             source = (root / name).read_text(encoding="utf-8")
-            assert 'direction="inbound"' in source, name
+            assert source.count('direction="inbound"') >= 2, name
