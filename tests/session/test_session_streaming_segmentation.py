@@ -218,6 +218,28 @@ def test_split_first_clause_handles_semicolon_and_colon():
     assert remaining == "A and B."
 
 
+def test_split_first_clause_does_not_split_bare_domain() -> None:
+    # Regression test for a bug: _is_url_separator only recognizes a URL
+    # when the token contains "://", so a scheme-less host like
+    # "example.com" is not protected and its "." is treated as an
+    # ordinary clause terminator, splitting the domain in half. This
+    # cuts the first TTS payload mid-hostname ("Go to example." / "com
+    # for more info, thanks"), producing an audible, mispronounced split
+    # on the very first thing spoken in the turn.
+    ready, remaining = split_first_clause("Go to example.com for more info, thanks")
+    assert ready == "Go to example.com for more info, "
+    assert remaining == "thanks"
+
+
+def test_split_first_clause_does_not_split_email_address() -> None:
+    # Regression test for a bug: an email address contains no "://" either,
+    # so the same gap in _is_url_separator splits it mid-address instead of
+    # holding it for the next clause boundary.
+    ready, remaining = split_first_clause("My email is john@example.com, thanks")
+    assert ready == "My email is john@example.com, "
+    assert remaining == "thanks"
+
+
 def test_split_first_phrase_bounds_punctuation_free_opener() -> None:
     text = "This response keeps streaming words without reaching punctuation for quite a while"
 
