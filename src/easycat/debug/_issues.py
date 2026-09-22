@@ -273,15 +273,23 @@ def _milestone_issues(
 
 
 # Barge-in record names.  An ``interruption`` (or fanned ``control_signal``
-# with ``signal_kind == "interrupt"``) is an acted-on barge-in; the bot goes
-# quiet on ``bot_stopped_speaking`` / ``playback_mark_ack``; a user starting to
-# talk over the bot is ``vad_start_speaking`` inside a ``bot_started_speaking``
-# → bot-stopped window.
+# with ``signal_kind == "interrupt"``) is an acted-on barge-in; a user starting
+# to talk over the bot is ``vad_start_speaking`` inside a playback window opened
+# by ``bot_started_speaking``.
+#
+# Once a barge-in is in flight, the bot going quiet is the first
+# ``bot_stopped_speaking`` / ``playback_mark_ack`` after it.  Only
+# ``bot_stopped_speaking`` CLOSES the window, though: ``playback_mark_ack`` is a
+# mid-playback progress signal (transports with playback acknowledgements emit
+# one every ``_playback_mark_bytes_interval`` bytes, ~125ms), so closing on it
+# would drop every barge-in that happens after the first ack.  This mirrors
+# ``easycat.debug._turn_timeline._barge_in_walls``.
 _INTERRUPTION = INTERRUPTION_RECORD_NAME
 _CONTROL_SIGNAL = CONTROL_SIGNAL_RECORD_NAME
 _BOT_STARTED_SPEAKING = BOT_STARTED_SPEAKING_RECORD_NAME
 _VAD_START_SPEAKING = VAD_START_SPEAKING_RECORD_NAME
 _BOT_STOPPED_NAMES = frozenset({BOT_STOPPED_SPEAKING_RECORD_NAME, PLAYBACK_MARK_ACK_RECORD_NAME})
+_BOT_WINDOW_CLOSED = BOT_STOPPED_SPEAKING_RECORD_NAME
 
 
 def _is_interruption(record: Mapping[str, Any]) -> bool:
@@ -370,13 +378,20 @@ def _missed_barge_in_cards(
     ordered: list[tuple[int, str, bool]],
     thresholds: IssueThresholds,
 ) -> list[dict[str, Any]]:
+    """Flag user speech inside a playback window that nothing ever stopped.
+
+    ``bot_started_speaking`` opens the window and only ``bot_stopped_speaking``
+    closes it, so a run of mid-playback ``playback_mark_ack`` records keeps the
+    bot "speaking" and later speech is still a barge-in candidate.  An ack
+    after the barge-in does resolve it: by then the bot really has gone quiet.
+    """
     issues: list[dict[str, Any]] = []
     bot_speaking = False
     for index, (wall, name, is_interruption) in enumerate(ordered):
         if name == _BOT_STARTED_SPEAKING:
             bot_speaking = True
             continue
-        if name in _BOT_STOPPED_NAMES:
+        if name == _BOT_WINDOW_CLOSED:
             bot_speaking = False
             continue
         if name != _VAD_START_SPEAKING or not bot_speaking:

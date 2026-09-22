@@ -260,3 +260,67 @@ def test_missed_barge_in_does_not_fire_outside_playback_window() -> None:
     ]
     report = build_issues(records)
     assert not [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+
+
+def test_missed_barge_in_survives_mark_acks_during_playback() -> None:
+    """Mid-playback mark acks must not close the window the user barges into.
+
+    Transports with playback acknowledgements emit a ``playback_mark_ack``
+    every ``_playback_mark_bytes_interval`` bytes (~125ms) while the bot is
+    still talking. Treating one as the end of the playback window would leave
+    ``bot_speaking`` False for the rest of it and silently drop every missed
+    barge-in that happens after the first ack.
+    """
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "playback_mark_ack", wall_ms=125),
+        _rec(3, "playback_mark_ack", wall_ms=250),
+        _rec(4, "playback_mark_ack", wall_ms=375),
+        _rec(5, "vad_start_speaking", wall_ms=500),  # the bot talks over the user
+    ]
+    report = build_issues(records)
+    missed = [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+    assert len(missed) == 1
+    assert missed[0]["stage"] == "vad"
+    assert missed[0]["turn_id"] == "t1"
+
+
+def test_missed_barge_in_resolved_by_mark_ack_after_the_barge_in() -> None:
+    """An ack AFTER the barge-in still counts as the bot going quiet."""
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "playback_mark_ack", wall_ms=125),
+        _rec(3, "playback_mark_ack", wall_ms=250),
+        _rec(4, "vad_start_speaking", wall_ms=500),
+        _rec(5, "playback_mark_ack", wall_ms=625),  # bot went quiet in the window
+    ]
+    report = build_issues(records)
+    assert not [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+
+
+def test_missed_barge_in_fires_when_ack_lands_after_the_window() -> None:
+    """An ack later than the miss window does not rescue the barge-in."""
+    thresholds = IssueThresholds()
+    late_ms = 500 + thresholds.missed_barge_in_window_ms + 100
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "playback_mark_ack", wall_ms=125),
+        _rec(3, "vad_start_speaking", wall_ms=500),
+        _rec(4, "playback_mark_ack", wall_ms=late_ms),
+    ]
+    report = build_issues(records)
+    missed = [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+    assert len(missed) == 1
+    assert missed[0]["metric"] == "missed_barge_in_window_ms"
+
+
+def test_missed_barge_in_ignores_speech_after_the_window_closed() -> None:
+    """``bot_stopped_speaking`` still closes the window for later speech."""
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "playback_mark_ack", wall_ms=125),
+        _rec(3, "bot_stopped_speaking", wall_ms=1000),
+        _rec(4, "vad_start_speaking", wall_ms=3000),  # bot is quiet here
+    ]
+    report = build_issues(records)
+    assert not [i for i in report["issues"] if i["code"] == "missed_barge_in"]
