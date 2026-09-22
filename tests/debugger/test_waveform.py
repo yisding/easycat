@@ -87,6 +87,16 @@ def test_decode_pcm_peaks_downmixes_stereo_by_averaging():
     assert peaks == [(200, 200), (-200, -200)]
 
 
+def test_decode_pcm_peaks_rounds_odd_sums_instead_of_flooring():
+    # (3,-4): sum -1, average -0.5 -> 0.  (3,4): sum 7, average 3.5 -> 4.
+    # Floor division ("//") wrongly yields -1 and 3 -- it never rounds up, so
+    # the strip picks up a systematic negative bias.  Must agree with
+    # easycat.debug._pcm.decode_pcm_mono.
+    stereo = array("h", [3, -4, 3, 4]).tobytes()
+    peaks = decode_pcm_peaks(stereo, sample_width=2, channels=2, buckets=2)
+    assert peaks == [(0, 0), (4, 4)]
+
+
 def test_decode_pcm_peaks_unknown_width_yields_silence():
     peaks = decode_pcm_peaks(b"\x00\x00\x00", sample_width=3, channels=1, buckets=3)
     assert peaks == [(0, 0)] * 3

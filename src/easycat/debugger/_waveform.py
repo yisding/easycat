@@ -39,12 +39,13 @@ def decode_pcm_peaks(
 ) -> list[tuple[int, int]]:
     """Downmix ``pcm`` to ``buckets`` ``(min, max)`` integer peak pairs.
 
-    Channels are averaged into mono before bucketing.  ``buckets`` is the
-    exact length of the returned list; empty/short audio or an unsupported
-    width (e.g. 8-bit mu-law) yields ``(0, 0)`` pairs so the caller can always
-    paint a fixed-width strip.  Callers that must distinguish "unsupported"
-    from "silence" should check :func:`easycat.debug._pcm.is_supported_width`
-    first.
+    Channels are averaged into mono before bucketing, rounding each frame sum
+    exactly the way :func:`easycat.debug._pcm.decode_pcm_mono` does.
+    ``buckets`` is the exact length of the returned list; empty/short audio or
+    an unsupported width (e.g. 8-bit mu-law) yields ``(0, 0)`` pairs so the
+    caller can always paint a fixed-width strip.  Callers that must distinguish
+    "unsupported" from "silence" should check
+    :func:`easycat.debug._pcm.is_supported_width` first.
     """
     buckets = max(1, int(buckets))
     samples, frame_count, channels = _decode_pcm_sample_array(
@@ -69,7 +70,11 @@ def decode_pcm_peaks(
                 total = 0
                 for channel_offset in range(channels):
                     total += samples[sample_index + channel_offset]
-                sample = total // channels
+                # ``round`` (half-to-even), never ``//``: floor division rounds
+                # toward negative infinity and biases the strip negative by up
+                # to 1 LSB.  Matches ``easycat.debug._pcm.decode_pcm_mono`` and
+                # ``easycat._audio_utils.to_mono``.
+                sample = round(total / channels)
             lo = sample if lo is None else min(lo, sample)
             hi = sample if hi is None else max(hi, sample)
         out.append((lo, hi) if lo is not None and hi is not None else (0, 0))
