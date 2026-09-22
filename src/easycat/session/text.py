@@ -190,10 +190,11 @@ def _is_numeric_separator(text: str, index: int) -> bool:
         return False
     if text[index] == ":" and index > 0 and text[index - 1].isdigit():
         return index + 1 == len(text) or text[index + 1].isdigit()
-    if text[index] in ".．" and index > 0 and text[index - 1].isdigit():  # noqa: SIM102 nested branches preserve decision context
-        # At the end of a streaming buffer, a numeric period may still become
-        # a decimal separator once the next delta arrives (for example "3."
-        # followed by "5").
+    if text[index] in ".．,，" and index > 0 and text[index - 1].isdigit():  # noqa: SIM102 nested branches preserve decision context
+        # At the end of a streaming buffer, a digit-preceded separator may
+        # still become part of a number once the next delta arrives: a
+        # decimal separator (for example "3." followed by "5") or a
+        # thousands separator (for example "1," followed by "234").
         if index + 1 == len(text):
             return True
     return (

@@ -314,7 +314,9 @@ class _SentenceStreamBuffer:
 
     @staticmethod
     def _has_trailing_numeric_separator(text: str) -> bool:
-        return len(text) >= 2 and text[-2].isdigit() and text[-1] in ".．:"
+        # Mirrors the end-of-buffer lookahead branches in
+        # ``_is_numeric_separator``; keep the character classes in sync.
+        return len(text) >= 2 and text[-2].isdigit() and text[-1] in ".．:,，"
 
     async def _put_payload(self, text: str, *, is_final: bool) -> bool:
         payload = self._prepare(text, is_streaming=True, is_final=is_final)

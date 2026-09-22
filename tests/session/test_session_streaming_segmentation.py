@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from easycat._turn_context import TURN_AUDIO_LOG_MAXLEN, TurnContext
 from easycat.cancel import CancelToken
 from easycat.session.interruption import (
@@ -185,18 +183,10 @@ def test_split_first_clause_holds_trailing_numeric_period_for_lookahead() -> Non
     assert remaining == "The estimate is 3."
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "bug: _is_numeric_separator holds a trailing digit-preceded '.'/'．' for "
-        "lookahead (it might become a decimal point once more text streams in) but "
-        "has no equivalent branch for a trailing digit-preceded ',' — so a "
-        "thousands-grouped number split across two stream deltas right after the "
-        "comma (e.g. '1,' then '234') is shipped to TTS immediately instead of held, "
-        "mangling the number mid-utterance."
-    ),
-)
 def test_split_first_clause_holds_trailing_numeric_comma_for_lookahead() -> None:
+    # A digit-preceded comma at the end of the buffer may still be a
+    # thousands separator ("1," then "234"), so it is held like a decimal
+    # point rather than treated as a clause boundary.
     ready, remaining = split_first_clause("The total is 1,")
     assert ready == ""
     assert remaining == "The total is 1,"
