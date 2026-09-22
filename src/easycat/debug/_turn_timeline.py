@@ -58,9 +58,15 @@ _TTS_FIRST = (TTS_FRAME_RECORD_NAME, "tts_audio")
 # window the user can interrupt; the FIRST ``vad_start_speaking`` at/after that
 # is the user starting to barge in, and the FIRST ``bot_stopped_speaking`` /
 # ``playback_mark_ack`` after the barge-in is the bot actually going quiet.
+#
+# Only ``bot_stopped_speaking`` CLOSES the window: ``playback_mark_ack`` is a
+# mid-playback progress signal (transports with playback acknowledgements emit
+# one every ``_playback_mark_bytes_interval`` bytes, ~125ms), so it is usable as
+# the stop timestamp once a barge-in is in flight but must never end the window.
 _BOT_STARTED = BOT_STARTED_SPEAKING_RECORD_NAME
 _USER_SPEECH_START = VAD_START_SPEAKING_RECORD_NAME
 _BOT_STOPPED = (BOT_STOPPED_SPEAKING_RECORD_NAME, PLAYBACK_MARK_ACK_RECORD_NAME)
+_BOT_WINDOW_CLOSED = BOT_STOPPED_SPEAKING_RECORD_NAME
 
 
 def record_wall_ns(record: Mapping[str, Any]) -> int | None:
@@ -383,11 +389,20 @@ def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float 
 def _barge_in_walls(pairs: list[tuple[int, str]]) -> tuple[int | None, int | None]:
     """Find the barge-in user-speech-start and bot-stopped walls for one turn.
 
-    Pure wall-clock ordering: the FIRST ``vad_start_speaking`` at/after a
-    ``bot_started_speaking`` is the user starting to barge in, and the FIRST
-    ``bot_stopped_speaking`` / ``playback_mark_ack`` strictly after that is the
-    bot going quiet.  Returns ``(None, None)`` when the turn never opened a
-    playback window or the user never spoke into it.
+    Pure wall-clock ordering: a playback window is opened by
+    ``bot_started_speaking`` and closed by ``bot_stopped_speaking``.  The FIRST
+    ``vad_start_speaking`` inside an open window is the user starting to barge
+    in, and the FIRST ``bot_stopped_speaking`` / ``playback_mark_ack`` after
+    that is the bot going quiet.  Returns ``(None, None)`` when the turn never
+    opened a playback window or the user never spoke into one.
+
+    A turn can hold several playback windows (streaming synthesis, gated
+    replay, interleaved hold audio), so a window that ends with no barge-in
+    must close: otherwise later, unrelated speech while the bot is quiet is
+    latched in as "the" barge-in and shadows the real one.  ``playback_mark_ack``
+    is deliberately NOT a window-closing name — it lands repeatedly mid-playback
+    on transports that acknowledge playback marks, and closing on it would drop
+    every barge-in that happens after the first ack.
     """
     ordered = sorted(pairs, key=lambda pair: pair[0])
     bot_speaking = False
@@ -397,8 +412,11 @@ def _barge_in_walls(pairs: list[tuple[int, str]]) -> tuple[int | None, int | Non
             bot_speaking = True
         elif name == _USER_SPEECH_START and bot_speaking and user_speech_start is None:
             user_speech_start = wall
-        elif name in _BOT_STOPPED and user_speech_start is not None:
-            return user_speech_start, wall
+        elif name in _BOT_STOPPED:
+            if user_speech_start is not None:
+                return user_speech_start, wall
+            if name == _BOT_WINDOW_CLOSED:
+                bot_speaking = False
     return user_speech_start, None
 
 

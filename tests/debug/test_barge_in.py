@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from easycat.debug._issues import IssueThresholds, build_issues
 from easycat.debug._turn_timeline import turn_milestones, turn_waterfall
 
@@ -63,23 +61,14 @@ def test_barge_in_milestone_ignores_user_speech_before_bot_started() -> None:
     assert milestones["t1"]["user_speech_start_to_bot_stopped_ms"] is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="_barge_in_walls never resets bot_speaking (see #1143)",
-)
 def test_barge_in_milestone_ignores_second_window_after_clean_stop() -> None:
     """A second playback window's real barge-in must not be shadowed by the first.
 
-    ``_barge_in_walls`` sets ``bot_speaking = True`` on ``bot_started_speaking``
-    but never resets it back to ``False`` anywhere in the function — a
-    ``bot_stopped_speaking`` record is only handled (and only returns) once
-    ``user_speech_start`` is already set, so a playback window that ends
-    cleanly (the user never spoke during it) is ignored and leaves
-    ``bot_speaking`` stuck ``True``. Any later, unrelated ``vad_start_speaking``
-    — even one long after the bot went quiet and unrelated to any playback
-    window — is then wrongly latched in as "the" barge-in, shadowing the real
-    one that follows.
+    ``bot_stopped_speaking`` closes the playback window it ends. Without that
+    reset, a window that ended cleanly (the user never spoke during it) leaves
+    ``bot_speaking`` latched ``True``, and any later, unrelated
+    ``vad_start_speaking`` while the bot is quiet is wrongly captured as "the"
+    barge-in, shadowing the real one in the next window.
     """
     records = [
         _rec(1, "bot_started_speaking", wall_ms=0),
@@ -91,6 +80,39 @@ def test_barge_in_milestone_ignores_second_window_after_clean_stop() -> None:
     ]
     milestones = turn_milestones(records)
     assert milestones["t1"]["user_speech_start_to_bot_stopped_ms"] == 100.0
+
+
+def test_barge_in_milestone_ignores_second_window_without_barge_in() -> None:
+    """Two clean windows and stray speech between them are not a barge-in."""
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "bot_stopped_speaking", wall_ms=1000),
+        _rec(3, "vad_start_speaking", wall_ms=3000),  # bot is quiet here
+        _rec(4, "bot_started_speaking", wall_ms=5000),
+        _rec(5, "bot_stopped_speaking", wall_ms=7000),  # nobody interrupted
+    ]
+    milestones = turn_milestones(records)
+    assert milestones["t1"]["user_speech_start_to_bot_stopped_ms"] is None
+
+
+def test_barge_in_milestone_survives_mark_acks_during_playback() -> None:
+    """Playback mark acks are mid-window progress, not the end of the window.
+
+    Transports with playback acknowledgements emit a ``playback_mark_ack``
+    every ``_playback_mark_bytes_interval`` bytes (~125ms) while the bot is
+    still talking. Treating one as a window close would drop every barge-in
+    that happens after the first ack.
+    """
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "playback_mark_ack", wall_ms=125),
+        _rec(3, "playback_mark_ack", wall_ms=250),
+        _rec(4, "playback_mark_ack", wall_ms=375),
+        _rec(5, "vad_start_speaking", wall_ms=2000),  # the real barge-in
+        _rec(6, "playback_mark_ack", wall_ms=2125),  # the bot going quiet
+    ]
+    milestones = turn_milestones(records)
+    assert milestones["t1"]["user_speech_start_to_bot_stopped_ms"] == 125.0
 
 
 def test_barge_in_milestone_is_robust_to_record_order() -> None:
