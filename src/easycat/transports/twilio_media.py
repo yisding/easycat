@@ -841,8 +841,14 @@ class _TwilioProtocolMixin:
                 AudioChunk(data=tail, format=self._audio_format),
                 context="Twilio",
             )
-        # Mirror the outbound call manager lifecycle for inbound calls.
+        # Mirror the outbound call manager lifecycle for inbound calls. The
+        # emit awaits real subscribers, so a new start frame can legitimately
+        # replace this stream while we're suspended here (gh 1103) -- re-check
+        # before tearing down, instead of wiping the replacement's state.
+        stopped_stream_sid = self._stream_sid
         await self._emit_call_ended_once()
+        if self._stream_sid != stopped_stream_sid:
+            return  # A new stream claimed the slot during the emit.
         self._stream_sid = None
         self._call_sid = None
         self._answered_at = None

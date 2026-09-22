@@ -435,6 +435,20 @@ class _TelnyxOutboundCoalescer:
         self._buffer.clear()
 
 
+@dataclass(frozen=True, slots=True)
+class _TelnyxCallEnd:
+    """What a claimed ``CallEnded`` emit must report for one stopped call.
+
+    Captured synchronously so the emit still describes the call that ended
+    even when a replacement ``start`` lands in an ``await`` that runs before
+    it (gh 1141).
+    """
+
+    call_control_id: str
+    answered_at: float | None
+    call_identity: Any | None
+
+
 class _TelnyxProtocolMixin:
     """Shared Telnyx media-streams inbound routing + handlers.
 
@@ -601,11 +615,17 @@ class _TelnyxProtocolMixin:
         state and enqueued a sentinel against it, with no error logged.
         ``websocket.py`` is immune only because it re-checks at execution time;
         this does the same (gh 1103).
+
+        The ``CallEnded`` itself is claimed *before* the mark expiry for the
+        same reason ``_handle_stop`` does: a replacement landing in that
+        earlier await must not make the emit report the replacement's call
+        control id (gh 1141).
         """
         if not self._owns_connection(ws):
             return  # A newer client owns the connection -> leave it alone.
+        stopped_call_end = self._claim_call_ended()
         await self._expire_pending_marks()
-        await self._emit_call_ended_once()
+        await self._emit_claimed_call_ended(stopped_call_end)
         if not self._owns_connection(ws):
             return  # A replacement claimed the slot during the awaits above.
         tail = self._inbound_resampler.finish()
@@ -851,9 +871,18 @@ class _TelnyxProtocolMixin:
                 AudioChunk(data=tail, format=self._audio_format),
                 context="Telnyx",
             )
-        # Mirror the outbound call manager lifecycle for inbound calls.
+        # Mirror the outbound call manager lifecycle for inbound calls. Both
+        # awaits below can suspend long enough for a new start frame to
+        # legitimately replace this stream (gh 1103): claim the CallEnded up
+        # front so it still reports *this* call even when the replacement
+        # lands during the mark expiry (gh 1141), and re-check the stream id
+        # before tearing down, instead of wiping the replacement's state.
+        stopped_stream_id = self._stream_id
+        stopped_call_end = self._claim_call_ended()
         await self._expire_pending_marks()
-        await self._emit_call_ended_once()
+        await self._emit_claimed_call_ended(stopped_call_end)
+        if self._stream_id != stopped_stream_id:
+            return  # A new stream claimed the slot during the awaits above.
         self._stream_id = None
         self._call_control_id = None
         self._answered_at = None
@@ -902,17 +931,44 @@ class _TelnyxProtocolMixin:
                 PlaybackMarkAck(mark_name=mark_name, session_id=self._easycat_session_id)
             )
 
-    async def _emit_call_ended_once(self) -> None:
+    def _claim_call_ended(self) -> _TelnyxCallEnd | None:
+        """Claim the once-only ``CallEnded`` and snapshot what it must report.
+
+        Returns ``None`` when this call already emitted, or when no call
+        control id is known.
+
+        The claim is synchronous on purpose. Callers that ``await`` before
+        emitting — ``_expire_pending_marks()`` in ``_handle_stop`` and
+        ``_finalize_after_receive`` — would otherwise read a *replacement*
+        call's ``_call_control_id`` on resume, so the stopped call's
+        ``CallEnded`` was lost, a bogus one fired for the live replacement,
+        and the once-only flag ``_accept_start`` had just reset was clobbered,
+        swallowing the replacement's own hangup (gh 1141).
+        """
         if self._call_ended_emitted or self._call_control_id is None:
-            return
+            return None
         self._call_ended_emitted = True
-        await emit_call_ended(
-            self._event_bus,
-            call_id=self._call_control_id,
+        return _TelnyxCallEnd(
+            call_control_id=self._call_control_id,
             answered_at=self._answered_at,
             call_identity=self._call_identity,
+        )
+
+    async def _emit_claimed_call_ended(self, claimed: _TelnyxCallEnd | None) -> None:
+        """Emit the ``CallEnded`` captured by :meth:`_claim_call_ended`."""
+        if claimed is None:
+            return
+        await emit_call_ended(
+            self._event_bus,
+            call_id=claimed.call_control_id,
+            answered_at=claimed.answered_at,
+            call_identity=claimed.call_identity,
             session_id=self._easycat_session_id,
         )
+
+    async def _emit_call_ended_once(self) -> None:
+        """Claim and emit in one step, for callers with no preceding await."""
+        await self._emit_claimed_call_ended(self._claim_call_ended())
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
         """Emit a DTMF event for the pressed digit."""
