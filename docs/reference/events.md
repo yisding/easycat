@@ -136,10 +136,12 @@ unrelated event type. Keep the returned subscription and call its idempotent
 - `CallRinging` — the outbound call entered the remote-ringing state.
 - `CallAnswered` — a call was answered (by a human, machine, or screener);
   triggers the configured greeting. `direction` says which side placed it: the
-  inbound media transports emit this event too, so consumers that only apply to
+  media transports emit this event too, so consumers that only apply to
   calls this session placed — the outbound call-state machine and its
-  classification gate — check for `direction="inbound"` and skip. It defaults to
-  `None` ("unspecified"), which those consumers treat as outbound.
+  classification gate — check for `direction="inbound"` and skip. The Twilio
+  and Telnyx transports mark it with the direction they parsed from the
+  `start` frame, so an outbound leg on a media stream is `"outbound"`. It
+  defaults to `None` ("unspecified"), which those consumers treat as outbound.
 - `CallScreening` — a platform or carrier call screener was detected.
 - `ScreeningResponse` — the screening detector requested the configured
   static or agent-generated response.
@@ -150,7 +152,7 @@ unrelated event type. Keep the returned subscription and call its idempotent
 - `CallStateChanged` — the outbound call controller moved between two call
   states.
 - `CallEnded` — the call terminated, with duration and disposition when
-  known. `direction` carries the same inbound marker as `CallAnswered` so a
+  known. `direction` carries the same parsed marker as `CallAnswered` so a
   never-used outbound call-state machine does not adopt an unrelated inbound
   call's hangup; it defaults to `None` ("unspecified"), treated as outbound.
 - `CallFailed` — the call failed (busy, no answer, rejected, or error).

@@ -205,6 +205,23 @@ async def run_stream_token_validation(
         return None
 
 
+def call_event_direction(call_identity: Any | None) -> Literal["inbound", "outbound"] | None:
+    """Map a parsed ``CallIdentity`` to a call-event ``direction`` marker.
+
+    The media transports serve whichever leg the carrier handed them, so the
+    marker on :class:`~easycat.events.CallAnswered` / :class:`~easycat.events.CallEnded`
+    follows :attr:`CallIdentity.direction` parsed from the ``start`` frame
+    rather than a literal ``"inbound"``. An ``"unknown"`` direction — and an
+    identity no ``start`` frame has populated yet — maps to ``None``, which
+    :class:`~easycat.telephony.call_state.OutboundCallStateMachine` treats as
+    "not provably inbound" and therefore still adopts (gh 1157).
+    """
+    direction = getattr(call_identity, "direction", None)
+    if direction in ("inbound", "outbound"):
+        return cast(Literal["inbound", "outbound"], direction)
+    return None
+
+
 async def emit_call_ended(
     event_bus: EventBus | None,
     *,
@@ -216,11 +233,13 @@ async def emit_call_ended(
 ) -> None:
     """Emit the once-per-call ``CallEnded`` event when a call id is known.
 
-    ``direction`` mirrors the inbound marker :class:`CallAnswered` already
-    carries (gh 1098): the inbound media transports call this helper too,
-    "for a consistent inbound + outbound lifecycle", so
+    ``direction`` mirrors the marker :class:`CallAnswered` already carries
+    (gh 1098): the inbound media transports call this helper too, "for a
+    consistent inbound + outbound lifecycle", so
     :class:`~easycat.telephony.call_state.OutboundCallStateMachine` needs it
-    to tell an inbound call's own hangup apart from its own (gh 1153).
+    to tell an inbound call's hangup apart from its own (gh 1153). Callers
+    pass :func:`call_event_direction` of the identity they parsed, so an
+    outbound leg on a media stream is marked ``"outbound"`` (gh 1157).
     """
     if event_bus is None or call_id is None:
         return
@@ -733,6 +752,7 @@ class TelephonyConnectionTransportBase(AudioQueueMixin):
 __all__ = [
     "StreamTokenValidator",
     "TelephonyConnectionTransportBase",
+    "call_event_direction",
     "decode_telephony_raw",
     "emit_call_ended",
     "enforce_media_bind_auth",

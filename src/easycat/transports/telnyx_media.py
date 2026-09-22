@@ -49,6 +49,7 @@ from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 from easycat.transports._telephony_media import (
     StreamTokenValidator,
     TelephonyConnectionTransportBase,
+    call_event_direction,
     decode_telephony_raw,
     emit_call_ended,
     enforce_media_bind_auth,
@@ -798,11 +799,14 @@ class _TelnyxProtocolMixin:
                     call_sid=call_control_id,
                     answered_by="human",
                     session_id=self._easycat_session_id,
-                    # Marked inbound so the outbound call-state machine does not
-                    # adopt this call: it would close its classification gate and
-                    # start its max-duration timer for a call it never placed
-                    # (gh 1098).
-                    direction="inbound",
+                    # Marked with the direction parsed from the start frame's
+                    # client_state so the outbound call-state machine does not
+                    # adopt an inbound call: it would close its classification
+                    # gate and start its max-duration timer for a call it never
+                    # placed (gh 1098). An outbound leg streamed here keeps its
+                    # own lifecycle, and an unknown direction stays None
+                    # (gh 1157).
+                    direction=call_event_direction(identity),
                 )
             )
 
@@ -964,10 +968,11 @@ class _TelnyxProtocolMixin:
             answered_at=claimed.answered_at,
             call_identity=claimed.call_identity,
             session_id=self._easycat_session_id,
-            # Marked inbound so the outbound call-state machine does not
-            # adopt this call's hangup (gh 1153; mirrors the CallAnswered
-            # marker from gh 1098).
-            direction="inbound",
+            # Same parsed marker as the CallAnswered emit, taken from the
+            # identity captured with the claim so a replacement call cannot
+            # relabel it; the outbound machine adopts this hangup only when the
+            # start frame did not prove the call inbound (gh 1153, gh 1157).
+            direction=call_event_direction(claimed.call_identity),
         )
 
     async def _emit_call_ended_once(self) -> None:

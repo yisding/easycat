@@ -53,6 +53,7 @@ from easycat.transports._limits import DEFAULT_INBOUND_AUDIO_MAX_BYTES
 from easycat.transports._telephony_media import (
     StreamTokenValidator,
     TelephonyConnectionTransportBase,
+    call_event_direction,
     decode_telephony_raw,
     emit_call_ended,
     enforce_media_bind_auth,
@@ -780,11 +781,13 @@ class _TwilioProtocolMixin:
                     call_sid=self._call_sid,
                     answered_by="human",
                     session_id=self._easycat_session_id,
-                    # Marked inbound so the outbound call-state machine does not
-                    # adopt this call: it would close its classification gate and
-                    # start its max-duration timer for a call it never placed
-                    # (gh 1098).
-                    direction="inbound",
+                    # Marked with the direction parsed from the start frame so
+                    # the outbound call-state machine does not adopt an inbound
+                    # call: it would close its classification gate and start its
+                    # max-duration timer for a call it never placed (gh 1098).
+                    # An outbound leg streamed here keeps its own lifecycle, and
+                    # an unknown direction stays None (gh 1157).
+                    direction=call_event_direction(identity),
                 )
             )
 
@@ -887,10 +890,10 @@ class _TwilioProtocolMixin:
             answered_at=self._answered_at,
             call_identity=self._call_identity,
             session_id=self._easycat_session_id,
-            # Marked inbound so the outbound call-state machine does not
-            # adopt this call's hangup (gh 1153; mirrors the CallAnswered
-            # marker above from gh 1098).
-            direction="inbound",
+            # Same parsed marker as the CallAnswered emit above, so the
+            # outbound call-state machine adopts this hangup only when the
+            # start frame did not prove the call inbound (gh 1153, gh 1157).
+            direction=call_event_direction(self._call_identity),
         )
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
