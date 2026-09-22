@@ -47,6 +47,14 @@ class RoleRequirement:
     extra_missing: bool = False
     degrades_without_extra: bool = False
     capabilities: frozenset[str] = field(default_factory=frozenset)
+    #: The role's backend declares NO install extra and its own SDK module is
+    #: absent — ``ProviderPlan.missing_backends``, the gap an extras check
+    #: structurally cannot find. Kept separate from ``extra_missing`` because the
+    #: two have different fixes (a vendor SDK vs. ``uv add 'easycat[...]'``) and
+    #: therefore different codes (``EASYCAT_E211`` vs. ``EASYCAT_E202``).
+    #: APPENDED last: ``RoleRequirement`` is constructed positionally out of
+    #: tree.
+    backend_missing: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -193,6 +201,7 @@ def selected_app_from_manifest(
     issues = plan_issues(plan)
     degraded = set(degraded_extra_roles(plan))
     missing_extras = set(plan.missing_extras)
+    missing_backends = set(plan.missing_backends)
 
     roles: list[RoleRequirement] = []
     for role_name, selection in plan.selected.items():
@@ -207,6 +216,10 @@ def selected_app_from_manifest(
                 extra_missing=extra_missing,
                 degrades_without_extra="degrades_to_passthrough" in selection.capabilities,
                 capabilities=selection.capabilities,
+                # The planner's OWN entry grammar, not a recomputed probe, so a
+                # doctor row and the ``plan --json`` issue for one absent SDK
+                # cannot disagree about whether the backend is missing.
+                backend_missing=f"{role_name}:{selection.provider}" in missing_backends,
             )
         )
 

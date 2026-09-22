@@ -19,12 +19,18 @@ from typing import TYPE_CHECKING, Literal
 from easycat.errors import (
     EASYCAT_E202,
     EASYCAT_E203,
+    EASYCAT_E211,
     EASYCAT_E602,
     EASYCAT_E604,
     EasyCatError,
     SetupIssue,
 )
-from easycat.planning.provider_plan import _ROLE_ORDER, ProviderPlan, build_provider_plan
+from easycat.planning.provider_plan import (
+    _ROLE_ORDER,
+    ProviderPlan,
+    ProviderSelection,
+    build_provider_plan,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -258,17 +264,145 @@ def degraded_extra_roles(plan: ProviderPlan) -> list[tuple[str, str]]:
     return pairs
 
 
+def _backend_issue(entry: str, *, role: str, provider: str) -> SetupIssue:
+    """The coded row for one ``missing_backends`` entry.
+
+    ``EASYCAT_E211``'s message and fix are built from the planner's OWN catalog
+    metadata — a role name and a registry-validated provider name — so, like the
+    ``unset_reference`` row in :func:`build_manifest_plan`, it is deliberately
+    NOT passed through :func:`_redacted`: a manifest value cannot reach the
+    string, and the redactor would corrupt the install instruction. An unknown
+    provider name never gets this far (``ProviderCatalog.validate_name`` raises
+    ``EASYCAT_E104``, and the built-in tables raise ``EASYCAT_E602``), so the
+    plan's provider is a name this repo shipped.
+
+    ``field`` is the whole ``"<role>:<provider>"`` entry, matching the
+    ``missing_backend:<role>:<provider>`` token ``blocking_errors()`` emits, so
+    a consumer can join a coded row to the reason it explains.
+    """
+    return SetupIssue.from_error(
+        EASYCAT_E211(role=role or "unknown", provider=provider),
+        reason="missing_backend",
+        field=entry,
+        role=role,
+        severity="blocking",
+    )
+
+
+def _selected_role_issues(
+    role: str,
+    choice: ProviderSelection,
+    *,
+    missing_env: set[str],
+    missing_extras: set[str],
+    missing_backends: set[str],
+    degraded_extra: str | None,
+) -> list[SetupIssue]:
+    """Every coded row ONE selected role contributes, in report order.
+
+    Each gap is read from the plan's ALREADY-COMPUTED set rather than recomputed,
+    so a planner refactor cannot leave a blocking reason without its coded row.
+    The three blocking shapes are distinct causes with distinct fixes: a missing
+    credential (``EASYCAT_E203``), a missing install extra (``EASYCAT_E202``),
+    and a backend that declares no extra at all whose SDK is absent
+    (``EASYCAT_E211``). The fourth row is the gracefully-degrading extra, which
+    is reported as a WARNING because ``create_session`` still runs.
+    """
+    issues: list[SetupIssue] = []
+    if choice.required_env and choice.required_env in missing_env:
+        issues.append(
+            SetupIssue.from_code(
+                EASYCAT_E203,
+                reason="missing_env",
+                field=choice.required_env,
+                role=role,
+                severity="blocking",
+                var=choice.required_env,
+            )
+        )
+    if choice.extra and choice.extra in missing_extras:
+        issues.append(
+            SetupIssue.from_code(
+                EASYCAT_E202,
+                reason="missing_extra",
+                field=choice.extra,
+                role=role,
+                severity="blocking",
+                extra=choice.extra,
+            )
+        )
+    backend_entry = f"{role}:{choice.provider}"
+    if backend_entry in missing_backends:
+        issues.append(_backend_issue(backend_entry, role=role, provider=choice.provider))
+    if degraded_extra:
+        issues.append(
+            SetupIssue.from_code(
+                EASYCAT_E202,
+                reason="missing_extra",
+                field=degraded_extra,
+                role=role,
+                severity="warning",
+                extra=degraded_extra,
+            )
+        )
+    return issues
+
+
+def _unattributed_backend_issues(plan: ProviderPlan) -> list[SetupIssue]:
+    """Coded rows for ``missing_backends`` entries no SELECTED role can claim.
+
+    ``_resolution._finalize`` builds every entry from the decision it just made,
+    so :func:`_selected_role_issues` claims all of them today. This is the
+    backstop for the defect #1155 filed: a blocking ``missing_backend:`` reason
+    reaching a surface with ``issues: []`` beside it. An entry whose role token
+    is not a pipeline role is reported unattributed (``role=""``) rather than
+    dropped.
+    """
+    # Mirrors the role WALK, not the selection map: an entry keyed by something
+    # outside ``_ROLE_ORDER`` is never claimed above, so it must land here.
+    claimed = {
+        f"{role}:{choice.provider}"
+        for role, choice in plan.selected.items()
+        if role in _ROLE_ORDER
+    }
+    issues: list[SetupIssue] = []
+    for entry in sorted(set(plan.missing_backends) - claimed):
+        role_token, separator, provider = entry.partition(":")
+        known_role = separator != "" and role_token in _ROLE_ORDER
+        issues.append(
+            _backend_issue(
+                entry,
+                role=role_token if known_role else "",
+                provider=provider if separator else entry,
+            )
+        )
+    return issues
+
+
 def plan_issues(plan: ProviderPlan) -> tuple[SetupIssue, ...]:
     """Role-attributed issues for a resolved plan, in pipeline-role order.
 
     Walks ``provider_plan._ROLE_ORDER`` and pairs each selected role with the
-    plan's ALREADY-COMPUTED ``missing_env`` / ``missing_extras`` sets. It does
-    NOT recompute the gaps, so a planner refactor cannot break the wire
-    contract. Deduped on ``(reason, field)`` so a var two roles share is
-    reported once, attributed to the first role in pipeline order.
+    plan's ALREADY-COMPUTED ``missing_env`` / ``missing_extras`` /
+    ``missing_backends`` sets. It does NOT recompute the gaps, so a planner
+    refactor cannot break the wire contract. Deduped on ``(reason, field)`` so a
+    var two roles share is reported once, attributed to the first role in
+    pipeline order.
+
+    EVERY blocking reason ``ProviderPlan.blocking_errors()`` can emit has a
+    coded row here. ``missing_backends`` is the one that needs its own code:
+    ``EASYCAT_E202`` would print ``uv add 'easycat[...]'`` for a backend that
+    declares NO extra (``planning/transport_registry.py``'s ``probe_module``
+    field exists precisely to distinguish the two), so a vendor SDK that ships
+    no PyPI package gets ``EASYCAT_E211`` and a fix that names the SDK instead
+    of an extra that does not exist. A backend entry whose ``"<role>:<provider>"``
+    pair matches no selected role is still reported — unattributed rather than
+    dropped — because a blocking error with no coded row is the defect this
+    function exists to prevent.
     """
     missing_env = set(plan.missing_env)
     missing_extras = set(plan.missing_extras)
+    missing_backends = set(plan.missing_backends)
     degraded = dict(degraded_extra_roles(plan))
 
     issues: list[SetupIssue] = []
@@ -285,40 +419,18 @@ def plan_issues(plan: ProviderPlan) -> tuple[SetupIssue, ...]:
         choice = plan.selected.get(role)
         if choice is None:
             continue
-        if choice.required_env and choice.required_env in missing_env:
-            _add(
-                SetupIssue.from_code(
-                    EASYCAT_E203,
-                    reason="missing_env",
-                    field=choice.required_env,
-                    role=role,
-                    severity="blocking",
-                    var=choice.required_env,
-                )
-            )
-        if choice.extra and choice.extra in missing_extras:
-            _add(
-                SetupIssue.from_code(
-                    EASYCAT_E202,
-                    reason="missing_extra",
-                    field=choice.extra,
-                    role=role,
-                    severity="blocking",
-                    extra=choice.extra,
-                )
-            )
-        degraded_extra = degraded.get(role)
-        if degraded_extra:
-            _add(
-                SetupIssue.from_code(
-                    EASYCAT_E202,
-                    reason="missing_extra",
-                    field=degraded_extra,
-                    role=role,
-                    severity="warning",
-                    extra=degraded_extra,
-                )
-            )
+        for issue in _selected_role_issues(
+            role,
+            choice,
+            missing_env=missing_env,
+            missing_extras=missing_extras,
+            missing_backends=missing_backends,
+            degraded_extra=degraded.get(role),
+        ):
+            _add(issue)
+    # Anything the role walk could not claim: reported, never dropped.
+    for leftover in _unattributed_backend_issues(plan):
+        _add(leftover)
     for defect in plan.defects:
         _add(defect)
 

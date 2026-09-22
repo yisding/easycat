@@ -8,6 +8,7 @@ import pytest
 
 from easycat.errors import EasyCatError
 from easycat.planning import _resolution
+from easycat.planning.provider_plan import ProviderPlan
 from easycat.planning.selection import (
     build_manifest_plan,
     degraded_extra_roles,
@@ -240,6 +241,76 @@ def test_plan_issues_attribute_gaps_to_pipeline_roles(
     assert by_field["aec"].role == "echo_canceller"
     # Blocking issues sort ahead of warnings.
     assert [issue.severity for issue in issues] == sorted(issue.severity for issue in issues)
+
+
+def test_plan_issues_code_a_backend_gap_with_no_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1155: the one blocking cause that used to report ``issues == ()``.
+
+    Krisp ships no PyPI package, so the backend declares no extra and no
+    missing-extra check can see it. Without its own code the plan was
+    ``blocked`` with an empty coded array — a red ``/health/ready`` and nothing
+    naming the SDK.
+    """
+    _absent(monkeypatch, "krisp_audio")
+    manifest = parse_manifest(
+        {
+            "project": {"name": "sel"},
+            "voice": {
+                "default": {
+                    "transport": "websocket",
+                    "stt": "openai",
+                    "tts": "openai",
+                    "vad": "krisp",
+                }
+            },
+        }
+    )
+
+    plan = build_manifest_plan(manifest, environ={"OPENAI_API_KEY": "sk-stub"})
+    issues = plan_issues(plan)
+
+    assert plan.blocking_errors() == ("missing_backend:vad:krisp",)
+    (issue,) = issues
+    assert issue.code == "EASYCAT_E211"
+    assert issue.reason == "missing_backend"
+    # The field is the blocking reason's own ``<role>:<provider>`` entry, so a
+    # consumer can join the coded row to the reason it explains.
+    assert issue.field == "vad:krisp"
+    assert issue.role == "vad"
+    assert issue.severity == "blocking"
+    assert "krisp" in issue.detail
+    # The whole point of a separate code: no install command for an extra the
+    # backend does not have.
+    assert "krisp" in issue.fix
+    assert "uv add" not in issue.fix
+    assert "uv sync --extra" not in issue.fix
+
+
+def test_plan_issues_still_code_an_unattributable_backend_entry() -> None:
+    """The issue's own repro: a gap with no matching selection is not dropped.
+
+    ``_finalize`` builds every entry from the decision it just made, so a plan
+    from the planner always matches. A blocking reason with no coded row is the
+    defect this function exists to prevent, so the entry is reported
+    unattributed rather than silently skipped.
+    """
+    plan = ProviderPlan(
+        profile="default",
+        selected={},
+        missing_env=(),
+        missing_extras=(),
+        warnings=(),
+        missing_backends=("vad:krisp",),
+    )
+
+    (issue,) = plan_issues(plan)
+
+    assert plan.has_blocking_errors is True
+    assert issue.code == "EASYCAT_E211"
+    assert issue.field == "vad:krisp"
+    assert issue.role == "vad"
 
 
 def test_plan_issues_dedupe_a_shared_env_var(monkeypatch: pytest.MonkeyPatch) -> None:

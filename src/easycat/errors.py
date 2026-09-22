@@ -157,13 +157,14 @@ class SetupIssue:
 
     ``code``     — the stable ``EASYCAT_Exxx``.
     ``reason``   — a stable, content-free token: ``"missing_env"``,
-                   ``"missing_extra"``, ``"unset_reference"``,
-                   ``"incomplete_selection"``, ``"unresolvable_profile"``.
+                   ``"missing_extra"``, ``"missing_backend"``,
+                   ``"unset_reference"``, ``"incomplete_selection"``,
+                   ``"unresolvable_profile"``.
                    The same vocabulary ``ProviderPlan.blocking_errors()``
                    already emits.
     ``field``    — the concrete thing at fault: an env-var NAME, an install
-                   extra, or a manifest path such as ``"[voice.default]"``.
-                   NEVER a value.
+                   extra, a ``"<role>:<provider>"`` backend entry, or a manifest
+                   path such as ``"[voice.default]"``. NEVER a value.
     ``role``     — the pipeline role that needs it (``"stt"`` / ``"tts"`` /
                    ``"transport"`` / …), or ``""`` when not role-scoped.
     ``detail``   — the rendered registry headline (or a situational message).
@@ -560,6 +561,27 @@ EASYCAT_E210 = register(
     related=["EASYCAT_E203", "EASYCAT_E202"],
 )
 
+EASYCAT_E211 = register(
+    "EASYCAT_E211",
+    "Selected backend {provider!r} for role {role} is not importable.",
+    cause=(
+        "The selected backend needs a vendor SDK that ships no PyPI package, so "
+        "EasyCat declares no install extra for it (Krisp is the built-in example). "
+        "The planner probed the backend's own Python module and it is absent, so "
+        "`create_session` would raise when it built that role. This is the gap a "
+        "missing-extra check structurally cannot find, which is why it is a code "
+        "of its own rather than EASYCAT_E202."
+    ),
+    fix=(
+        "Install the {provider} SDK the way its vendor documents and make sure its "
+        "Python module imports in this environment — there is no `easycat[...]` "
+        "extra to add for it. To run without it, pick a different {role} backend "
+        "in the `[voice.<profile>]` table of your `easycat.toml`."
+    ),
+    example="easycat plan --manifest easycat.toml  # re-check once the SDK imports",
+    related=["EASYCAT_E202", "EASYCAT_E104"],
+)
+
 
 # ══════════════════════════════════════════════════════════════════
 # E3xx — runtime (session execution)
@@ -854,6 +876,7 @@ __all__ = [
     "EASYCAT_E208",
     "EASYCAT_E209",
     "EASYCAT_E210",
+    "EASYCAT_E211",
     "EASYCAT_E301",
     "EASYCAT_E302",
     "EASYCAT_E303",

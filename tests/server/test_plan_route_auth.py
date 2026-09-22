@@ -219,6 +219,39 @@ def test_capabilities_payload_reports_the_issue(
     assert caps["issues"][0]["code"] == "EASYCAT_E104"
 
 
+def test_plan_payload_codes_a_missing_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A-4b (#1155): ``/plan`` stops reporting a blocked plan with no issue.
+
+    A backend that declares no pip extra (Krisp ships no PyPI package) was the
+    one blocking cause that reached the body as ``blocking_errors`` with an
+    EMPTY ``issues`` array — the shape that makes an operator read the
+    endpoint's code-and-fix contract as optional.
+    """
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _SECRET_SHAPED)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setattr(
+        _resolution, "_default_module_available", lambda module: module != "krisp_audio"
+    )
+    server = VoiceServer.from_manifest(
+        _write_manifest(tmp_path, vad="krisp", transport="websocket")
+    )
+
+    payload = server.plan_payload()
+
+    assert payload["missing_backends"] == ["vad:krisp"]
+    assert payload["blocking_errors"] == ["missing_backend:vad:krisp"]
+    assert payload["has_blocking_errors"] is True
+    (issue,) = payload["issues"]
+    assert issue["code"] == "EASYCAT_E211"
+    assert issue["reason"] == "missing_backend"
+    assert issue["field"] == "vad:krisp"
+    assert issue["role"] == "vad"
+    assert issue["severity"] == "blocking"
+    assert "uv add" not in issue["fix"]
+
+
 def test_plan_payload_never_contains_a_resolved_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

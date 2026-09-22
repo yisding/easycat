@@ -1516,6 +1516,30 @@ _SELECTED_APP_CASES: tuple[tuple[str, str, str, dict[str, str], tuple[str, ...],
         },
     ),
     (
+        "missing-backend",
+        # ``websocket`` needs no extra, so the only red row can be the backend.
+        'transport = "websocket"\nstt = "openai"\ntts = "openai"\nvad = "krisp"',
+        "",
+        {"OPENAI_API_KEY": "sk-stub"},
+        ("krisp_audio",),
+        {
+            "exit_code": 1,
+            "rows": {
+                "backend_vad": {
+                    "status": "fail",
+                    "code": "EASYCAT_E211",
+                    "field": "vad:krisp",
+                    "role": "vad",
+                    "requirement": "required",
+                }
+            },
+            "detail_contains": {"backend_vad": "krisp"},
+            # The fix must not name an ``easycat`` extra Krisp does not declare.
+            "fix_contains": {"backend_vad": "Install the krisp SDK"},
+            "forbidden_codes": ["EASYCAT_E202"],
+        },
+    ),
+    (
         "unused-extra",
         'transport = "webrtc"\nstt = "openai"\ntts = "openai"',
         "",
@@ -1981,6 +2005,18 @@ _EXTRA_ROW_APP = SelectedApp(
         ),
     ),
 )
+_BACKEND_ROW_APP = SelectedApp(
+    source="manifest",
+    roles=(
+        RoleRequirement(
+            role="vad",
+            provider="krisp",
+            extra=None,
+            backend_missing=True,
+            capabilities=frozenset({"endpointing"}),
+        ),
+    ),
+)
 _DEFECT_ROW_APP = SelectedApp(
     source="manifest",
     issues=(
@@ -2006,6 +2042,7 @@ _DEFECT_ROW_APP = SelectedApp(
         (lambda: doctor_module.check_journal_writable(), "filesystem"),
         (lambda: doctor_module.check_disk_space(), "filesystem"),
         (lambda: doctor_module.check_selected_extras(_EXTRA_ROW_APP)[0], "static"),
+        (lambda: doctor_module.check_selected_backends(_BACKEND_ROW_APP)[0], "static"),
         (lambda: doctor_module.check_selection_defects(_DEFECT_ROW_APP)[0], "static"),
     ],
 )
@@ -2524,6 +2561,7 @@ def test_doctor_selected_app_check_functions_are_pure(
     before_modules = sorted(sys.modules)
 
     extras = doctor_module.check_selected_extras(selected)
+    doctor_module.check_selected_backends(selected)
     doctor_module.check_selection_defects(selected)
 
     assert dict(os.environ) == before_env
@@ -2534,5 +2572,7 @@ def test_doctor_selected_app_check_functions_are_pure(
 
 def test_selected_app_checks_are_empty_without_a_selection() -> None:
     assert doctor_module.check_selected_extras(None) == []
+    assert doctor_module.check_selected_backends(None) == []
     assert doctor_module.check_selection_defects(None) == []
     assert doctor_module.check_selected_extras(SelectedApp(source="scaffold")) == []
+    assert doctor_module.check_selected_backends(SelectedApp(source="scaffold")) == []

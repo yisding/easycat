@@ -170,6 +170,15 @@ for the fix text.
 - **Example:** `easycat doctor --env-file .env`
 - **Related:** [EASYCAT_E203](#easycat_e203), [EASYCAT_E202](#easycat_e202)
 
+### EASYCAT_E211
+
+**Selected backend {provider!r} for role {role} is not importable.**
+
+- **Cause:** The selected backend needs a vendor SDK that ships no PyPI package, so EasyCat declares no install extra for it (Krisp is the built-in example). The planner probed the backend's own Python module and it is absent, so `create_session` would raise when it built that role. This is the gap a missing-extra check structurally cannot find, which is why it is a code of its own rather than EASYCAT_E202.
+- **Fix:** Install the {provider} SDK the way its vendor documents and make sure its Python module imports in this environment — there is no `easycat[...]` extra to add for it. To run without it, pick a different {role} backend in the `[voice.<profile>]` table of your `easycat.toml`.
+- **Example:** `easycat plan --manifest easycat.toml  # re-check once the SDK imports`
+- **Related:** [EASYCAT_E202](#easycat_e202), [EASYCAT_E104](#easycat_e104)
+
 ## E3xx — Runtime
 
 Session execution: providers, transports, turns.
