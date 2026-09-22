@@ -183,6 +183,15 @@ def test_split_first_clause_holds_trailing_numeric_period_for_lookahead() -> Non
     assert remaining == "The estimate is 3."
 
 
+def test_split_first_clause_holds_trailing_numeric_comma_for_lookahead() -> None:
+    # A digit-preceded comma at the end of the buffer may still be a
+    # thousands separator ("1," then "234"), so it is held like a decimal
+    # point rather than treated as a clause boundary.
+    ready, remaining = split_first_clause("The total is 1,")
+    assert ready == ""
+    assert remaining == "The total is 1,"
+
+
 def test_split_first_clause_skips_short_opener_fragment():
     # "Sure," is too short to ship on its own; the split falls through to the
     # sentence terminator instead of emitting a clipped fragment.
