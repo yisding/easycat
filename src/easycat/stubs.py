@@ -328,8 +328,11 @@ def scripted_turn_config(
 
     Wires :func:`scripted_turn_providers` into ``EasyConfig.mic(...)`` so the
     transport → VAD → STT → agent → TTS pipeline really runs with no
-    microphone, no API key, no provider extra and no network.  Pass *agent* to
-    substitute your own agent object for the scripted echo agent.
+    microphone, no provider extra and no network.  Pass *agent* to
+    substitute your own agent object for the scripted echo agent — the
+    default one is keyless, but a substituted agent is passed through
+    untouched, so a real framework agent still needs its model credential and
+    calls the model for real.
 
     The audio is synthetic: this exercises pipeline wiring, not speech quality.
     """

@@ -23,7 +23,12 @@ from easycat.server import VoiceServer, VoiceServerConfig
 
 _HAS_AIOHTTP = aiohttp is not None
 
-pytestmark = pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
+#: Only the tests that actually drive an HTTP client need the extra. The
+#: ``plan_payload`` / ``capabilities_payload`` rows call plain sync methods on a
+#: ``VoiceServer``, so they MUST run in the credential-free lane — they are the
+#: only executing coverage of the server's copy of the per-role selection
+#: projection (``easycat.planning.selection_to_dict``).
+_requires_aiohttp = pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
 
 # A realistic secret-shaped token (``sk-...``, 24+ chars) for the token-leak
 # assertions so they exercise ``redact_value``'s value-policy safety net, not
@@ -39,7 +44,13 @@ class _FakeSession:
         pass
 
 
-def _write_manifest(tmp_path: Path, *, stt: str = "openai/realtime", vad: str = "silero") -> Path:
+def _write_manifest(
+    tmp_path: Path,
+    *,
+    stt: str = "openai/realtime",
+    vad: str = "silero",
+    transport: str = "webrtc",
+) -> Path:
     manifest = tmp_path / "easycat.toml"
     manifest.write_text(
         "\n".join(
@@ -53,7 +64,7 @@ def _write_manifest(tmp_path: Path, *, stt: str = "openai/realtime", vad: str = 
                 'auth = "bearer-env:EASYCAT_SERVE_TOKEN"',
                 "",
                 "[voice.default]",
-                'transport = "webrtc"',
+                f'transport = "{transport}"',
                 f'stt = "{stt}"',
                 'tts = "openai"',
                 f'vad = "{vad}"',
@@ -102,12 +113,17 @@ def test_plan_payload_factory_only_server_is_empty() -> None:
     payload = server.plan_payload()
     assert payload["selected"] == {}
     assert payload["has_blocking_errors"] is False
+    # The gap tuples are present and empty in EVERY branch, so ``/plan``'s
+    # top-level key set does not depend on which branch answered.
+    assert payload["missing_backends"] == []
 
 
 def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
-    monkeypatch.setattr("easycat.planning.provider_plan._extra_is_missing", lambda _extra: False)
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available", lambda _name: True
+    )
     server = VoiceServer.from_manifest(_write_manifest(tmp_path))
     payload = server.plan_payload()
     assert set(payload["selected"]) == {
@@ -120,13 +136,28 @@ def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         "echo_canceller",
     }
     assert payload["selected"]["transport"]["provider"] == "webrtc"
+    assert payload["missing_backends"] == []
     assert payload["has_blocking_errors"] is False
+    # The server builds each role dict through ``easycat.planning``'s shared
+    # projection, so its keys are exactly the ones ``easycat plan --json``
+    # publishes (pinned in ``tests/planning/test_provider_plan.py``).
+    for role_payload in payload["selected"].values():
+        assert set(role_payload) == {
+            "role",
+            "provider",
+            "model",
+            "config_type",
+            "extra",
+            "required_env",
+            "capabilities",
+        }
     # No resolved token appears anywhere in the payload.
     import json
 
     assert _RESOLVED_TOKEN not in json.dumps(payload)
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_plan_route_returns_200(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -161,6 +192,7 @@ async def _text_of(
         return await resp.text()
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_plan_route_factory_only_returns_empty(
     client: aiohttp.ClientSession,
@@ -182,13 +214,16 @@ async def test_plan_route_factory_only_returns_empty(
 # ── /health/ready M6b wiring ─────────────────────────────────────────
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_ready_200_when_manifest_plan_clean(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
-    monkeypatch.setattr("easycat.planning.provider_plan._extra_is_missing", lambda _extra: False)
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available", lambda _name: True
+    )
     server = VoiceServer.from_manifest(_write_manifest(tmp_path))
     server.config.port = 0
     await server.start()
@@ -204,6 +239,7 @@ async def test_ready_200_when_manifest_plan_clean(
         await server.stop()
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_ready_503_when_plan_has_blocking_errors(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -227,6 +263,114 @@ async def test_ready_503_when_plan_has_blocking_errors(
         await server.stop()
 
 
+def test_ready_is_ready_for_a_native_endpointing_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DX1-D1: readiness must not block on a VAD the session never builds.
+
+    ``deepgram/flux-general-en`` declares ``native_endpointing``, so
+    ``create_session`` drives turns from STT FINAL events and constructs no VAD
+    at all. Before the fix ``/health/ready`` reported ``plan_has_blocking_errors``
+    on the absent ``silero-vad`` extra for a deployment that starts fine.
+
+    Uses a ``websocket`` transport so the profile itself pulls no install
+    extra, and forces the VAD probe modules absent rather than depending on the
+    checkout: a maintainer who ran ``uv sync --extra silero-vad`` has
+    ``onnxruntime`` importable, and an ambient probe would make the
+    ``deepgram/nova-2`` control's "extra is still missing" assertion fail there.
+    The control proves the ``off`` verdict is not vacuous — the same extra IS
+    blocking for a profile that does build a VAD.
+    """
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-stub")
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available",
+        lambda name: name not in {"onnxruntime", "ten_vad", "krisp_audio"},
+    )
+
+    control_dir = tmp_path / "control"
+    control_dir.mkdir()
+    native_dir = tmp_path / "native"
+    native_dir.mkdir()
+
+    control = VoiceServer.from_manifest(
+        _write_manifest(control_dir, stt="deepgram/nova-2", transport="websocket")
+    ).plan_payload()
+    assert control["selected"]["vad"]["provider"] == "silero"
+    assert "missing_extra:silero-vad" in control["blocking_errors"]
+    assert control["has_blocking_errors"] is True
+
+    native = VoiceServer.from_manifest(
+        _write_manifest(native_dir, stt="deepgram/flux-general-en", transport="websocket")
+    )
+    payload = native.plan_payload()
+    assert payload["selected"]["vad"]["provider"] == "off"
+    assert payload["selected"]["vad"]["capabilities"] == ["disabled"]
+    assert payload["missing_extras"] == []
+    assert payload["has_blocking_errors"] is False
+    # The tuple ``VoiceServerHealth`` turns into the 200/503 verdict
+    # (``server/health.py`` reads ``plan_has_blocking_errors``). Asserted
+    # directly because the HTTP peers in this file need aiohttp, which the dev
+    # group does not install.
+    assert native._manifest_readiness() == (True, ())
+
+
+async def test_ready_blocks_for_a_selected_backend_whose_sdk_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DX1-D2, the operator-visible half: readiness for an unbuildable backend.
+
+    Krisp ships no PyPI package, so ``VAD_BACKENDS["krisp"]`` declares no extra
+    and ``/health/ready`` reported READY on every machine without the commercial
+    SDK — while ``create_vad`` raises there on the first connection. The backend's
+    ``probe_module`` makes that a blocking gap of its own class.
+
+    ``transport = "websocket"`` so the profile pulls no unrelated extra, and the
+    probe seam is forced rather than trusted: a machine that HAS ``krisp_audio``
+    would otherwise make the control assertion vacuous.
+    """
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available",
+        lambda name: name != "krisp_audio",
+    )
+
+    blocked_dir = tmp_path / "blocked"
+    blocked_dir.mkdir()
+    server = VoiceServer.from_manifest(
+        _write_manifest(blocked_dir, vad="krisp", transport="websocket")
+    )
+    payload = server.plan_payload()
+    assert payload["selected"]["vad"]["provider"] == "krisp"
+    assert payload["missing_backends"] == ["vad:krisp"]
+    assert payload["missing_extras"] == []
+    assert "missing_backend:vad:krisp" in payload["blocking_errors"]
+    assert payload["has_blocking_errors"] is True
+    # The tuple ``VoiceServerHealth`` turns into the 200/503 verdict
+    # (``server/health.py`` reads ``plan_blocking_errors``). Asserted directly
+    # because the HTTP peers in this file need aiohttp, which the dev group does
+    # not install.
+    assert server._manifest_readiness() == (True, ("missing_backend:vad:krisp",))
+    health = await server.health()
+    assert "plan_has_blocking_errors" in health.readiness_failures()
+    assert health.is_ready() is False
+
+    # The control: the SAME profile on a machine that has the SDK is ready, so
+    # the verdict tracks the probe rather than the backend name.
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available", lambda _name: True
+    )
+    installed_dir = tmp_path / "installed"
+    installed_dir.mkdir()
+    installed = VoiceServer.from_manifest(
+        _write_manifest(installed_dir, vad="krisp", transport="websocket")
+    )
+    assert installed.plan_payload()["missing_backends"] == []
+    assert installed._manifest_readiness() == (True, ())
+
+
 def test_plan_payload_unresolvable_backend_returns_blocking_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -241,6 +385,10 @@ def test_plan_payload_unresolvable_backend_returns_blocking_errors(
     assert payload["selected"] == {}
     assert payload["manifest_loaded"] is True
     assert any("plan_unresolvable" in err for err in payload["blocking_errors"])
+    # The diagnostic branch an operator reaches for a red ``/health/ready``: a
+    # client reading ``payload["missing_backends"]`` must not get a KeyError here
+    # of all places.
+    assert payload["missing_backends"] == []
 
 
 def test_capabilities_payload_unresolvable_backend_is_empty(
@@ -254,6 +402,7 @@ def test_capabilities_payload_unresolvable_backend_is_empty(
     assert caps["all_capabilities"] == []
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_plan_and_capabilities_endpoints_200_when_unresolvable(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -280,6 +429,7 @@ async def test_plan_and_capabilities_endpoints_200_when_unresolvable(
         await server.stop()
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_ready_503_when_manifest_plan_unresolvable(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -307,6 +457,7 @@ async def test_ready_503_when_manifest_plan_unresolvable(
         await server.stop()
 
 
+@_requires_aiohttp
 @pytest.mark.integration_socket
 async def test_factory_only_keeps_m4_skipped_placeholders(
     client: aiohttp.ClientSession,
@@ -364,7 +515,9 @@ async def test_ready_503_when_phone_profile_has_no_token(
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     # Extras faked present so the 503 proves the missing token, not an extra.
-    monkeypatch.setattr("easycat.planning.provider_plan._module_available", lambda _module: True)
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available", lambda _module: True
+    )
     server = VoiceServer.from_manifest(_write_phone_manifest(tmp_path))
     server.config.port = 0
     await server.start()
@@ -385,7 +538,9 @@ async def test_plan_route_payload_carries_role_attributed_issues(
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
-    monkeypatch.setattr("easycat.planning.provider_plan._module_available", lambda _module: True)
+    monkeypatch.setattr(
+        "easycat.planning._resolution._default_module_available", lambda _module: True
+    )
     server = VoiceServer.from_manifest(_write_manifest(tmp_path, stt="deepgram"))
     server.config.port = 0
     await server.start()

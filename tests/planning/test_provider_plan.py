@@ -189,6 +189,56 @@ def test_unknown_vad_shortcut_raises_not_silent_auto_fallback() -> None:
         )
 
 
+def test_unknown_vad_backend_still_raises_when_the_stage_is_skipped() -> None:
+    # The VAD role is reported ``off`` for a native-endpointing STT, but the
+    # backend is RESOLVED before it is disabled: an unresolvable profile must
+    # stay unresolvable regardless of who owns endpointing, or ``easycat plan``
+    # would print a clean plan for a manifest ``to_easyconfig`` rejects.
+    environ = {"OPENAI_API_KEY": "x", "DEEPGRAM_API_KEY": "y"}
+    # Pin the premise: without it this row would keep passing (``_decide_vad``
+    # raises on every path) even if ``deepgram/flux-general-en`` stopped
+    # declaring ``native_endpointing``, and would silently stop guarding the
+    # resolve-then-disable ordering it exists for.
+    skipped = build_provider_plan(
+        _profile(transport="websocket", stt="deepgram/flux-general-en", vad="silero"),
+        environ=environ,
+    )
+    assert skipped.selected["vad"].provider == "off"
+
+    with pytest.raises(ValueError, match="Unknown VAD backend 'not-a-backend'"):
+        build_provider_plan(
+            _profile(transport="websocket", stt="deepgram/flux-general-en", vad="not-a-backend"),
+            environ=environ,
+        )
+
+
+def test_unknown_echo_canceller_shortcut_raises_not_silent_passthrough() -> None:
+    # Regression: an unknown echo-canceller shortcut must NOT plan as the
+    # passthrough default. ``EasyConfig.__post_init__`` parses the string, so a
+    # shortcut only reaches the planner when the caller mutates the field
+    # afterwards -- and ``create_session`` then revalidates and raises
+    # EASYCAT_E104. A clean plan here would call that config deployable.
+    config = EasyConfig(stt="openai", tts="openai", agent=_Agent(), openai_api_key="sk-x")
+    config.echo_cancellation = "not-a-backend"
+    with pytest.raises(ValueError, match="Unknown echo canceller backend 'not-a-backend'"):
+        build_provider_plan(config, environ={"OPENAI_API_KEY": "x"})
+
+
+def test_builtin_echo_canceller_shortcut_selects_its_backend() -> None:
+    # ``parse_echo_canceller_string("livekit")`` yields an ENABLED config, so the
+    # planner must report the livekit backend (and its ``aec`` extra) rather than
+    # reading ``.enabled`` off the raw string and reporting passthrough.
+    config = EasyConfig(stt="openai", tts="openai", agent=_Agent(), openai_api_key="sk-x")
+    config.echo_cancellation = "livekit"
+    plan = build_provider_plan(config, environ={"OPENAI_API_KEY": "x"})
+    assert plan.selected["echo_canceller"].provider == "livekit"
+    assert plan.selected["echo_canceller"].extra == "aec"
+
+    config.echo_cancellation = "passthrough"
+    plan = build_provider_plan(config, environ={"OPENAI_API_KEY": "x"})
+    assert plan.selected["echo_canceller"].provider == "passthrough"
+
+
 def test_twilio_combo_emits_warning_not_blocking() -> None:
     plan = build_provider_plan(
         _profile(transport="twilio", stt="openai", tts="openai"),
@@ -236,3 +286,152 @@ def test_provider_plan_dataclasses_are_frozen() -> None:
     )
     assert not plan.has_blocking_errors
     assert plan.blocking_errors() == ()
+
+
+class _VADLike:
+    def configure(self, **_kwargs: object) -> None: ...
+
+    async def process(self, _chunk: object) -> object: ...
+
+
+def test_class_object_is_described_the_way_create_vad_treats_it() -> None:
+    """A provider CLASS keeps its current, factory-matching verdict.
+
+    ``create_vad`` (like ``create_noise_reducer`` / ``create_echo_canceller``)
+    duck-checks the method names WITHOUT a class-object guard and hands a
+    matching class straight back, so the planner must describe it the same way.
+    ``config/_factory.py``'s stricter ``_is_vad_provider_instance`` disagrees —
+    that divergence is pre-existing and belongs to a behaviour-change PR, not to
+    the structural collapse.
+    """
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=_VADLike,  # the CLASS, not an instance
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    selection = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"}).selected["vad"]
+    # ``type(_VADLike).__name__`` is ``"type"`` — an unflattering but faithful
+    # record of what the injected branch reports for a class today.
+    assert selection.provider == "type"
+    assert selection.capabilities == frozenset({"injected"})
+
+
+def test_instance_is_treated_as_an_injected_provider() -> None:
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=_VADLike(),
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    selection = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"}).selected["vad"]
+    assert selection.provider == "_VADLike"
+    assert selection.capabilities == frozenset({"injected"})
+    assert selection.extra is None
+
+
+# ── The one selection projection ─────────────────────────────────────
+
+#: The keys every JSON surface publishes per role. Spelled out here, once, so a
+#: field added to ``selection_to_dict`` has to be added to this list too.
+_SELECTION_PAYLOAD_KEYS = {
+    "role",
+    "provider",
+    "model",
+    "config_type",
+    "extra",
+    "required_env",
+    "capabilities",
+}
+
+
+def test_selection_to_dict_is_the_projection_both_json_surfaces_use() -> None:
+    """``easycat plan --json`` and the server's ``/plan`` payload cannot drift.
+
+    Both surfaces reach this projection through
+    :func:`easycat.planning.plan_to_dict`, which is where the per-role dict is
+    built. The server assertions in ``tests/server/test_plan_endpoint.py`` need
+    aiohttp, so this credential-free row is what actually executes the shared
+    projection and pins its key set on a dev-group-only machine.
+    """
+    from easycat.planning import selection_to_dict
+
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=VADConfig(backend="silero"),
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    plan = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"})
+    for selection in plan.selected.values():
+        payload = selection_to_dict(selection)
+        assert set(payload) == _SELECTION_PAYLOAD_KEYS
+        # JSON-ready: ``capabilities`` is a sorted list, never a frozenset.
+        assert payload["capabilities"] == sorted(selection.capabilities)
+
+
+_PLAN_PAYLOAD_KEYS = {
+    "profile",
+    "selected",
+    "missing_env",
+    "missing_extras",
+    "missing_backends",
+    "warnings",
+    "blocking_errors",
+    "has_blocking_errors",
+}
+
+
+def test_plan_to_dict_is_the_plan_projection_both_json_surfaces_use() -> None:
+    """The plan-LEVEL peer of the selection projection above.
+
+    ``easycat plan --json`` spreads this dict into its envelope and
+    ``VoiceServer.plan_payload`` spreads it under ``manifest_loaded``, so a
+    plan-level field added to one surface lands on both. The key set is pinned
+    here because the server rows that would otherwise catch a drift need aiohttp.
+    """
+    from easycat.planning import plan_to_dict, selection_to_dict
+
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=VADConfig(backend="silero"),
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    plan = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"})
+    payload = plan_to_dict(plan)
+
+    assert set(payload) == _PLAN_PAYLOAD_KEYS
+    assert payload["profile"] == plan.profile
+    # Every gap tuple is a JSON-ready list, never a tuple.
+    for key in ("missing_env", "missing_extras", "missing_backends", "warnings"):
+        assert isinstance(payload[key], list), key
+    assert payload["blocking_errors"] == list(plan.blocking_errors())
+    assert payload["has_blocking_errors"] is plan.has_blocking_errors
+    # Roles go through the SAME per-selection projection, not a second copy.
+    assert payload["selected"] == {
+        role: selection_to_dict(selection) for role, selection in plan.selected.items()
+    }
+
+
+def test_plan_to_dict_key_set_matches_the_server_empty_plan_branches() -> None:
+    """``/plan``'s top-level key set must not depend on which branch answered.
+
+    ``VoiceServer.plan_payload`` has two branches with no resolved plan (a
+    factory-only server, an unresolvable profile) that build their payload by
+    hand from ``_empty_plan_gaps()``. A client reading ``missing_backends`` on the
+    unresolvable-profile path — the diagnostic case — must not get a ``KeyError``.
+    """
+    from easycat.server.voice_server import _empty_plan_gaps
+
+    hand_built = {"profile", "selected", *_empty_plan_gaps(), "blocking_errors"}
+    hand_built.add("has_blocking_errors")
+    assert hand_built == _PLAN_PAYLOAD_KEYS

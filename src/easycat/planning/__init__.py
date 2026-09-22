@@ -16,6 +16,22 @@ Metadata sourcing (per the M6b spec):
 * **transport / agent** — use declarative built-in metadata in
   :mod:`easycat.planning.transport_registry`.
 
+Every role is resolved exactly ONCE, in the private
+:mod:`easycat.planning._resolution`, which returns a typed
+``ResolvedConfiguration``; ``build_provider_plan`` is a pure projection of that
+result into :class:`ProviderPlan`. The built-in decision path is genuinely pure,
+but ``ProviderCatalog.discover()`` and ``probe_module_for_extra`` reach installed
+entry points and therefore execute third-party module-level code — the one
+documented side effect on the planning path.
+
+A role ``create_session`` builds NOTHING for is reported ``provider="off"``
+with ``capabilities={"disabled"}`` and no extra, so its install extra is not a
+blocking gap. That covers a disabled ``noise_reducer`` and — mirroring
+``create_session``'s stage-skip decision
+(:func:`easycat._pipeline_decisions.vad_stage_enabled`) — the ``vad`` role when
+the STT declares ``native_endpointing`` and nothing (smart turn, push-to-talk,
+the voicemail detector) takes endpointing back from it.
+
 The planner-vs-``create_session`` PARITY TEST is the required gate: the
 manifest/plan readiness checks may only ship once parity is green.
 
@@ -33,16 +49,16 @@ from easycat.planning.provider_plan import (
     ProviderSelection,
     Role,
     build_provider_plan,
+    plan_to_dict,
+    selection_to_dict,
 )
 from easycat.planning.selection import (
     build_manifest_plan,
     load_selected_profile,
-    plan_body,
     plan_issues,
     plan_selected_profile,
     selection_error,
     selection_issue,
-    selection_to_dict,
 )
 from easycat.planning.transport_registry import (
     BUILTIN_BACKEND_ROLES,
@@ -62,9 +78,9 @@ __all__ = [
     "build_manifest_plan",
     "build_provider_plan",
     "load_selected_profile",
-    "plan_body",
     "plan_issues",
     "plan_selected_profile",
+    "plan_to_dict",
     "selection_error",
     "selection_issue",
     "selection_to_dict",

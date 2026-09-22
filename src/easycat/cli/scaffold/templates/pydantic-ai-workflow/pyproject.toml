@@ -17,6 +17,9 @@ dev = [
 line-length = 99
 target-version = "py311"
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [tool.easycat.scaffold]
 template = "$TEMPLATE"
 required_env = $REQUIRED_ENV

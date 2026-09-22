@@ -87,6 +87,30 @@ _LISTENER_CLEANUP_COHORT = "voice-server-listener-cleanup"
 _SESSION_SWEEP_TASK = "voice_server_session_sweep"
 _SESSION_SWEEP_COHORT = "voice-server-session-sweep"
 
+# The gap tuples every ``/plan`` payload carries. ``plan_payload`` has three
+# branches and only ONE of them has a resolved ``ProviderPlan`` to project
+# through ``easycat.planning.plan_to_dict``; the other two build their payload by
+# hand. Sharing the empty shape here keeps ``/plan``'s TOP-LEVEL KEY SET
+# branch-independent, so a client doing ``payload["missing_backends"]`` cannot
+# hit a ``KeyError`` on the unresolvable-profile path — which is exactly the
+# diagnostic case where it matters most.
+_EMPTY_PLAN_GAP_KEYS: tuple[str, ...] = (
+    "missing_env",
+    "missing_extras",
+    "missing_backends",
+    "warnings",
+)
+
+
+def _empty_plan_gaps() -> dict[str, list[str]]:
+    """The four gap tuples of a payload with no resolved plan, all empty.
+
+    A function rather than a module-level dict constant so each payload owns its
+    OWN lists: spreading a shared constant would alias the same mutable lists
+    into every response.
+    """
+    return {key: [] for key in _EMPTY_PLAN_GAP_KEYS}
+
 
 class _ListenerCleanupWaitResult(Enum):
     COMPLETED = auto()
@@ -1229,26 +1253,26 @@ class VoiceServer:
         plan. No resolved token can appear: the planner reads only provider
         metadata (names/extras/env-var NAMES), never secret values.
 
-        The seven plan keys come from
-        :func:`easycat.planning.selection.plan_body`, the same function
-        ``easycat plan --json`` spreads into its envelope, so the two surfaces
-        cannot drift. ``issues`` is the additive, role-attributed coded array
-        (``code``/``reason``/``severity`` plus any of ``field``/``role``/
-        ``detail``/``fix``); ``manifest_loaded`` is server-only.
+        All three branches emit the SAME top-level keys: the resolved one through
+        :func:`easycat.planning.plan_to_dict` — the same projection ``easycat plan
+        --json`` spreads into its envelope, so the two surfaces cannot drift — and
+        the other two through :func:`_empty_plan_gaps`. ``issues`` is the additive,
+        role-attributed coded array (``code``/``reason``/``severity`` plus any of
+        ``field``/``role``/``detail``/``fix``) every branch carries;
+        ``manifest_loaded`` is server-only.
         """
         if self._manifest is None:
             return {
                 "profile": self.config.profile,
                 "selected": {},
-                "missing_env": [],
-                "missing_extras": [],
-                "warnings": [],
+                **_empty_plan_gaps(),
                 "blocking_errors": [],
                 "has_blocking_errors": False,
                 "manifest_loaded": self._manifest_load_error is None,
                 "issues": [],
             }
-        from easycat.planning.selection import plan_body, plan_issues
+        from easycat.planning import plan_to_dict
+        from easycat.planning.selection import plan_issues
 
         profile = self.config.profile
         plan, issue = self._resolve_profile_plan(profile)
@@ -1262,16 +1286,14 @@ class VoiceServer:
             return {
                 "profile": profile,
                 "selected": {},
-                "missing_env": [],
-                "missing_extras": [],
-                "warnings": [],
+                **_empty_plan_gaps(),
                 "blocking_errors": [f"plan_unresolvable: {issue.detail}"],
                 "has_blocking_errors": True,
                 "manifest_loaded": True,
                 "issues": [issue.as_dict()],
             }
         return {
-            **plan_body(plan),
+            **plan_to_dict(plan),
             "manifest_loaded": True,
             "issues": [entry.as_dict() for entry in plan_issues(plan)],
         }

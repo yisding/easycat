@@ -439,6 +439,20 @@ process shutdown belong above it.
 constructs sessions should produce `EasyConfig` objects or accept user
 factories that produce them, rather than bypassing `create_session()`.
 
+Role resolution and resource construction are owned by different modules that
+never import each other: `easycat.planning` resolves every pipeline role
+statically (`planning/_resolution.py` decides once, `planning/provider_plan.py`
+projects the result into the public `ProviderPlan`), while `config/_factory.py`
+owns construction. The pure decisions both need — the live-provider predicates, the
+noise-reduction switch, and the STT-native-endpointing turn policy — live in the
+stdlib-only leaf `easycat._pipeline_decisions`, below both, and an Import Linter
+independence contract keeps the two layers from reaching for each other. Inside
+`config/_factory.py` the same split runs again in the small:
+`_decide_audio_pipeline` resolves every audio-pipeline decision — which specs
+each role uses, whether the VAD stage runs, whether noise reduction is on —
+without constructing any provider, and `_construct_audio_pipeline` builds only what
+those decisions selected, inside the rollback boundary.
+
 ## Non-goals
 
 Permanently out of bounds: voice-to-voice realtime APIs, an EasyCat-native tool

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from easycat.errors import EasyCatError
-from easycat.planning import provider_plan
+from easycat.planning import _resolution
 from easycat.planning.selection import (
     build_manifest_plan,
     degraded_extra_roles,
@@ -29,9 +29,13 @@ def _absent(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
 
     Delegating the unnamed modules to the real ``find_spec`` would let another
     lane's missing optional extra add an entry to a whole-collection assertion.
+    The hook is the resolver's default module probe: every role's extra and
+    backend check reaches the interpreter through it.
     """
     absent = set(modules)
-    monkeypatch.setattr(provider_plan, "_module_available", lambda module: module not in absent)
+    monkeypatch.setattr(
+        _resolution, "_default_module_available", lambda module: module not in absent
+    )
 
 
 def test_manifest_plan_defect_severity_is_scoped() -> None:

@@ -432,15 +432,18 @@ def _hide_module(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
 def _force_modules(monkeypatch: pytest.MonkeyPatch, absent: tuple[str, ...]) -> None:
     """Pin extras availability at the planner's single private seam.
 
-    Every extra check flows through ``provider_plan._module_available``, so
-    forcing it makes these assertions identical in the credential-free lane and
-    in an extras lane. Everything not named in *absent* reads as present, so a
-    case only ever goes red for the defect it is about.
+    Every extra and backend check flows through the resolver's one probe,
+    ``planning._resolution._default_module_available``, so forcing it makes
+    these assertions identical in the credential-free lane and in an extras
+    lane. Everything not named in *absent* reads as present, so a case only
+    ever goes red for the defect it is about.
     """
-    from easycat.planning import provider_plan
+    from easycat.planning import _resolution
 
     missing = set(absent)
-    monkeypatch.setattr(provider_plan, "_module_available", lambda module: module not in missing)
+    monkeypatch.setattr(
+        _resolution, "_default_module_available", lambda module: module not in missing
+    )
 
 
 @pytest.mark.parametrize("case", _SAME_CAUSE_CASES, ids=lambda case: case.id)

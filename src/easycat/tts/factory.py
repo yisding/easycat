@@ -22,6 +22,18 @@ from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 TTSConfig = OpenAITTSConfig | DeepgramTTSConfig | ElevenLabsTTSConfig | CartesiaTTSConfig
 TTS_PROVIDER_ENTRY_POINT_GROUP = "easycat.tts_providers"
 
+#: The provider ``EasyConfig`` falls back to when ``tts=`` is left unset.
+#:
+#: Named here so the planner and ``EasyConfig`` are greppable as a pair.
+#: ``easycat.config.easy`` deliberately does NOT import this constant: it fills
+#: its default by constructing ``OpenAITTSConfig`` directly, and routing that
+#: through the catalog would force ``discover()`` — third-party entry-point
+#: execution — during plain ``EasyConfig()`` construction. The two are tied
+#: together by ``tests/config/test_easyconfig_defaults.py::
+#: test_openai_defaults_match_the_planner_default_provider_names`` instead, so do
+#: not "finish the job" by wiring them.
+DEFAULT_TTS_PROVIDER = "openai"
+
 _CATALOG = ProviderCatalog(
     specs={
         # implementation, config, credential env, install extra, API domains

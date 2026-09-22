@@ -108,7 +108,16 @@ the selected `VoiceServer` profile. `plan` resolves the same provider and
 capability inputs without starting the server — and
 `easycat doctor --manifest easycat.toml --profile default` diagnoses that same
 selection against the local machine, so the two describe one selection
-mechanism rather than two.
+mechanism rather than two. Roles the session does not build are reported as
+`off` — a `vad` role, for example, when the STT declares `native_endpointing`
+and owns turn boundaries — so their install extras are not counted as blocking
+gaps by either command.
+
+`--json` reports the gap tuples `missing_env`, `missing_extras`, and
+`missing_backends`. `missing_backends` names a selected backend whose SDK is
+absent even though it has no pip extra, as `role:provider` (for example
+`vad:krisp`); like the other two it blocks the plan, because `create_session`
+raises for it.
 
 `plan --json` adds an `issues` array next to its existing keys. Each entry
 carries the stable `code` (`EASYCAT_E203` for a missing credential,

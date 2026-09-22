@@ -120,10 +120,12 @@ _DOCUMENTED_PLAN_REASONS = frozenset(
 
 def _plan_json(cli: CliRunner, manifest: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     """``easycat plan --json`` with extras pinned so the lane is deterministic."""
-    from easycat.planning import provider_plan
+    from easycat.planning import _resolution
 
     with monkeypatch.context() as patched:
-        patched.setattr(provider_plan, "_module_available", lambda module: module != "twilio")
+        patched.setattr(
+            _resolution, "_default_module_available", lambda module: module != "twilio"
+        )
         patched.setenv("OPENAI_API_KEY", "sk-stub")
         for var in ("DEEPGRAM_API_KEY", "PLAN_TOK"):
             patched.delenv(var, raising=False)

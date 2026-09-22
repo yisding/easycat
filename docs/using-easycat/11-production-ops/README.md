@@ -156,7 +156,11 @@ cause a liveness restart loop.
 
 `/health/ready` answers: should new sessions be routed here? It fails when the
 server is draining, at capacity, the route stack is unavailable, a configured
-manifest failed to load, or provider planning has blocking errors.
+manifest failed to load, or provider planning has blocking errors. Readiness also
+blocks on a selected backend whose SDK is absent even when that backend has no
+pip extra — a commercial backend such as Krisp ships no PyPI package, so nothing
+would be reported as a missing extra, yet the session raises on the first
+connection.
 
 `/health` returns the stable diagnostic payload with process state, active and
 maximum sessions, draining, and safe sub-checks. It must not include session
@@ -173,7 +177,7 @@ so model loading, connection setup, and first-call initialisation happen before
 audio flows rather than inside the caller's first turn:
 
 ```python
-EasyConfig(agent=agent, warmup=True)   # the default; set False to opt out
+EasyConfig(agent=agent, warmup=True)  # the default; set False to opt out
 ```
 
 It matters here because readiness and warmup answer adjacent questions. Warmup

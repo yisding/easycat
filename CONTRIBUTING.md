@@ -74,6 +74,20 @@ dependency floors, validation artifact lanes, and built distributions. Run the
 change-specific validation or release lane below when those surfaces are in
 scope.
 
+Scaffold templates are one such surface `just check` cannot fully cover: this
+checkout's dev venv installs no agent-framework SDK, so a generated project's
+SDK-bound wiring test always skips locally. `.github/workflows/ci.yml`'s
+`generated-app-smoke` job is the automated proof — it runs on every push and
+pull request, building the wheel, installing `easycat[openai-agents]` from it
+into a throwaway venv outside the workspace, and running the generated
+project's tests there with the SDK present and outbound provider traffic
+blocked. Reproduce that job locally with
+`uv run pytest tests/cli/e2e/test_generated_project_wheel.py -m integration_external`
+— it needs `uv` and network access to build the wheel and resolve the SDK
+extra, is marked `integration_external`, and is excluded from `just test`,
+`just check`, and every `just guard-*` recipe. It is a maintainer
+reproduction tool, not a gate; the `ci.yml` job is the gate.
+
 ### Source-enforcement ratchets
 
 `tests/ratchets/` fingerprints grandfathered production call sites for raw

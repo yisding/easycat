@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-from easycat.planning import provider_plan
-from easycat.planning.selection import build_manifest_plan, plan_body
+from easycat.planning import _resolution, plan_to_dict
+from easycat.planning.selection import build_manifest_plan
 from easycat.server import BearerTokenAuth, VoiceServer, VoiceServerConfig
 from easycat.server.routes import register_plan_route
 
@@ -138,11 +138,11 @@ def _write_manifest(
 def _extras_present(monkeypatch: pytest.MonkeyPatch) -> None:
     """Report every probe module present at the planner's single seam.
 
-    Without this a phone/webrtc profile would go red for a missing extra in a
-    dev-group environment, and the readiness assertions would pass for the
-    wrong reason.
+    Without this a phone/webrtc profile would go red for a missing extra (or an
+    unbuildable backend) in a dev-group environment, and the readiness
+    assertions would pass for the wrong reason.
     """
-    monkeypatch.setattr(provider_plan, "_module_available", lambda _module: True)
+    monkeypatch.setattr(_resolution, "_default_module_available", lambda _module: True)
 
 
 def test_plan_payload_shares_the_cli_body_keys(
@@ -159,7 +159,7 @@ def test_plan_payload_shares_the_cli_body_keys(
 
     plan = build_manifest_plan(load_manifest(manifest_path), profile="default")
 
-    assert set(server.plan_payload()) == set(plan_body(plan)) | {"manifest_loaded", "issues"}
+    assert set(server.plan_payload()) == set(plan_to_dict(plan)) | {"manifest_loaded", "issues"}
 
 
 def test_plan_payload_selected_matches_the_cli(
@@ -274,7 +274,7 @@ def test_unset_server_auth_does_not_block_the_profile_plan(
     from easycat.project import load_manifest
 
     plan = build_manifest_plan(load_manifest(manifest_path), profile="default")
-    body = plan_body(plan)
+    body = plan_to_dict(plan)
 
     assert body["has_blocking_errors"] is False
     assert not [reason for reason in body["blocking_errors"] if "SRV_TOK" in reason]
