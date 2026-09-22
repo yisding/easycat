@@ -101,7 +101,7 @@ for the fix text.
 - **Cause:** The agent or template needs a Python package that is in one of EasyCat's optional extras, but that extra is not installed.
 - **Fix:** Install the extra: `uv add 'easycat[{extra}]'`. From the EasyCat repo, use `uv sync --extra {extra} --group dev`.
 - **Example:** `uv add 'easycat[openai-agents]'  # or: uv sync --extra openai-agents --group dev`
-- **Related:** [EASYCAT_E203](#easycat_e203)
+- **Related:** [EASYCAT_E203](#easycat_e203), [EASYCAT_E602](#easycat_e602)
 
 ### EASYCAT_E203
 
@@ -168,7 +168,7 @@ for the fix text.
 - **Cause:** The selected EasyCat project (its `[tool.easycat.scaffold]` table or its `easycat.toml` profile) declares this environment variable as a startup requirement, but doctor found it unset, still set to an example placeholder, or invalid for its declared use.
 - **Fix:** Copy `.env.example` to `.env`, replace every required placeholder with the real project value, and rerun `easycat doctor --env-file .env` (or `easycat doctor --manifest easycat.toml --env-file .env`).
 - **Example:** `easycat doctor --env-file .env`
-- **Related:** [EASYCAT_E203](#easycat_e203)
+- **Related:** [EASYCAT_E203](#easycat_e203), [EASYCAT_E202](#easycat_e202)
 
 ## E3xx — Runtime
 
@@ -289,7 +289,7 @@ Command invocation and argument problems.
 - **Fix:** Check the manifest against `docs/deployment/production-servers.md`. Each `[voice.<profile>]` needs a known `transport` (`webrtc`/`websocket`/`twilio`/`telnyx`/`local`).
 - **Example:** `[voice.default]
 transport = "webrtc"`
-- **Related:** [EASYCAT_E601](#easycat_e601), [EASYCAT_E603](#easycat_e603)
+- **Related:** [EASYCAT_E601](#easycat_e601), [EASYCAT_E603](#easycat_e603), [EASYCAT_E203](#easycat_e203), [EASYCAT_E202](#easycat_e202)
 
 ### EASYCAT_E603
 

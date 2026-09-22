@@ -136,22 +136,46 @@ class ProviderPlan:
     def blocking_errors(self) -> tuple[str, ...]:
         """Return content-free blocking-error reasons (sorted, deduped).
 
-        A blocking error is a missing required env var, a missing required extra,
-        or an unbuildable selected backend. Warnings are NOT blocking. The reasons
-        are deliberately content-free (role + env/extra/provider name only) so
-        they are safe to echo on ``/health/ready`` and to compare in the parity
-        test.
+        A blocking error is a missing required env var, a missing required
+        extra for a SELECTED role, an unbuildable selected backend, or a
+        ``blocking`` selection defect. A defect contributes its OWN
+        ``reason:field`` pair — ``incomplete_selection:[voice.<name>]`` for a
+        structurally incomplete profile, ``unset_reference:<VAR>`` for a
+        configured ``bearer-env:`` reference whose variable is unset — so a
+        consumer can tell the two apart instead of seeing every defect
+        collapsed onto one reason. Warnings are NOT blocking. The reasons are
+        deliberately content-free (role, env/extra/provider name, or a manifest
+        path — never a value) so they are safe to echo on ``/health/ready`` and
+        to compare in the parity test.
         """
         reasons: list[str] = []
         reasons.extend(f"missing_env:{var}" for var in self.missing_env)
         reasons.extend(f"missing_extra:{extra}" for extra in self.missing_extras)
         reasons.extend(f"missing_backend:{entry}" for entry in self.missing_backends)
+        reasons.extend(
+            f"{issue.reason}:{issue.field}"
+            for issue in self.defects
+            if issue.severity == "blocking"
+        )
         return tuple(reasons)
 
     @property
     def has_blocking_errors(self) -> bool:
-        """``True`` when a selected role has a missing env/extra or an absent SDK."""
-        return bool(self.missing_env or self.missing_extras or self.missing_backends)
+        """``True`` when a selected role has a missing env/extra or an absent SDK.
+
+        A ``blocking`` selection defect counts too: a phone profile with no
+        ``token`` cannot serve one call, so ``/health/ready`` must be red for it
+        rather than green-then-``EASYCAT_E602``-on-first-connection. A
+        ``warning`` defect (an unset ``[server] auth`` reference, which
+        ``VoiceServer.from_manifest`` already refuses to construct around) is
+        reported but never blocking.
+        """
+        return bool(
+            self.missing_env
+            or self.missing_extras
+            or self.missing_backends
+            or any(issue.severity == "blocking" for issue in self.defects)
+        )
 
 
 def selection_to_dict(selection: ProviderSelection) -> dict[str, Any]:

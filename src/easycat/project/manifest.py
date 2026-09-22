@@ -145,6 +145,12 @@ class ProjectManifest:
         Covers ``[server] auth`` and the profile's ``token``: the two
         reference-bearing fields ``build_provider_plan`` cannot see, because it
         receives a :class:`~easycat.project.schema.VoiceProfile`, not a manifest.
+
+        A profile ``token`` counts only on a PHONE transport. ``to_easyconfig``
+        resolves ``spec.token`` inside its ``preset == "phone"`` branch and
+        nowhere else, so a ``token`` on a websocket/webrtc/local profile binds
+        nothing: reporting it here would block ``plan`` and ``/health/ready``
+        on a manifest that starts fine.
         """
         spec = self.profile(profile)
         requirements: list[ProfileRequirement] = []
@@ -156,7 +162,7 @@ class ProjectManifest:
                     reference=self.server.auth.reference,
                 )
             )
-        if spec.token is not None:
+        if spec.token is not None and TRANSPORT_PRESET.get(spec.transport) == "phone":
             requirements.append(
                 ProfileRequirement(
                     var=spec.token.env_var,
@@ -186,12 +192,24 @@ class ProjectManifest:
                 if spec.transport == "telnyx"
                 else "TWILIO_STREAM_TOKEN_SECRET"
             )
+            # ``fix=`` overrides E602's registry text, which is written for the
+            # code as a whole ("each `[voice.<profile>]` needs a known
+            # `transport`") and would tell an operator to change a transport
+            # that is already valid. The override reaches EVERY surface —
+            # ``to_easyconfig``'s raise, ``easycat plan``, ``easycat doctor``,
+            # and ``/plan``'s ``issues[].fix`` — because they all read
+            # ``rendered_fix()``.
             return (
                 EASYCAT_E602(
                     path=str(self.source_path or "easycat.toml"),
                     problem=(
                         f"phone profile {profile!r} requires a token reference; "
                         f"set token = 'bearer-env:{token_env_var}'"
+                    ),
+                    fix=(
+                        f"Add token = 'bearer-env:{token_env_var}' to "
+                        f"`[voice.{profile}]`, then export {token_env_var} with the "
+                        "shared secret your carrier's stream webhook sends."
                     ),
                 ),
             )

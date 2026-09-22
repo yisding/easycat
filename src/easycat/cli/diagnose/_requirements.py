@@ -112,9 +112,15 @@ class SelectedApp:
                 return role.role
         return ""
 
-    def code_for_env(self, var: str) -> str:
-        """``"EASYCAT_E604"`` for a manifest-bound reference var, else E210."""
-        return "EASYCAT_E604" if var in self.reference_vars else "EASYCAT_E210"
+    def issue_for_env(self, var: str) -> SetupIssue | None:
+        """The planner issue backing an env-var row, if the planner made one.
+
+        An env var can be blocked for two reasons the planner already coded: a
+        selected role needs a credential (``missing_env`` -> ``EASYCAT_E203``)
+        or the manifest binds a ``bearer-env:`` reference that is unset
+        (``unset_reference`` -> ``EASYCAT_E604``).
+        """
+        return self.issue_for("missing_env", var) or self.issue_for("unset_reference", var)
 
     def issue_for(self, reason: str, field_name: str) -> SetupIssue | None:
         """Look up the planner issue backing a check row, if any."""
@@ -255,7 +261,8 @@ def dependency_source(project_root: Path = Path()) -> DependencySource:
     ):
         return "none"
     tool = data.get("tool")
-    sources = tool.get("uv", {}).get("sources", {}) if isinstance(tool, dict) else {}
+    uv = tool.get("uv") if isinstance(tool, dict) else None
+    sources = uv.get("sources", {}) if isinstance(uv, dict) else {}
     pin = sources.get("easycat") if isinstance(sources, dict) else None
     if isinstance(pin, dict):
         if pin.get("git"):

@@ -310,7 +310,7 @@ def serve(
     profile: str = typer.Option(
         "default",
         "--profile",
-        help="Voice profile table to serve (for example, voice.default).",
+        help="Voice profile table to serve: the name after 'voice.' (for example, default).",
     ),
     mode: str = typer.Option(
         "browser",

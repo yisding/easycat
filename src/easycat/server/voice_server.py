@@ -54,6 +54,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from easycat.config import EasyConfig
+    from easycat.errors import SetupIssue
+    from easycat.planning import ProviderPlan
     from easycat.server.health import ServerState
     from easycat.session import Session
     from easycat.voice_app import VoiceApp
@@ -1205,13 +1207,13 @@ class VoiceServer:
         # "silro"``). Surface that as a plan blocking error, never a raised probe
         # (a raised health check breaks k8s liveness/readiness outright). The
         # reason stays a content-free token so the body leaks nothing.
-        plan, _error = self._resolve_profile_plan(self.config.profile)
+        plan, _issue = self._resolve_profile_plan(self.config.profile)
         if plan is None:
             return True, ("plan_unresolvable",)
         return True, plan.blocking_errors()
 
-    def _resolve_profile_plan(self, profile: str) -> tuple[Any | None, str | None]:
-        """Build the provider plan for *profile*, or return a redacted error.
+    def _resolve_profile_plan(self, profile: str) -> tuple[ProviderPlan | None, SetupIssue | None]:
+        """Build the provider plan for *profile*, or return a coded issue.
 
         The planner RAISES on an unresolvable profile (an unknown provider /
         backend shortcut) to preserve the planner-vs-``create_session`` parity
@@ -1219,23 +1221,28 @@ class VoiceServer:
         ``/capabilities`` endpoints must surface that as structured data, NOT a
         500 — they are the exact endpoints an operator reaches to diagnose a red
         ``/health/ready``, and a raised aiohttp handler would 500 the
-        diagnostic. Returns ``(plan, None)`` on success or ``(None, error)`` with
-        a redacted, content-bounded error string on failure.
+        diagnostic. Returns ``(plan, None)`` on success or ``(None, issue)``
+        with the same coded, REDACTED :class:`~easycat.errors.SetupIssue`
+        ``easycat plan`` and ``easycat doctor`` report for that cause.
+
+        ``selection_issue`` — never ``SetupIssue.from_error(selection_error(…))``:
+        ``selection_error`` passes an ``EasyCatError`` through unchanged and
+        ``EASYCAT_E104``'s message interpolates the raw manifest value, so only
+        the redacting constructor is safe for an HTTP body. The traceback stays
+        in the log, never in the response.
         """
-        from easycat.planning import build_provider_plan
+        from easycat.planning.selection import build_manifest_plan, selection_issue
 
         try:
-            return build_provider_plan(self._manifest.profile(profile), profile=profile), None
+            return build_manifest_plan(self._manifest, profile=profile), None
         except Exception as exc:
-            from easycat.validation.redaction import redact_value
-
             logger.warning(
                 "VoiceServer: provider plan for profile %r is unresolvable; "
                 "reporting a plan blocking error",
                 profile,
                 exc_info=True,
             )
-            return None, f"plan_unresolvable: {redact_value(str(exc))}"
+            return None, selection_issue(exc, profile=profile)
 
     def plan_payload(self) -> dict[str, Any]:
         """Return the read-only ``/plan`` JSON payload (redacted, no token).
@@ -1247,8 +1254,12 @@ class VoiceServer:
         metadata (names/extras/env-var NAMES), never secret values.
 
         All three branches emit the SAME top-level keys: the resolved one through
-        :func:`easycat.planning.plan_to_dict`, the other two through
-        :func:`_empty_plan_gaps`.
+        :func:`easycat.planning.plan_to_dict` — the same projection ``easycat plan
+        --json`` spreads into its envelope, so the two surfaces cannot drift — and
+        the other two through :func:`_empty_plan_gaps`. ``issues`` is the additive,
+        role-attributed coded array (``code``/``reason``/``severity`` plus any of
+        ``field``/``role``/``detail``/``fix``) every branch carries;
+        ``manifest_loaded`` is server-only.
         """
         if self._manifest is None:
             return {
@@ -1258,23 +1269,34 @@ class VoiceServer:
                 "blocking_errors": [],
                 "has_blocking_errors": False,
                 "manifest_loaded": self._manifest_load_error is None,
+                "issues": [],
             }
+        from easycat.planning import plan_to_dict
+        from easycat.planning.selection import plan_issues
+
         profile = self.config.profile
-        plan, error = self._resolve_profile_plan(profile)
+        plan, issue = self._resolve_profile_plan(profile)
         if plan is None:
             # The manifest loaded but the profile is unbuildable. Return a
             # structured plan-with-blocking-errors (HTTP 200), never a 500.
+            # ``blocking_errors[0]`` keeps its ``plan_unresolvable: `` prefix and
+            # its redaction; the suffix is now the CODED message, so the machine
+            # -readable half lives in the additive ``issues`` array.
+            assert issue is not None  # _resolve_profile_plan pairs None with an issue
             return {
                 "profile": profile,
                 "selected": {},
                 **_empty_plan_gaps(),
-                "blocking_errors": [error],
+                "blocking_errors": [f"plan_unresolvable: {issue.detail}"],
                 "has_blocking_errors": True,
                 "manifest_loaded": True,
+                "issues": [issue.as_dict()],
             }
-        from easycat.planning import plan_to_dict
-
-        return {**plan_to_dict(plan), "manifest_loaded": True}
+        return {
+            **plan_to_dict(plan),
+            "manifest_loaded": True,
+            "issues": [entry.as_dict() for entry in plan_issues(plan)],
+        }
 
     def metrics_payload(self) -> dict[str, Any]:
         """Return the read-only ``GET /metrics`` JSON payload (M8).
@@ -1320,18 +1342,28 @@ class VoiceServer:
 
         The planner reads only provider metadata (names / extras / env-var NAMES
         / declared capability strings) — never secret values — so no token can
-        appear. ``build_provider_plan`` is imported LAZILY here (like
-        :meth:`plan_payload`) so this method does not pull the planner at module
-        load (the M4 import boundary).
+        appear. The planner is imported LAZILY here (like :meth:`plan_payload`)
+        so this method does not pull it at module load (the M4 import boundary).
+
+        An UNRESOLVABLE profile keeps the documented empty shape and adds the
+        coded, redacted ``issues`` array, so the endpoint no longer drops the
+        reason it already knows.
         """
         if self._manifest is None:
             return {"profile": self.config.profile, "roles": {}, "all_capabilities": []}
         profile = self.config.profile
-        plan, _error = self._resolve_profile_plan(profile)
+        plan, issue = self._resolve_profile_plan(profile)
         if plan is None:
             # Unbuildable profile: no capabilities resolvable. Return the
-            # documented empty shape (HTTP 200), never a 500.
-            return {"profile": profile, "roles": {}, "all_capabilities": []}
+            # documented empty shape (HTTP 200), never a 500 — plus the coded,
+            # redacted reason, which this endpoint used to drop entirely.
+            assert issue is not None  # _resolve_profile_plan pairs None with an issue
+            return {
+                "profile": profile,
+                "roles": {},
+                "all_capabilities": [],
+                "issues": [issue.as_dict()],
+            }
         roles = {role: sorted(selection.capabilities) for role, selection in plan.selected.items()}
         union: set[str] = set()
         for caps in roles.values():

@@ -19,7 +19,13 @@ def test_plan_help_renders_profile_table_literally(cli: CliRunner) -> None:
 
     assert result.exit_code == 0
     assert "Voice profile table to plan" in help_text
-    assert "voice.default" in help_text
+    # The example must be the value ``--profile`` actually takes: profiles are
+    # keyed by the bare name, so ``--profile voice.default`` raises
+    # EASYCAT_E602 "unknown profile". It must also carry no square brackets —
+    # Rich reads them as style tags and eats them out of the rendered help,
+    # which is what "The to plan" guards against.
+    assert "for example, default" in help_text
+    assert "voice.default" not in help_text
     assert "The to plan" not in help_text
 
 
@@ -163,3 +169,251 @@ def test_plan_error_redacts_a_secret_shaped_manifest_value(
     assert payload["code"] == "EASYCAT_E602"
     assert secret not in result.stdout
     assert "[REDACTED_SECRET]" in payload["message"]
+
+
+# ── DX2 PR2: the coded ``issues`` array on every plan surface ──────────
+
+
+#: The three keys ``json_envelope`` stamps on every command payload; the plan
+#: body keys are everything else.
+_ENVELOPE_KEYS = frozenset({"schema_version", "command", "status"})
+
+
+def _pin_extras(monkeypatch: pytest.MonkeyPatch, *absent: str) -> None:
+    """Pin extras availability TOTALLY at the planner's single private seam.
+
+    Extras availability is environment-dependent, so a test about coded issues
+    must pin it at the single private seam every extra check flows through.
+    Everything not named in *absent* reads as PRESENT — delegating the rest to
+    the real ``find_spec`` (the shape this file used to have) would let an
+    unrelated uninstalled extra add a row to an equality assertion, so a case
+    could only go red for the defect it is about in some lanes.
+    """
+    from easycat.planning import _resolution
+
+    missing = set(absent)
+    monkeypatch.setattr(
+        _resolution, "_default_module_available", lambda module: module not in missing
+    )
+
+
+def test_plan_json_adds_issues_without_changing_existing_keys(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-1: the eight existing keys keep their shape; ``issues`` is additive."""
+    manifest = _write_manifest(tmp_path, 'stt = "deepgram"\n')
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    _pin_extras(monkeypatch)
+
+    payload = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
+
+    # EQUALITY, not containment: a renamed, dropped, or accidentally-added
+    # top-level key is exactly the regression this test is named for, and the
+    # server-side half of the same contract
+    # (``test_plan_payload_shares_the_cli_body_keys``) is pinned this strongly.
+    assert set(payload) - _ENVELOPE_KEYS == {
+        "profile",
+        "selected",
+        "missing_env",
+        "missing_extras",
+        "missing_backends",
+        "warnings",
+        "blocking_errors",
+        "has_blocking_errors",
+        "issues",
+    }
+    assert _ENVELOPE_KEYS <= set(payload)
+    assert payload["blocking_errors"] == ["missing_env:DEEPGRAM_API_KEY"]
+    assert payload["has_blocking_errors"] is True
+    assert payload["selected"]["stt"]["required_env"] == "DEEPGRAM_API_KEY"
+
+
+def test_plan_issues_name_role_field_and_code(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-2: a missing credential and a missing extra each carry role + code."""
+    manifest = _write_manifest(tmp_path, 'stt = "deepgram"\n')
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    _pin_extras(monkeypatch, "aiortc")
+
+    payload = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
+    by_field = {issue["field"]: issue for issue in payload["issues"]}
+
+    credential = by_field["DEEPGRAM_API_KEY"]
+    assert credential["role"] == "stt"
+    assert credential["code"] == "EASYCAT_E203"
+    assert credential["reason"] == "missing_env"
+    assert credential["severity"] == "blocking"
+    assert credential["fix"]
+
+    extra = by_field["webrtc"]
+    assert extra["role"] == "transport"
+    assert extra["code"] == "EASYCAT_E202"
+    assert extra["reason"] == "missing_extra"
+
+
+def test_plan_human_output_names_code_and_fix(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-3: the terminal surface prints the code and the fix, not just a token."""
+    manifest = _write_manifest(tmp_path, 'stt = "deepgram"\n')
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    _pin_extras(monkeypatch)
+
+    result = cli.invoke(app, ["plan", "--manifest", str(manifest)])
+    output = " ".join(result.stdout.split())
+
+    assert "missing env: DEEPGRAM_API_KEY" in output
+    assert "status: blocked" in output
+    assert "EASYCAT_E203 DEEPGRAM_API_KEY (stt):" in output
+    assert "Fix:" in output
+
+
+def test_plan_human_output_renders_warning_issues(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-3d: a warning-severity issue must not vanish from the human output.
+
+    An unset ``[server] auth`` reference is warning-severity, so it never
+    reaches ``plan.warnings``. Dropped from the issue loop as well, the default
+    surface printed ``status: ready`` and nothing else while ``--json``
+    reported the missing server credential.
+    """
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text(
+        '[project]\nname = "plan-cli"\n\n[server]\nauth = "bearer-env:SRV_TOK"\n'
+        '\n[voice.default]\ntransport = "webrtc"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.delenv("SRV_TOK", raising=False)
+    monkeypatch.setenv("NO_COLOR", "1")
+    _pin_extras(monkeypatch)
+
+    output = " ".join(cli.invoke(app, ["plan", "--manifest", str(manifest)]).stdout.split())
+
+    assert "status: ready" in output
+    assert "EASYCAT_E604 SRV_TOK" in output
+
+
+def test_plan_human_output_survives_bracketed_fields_and_fixes(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-3b: Rich must not eat ``[voice.default]`` or ``easycat[webrtc]``.
+
+    Both DX2 headline shapes carry square brackets, which Rich reads as style
+    tags unless every interpolation is escaped. Unescaped, the E202 row prints
+    the copy-pasteable command ``uv add 'easycat'`` — which installs EasyCat
+    WITHOUT the extra the row is about — and the E602 row loses its field
+    entirely.
+    """
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text(
+        '[project]\nname = "plan-cli"\n\n[voice.default]\ntransport = "twilio"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    _pin_extras(monkeypatch, "twilio")
+
+    output = " ".join(cli.invoke(app, ["plan", "--manifest", str(manifest)]).stdout.split())
+
+    # The missing-extra row's fix must stay installable verbatim.
+    assert "EASYCAT_E202 telephony (transport):" in output
+    assert "uv add 'easycat[telephony]'" in output
+    # The incomplete-selection row must keep its manifest-table field.
+    assert "EASYCAT_E602 [voice.default] (-):" in output
+    assert "`[voice.default]`" in output
+
+
+def test_plan_human_output_does_not_crash_on_a_bracket_shaped_detail(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-3c: a closing-tag-shaped substring must not raise ``MarkupError``."""
+    from easycat.errors import SetupIssue
+
+    manifest = _write_manifest(tmp_path, "")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    _pin_extras(monkeypatch)
+    monkeypatch.setattr(
+        selection,
+        "plan_issues",
+        lambda _plan: [
+            SetupIssue(code="EASYCAT_E602", reason="incomplete_selection", field="[/]", detail="x")
+        ],
+    )
+
+    result = cli.invoke(app, ["plan", "--manifest", str(manifest)])
+
+    assert result.exit_code == 0
+    assert "EASYCAT_E602 [/] (-): x" in " ".join(result.stdout.split())
+
+
+def test_plan_reports_an_incomplete_phone_profile(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-4: a phone profile with no token is blocked, not silently ready."""
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text(
+        '[project]\nname = "plan-cli"\n\n[voice.default]\ntransport = "twilio"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    # Fake the phone extras present so the redness proves the missing TOKEN,
+    # not a missing install extra.
+    _pin_extras(monkeypatch)
+
+    payload = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
+
+    assert payload["has_blocking_errors"] is True
+    assert "incomplete_selection:[voice.default]" in payload["blocking_errors"]
+    assert not [err for err in payload["blocking_errors"] if err.startswith("missing_extra:")]
+    incomplete = [i for i in payload["issues"] if i["reason"] == "incomplete_selection"]
+    assert [issue["code"] for issue in incomplete] == ["EASYCAT_E602"]
+    assert "TWILIO_STREAM_TOKEN_SECRET" in incomplete[0]["detail"]
+    # The fix must address THIS defect, not E602's code-wide "pick a known
+    # transport" advice — the transport is already valid.
+    assert "token = 'bearer-env:TWILIO_STREAM_TOKEN_SECRET'" in incomplete[0]["fix"]
+    assert "needs a known `transport`" not in incomplete[0]["fix"]
+
+
+def test_plan_exit_code_is_zero_with_blocking_errors(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-5: pins today's verified behavior so a future change is deliberate."""
+    manifest = _write_manifest(tmp_path, 'stt = "deepgram"\n')
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+
+    result = cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["has_blocking_errors"] is True
+
+
+def test_plan_and_doctor_report_the_same_cause(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-6: the headline acceptance case — one manifest, one code, two surfaces."""
+    manifest = _write_manifest(tmp_path, 'stt = "deepgram"\n')
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    _pin_extras(monkeypatch)
+
+    planned = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
+    diagnosed = json.loads(
+        cli.invoke(
+            app, ["doctor", "--manifest", str(manifest), "--json", "--environment", "production"]
+        ).stdout
+    )
+
+    issue = next(i for i in planned["issues"] if i["field"] == "DEEPGRAM_API_KEY")
+    row = next(r for r in diagnosed["checks"] if r["name"] == "env_deepgram")
+
+    assert issue["code"] == row["code"] == "EASYCAT_E203"
+    assert issue["role"] == row["role"] == "stt"
+    assert row["field"] == "DEEPGRAM_API_KEY"
