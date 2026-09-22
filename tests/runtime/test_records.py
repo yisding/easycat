@@ -169,6 +169,65 @@ class TestErrorInfo:
         assert "handle_request(req)" not in info.traceback
         assert "raise exc from None" not in info.traceback
 
+    def test_from_exception_keeps_easycat_frames_in_a_wheel_install(self, monkeypatch):
+        # A wheel-installed EasyCat lives in site-packages itself (the release
+        # validator asserts exactly that), so a bare substring test would fold
+        # EasyCat's own frames away and leave the journal — the single source of
+        # truth for observability — unable to say which module raised.
+        monkeypatch.setattr(
+            "easycat.runtime.records._EASYCAT_PACKAGE_ROOT",
+            "/venv/site-packages/easycat",
+        )
+        fake_traceback = [
+            "Traceback (most recent call last):\n",
+            '  File "/venv/site-packages/easycat/session/_turn_runner.py", line 88, in run\n',
+            "    await self._stt_stage.transcribe(ctx)\n",
+            '  File "/venv/site-packages/easycat/stt/openai.py", line 41, in stream\n',
+            "    return await self._client.post(url)\n",
+            '  File "/venv/site-packages/httpx/_client.py", line 10, in post\n',
+            "    resp = self._pool.handle_request(req)\n",
+            '  File "/venv/site-packages/httpcore/_sync.py", line 20, in handle\n',
+            "    raise exc from None\n",
+            "RuntimeError: boom\n",
+        ]
+        monkeypatch.setattr("traceback.format_exception", lambda *args, **kwargs: fake_traceback)
+
+        info = ErrorInfo.from_exception(RuntimeError("boom"))
+
+        assert info.traceback is not None
+        # Only the httpx/httpcore run collapses; both EasyCat frames survive.
+        assert info.traceback.count("third-party frame(s)") == 1
+        assert "  ...2 third-party frame(s)...\n" in info.traceback
+        assert "easycat/session/_turn_runner.py" in info.traceback
+        assert "    await self._stt_stage.transcribe(ctx)\n" in info.traceback
+        assert "easycat/stt/openai.py" in info.traceback
+        assert "    return await self._client.post(url)\n" in info.traceback
+        assert "handle_request(req)" not in info.traceback
+        assert "raise exc from None" not in info.traceback
+
+    def test_from_exception_collapse_ignores_a_leading_pipe_source_line(self, monkeypatch):
+        # ``traceback`` prints a frame's source as ``"    " + line.strip()``, so a
+        # union continuation broken before the operator renders as ``    | None``.
+        # Outside an exception group that is source text, not a group gutter, and
+        # mistaking it for one would split the run and leak the dependency line.
+        fake_traceback = [
+            "Traceback (most recent call last):\n",
+            '  File "/x/site-packages/dep/a.py", line 10, in annotate\n',
+            "    | None\n",
+            '  File "/x/site-packages/dep/b.py", line 20, in inner\n',
+            "    raise exc from None\n",
+            "RuntimeError: boom\n",
+        ]
+        monkeypatch.setattr("traceback.format_exception", lambda *args, **kwargs: fake_traceback)
+
+        info = ErrorInfo.from_exception(RuntimeError("boom"))
+
+        assert info.traceback is not None
+        assert info.traceback.count("third-party frame(s)") == 1
+        assert "  ...2 third-party frame(s)...\n" in info.traceback
+        assert "| None" not in info.traceback
+        assert "raise exc from None" not in info.traceback
+
     def test_from_exception_collapse_keeps_chained_exception_separators(self, monkeypatch):
         # Chained tracebacks separate the sections with a blank line and a
         # prose line at zero indent. Neither may be mistaken for a continuation

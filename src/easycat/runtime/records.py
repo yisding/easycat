@@ -7,6 +7,7 @@ must have defaults so older bundles remain loadable.
 from __future__ import annotations
 
 import enum
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -72,10 +73,12 @@ class ErrorInfo:
     def from_exception(exc: BaseException, *, notes: str | None = None) -> ErrorInfo:
         """Capture an ``ErrorInfo`` from a live exception.
 
-        Runs of consecutive third-party frames (site-packages) are collapsed to
-        a single ``...N third-party frame(s)...`` line to keep journal records
-        readable.  PEP 678 notes attached to the exception are preserved in the
-        structured ``notes`` field for journal filters and bundle export.
+        Runs of consecutive third-party frames (site-packages, excluding
+        EasyCat's own package so a wheel install still names the module that
+        raised) are collapsed to a single ``...N third-party frame(s)...`` line
+        to keep journal records readable.  PEP 678 notes attached to the
+        exception are preserved in the structured ``notes`` field for journal
+        filters and bundle export.
         """
         import traceback as tb_mod
 
@@ -101,6 +104,29 @@ class ErrorInfo:
 # ``+`` lines never count as continuations, so group structure survives intact.
 _TRACEBACK_GUTTER = re.compile(r"[ \t]*\|[ \t]?")
 _TRACEBACK_FILE_HEADER = re.compile(r'File "(?P<path>.*)", line \d+')
+# Group output always delimits its sub-exceptions with a ``+---`` separator.  A
+# flat traceback never contains one, and that is how a genuine gutter is told
+# apart from a source line that merely starts with ``|`` — a leading-operator
+# union continuation such as ``| None``, which would otherwise be mistaken for a
+# gutter and split the very run this helper exists to join.
+_TRACEBACK_GROUP_SEPARATOR = re.compile(r"^[ \t]*\+-+", re.MULTILINE)
+
+# EasyCat ships as a wheel and therefore normally lives in ``site-packages`` too
+# (``validation/_release_runner.py`` asserts exactly that for a release install).
+# A bare ``"site-packages" in path`` test would consequently collapse EasyCat's
+# own frames and hide which module raised, so the package root is excluded.
+_EASYCAT_PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _is_third_party_path(path: str) -> bool:
+    """Return ``True`` for a dependency frame, excluding EasyCat's own package."""
+    if "site-packages" not in path:
+        return False
+    normalized = os.path.normpath(path)
+    return not (
+        normalized == _EASYCAT_PACKAGE_ROOT
+        or normalized.startswith(_EASYCAT_PACKAGE_ROOT + os.sep)
+    )
 
 
 def _split_traceback_gutter(line: str) -> tuple[str, str]:
@@ -117,6 +143,7 @@ def _collapse_third_party_frames(text: str) -> str:
     skip_run = 0
     skip_gutter = ""
     skip_indent = -1
+    has_gutter = _TRACEBACK_GROUP_SEPARATOR.search(text) is not None
 
     def flush() -> None:
         nonlocal skip_run, skip_indent
@@ -126,14 +153,14 @@ def _collapse_third_party_frames(text: str) -> str:
         skip_indent = -1
 
     for line in text.splitlines(keepends=True):
-        gutter, rest = _split_traceback_gutter(line)
+        gutter, rest = _split_traceback_gutter(line) if has_gutter else ("", line)
         body = rest.rstrip("\r\n")
         content = body.lstrip(" \t")
         indent = len(body) - len(content)
 
         header = _TRACEBACK_FILE_HEADER.match(content)
         if header is not None:
-            if "site-packages" in header["path"]:
+            if _is_third_party_path(header["path"]):
                 if not skip_run:
                     skip_gutter = gutter
                 skip_run += 1
