@@ -220,7 +220,9 @@ flowchart TD
   surface but consumed by the session collaborator.
 - `end_of_turn_silence_ms` controls the conversational fallback endpoint.
 - A terminally punctuated STT final can shorten the fixed timer only for the
-  exact pause whose lease accompanied that final.
+  exact pause whose lease accompanied that final. A trailing run of two or more
+  full stops, or a Unicode ellipsis, counts as trailing off rather than
+  finishing, so it keeps the full timer.
 - A smart-turn complete verdict ends promptly.
 - A smart-turn incomplete or error verdict gets the full fallback grace
   **after** the decision. Detector latency is not subtracted, and semantic

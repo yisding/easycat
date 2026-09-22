@@ -121,9 +121,11 @@ class TurnManagerConfig:
     # grants, so a semantically mid-sentence user keeps the full window.
     end_of_turn_silence_ms: int = 500
     # Shorter silence timeout used when STT finalizes text with terminal
-    # punctuation during the pause. None disables punctuation-aware
-    # endpointing. Smart-turn incomplete/error decisions still receive the
-    # full end_of_turn_silence_ms grace period.
+    # punctuation during the pause. A trailing run of two or more full stops,
+    # or a Unicode ellipsis, reads as trailing off rather than finishing and
+    # keeps the full window. None disables punctuation-aware endpointing.
+    # Smart-turn incomplete/error decisions still receive the full
+    # end_of_turn_silence_ms grace period.
     punctuated_end_of_turn_silence_ms: int | None = 200
     # Silence budget, after VAD stop, before finalizing the current STT segment.
     # 0 means commit the segment immediately when VAD reports a pause.
@@ -511,13 +513,20 @@ class TurnManager:
         """Notify the originating pause that STT finalized a complete sentence.
 
         Only terminal punctuation from the active pause can shorten its fixed
-        endpoint timer. The lease guard prevents a delayed segment final
+        endpoint timer. A trailing run of two or more full stops, or a Unicode
+        ellipsis, is a speaker trailing off rather than finishing, so those keep
+        the full grace window however the STT backend spells them ("..", "...",
+        "…", "….", "．．"). The lease guard prevents a delayed segment final
         from an earlier pause from leaking into a later pause.
         """
         if self._state != TurnManagerState.USER_PAUSED or not pause.guard():
             return
         normalized = text.rstrip().rstrip("\"'”’)]}")
-        if normalized.endswith(("...", "…")):
+        # Count the trailing full-stop run instead of matching a fixed literal:
+        # ".." is as much a trailing-off ellipsis as "..." is. Strip the
+        # fullwidth stop (U+FF0E) too so CJK transcripts get the same rule.
+        undotted = normalized.rstrip(".．")
+        if len(normalized) - len(undotted) >= 2 or undotted.endswith("…"):
             return
         if normalized.endswith((".", "!", "?", "。", "！", "？", "．")):
             self._punctuated_transcript_event.set()

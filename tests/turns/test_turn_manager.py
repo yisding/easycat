@@ -578,7 +578,20 @@ async def test_unpunctuated_stt_final_keeps_full_endpoint_timeout() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", ["Wait...", "Wait…", 'Wait..."'])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Wait...",
+        "Wait…",
+        'Wait..."',
+        "Wait..",
+        'Wait.."',
+        "Wait....",
+        "um..",
+        "Wait….",
+        "待って．．",
+    ],
+)
 async def test_ellipsis_does_not_shorten_endpoint_timeout(text: str) -> None:
     bus = EventBus()
     tm = TurnManager(
@@ -595,6 +608,53 @@ async def test_ellipsis_does_not_shorten_endpoint_timeout(text: str) -> None:
 
     assert not tm._punctuated_transcript_event.is_set()
     await tm.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["Done.", 'Done."', "Done!", "ok!!", "終わり。", "終わり．"])
+async def test_single_terminal_stop_still_shortens_endpoint_timeout(text: str) -> None:
+    """Only *runs* of full stops trail off; one stop (or doubled bangs) ends a turn."""
+    bus = EventBus()
+    tm = TurnManager(
+        bus,
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=20,
+        ),
+    )
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+    tm.on_stt_final(text, pause=tm.capture_pause())
+
+    assert tm._punctuated_transcript_event.is_set()
+    await tm.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_double_dot_final_keeps_full_endpoint_timeout() -> None:
+    """A two-dot trailing-off final must wait out the full fallback grace."""
+    bus = EventBus()
+    tm = TurnManager(
+        bus,
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=20,
+        ),
+    )
+    reasons: list[str] = []
+    tm.bind_journal_hook(lambda _old, _new, reason, _turn_id: reasons.append(reason))
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+    tm.on_stt_final("I was thinking..", pause=tm.capture_pause())
+
+    await asyncio.sleep(0.04)
+    assert tm.state == TurnManagerState.USER_PAUSED
+
+    await asyncio.sleep(0.09)
+    assert tm.state == TurnManagerState.PROCESSING
+    assert reasons[-1] == "silence_timeout"
 
 
 @pytest.mark.asyncio
