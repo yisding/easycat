@@ -111,6 +111,7 @@ _DOCUMENTED_PLAN_REASONS = frozenset(
     {
         "missing_env",
         "missing_extra",
+        "missing_backend",
         "unset_reference",
         "incomplete_selection",
         "unresolvable_profile",
@@ -118,14 +119,18 @@ _DOCUMENTED_PLAN_REASONS = frozenset(
 )
 
 
-def _plan_json(cli: CliRunner, manifest: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
+def _plan_json(
+    cli: CliRunner,
+    manifest: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    absent: str = "twilio",
+) -> dict:
     """``easycat plan --json`` with extras pinned so the lane is deterministic."""
     from easycat.planning import _resolution
 
     with monkeypatch.context() as patched:
-        patched.setattr(
-            _resolution, "_default_module_available", lambda module: module != "twilio"
-        )
+        patched.setattr(_resolution, "_default_module_available", lambda module: module != absent)
         patched.setenv("OPENAI_API_KEY", "sk-stub")
         for var in ("DEEPGRAM_API_KEY", "PLAN_TOK"):
             patched.delenv(var, raising=False)
@@ -145,9 +150,9 @@ def _plan_keys_and_reasons_from_cli(
     """Real ``plan --json`` top-level keys, and every reason a code path emits.
 
     The drift anchor for the catalog's ``plan`` entry, mirroring
-    :func:`_doctor_keys_from_cli`: without it the whole nine-key/five-reason
-    block can be deleted with this lane still green. Two manifests plus the
-    unresolvable-profile constructor cover all five documented reasons, so a
+    :func:`_doctor_keys_from_cli`: without it the whole nine-key/six-reason
+    block can be deleted with this lane still green. Three manifests plus the
+    unresolvable-profile constructor cover all six documented reasons, so a
     token that stops being emitted — or one invented in prose — fails here.
     """
     from easycat.planning.selection import selection_issue
@@ -165,10 +170,22 @@ def _plan_keys_and_reasons_from_cli(
         '[project]\nname = "schema"\n\n[voice.default]\ntransport = "twilio"\n',
         encoding="utf-8",
     )
+    # ``missing_backend`` needs a backend with NO extra whose SDK is absent —
+    # the one reason a missing-extra probe cannot produce.
+    backend = root / "backend.toml"
+    backend.write_text(
+        '[project]\nname = "schema"\n\n[voice.default]\n'
+        'transport = "websocket"\nstt = "openai"\ntts = "openai"\nvad = "krisp"\n',
+        encoding="utf-8",
+    )
 
     payload = _plan_json(cli, referenced, monkeypatch)
     reasons = {issue["reason"] for issue in payload["issues"]}
     reasons |= {issue["reason"] for issue in _plan_json(cli, defective, monkeypatch)["issues"]}
+    reasons |= {
+        issue["reason"]
+        for issue in _plan_json(cli, backend, monkeypatch, absent="krisp_audio")["issues"]
+    }
     reasons.add(selection_issue(ValueError("Unknown VAD backend"), profile="default").reason)
 
     assert reasons == set(_DOCUMENTED_PLAN_REASONS)

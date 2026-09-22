@@ -395,6 +395,73 @@ def test_plan_exit_code_is_zero_with_blocking_errors(
     assert json.loads(result.stdout)["has_blocking_errors"] is True
 
 
+def test_plan_codes_a_missing_backend_on_both_surfaces(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-7 (#1155): the backend gap gets the same coded row as a key or extra.
+
+    ``missing backends:`` used to print alone under ``status: blocked`` with
+    ``issues: []`` next to it in ``--json`` — the one blocking cause with no
+    code, no role, and no fix.
+    """
+    manifest = _write_backend_manifest(tmp_path, vad="krisp")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    _pin_extras(monkeypatch, "krisp_audio")
+
+    payload = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
+    output = " ".join(cli.invoke(app, ["plan", "--manifest", str(manifest)]).stdout.split())
+
+    assert payload["missing_backends"] == ["vad:krisp"]
+    assert payload["blocking_errors"] == ["missing_backend:vad:krisp"]
+    (issue,) = payload["issues"]
+    assert set(issue) == {"code", "reason", "severity", "field", "role", "detail", "fix"}
+    assert issue["code"] == "EASYCAT_E211"
+    assert issue["reason"] == "missing_backend"
+    assert issue["severity"] == "blocking"
+    assert issue["field"] == "vad:krisp"
+    assert issue["role"] == "vad"
+    assert "krisp" in issue["detail"]
+    # The human surface prints the code row beneath its red gap line, exactly
+    # as it does for a missing key or extra.
+    assert "missing backends: vad:krisp" in output
+    assert "status: blocked" in output
+    assert "EASYCAT_E211 vad:krisp (vad):" in output
+    # ...and the fix names the SDK, not an extra the backend does not declare.
+    assert "Fix: Install the krisp SDK" in output
+    assert "uv add" not in output
+
+
+def test_plan_and_doctor_report_the_same_missing_backend(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PP-8 (#1155): the backend gap keeps the one-cause-one-code invariant.
+
+    The peer of :func:`test_plan_and_doctor_report_the_same_cause` for the gap
+    that had no code at all: plan, doctor, and ``/plan`` must agree on
+    ``EASYCAT_E211``, the role, and the ``role:provider`` field.
+    """
+    manifest = _write_backend_manifest(tmp_path, vad="krisp")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    _pin_extras(monkeypatch, "krisp_audio")
+
+    planned = json.loads(cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"]).stdout)
+    diagnosed = json.loads(
+        cli.invoke(
+            app, ["doctor", "--manifest", str(manifest), "--json", "--environment", "production"]
+        ).stdout
+    )
+
+    issue = next(i for i in planned["issues"] if i["reason"] == "missing_backend")
+    row = next(r for r in diagnosed["checks"] if r["name"] == "backend_vad")
+
+    assert issue["code"] == row["code"] == "EASYCAT_E211"
+    assert issue["role"] == row["role"] == "vad"
+    assert issue["field"] == row["field"] == "vad:krisp"
+    assert issue["detail"] == row["detail"]
+    assert issue["fix"] == row["fix"]
+
+
 def test_plan_and_doctor_report_the_same_cause(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

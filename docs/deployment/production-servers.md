@@ -420,11 +420,15 @@ authenticated `/plan` body's `blocking_errors` (and through
 eight keys `easycat plan --json` emits — `profile`, `selected`, `missing_env`,
 `missing_extras`, `missing_backends`, `warnings`, `blocking_errors`,
 `has_blocking_errors` — plus `manifest_loaded` and an additive `issues` array.
-Each issue carries `code` (`EASYCAT_E203`, `EASYCAT_E202`, `EASYCAT_E604`,
-`EASYCAT_E602`, `EASYCAT_E104`), a content-free `reason` (`missing_env`,
-`missing_extra`, `unset_reference`, `incomplete_selection`,
-`unresolvable_profile`), a `severity` of `blocking` or `warning`, and any of
-`field`, `role`, `detail`, and `fix`. No secret-shaped manifest value can reach
+Each issue carries `code` (`EASYCAT_E203`, `EASYCAT_E202`, `EASYCAT_E211`,
+`EASYCAT_E604`, `EASYCAT_E602`, `EASYCAT_E104`), a content-free `reason`
+(`missing_env`, `missing_extra`, `missing_backend`, `unset_reference`,
+`incomplete_selection`, `unresolvable_profile`), a `severity` of `blocking` or
+`warning`, and any of `field`, `role`, `detail`, and `fix`. Every blocking
+reason above has a coded issue: `missing_backend:<role>:<provider>` is reported
+as `EASYCAT_E211`, carrying that same `role:provider` pair in `field`, and its
+fix names the vendor SDK rather than an `easycat[...]` extra the backend does
+not declare. No secret-shaped manifest value can reach
 the body. The only issue whose text interpolates the manifest —
 `incomplete_selection` — is passed through the redactor; every other
 `detail`/`fix` is verbatim error-registry text over planner catalog metadata

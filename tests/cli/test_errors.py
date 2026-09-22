@@ -579,6 +579,12 @@ def test_no_new_error_codes_were_added() -> None:
     DX2 reports existing causes with a shared record; it registers nothing. A
     new code here is a deliberate act that must update this baseline (and the
     ``easycat explain`` docs) in the same commit.
+
+    Bumped once, deliberately, from 30 to 31 for ``EASYCAT_E211`` (#1155): a
+    selected backend whose vendor SDK is not importable had NO fitting code —
+    ``EASYCAT_E202`` would have printed ``uv add 'easycat[...]'`` for a backend
+    that declares no extra — so ``plan_issues`` reported that blocking gap with
+    an empty ``issues`` array.
     """
     assert set(all_codes()) == {
         "EASYCAT_E101",
@@ -596,6 +602,7 @@ def test_no_new_error_codes_were_added() -> None:
         "EASYCAT_E208",
         "EASYCAT_E209",
         "EASYCAT_E210",
+        "EASYCAT_E211",
         "EASYCAT_E301",
         "EASYCAT_E302",
         "EASYCAT_E303",

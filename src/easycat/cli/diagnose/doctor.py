@@ -42,7 +42,7 @@ from easycat.cli.diagnose._requirements import (
     install_fix,
     selected_app_from_scaffold,
 )
-from easycat.errors import EasyCatError
+from easycat.errors import EASYCAT_E211, EasyCatError
 
 if TYPE_CHECKING:
     from easycat.project.manifest import ProjectManifest
@@ -1125,6 +1125,51 @@ def check_selected_extras(selected: SelectedApp | None) -> list[CheckResult]:
     return results
 
 
+def check_selected_backends(selected: SelectedApp | None) -> list[CheckResult]:
+    """One ``fail`` row per SELECTED backend whose own SDK is absent.
+
+    The peer of :func:`check_selected_extras` for the gap an extras check
+    structurally cannot find: these backends declare NO pip extra (a vendor SDK
+    such as Krisp ships no PyPI package), so ``EASYCAT_E202``'s
+    ``uv add 'easycat[...]'`` would name an extra that does not exist — hence
+    ``EASYCAT_E211`` and a fix that names the SDK instead.
+
+    ``code`` / ``detail`` / ``fix`` / ``field`` come straight off the planner
+    issue, so this row, ``easycat plan``'s coded row, and ``/plan``'s ``issues``
+    entry report one cause identically. Nothing is imported here — detection
+    happened in the planner via ``find_spec`` — and the row is emitted only for
+    a SELECTED role, so a disabled stage's backend is never a doctor failure.
+    """
+    if selected is None:
+        return []
+    results: list[CheckResult] = []
+    for role in selected.roles:
+        if not role.backend_missing:
+            continue
+        entry = f"{role.role}:{role.provider}"
+        issue = selected.issue_for("missing_backend", entry)
+        if issue is None:
+            # Only reachable for a hand-built ``SelectedApp``: the manifest
+            # projection derives the roles and the issues from one plan.
+            coded = EASYCAT_E211(role=role.role, provider=role.provider)
+            code, detail, fix = coded.code, coded.message, coded.rendered_fix() or ""
+        else:
+            code, detail, fix = issue.code, issue.detail, issue.fix
+        results.append(
+            CheckResult(
+                name=f"backend_{role.role}",
+                status="fail",
+                detail=detail,
+                requirement="required",
+                code=code,
+                fix=fix,
+                role=role.role,
+                field=entry,
+            )
+        )
+    return results
+
+
 def check_selection_defects(selected: SelectedApp | None) -> list[CheckResult]:
     """One ``fail`` row per incomplete-selection defect on the chosen profile.
 
@@ -1245,6 +1290,7 @@ def _run_all_checks(
     results.extend(check_selection_defects(selected))
     results.extend(check_env_vars(only_provider=only_provider, selected=selected))
     results.extend(check_selected_extras(selected))
+    results.extend(check_selected_backends(selected))
     results.extend(check_provider_reachability(only_provider=only_provider, selected=selected))
     results.append(check_onnxruntime())
     results.append(check_resampling_backend())

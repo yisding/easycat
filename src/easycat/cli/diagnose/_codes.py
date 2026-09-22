@@ -186,7 +186,8 @@ entry points include:
                          touches audio hardware; `network` = one bounded
                          unauthenticated probe), and may include `code`
                          and `fix` when the check fails, `field` naming the
-                         env var, install extra, or manifest path the row is
+                         env var, install extra, `role:provider` backend, or
+                         manifest path the row is
                          about, and `role` when the row belongs to a selected
                          pipeline role; a row's `code`, `field`, and `role`
                          match the `easycat plan --json` issue for the same
@@ -202,10 +203,15 @@ entry points include:
                          declares no pip extra, as `role:provider`; each issue
                          has `code`,
                          `reason` (`missing_env`, `missing_extra`,
-                         `unset_reference`, `incomplete_selection`, or
+                         `missing_backend`, `unset_reference`,
+                         `incomplete_selection`, or
                          `unresolvable_profile`), `severity`
                          (`blocking` or `warning`), and any of `field`,
-                         `role`, `detail`, `fix`; the server's authenticated
+                         `role`, `detail`, `fix`; a `missing_backend` issue is
+                         coded `EASYCAT_E211` and its `field` is the same
+                         `role:provider` entry, so it joins to the
+                         `missing_backend:<role>:<provider>` blocking reason;
+                         the server's authenticated
                          `GET /plan` returns the same keys plus
                          `manifest_loaded`
   `validation`, `report_path`, `exit_code` -
