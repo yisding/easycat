@@ -200,7 +200,7 @@ def _pin_extras(monkeypatch: pytest.MonkeyPatch, *absent: str) -> None:
 def test_plan_json_adds_issues_without_changing_existing_keys(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PP-1: the seven existing keys keep their shape; ``issues`` is additive."""
+    """PP-1: the eight existing keys keep their shape; ``issues`` is additive."""
     manifest = _write_manifest(tmp_path, 'stt = "deepgram"\n')
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
@@ -217,6 +217,7 @@ def test_plan_json_adds_issues_without_changing_existing_keys(
         "selected",
         "missing_env",
         "missing_extras",
+        "missing_backends",
         "warnings",
         "blocking_errors",
         "has_blocking_errors",

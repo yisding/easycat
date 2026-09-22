@@ -195,9 +195,12 @@ entry points include:
                          `--manifest`/`--profile` scopes the run to one app;
                          `probes` reports which probe classes ran; `fixes`
                          appears with `--fix`
-  `profile`, `selected`, `missing_env`, `missing_extras`, `warnings`,
-  `blocking_errors`, `has_blocking_errors`, `issues` -
-                         `easycat plan --json`; each issue has `code`,
+  `profile`, `selected`, `missing_env`, `missing_extras`, `missing_backends`,
+  `warnings`, `blocking_errors`, `has_blocking_errors`, `issues` -
+                         `easycat plan --json`; `missing_backends` names a
+                         selected backend whose SDK is absent even though it
+                         declares no pip extra, as `role:provider`; each issue
+                         has `code`,
                          `reason` (`missing_env`, `missing_extra`,
                          `unset_reference`, `incomplete_selection`, or
                          `unresolvable_profile`), `severity`

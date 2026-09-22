@@ -145,7 +145,7 @@ def _plan_keys_and_reasons_from_cli(
     """Real ``plan --json`` top-level keys, and every reason a code path emits.
 
     The drift anchor for the catalog's ``plan`` entry, mirroring
-    :func:`_doctor_keys_from_cli`: without it the whole eight-key/five-reason
+    :func:`_doctor_keys_from_cli`: without it the whole nine-key/five-reason
     block can be deleted with this lane still green. Two manifests plus the
     unresolvable-profile constructor cover all five documented reasons, so a
     token that stops being emitted — or one invented in prose — fails here.
