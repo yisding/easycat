@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from easycat.debug._issues import IssueThresholds, build_issues
-from easycat.debug._turn_timeline import turn_milestones, turn_waterfall
+from easycat.debug._turn_timeline import drain_ack_indices, turn_milestones, turn_waterfall
 
 
 def _rec(seq: int, name: str, *, turn_id: str = "t1", wall_ms: float = 0.0, **data) -> dict:
@@ -260,3 +260,171 @@ def test_missed_barge_in_does_not_fire_outside_playback_window() -> None:
     ]
     report = build_issues(records)
     assert not [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+
+
+def test_missed_barge_in_survives_mark_acks_during_playback() -> None:
+    """Mid-playback mark acks must not close the window the user barges into.
+
+    Transports with playback acknowledgements emit a ``playback_mark_ack``
+    every ``_playback_mark_bytes_interval`` bytes (~125ms) while the bot is
+    still talking. Treating one as the end of the playback window would leave
+    ``bot_speaking`` False for the rest of it and silently drop every missed
+    barge-in that happens after the first ack.
+    """
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "playback_mark_ack", wall_ms=125),
+        _rec(3, "playback_mark_ack", wall_ms=250),
+        _rec(4, "playback_mark_ack", wall_ms=375),
+        _rec(5, "vad_start_speaking", wall_ms=500),  # the bot talks over the user
+    ]
+    report = build_issues(records)
+    missed = [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+    assert len(missed) == 1
+    assert missed[0]["stage"] == "vad"
+    assert missed[0]["turn_id"] == "t1"
+
+
+def test_missed_barge_in_resolved_by_mark_ack_after_the_barge_in() -> None:
+    """An ack AFTER the barge-in still counts as the bot going quiet."""
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "playback_mark_ack", wall_ms=125),
+        _rec(3, "playback_mark_ack", wall_ms=250),
+        _rec(4, "vad_start_speaking", wall_ms=500),
+        _rec(5, "playback_mark_ack", wall_ms=625),  # bot went quiet in the window
+    ]
+    report = build_issues(records)
+    assert not [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+
+
+def test_missed_barge_in_fires_when_ack_lands_after_the_window() -> None:
+    """An ack later than the miss window does not rescue the barge-in."""
+    thresholds = IssueThresholds()
+    late_ms = 500 + thresholds.missed_barge_in_window_ms + 100
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "playback_mark_ack", wall_ms=125),
+        _rec(3, "vad_start_speaking", wall_ms=500),
+        _rec(4, "playback_mark_ack", wall_ms=late_ms),
+    ]
+    report = build_issues(records)
+    missed = [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+    assert len(missed) == 1
+    assert missed[0]["metric"] == "missed_barge_in_window_ms"
+
+
+def test_missed_barge_in_ignores_speech_after_the_window_closed() -> None:
+    """``bot_stopped_speaking`` still closes the window for later speech."""
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "playback_mark_ack", wall_ms=125),
+        _rec(3, "bot_stopped_speaking", wall_ms=1000),
+        _rec(4, "vad_start_speaking", wall_ms=3000),  # bot is quiet here
+    ]
+    report = build_issues(records)
+    assert not [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+
+
+# ── mid-playback progress acks vs the drain ack ──────────────────
+
+
+def _ack_stream(
+    start_seq: int, *, first_ms: float, last_ms: float, every_ms: float = 125.0
+) -> list[dict]:
+    """A transport's ``playback_mark_ack`` run, one ack every *every_ms*."""
+    records: list[dict] = []
+    wall_ms = first_ms
+    seq = start_seq
+    while wall_ms <= last_ms:
+        records.append(_rec(seq, "playback_mark_ack", wall_ms=wall_ms))
+        wall_ms += every_ms
+        seq += 1
+    return records
+
+
+def test_drain_ack_indices_marks_only_the_last_ack_of_each_run() -> None:
+    names = [
+        "bot_started_speaking",
+        "playback_mark_ack",
+        "playback_mark_ack",  # drain of run 1
+        "bot_stopped_speaking",
+        "bot_started_speaking",
+        "playback_mark_ack",
+        "vad_start_speaking",
+        "playback_mark_ack",  # drain of run 2
+    ]
+    assert drain_ack_indices(names) == frozenset({2, 7})
+
+
+def test_drain_ack_indices_ignores_journals_without_acks() -> None:
+    assert drain_ack_indices(["bot_started_speaking", "bot_stopped_speaking"]) == frozenset()
+
+
+def test_missed_barge_in_fires_while_the_ack_stream_keeps_running() -> None:
+    """The shape issue #1156 describes: acks keep arriving past the barge-in.
+
+    A missed barge-in means the bot never stopped, so an ack-emitting transport
+    keeps acknowledging marks every ~125ms for the whole utterance. Accepting
+    any of those progress acks as "the bot went quiet" resolves the candidate
+    ~125ms after the user spoke and the card can never fire.
+    """
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        *_ack_stream(2, first_ms=125, last_ms=5000),
+        _rec(100, "vad_start_speaking", wall_ms=2000),  # the bot talks over the user
+    ]
+    report = build_issues(records)
+    missed = [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+    assert len(missed) == 1
+    assert missed[0]["stage"] == "vad"
+
+
+def test_missed_barge_in_fires_when_playback_only_drains_after_the_window() -> None:
+    """A drain ack (and stop) far past the window does not rescue the barge-in."""
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        *_ack_stream(2, first_ms=125, last_ms=5000),
+        _rec(100, "vad_start_speaking", wall_ms=2000),
+        _rec(101, "bot_stopped_speaking", wall_ms=5125),
+    ]
+    report = build_issues(records)
+    missed = [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+    assert len(missed) == 1
+
+
+def test_missed_barge_in_resolved_when_the_ack_stream_drains_in_window() -> None:
+    """Playback that really drains just after the barge-in is not a miss."""
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        *_ack_stream(2, first_ms=125, last_ms=2125),  # last ack = the drain ack
+        _rec(100, "vad_start_speaking", wall_ms=2000),
+    ]
+    report = build_issues(records)
+    assert not [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+
+
+def test_slow_barge_in_fires_while_the_ack_stream_keeps_running() -> None:
+    """Progress acks must not stop the cutoff clock for an acted barge-in."""
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "interruption", wall_ms=100),
+        *_ack_stream(3, first_ms=125, last_ms=3000),
+    ]
+    report = build_issues(records)
+    slow = [i for i in report["issues"] if i["code"] == "slow_barge_in"]
+    assert len(slow) == 1
+    # The clock runs to the drain ack at 3000ms, not the 125ms progress ack.
+    assert slow[0]["value"] == 2900.0
+
+
+def test_barge_in_milestone_skips_mid_playback_acks_after_the_barge_in() -> None:
+    """The milestone and the issue card read the same journal the same way."""
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        *_ack_stream(2, first_ms=125, last_ms=3000),
+        _rec(100, "vad_start_speaking", wall_ms=2000),
+        _rec(101, "bot_stopped_speaking", wall_ms=3125),
+    ]
+    milestones = turn_milestones(records)
+    assert milestones["t1"]["user_speech_start_to_bot_stopped_ms"] == 1000.0
