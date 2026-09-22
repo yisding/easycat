@@ -708,3 +708,94 @@ async def test_telnyx_handle_stop_does_not_clear_a_replacement_claimed_mid_emit(
     assert transport._call_control_id == "CC2"
     assert transport._in_queue.empty(), "a phantom sentinel was enqueued"
     assert ended == ["CC1"]
+
+
+@pytest.mark.asyncio
+async def test_telnyx_handle_stop_reports_the_stopped_call_when_marks_expire_late() -> None:
+    """The ``CallEnded`` must name the stopped call, not the replacement (gh 1141).
+
+    ``_handle_stop`` awaits ``_expire_pending_marks()`` *before* the emit, so a
+    replacement ``start`` can legitimately land in that earlier await too. The
+    stream-id re-check alone protected the replacement's state but not the
+    emit: ``_emit_call_ended_once()`` then read the replacement's
+    ``call_control_id``, losing CC1's ``CallEnded``, firing a bogus one for the
+    live call, and swallowing CC2's real hangup via the once-only flag.
+    """
+    bus = EventBus()
+    ended: list[str] = []
+    reconnect_done = asyncio.Event()
+    transport = TelnyxTransport(event_bus=bus)
+    transport._ws = _DummyTelnyxWebSocket()  # type: ignore[assignment]
+
+    async def _record_call_ended(event: CallEnded) -> None:
+        ended.append(event.call_sid)
+
+    async def _reconnect_on_mark_ack(event: PlaybackMarkAck) -> None:
+        if reconnect_done.is_set():
+            return
+        await transport._handle_message(_start_msg(stream_id="ST2", call_control_id="CC2"))
+        reconnect_done.set()
+
+    bus.subscribe(CallEnded, _record_call_ended)
+    bus.subscribe(PlaybackMarkAck, _reconnect_on_mark_ack)
+
+    await transport._handle_message(_start_msg(stream_id="ST1", call_control_id="CC1"))
+    transport._pending_marks["mark_1"] = None
+
+    await transport._handle_message(json.dumps({"event": "stop", "stop": {"stream_id": "ST1"}}))
+    await drain(transport)
+    assert reconnect_done.is_set(), "the race window was not exercised"
+
+    assert transport._stream_id == "ST2"
+    assert transport._call_control_id == "CC2"
+    assert transport._in_queue.empty(), "a phantom sentinel was enqueued"
+    assert ended == ["CC1"], "CallEnded must report the call that actually stopped"
+    assert transport._call_ended_emitted is False, "the replacement's hangup would be swallowed"
+
+
+@pytest.mark.asyncio
+async def test_telnyx_finalize_reports_the_closed_call_when_marks_expire_late() -> None:
+    """``_finalize_after_receive`` claims its ``CallEnded`` early too (gh 1141).
+
+    Mirror image of the ``_handle_stop`` case: the finalizer runs the same
+    ``_expire_pending_marks()`` await ahead of the emit, so it needs the same
+    up-front claim to keep reporting the call whose socket closed.
+    """
+    bus = EventBus()
+    ended: list[str] = []
+    reconnect_done = asyncio.Event()
+    old_ws = _BlockingTelnyxWebSocket()
+    new_ws = _BlockingTelnyxWebSocket()
+    transport = TelnyxTransport(event_bus=bus)
+
+    async def _record_call_ended(event: CallEnded) -> None:
+        ended.append(event.call_sid)
+
+    async def _reconnect_on_mark_ack(event: PlaybackMarkAck) -> None:
+        if reconnect_done.is_set():
+            return
+        transport._ws = new_ws  # type: ignore[assignment]
+        await transport._handle_message(_start_msg(stream_id="ST2", call_control_id="CC2"))
+        reconnect_done.set()
+
+    bus.subscribe(CallEnded, _record_call_ended)
+    bus.subscribe(PlaybackMarkAck, _reconnect_on_mark_ack)
+
+    old_task = asyncio.create_task(transport._handle_connection(old_ws))  # type: ignore[arg-type]
+    await asyncio.wait_for(old_ws.entered.wait(), timeout=1.0)
+    await transport._handle_message(_start_msg(stream_id="ST1", call_control_id="CC1"))
+    transport._pending_marks["mark_1"] = None
+
+    old_ws.release.set()
+    await asyncio.wait_for(old_task, timeout=1.0)
+    await drain(transport)
+    assert reconnect_done.is_set(), "the race window was not exercised"
+
+    assert transport._ws is new_ws
+    assert transport._stream_id == "ST2"
+    assert transport._call_control_id == "CC2"
+    assert transport._in_queue.empty(), "a phantom sentinel was enqueued"
+    assert ended == ["CC1"], "CallEnded must report the call whose socket closed"
+    assert transport._call_ended_emitted is False, "the replacement's hangup would be swallowed"
+
+    new_ws.release.set()
