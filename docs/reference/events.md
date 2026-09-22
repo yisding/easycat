@@ -150,7 +150,9 @@ unrelated event type. Keep the returned subscription and call its idempotent
 - `CallStateChanged` — the outbound call controller moved between two call
   states.
 - `CallEnded` — the call terminated, with duration and disposition when
-  known.
+  known. `direction` carries the same inbound marker as `CallAnswered` so a
+  never-used outbound call-state machine does not adopt an unrelated inbound
+  call's hangup; it defaults to `None` ("unspecified"), treated as outbound.
 - `CallFailed` — the call failed (busy, no answer, rejected, or error).
 
 ### Supervisor Audio Taps

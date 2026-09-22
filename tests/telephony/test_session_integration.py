@@ -7,6 +7,7 @@ the helpers respond to events within the session lifecycle.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -390,6 +391,19 @@ class TestOutboundCallFlow:
             nav.stop()
 
 
+class _StubWebSocket:
+    """Minimal stand-in for a media websocket (the transports only send/close)."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    async def close(self, *args: object) -> None:
+        return None
+
+
 class TestInboundCallIsNotAdoptedByOutboundMachine:
     """gh 1098: an inbound call must not be adopted by the outbound machine.
 
@@ -533,15 +547,73 @@ class TestInboundCallIsNotAdoptedByOutboundMachine:
             finally:
                 sm.stop()
 
-    def test_inbound_transports_mark_their_call_answered_and_ended_inbound(self) -> None:
-        """Structural lock: both inbound media transports must set the marker.
+    @pytest.mark.asyncio
+    async def test_inbound_transports_mark_their_call_answered_and_ended_inbound(self) -> None:
+        """Producer lock: both inbound media transports mark their lifecycle events.
 
-        Covers both the gh-1098 ``CallAnswered`` marker and the gh-1153
-        ``CallEnded`` marker passed through ``emit_call_ended``.
+        Drives the real Twilio and Telnyx media transports through a
+        ``start`` + ``stop`` and asserts the events they publish on the shared
+        session bus carry ``direction="inbound"`` -- the marker the guards in
+        ``_on_answered`` (gh 1098) and ``_on_ended`` (gh 1153) key off. Without
+        it the outbound machine has nothing to tell an unrelated inbound call
+        apart from a call it placed itself.
         """
-        from pathlib import Path
+        from easycat.transports.telnyx_media import TelnyxTransport, TelnyxTransportConfig
+        from easycat.transports.twilio_media import TwilioTransport
 
-        root = Path(__file__).resolve().parents[2] / "src" / "easycat" / "transports"
-        for name in ("twilio_media.py", "telnyx_media.py"):
-            source = (root / name).read_text(encoding="utf-8")
-            assert source.count('direction="inbound"') >= 2, name
+        bus = EventBus()
+        answered: list[CallAnswered] = []
+        ended: list[CallEnded] = []
+        bus.subscribe(CallAnswered, answered.append)
+        bus.subscribe(CallEnded, ended.append)
+
+        twilio = TwilioTransport(event_bus=bus)
+        await twilio._handle_message(
+            json.dumps(
+                {
+                    "event": "start",
+                    "streamSid": "MZ1",
+                    "start": {
+                        "streamSid": "MZ1",
+                        "callSid": "CA1",
+                        "mediaFormat": {
+                            "encoding": "audio/x-mulaw",
+                            "sampleRate": 8000,
+                            "channels": 1,
+                        },
+                    },
+                }
+            )
+        )
+        await twilio._handle_message(json.dumps({"event": "stop", "streamSid": "MZ1"}))
+        await twilio._drain_emit_tasks()
+
+        telnyx = TelnyxTransport(TelnyxTransportConfig(), event_bus=bus)
+        telnyx._ws = _StubWebSocket()  # type: ignore[assignment]
+        await telnyx._handle_message(
+            json.dumps(
+                {
+                    "event": "start",
+                    "start": {
+                        "stream_id": "ST1",
+                        "call_control_id": "CC1",
+                        "media_format": {
+                            "encoding": "L16",
+                            "sample_rate": 16000,
+                            "channels": 1,
+                        },
+                    },
+                }
+            )
+        )
+        await telnyx._handle_message(json.dumps({"event": "stop", "stop": {"stream_id": "ST1"}}))
+        await telnyx._drain_emit_tasks()
+
+        assert [(event.call_sid, event.direction) for event in answered] == [
+            ("CA1", "inbound"),
+            ("CC1", "inbound"),
+        ]
+        assert [(event.call_sid, event.direction) for event in ended] == [
+            ("CA1", "inbound"),
+            ("CC1", "inbound"),
+        ]
