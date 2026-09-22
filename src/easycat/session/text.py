@@ -93,6 +93,17 @@ _FIRST_PHRASE_MIN_CHARS = 24
 _FIRST_CLAUSE_BOUNDARY_CHARS = ".!?。！？．,;:"
 _URL_SCHEMES_HELD_FOR_LOOKAHEAD = frozenset({"ftp", "ftps", "http", "https", "ws", "wss"})
 _URL_LEADING_WRAPPERS = "([{<\"'`"
+_URL_TRAILING_PUNCTUATION = ",;:!?)]}\"'`"
+
+# Recognizes a scheme-less hostname (``example.com``, ``www.example.com``) or
+# an email address (``user@example.com``) as a whole token, so the internal
+# ``.`` separators are not mistaken for clause terminators.  The final label
+# must be at least two letters (a plausible TLD) so short abbreviation-style
+# tokens like ``U.S.`` or ``e.g.`` are not swept up.
+_DOMAIN_TOKEN_RE = re.compile(r"^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$", re.IGNORECASE)
+_EMAIL_TOKEN_RE = re.compile(
+    r"^[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$", re.IGNORECASE
+)
 
 
 def split_first_clause(text: str) -> tuple[str, str]:
@@ -174,15 +185,29 @@ def _is_url_separator(text: str, index: int) -> bool:
         return scheme in _URL_SCHEMES_HELD_FOR_LOOKAHEAD
 
     scheme, sep, _ = token_prefix.partition("://")
-    if not sep or not _is_url_scheme(scheme):
-        return False
-    return index + 1 < len(text) and not text[index + 1].isspace()
+    if sep and _is_url_scheme(scheme):
+        return index + 1 < len(text) and not text[index + 1].isspace()
+
+    if text[index] == "." and index + 1 < len(text) and not text[index + 1].isspace():
+        end = index + 1
+        while end < len(text) and not text[end].isspace():
+            end += 1
+        token = text[start + 1 : end].lstrip(_URL_LEADING_WRAPPERS)
+        if _looks_like_domain_or_email(token):
+            return True
+
+    return False
 
 
 def _is_url_scheme(scheme: str) -> bool:
     return (
         bool(scheme) and scheme[0].isalpha() and all(ch.isalnum() or ch in "+-." for ch in scheme)
     )
+
+
+def _looks_like_domain_or_email(token: str) -> bool:
+    cleaned = token.rstrip(_URL_TRAILING_PUNCTUATION)
+    return bool(_DOMAIN_TOKEN_RE.match(cleaned) or _EMAIL_TOKEN_RE.match(cleaned))
 
 
 def _is_numeric_separator(text: str, index: int) -> bool:
