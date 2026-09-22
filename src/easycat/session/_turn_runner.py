@@ -237,6 +237,7 @@ class TurnRunner:
         self._is_running = wiring.is_running
         self._is_gated = wiring.is_gated
         self._agent = wiring.agent
+        self._session_actions = wiring.session_actions
         self._drain_session_actions = wiring.drain_session_actions
         self._fence_session_actions = wiring.fence_session_actions
         self._caller_id_system_message = wiring.caller_id_system_message
@@ -1491,7 +1492,23 @@ class TurnRunner:
                 identity=st.identity,
                 activity=st.activity,
             )
-        elif st.synth_started and not st.playback_started:
+            return
+        if st.playback_started:
+            # Playback ran but the manager has already left BOT_SPEAKING, so
+            # some other owner finalized this generation. Touch nothing.
+            return
+        # No ``finalize_speaking_turn`` for this turn, and that is the only
+        # normal-completion path that drains queued ``SessionActions`` and
+        # clears their ``no_interrupt`` barge-in guard. An agent that ends or
+        # transfers the call from a tool without also speaking a closing line
+        # queues no TTS payload, so ``synth_started`` stays False; the same
+        # holds for a gated turn, a suppressed-playback turn, and a first
+        # payload that yields no audio. Settling the actions here is what keeps
+        # them from being orphaned — hanging the caller up during some later,
+        # unrelated turn, or never at all, with barge-in suppressed the whole
+        # time (gh 1149).
+        await self._settle_unspoken_turn_actions(st)
+        if st.synth_started:
             if st.gated:
                 # Keep current turn alive for gated replay mark accounting.
                 # ``TurnManager.reset()`` cancels the active token before
@@ -1506,6 +1523,24 @@ class TurnRunner:
                 self._reset_turn_manager_preserving_token()
             else:
                 self._reset_turn_state()
+
+    async def _settle_unspoken_turn_actions(self, st: _StreamingTtsState) -> None:
+        """Drain (or fence) queued actions for a turn that never spoke.
+
+        Mirrors the drain → ``clear_no_interrupt`` pairing that
+        :meth:`TTSScheduler.finalize_speaking_turn` owns for a turn that did
+        speak. A cancelled turn is *fenced* instead: its request is stale, and
+        a caller who just barged in must not have the call ended on them, so
+        the actions are dropped with a ``SessionActionFailed`` record each
+        (gh 1099).
+        """
+        if (st.token and st.token.is_cancelled) or st.playback_cut_short:
+            await self._fence_session_actions("turn ended without speaking")
+            return
+        st.should_stop = await self._drain_session_actions() or st.should_stop
+        actions = self._session_actions()
+        if actions is not None:
+            actions.clear_no_interrupt()
 
     async def _await_agent_task_recording_cancel(
         self,

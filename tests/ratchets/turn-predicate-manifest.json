@@ -1,17 +1,17 @@
 {
   "version": 1,
-  "update_rationale": "fix batch1 final",
+  "update_rationale": "gh 1149: settling a turn that never spoke fences its queued session actions when the turn was cancelled",
   "counts": {
     "categories": {
       "activity_state_predicate": 4,
       "null_object_predicate": 29,
       "phase_latch_predicate": 1,
-      "token_cancellation_predicate": 13,
+      "token_cancellation_predicate": 14,
       "token_ownership_predicate": 3
     },
     "roles": {
       "activity": 4,
-      "cancellation": 13,
+      "cancellation": 14,
       "null_object": 29,
       "phase_latch": 1,
       "token_ownership": 3
@@ -61,6 +61,7 @@
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._maybe_speak_agent_failure_fallback\tst.token.is_cancelled\t7d151c5925822f85\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._preemptive_candidate\tturn.cancel_token.is_cancelled\tddee11ccfa462093\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._prepare_turn_publication\tprev.cancel_token.is_cancelled\t67efb8318625f146\t0\tcancellation\tCooperative cancellation participates in effect admission.",
+    "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._settle_unspoken_turn_actions\tst.token.is_cancelled\t7d151c5925822f85\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._stream_text_turn\tcancel_token.is_cancelled\tf9722bc08564741c\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner._synthesize_queued_payloads\tst.token.is_cancelled\t7d151c5925822f85\t0\tcancellation\tCooperative cancellation participates in effect admission.",
     "token_cancellation_predicate\tsession/_turn_runner.py\tTurnRunner.handle_end_of_speech\ttoken.is_cancelled\tfd37cdf50d365535\t0\tcancellation\tCooperative cancellation participates in effect admission.",

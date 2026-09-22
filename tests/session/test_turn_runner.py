@@ -32,6 +32,7 @@ from easycat.events import (
     ErrorStage,
     Event,
     EventBus,
+    SessionActionFailed,
     STTEvent,
     STTEventType,
     STTFinal,
@@ -383,6 +384,22 @@ class _FailingStreamingAgent(_TestBridgeBase):
         _ = turn_input, recorder, cancel_token
         yield AgentBridgeEvent(kind="text_delta", text="")
         raise RuntimeError("agent unavailable")
+
+
+class _QuietStreamingAgent(_TestBridgeBase):
+    """Ends the turn without speaking (e.g. a silent tool-only reply)."""
+
+    async def run(self, text: str) -> str:
+        return ""
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder, cancel_token
+        yield AgentBridgeEvent(kind="done", text="")
 
 
 def _config(**overrides) -> SessionConfig:
@@ -3043,6 +3060,132 @@ async def test_run_streaming_agent_action_drain_triggers_stop() -> None:
     await session._turn_runner.run_streaming_agent("hello", token=None)
 
     session.stop.assert_awaited_once()
+    # The speaking path must settle the queue exactly once: pinning these here
+    # catches a quiet-turn drain that is widened until it also fires after
+    # ``finalize_speaking_turn`` already ran.
+    assert not actions.has_pending
+    assert not actions.no_interrupt
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_agent_quiet_turn_still_drains_actions() -> None:
+    """A queued action must still run when the agent speaks no text at all.
+
+    ``_settle_turn_after_tts`` only drains queued ``SessionActions`` (and
+    clears a stuck ``no_interrupt`` guard) through the ``st.synth_started``
+    branch, which requires a TTS payload to have actually been queued. An
+    agent that ends the call via a tool without also speaking a final line
+    (``invoke`` yields no ``text_delta``, only an empty ``done``) never
+    queues TTS audio, so ``synth_started`` stays ``False`` and the fallback
+    path in ``run_streaming_agent`` only resets turn-manager state -- the
+    pending ``end_call`` action, and its ``no_interrupt=True`` barge-in
+    guard, were silently orphaned forever.
+    """
+    actions = SessionActions()
+    actions.end_call(reason="done")
+    session = Session(_config(agent=_QuietStreamingAgent(), session_actions=actions))
+    session.stop = AsyncMock()
+    session._turn = TurnContext("turn-quiet", CancelToken())
+
+    result = await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    assert result == ""
+    session.stop.assert_awaited_once()
+    assert not actions.has_pending
+    assert not actions.no_interrupt
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_agent_quiet_turn_drains_transfer_call() -> None:
+    """The quiet-turn drain is not ``end_call``-specific."""
+    actions = SessionActions()
+    actions.transfer_call("+15550001111", reason="escalate")
+    session = Session(_config(agent=_QuietStreamingAgent(), session_actions=actions))
+    session._turn = TurnContext("turn-quiet-transfer", CancelToken())
+
+    await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    assert not actions.has_pending
+    assert not actions.no_interrupt
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_agent_cancelled_quiet_turn_fences_actions() -> None:
+    """A *cancelled* quiet turn drops its actions instead of running them.
+
+    The requesting turn was cancelled, so its ``end_call`` intent is stale:
+    a caller who just barged in must not have the call ended on them. The
+    queue is fenced with a ``SessionActionFailed`` record per action, and the
+    barge-in guard is released all the same (gh 1099).
+    """
+    actions = SessionActions()
+    actions.end_call(reason="done")
+    session = Session(_config(agent=_QuietStreamingAgent(), session_actions=actions))
+    session.stop = AsyncMock()
+    failed: list[SessionActionFailed] = []
+    session.event_bus.subscribe(SessionActionFailed, failed.append)
+    token = CancelToken()
+    token.cancel()
+    session._turn = TurnContext("turn-quiet-cancelled", token)
+
+    await session._turn_runner.run_streaming_agent("hello", token=token)
+
+    session.stop.assert_not_awaited()
+    assert not actions.has_pending
+    assert not actions.no_interrupt
+    assert [event.error for event in failed] == [
+        "session action dropped: turn ended without speaking"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_agent_suppressed_playback_still_drains_actions() -> None:
+    """A spoken turn whose playback was suppressed still settles its actions.
+
+    ``_synthesize_queued_payloads`` discards payloads while playback is
+    suppressed without ever setting ``synth_started``, so this reaches the
+    same terminal branch as a quiet turn even though the agent did speak.
+    Suppression is not cancellation, so the action must run rather than be
+    fenced (gh 1149).
+    """
+    suppressed = asyncio.Event()
+
+    class _SuppressedStreamingAgent(_TestBridgeBase):
+        """Speaks only after playback suppression is in effect."""
+
+        async def run(self, text: str) -> str:
+            return ""
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            await suppressed.wait()
+            yield AgentBridgeEvent(kind="text_delta", text="Goodbye. ")
+            yield AgentBridgeEvent(kind="done", text="Goodbye. ")
+
+    actions = SessionActions()
+    actions.end_call(reason="done")
+    session = Session(
+        _config(agent=_SuppressedStreamingAgent(), session_actions=actions),
+    )
+    session.stop = AsyncMock()
+    session._turn = TurnContext("turn-suppressed-action", CancelToken())
+
+    turn_task = asyncio.create_task(session._turn_runner.run_streaming_agent("hello", token=None))
+    await asyncio.sleep(0)
+    await session.cancel_tts_playback()
+    assert session._tts_scheduler.is_playback_suppressed is True
+    suppressed.set()
+
+    await asyncio.wait_for(turn_task, timeout=10)
+
+    session.stop.assert_awaited_once()
+    assert not actions.has_pending
+    assert not actions.no_interrupt
 
 
 @pytest.mark.asyncio
