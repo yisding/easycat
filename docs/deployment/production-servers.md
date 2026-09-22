@@ -424,9 +424,9 @@ Each issue carries `code` (`EASYCAT_E203`, `EASYCAT_E202`, `EASYCAT_E604`,
 `EASYCAT_E602`, `EASYCAT_E104`), a content-free `reason` (`missing_env`,
 `missing_extra`, `unset_reference`, `incomplete_selection`,
 `unresolvable_profile`), a `severity` of `blocking` or `warning`, and any of
-`field`, `role`, `detail`, and `fix`. No secret-shaped
-manifest value can reach the body. The only issue whose text interpolates the
-manifest — `incomplete_selection` — is passed through the redactor; every other
+`field`, `role`, `detail`, and `fix`. No secret-shaped manifest value can reach
+the body. The only issue whose text interpolates the manifest —
+`incomplete_selection` — is passed through the redactor; every other
 `detail`/`fix` is verbatim error-registry text over planner catalog metadata
 (env-var names, install extras, role names) and is left byte-identical to what
 `easycat doctor` prints for the same code, so a copy-pasteable fix stays
