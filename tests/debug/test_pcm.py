@@ -81,7 +81,9 @@ def test_decode_non_positive_channels_clamped_to_mono():
 
 def test_decode_stereo_downmix_rounds_odd_sums_instead_of_flooring():
     # Interleaved L/R (3, -4): sum -1, true average -0.5 -> rounds to 0.
-    # Floor division ("//") wrongly yields -1, introducing a systematic
-    # negative bias (see easycat._audio_utils.to_mono, which rounds).
-    stereo = array("h", [3, -4]).tobytes()
-    assert decode_pcm_mono(stereo, sample_width=2, channels=2) == [0]
+    # Then (3, 4): sum 7, true average 3.5 -> rounds to 4.
+    # Floor division ("//") wrongly yields -1 and 3, i.e. it never rounds up:
+    # a systematic negative bias.  round() is half-to-even, matching
+    # easycat._audio_utils.to_mono and easycat.debugger._waveform.
+    stereo = array("h", [3, -4, 3, 4]).tobytes()
+    assert decode_pcm_mono(stereo, sample_width=2, channels=2) == [0, 4]

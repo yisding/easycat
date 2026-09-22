@@ -57,9 +57,12 @@ def decode_pcm_mono(blob: bytes, *, sample_width: int, channels: int) -> list[in
 
     Returns an empty list for unsupported widths (``sample_width`` not in
     {2, 4}; notably 8-bit mu-law), empty/short input, or a non-positive channel
-    count.  Interleaved frames are averaged across channels.  Decoding is
-    byte-order normalised so big-endian hosts decode the same little-endian
-    stream.  Trailing bytes that don't complete a frame are dropped.
+    count.  Interleaved frames are averaged across channels, rounding the frame
+    sum (half-to-even) rather than flooring it so the downmix carries no DC
+    bias -- the same convention as :func:`easycat._audio_utils.to_mono`.
+    Decoding is byte-order normalised so big-endian hosts decode the same
+    little-endian stream.  Trailing bytes that don't complete a frame are
+    dropped.
     """
     typecode = _WIDTH_TYPECODE.get(int(sample_width))
     channels = max(1, int(channels))
