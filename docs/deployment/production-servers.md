@@ -404,23 +404,27 @@ as `checks.providers.status = "degraded"`. Neither body names a variable, an
 extra, or a manifest path.
 
 The blocking reasons behind that verdict use one `key:value` grammar —
-`missing_env:<VAR>`, `missing_extra:<extra>`, `unset_reference:<VAR>` for a
-configured `bearer-env:` reference whose variable is unset, and the sibling
-`incomplete_selection:[voice.<name>]` token, which names a manifest path and
-never a value. A defect keeps its own `reason`, so an absent reference value
-and a structurally incomplete profile stay distinguishable. They are what `ProviderPlan.blocking_errors()` returns, and they
-reach an operator through the authenticated `/plan` body's `blocking_errors`
-(and through `easycat plan --json`), not through the probe endpoints.
+`missing_env:<VAR>`, `missing_extra:<extra>`,
+`missing_backend:<role>:<provider>` for a selected backend whose SDK is absent
+even though it declares no pip extra (`vad:krisp`, say), `unset_reference:<VAR>`
+for a configured `bearer-env:` reference whose variable is unset, and the
+sibling `incomplete_selection:[voice.<name>]` token, which names a manifest path
+and never a value. A defect keeps its own `reason`, so an absent reference
+value and a structurally incomplete profile stay distinguishable. They are what
+`ProviderPlan.blocking_errors()` returns, and they reach an operator through the
+authenticated `/plan` body's `blocking_errors` (and through
+`easycat plan --json`), not through the probe endpoints.
 
 `/plan` sits next to them behind the same bearer auth as `/metrics`,
 `/manifest`, and `/capabilities`, and reports *which* issue. It returns the
-seven keys `easycat plan --json` emits — `profile`, `selected`, `missing_env`,
-`missing_extras`, `warnings`, `blocking_errors`, `has_blocking_errors` — plus
-`manifest_loaded` and an additive `issues` array. Each issue carries `code`
-(`EASYCAT_E203`, `EASYCAT_E202`, `EASYCAT_E604`, `EASYCAT_E602`, `EASYCAT_E104`),
-a content-free `reason` (`missing_env`, `missing_extra`, `unset_reference`,
-`incomplete_selection`, `unresolvable_profile`), a `severity` of `blocking` or
-`warning`, and any of `field`, `role`, `detail`, and `fix`. No secret-shaped
+eight keys `easycat plan --json` emits — `profile`, `selected`, `missing_env`,
+`missing_extras`, `missing_backends`, `warnings`, `blocking_errors`,
+`has_blocking_errors` — plus `manifest_loaded` and an additive `issues` array.
+Each issue carries `code` (`EASYCAT_E203`, `EASYCAT_E202`, `EASYCAT_E604`,
+`EASYCAT_E602`, `EASYCAT_E104`), a content-free `reason` (`missing_env`,
+`missing_extra`, `unset_reference`, `incomplete_selection`,
+`unresolvable_profile`), a `severity` of `blocking` or `warning`, and any of
+`field`, `role`, `detail`, and `fix`. No secret-shaped
 manifest value can reach the body. The only issue whose text interpolates the
 manifest — `incomplete_selection` — is passed through the redactor; every other
 `detail`/`fix` is verbatim error-registry text over planner catalog metadata
