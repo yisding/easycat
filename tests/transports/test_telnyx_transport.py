@@ -13,6 +13,7 @@ import pytest
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
     DTMF,
+    CallAnswered,
     CallEnded,
     EventBus,
     PlaybackMarkAck,
@@ -449,6 +450,70 @@ async def test_stop_emits_call_ended_once() -> None:
     ended = collected.get(CallEnded, [])
     assert len(ended) == 1
     assert ended[0].call_sid == "CC1"
+
+
+# ── Lifecycle direction marker (gh 1157) ──────────────────────────
+
+
+def _client_state(fields: dict[str, str]) -> str:
+    return base64.b64encode(json.dumps(fields).encode("utf-8")).decode("ascii")
+
+
+async def _lifecycle_directions(
+    client_state: str | None,
+) -> tuple[list[str | None], list[str | None]]:
+    """Drive one start + stop and return the direction on each lifecycle event."""
+    bus, collected = make_telnyx_bus()
+    transport = TelnyxTransport(TelnyxTransportConfig(), event_bus=bus)
+    transport._ws = _DummyTelnyxWebSocket()
+
+    await transport._handle_message(_start_msg(client_state=client_state))
+    await transport._handle_message(json.dumps({"event": "stop", "stop": {"stream_id": "ST1"}}))
+    await drain(transport)
+
+    answered = collected.get(CallAnswered, [])
+    ended = collected.get(CallEnded, [])
+    assert [event.call_sid for event in answered] == ["CC1"]
+    assert [event.call_sid for event in ended] == ["CC1"]
+    return (
+        [event.direction for event in answered],
+        [event.direction for event in ended],
+    )
+
+
+@pytest.mark.asyncio
+async def test_outbound_client_state_marks_both_lifecycle_events_outbound() -> None:
+    """An outbound leg must not be labelled inbound (gh 1157).
+
+    Both emits used to hardcode ``direction="inbound"``, so an outbound call
+    whose media stream shares a bus with its ``OutboundCallStateMachine`` never
+    saw its own ``CallAnswered`` / ``CallEnded`` -- both guards drop
+    ``"inbound"`` -- and the machine stayed stuck in ``INITIATING``/``RINGING``.
+    """
+    answered, ended = await _lifecycle_directions(_client_state({"direction": "outbound"}))
+    assert answered == ["outbound"]
+    assert ended == ["outbound"]
+
+
+@pytest.mark.asyncio
+async def test_inbound_client_state_still_marks_both_lifecycle_events_inbound() -> None:
+    answered, ended = await _lifecycle_directions(_client_state({"direction": "inbound"}))
+    assert answered == ["inbound"]
+    assert ended == ["inbound"]
+
+
+@pytest.mark.asyncio
+async def test_start_without_client_state_defaults_to_inbound() -> None:
+    answered, ended = await _lifecycle_directions(None)
+    assert answered == ["inbound"]
+    assert ended == ["inbound"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_direction_leaves_both_lifecycle_events_unmarked() -> None:
+    answered, ended = await _lifecycle_directions(_client_state({"direction": "sip-refer"}))
+    assert answered == [None]
+    assert ended == [None]
 
 
 # ── Outbound coalescing ───────────────────────────────────────────

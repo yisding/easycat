@@ -1425,6 +1425,64 @@ class TestTwilioSharedBusSessionCorrelation:
         assert all(event.session_id == "session-right" for event in right_events)
 
 
+class TestTwilioCallEventDirection:
+    """Lifecycle events carry the direction parsed from ``start`` (gh 1157).
+
+    Both emits used to hardcode ``direction="inbound"``, so an outbound leg
+    whose media stream shares a bus with its ``OutboundCallStateMachine``
+    never saw its own ``CallAnswered`` / ``CallEnded`` (both guards drop
+    ``"inbound"``) and the machine stayed stuck in ``INITIATING``/``RINGING``.
+    """
+
+    @staticmethod
+    async def _lifecycle_directions(
+        custom_parameters: dict[str, str] | None,
+    ) -> tuple[list[str | None], list[str | None]]:
+        bus = EventBus()
+        answered: list[CallAnswered] = []
+        ended: list[CallEnded] = []
+        bus.subscribe(CallAnswered, answered.append)
+        bus.subscribe(CallEnded, ended.append)
+        transport = TwilioConnectionTransport(_DummyTwilioWebSocket(), event_bus=bus)
+
+        await transport._handle_message(
+            _twilio_start_msg("MZ1", "CA1", custom_parameters=custom_parameters)
+        )
+        await transport._handle_message(_twilio_stop_msg("MZ1"))
+        await _drain_transport_diagnostics(transport)
+
+        assert [event.call_sid for event in answered] == ["CA1"]
+        assert [event.call_sid for event in ended] == ["CA1"]
+        return (
+            [event.direction for event in answered],
+            [event.direction for event in ended],
+        )
+
+    @pytest.mark.asyncio
+    async def test_outbound_start_frame_marks_both_events_outbound(self) -> None:
+        answered, ended = await self._lifecycle_directions({"Direction": "outbound-api"})
+        assert answered == ["outbound"]
+        assert ended == ["outbound"]
+
+    @pytest.mark.asyncio
+    async def test_inbound_start_frame_still_marks_both_events_inbound(self) -> None:
+        answered, ended = await self._lifecycle_directions({"Direction": "inbound"})
+        assert answered == ["inbound"]
+        assert ended == ["inbound"]
+
+    @pytest.mark.asyncio
+    async def test_start_frame_without_direction_defaults_to_inbound(self) -> None:
+        answered, ended = await self._lifecycle_directions(None)
+        assert answered == ["inbound"]
+        assert ended == ["inbound"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_direction_leaves_both_events_unmarked(self) -> None:
+        answered, ended = await self._lifecycle_directions({"Direction": "sip-refer"})
+        assert answered == [None]
+        assert ended == [None]
+
+
 class TestTwilioStreamGapDiagnostics:
     @pytest.mark.asyncio
     async def test_server_transport_emits_sequence_and_timestamp_gap_diagnostics(
