@@ -964,6 +964,10 @@ class _TelnyxProtocolMixin:
             answered_at=claimed.answered_at,
             call_identity=claimed.call_identity,
             session_id=self._easycat_session_id,
+            # Marked inbound so the outbound call-state machine does not
+            # adopt this call's hangup (gh 1153; mirrors the CallAnswered
+            # marker from gh 1098).
+            direction="inbound",
         )
 
     async def _emit_call_ended_once(self) -> None:
