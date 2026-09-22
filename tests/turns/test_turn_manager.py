@@ -843,6 +843,93 @@ async def test_audio_captured_during_speech():
     assert len(tm.turn_audio) >= 5
 
 
+@pytest.mark.asyncio
+async def test_pre_roll_buffer_does_not_leak_prior_turn_audio_into_barge_in():
+    """A completed turn's trailing audio must not resurface in the next turn.
+
+    ``on_audio_frame`` feeds ``_pre_roll_buffer`` unconditionally, regardless
+    of turn state (it is only ``_turn_audio`` that is gated on
+    USER_SPEAKING/USER_PAUSED). Before the fix for #1147,
+    ``_complete_user_turn`` (the USER_PAUSED -> PROCESSING transition) left
+    the buffer alone, so its last ``pre_roll_ms`` still held turn 1's own
+    already-transcribed tail when the user barged in again from PROCESSING.
+    ``_begin_turn`` unconditionally flushes the pre-roll buffer into the new
+    turn's ``turn_audio``, and ``_turn_runner`` replays every chunk of it
+    into the new turn's STT stream as "pre-roll priming" -- so audio from a
+    turn already fully consumed was resent to STT as part of the next turn.
+    """
+    bus = EventBus()
+    config = TurnManagerConfig(end_of_turn_silence_ms=10, pre_roll_ms=100)
+    tm = TurnManager(bus, config=config)
+
+    # Turn 1: user speaks, tagging every chunk with a marker byte (111) so it
+    # can be told apart from any later turn's audio.
+    await tm.on_vad_event(VADStartSpeaking())
+    for _ in range(10):
+        tm.on_audio_frame(_chunk(value=111))
+    await tm.on_vad_event(VADStopSpeaking())
+
+    # Let the silence timer fire: USER_PAUSED -> PROCESSING. No further audio
+    # arrives before the agent replies, so the pre-roll buffer still holds
+    # turn 1's own trailing chunks (tagged 111).
+    await asyncio.sleep(0.05)
+    assert tm.state == TurnManagerState.PROCESSING
+
+    # User re-speaks while the agent is still "thinking" -> barge-in starts
+    # turn 2 before any new audio has been fed.
+    await tm.on_vad_event(VADStartSpeaking())
+    assert tm.state == TurnManagerState.USER_SPEAKING
+
+    # Turn 2's turn_audio must not contain turn 1's already-consumed audio.
+    leaked = [c for c in tm.turn_audio if c.data and c.data[0] == 111]
+    assert not leaked, (
+        "turn 1's trailing audio leaked into turn 2's turn_audio via the "
+        "un-cleared pre-roll buffer"
+    )
+
+
+@pytest.mark.asyncio
+async def test_completing_a_user_turn_empties_the_pre_roll_window():
+    """Completing a user turn drops the pre-roll window it already consumed."""
+    bus = EventBus()
+    config = TurnManagerConfig(end_of_turn_silence_ms=10, pre_roll_ms=100)
+    tm = TurnManager(bus, config=config)
+
+    await tm.on_vad_event(VADStartSpeaking())
+    for _ in range(10):
+        tm.on_audio_frame(_chunk(value=111))
+    await tm.on_vad_event(VADStopSpeaking())
+
+    await asyncio.sleep(0.05)
+    assert tm.state == TurnManagerState.PROCESSING
+    assert len(tm._pre_roll_buffer) == 0
+    assert tm._pre_roll_duration_ms == 0.0
+
+
+@pytest.mark.asyncio
+async def test_push_to_talk_repress_does_not_replay_prior_turn_audio():
+    """A push-to-talk re-press must not inherit the finished turn's audio.
+
+    ``end_turn()`` reaches the same ``_complete_user_turn`` as the silence
+    timeout, and a press while PROCESSING barges in, so an immediate re-press
+    within ``pre_roll_ms`` is the worst case: the whole window is the prior
+    turn's confirmed speech, with no VAD confirmation lag to dilute it.
+    """
+    bus = EventBus()
+    config = TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK, pre_roll_ms=450)
+    tm = TurnManager(bus, config=config)
+
+    await tm.start_turn()
+    for _ in range(10):
+        tm.on_audio_frame(_chunk(value=111))
+    await tm.end_turn()
+    assert tm.state == TurnManagerState.PROCESSING
+
+    await tm.start_turn()
+    assert tm.state == TurnManagerState.USER_SPEAKING
+    assert tm.turn_audio == []
+
+
 # ── Push-to-talk tests ──────────────────────────────────────────────
 
 

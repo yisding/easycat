@@ -629,6 +629,15 @@ class TurnManager:
         """Transition to processing and emit the correlated turn-end event."""
         if self._shutting_down:
             return
+        # Every chunk still inside the pre-roll window was also appended to
+        # this turn's ``_turn_audio`` and already streamed to STT, so it is
+        # consumed audio, not pre-decision audio.  Dropping it here keeps a
+        # barge-in out of PROCESSING from flushing the finished turn's tail
+        # into the next turn and re-priming a fresh STT stream with it.  The
+        # window refills on its own: ``on_audio_frame`` keeps feeding the
+        # buffer in every state.
+        self._pre_roll_buffer.clear()
+        self._pre_roll_duration_ms = 0.0
         self._transition(
             TurnManagerState.PROCESSING,
             reason=reason,

@@ -191,6 +191,13 @@ mutates.
 Pre-roll and active-turn audio are bounded by both duration and chunk count.
 Duration alone is unsafe when a producer supplies pathological tiny chunks.
 
+Completing a user turn empties the pre-roll window as well. Every chunk still
+in it at that point was also captured into the finished turn's audio and
+already streamed to STT, so keeping it would let a barge-in out of PROCESSING
+flush consumed audio into the next turn and re-prime a fresh STT stream with
+it. The window refills immediately, because frames keep feeding it in every
+state.
+
 ## 3.6 Pauses, Segments, and Endpoints Are Different
 
 A VAD stop opens a pause. Three related timers/decisions may then occur:
