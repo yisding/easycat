@@ -110,14 +110,6 @@ class TestErrorInfo:
         assert info.children[1].message == "provider failed"
         assert info.children[1].notes == "provider=openai"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "known bug: from_exception only matches 'site-packages' per physical "
-            "line, so the source/caret lines under a third-party File line break "
-            "the collapse run instead of folding into it (easycat#1139)"
-        ),
-    )
     def test_from_exception_collapses_consecutive_third_party_frames(self, monkeypatch):
         # A traceback line only contains "site-packages" on the ``File ...``
         # line of a frame; the source line (and any caret-annotation line)
@@ -144,6 +136,107 @@ class TestErrorInfo:
         assert "handle_request(req)" not in info.traceback
         assert "raise exc from None" not in info.traceback
         assert "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^" not in info.traceback
+
+    def test_from_exception_keeps_first_party_frames_between_collapsed_runs(self, monkeypatch):
+        # Collapsing must stay surgical: only frames whose ``File ...`` header
+        # points into site-packages are folded away. Application and stdlib
+        # frames — and their source lines — have to survive between the runs,
+        # otherwise the marker hides the very frames a reader needs.
+        fake_traceback = [
+            "Traceback (most recent call last):\n",
+            '  File "/app/service.py", line 3, in run\n',
+            "    return client.fetch()\n",
+            '  File "/x/site-packages/httpx/_client.py", line 10, in fetch\n',
+            "    resp = self._pool.handle_request(req)\n",
+            '  File "/usr/lib/python3.11/contextlib.py", line 155, in __exit__\n',
+            "    self.gen.throw(value)\n",
+            '  File "/x/site-packages/httpcore/_sync.py", line 20, in handle_request\n',
+            "    raise exc from None\n",
+            "RuntimeError: boom\n",
+        ]
+        monkeypatch.setattr("traceback.format_exception", lambda *args, **kwargs: fake_traceback)
+
+        info = ErrorInfo.from_exception(RuntimeError("boom"))
+
+        assert info.traceback is not None
+        assert info.traceback.count("...1 third-party frame(s)...\n") == 2
+        assert '  File "/app/service.py", line 3, in run\n' in info.traceback
+        assert "    return client.fetch()\n" in info.traceback
+        assert '  File "/usr/lib/python3.11/contextlib.py", line 155, in __exit__\n' in (
+            info.traceback
+        )
+        assert "    self.gen.throw(value)\n" in info.traceback
+        assert "handle_request(req)" not in info.traceback
+        assert "raise exc from None" not in info.traceback
+
+    def test_from_exception_collapse_keeps_chained_exception_separators(self, monkeypatch):
+        # Chained tracebacks separate the sections with a blank line and a
+        # prose line at zero indent. Neither may be mistaken for a continuation
+        # of the third-party frame above it, or the marker lands in the wrong
+        # section and the separator disappears.
+        fake_traceback = [
+            "Traceback (most recent call last):\n",
+            '  File "/x/site-packages/httpcore/_sync.py", line 20, in handle_request\n',
+            "    raise exc from None\n",
+            "ConnectError: connection refused\n",
+            "\n",
+            "The above exception was the direct cause of the following exception:\n",
+            "\n",
+            "Traceback (most recent call last):\n",
+            '  File "/app/service.py", line 3, in run\n',
+            "    return client.fetch()\n",
+            "RuntimeError: boom\n",
+        ]
+        monkeypatch.setattr("traceback.format_exception", lambda *args, **kwargs: fake_traceback)
+
+        info = ErrorInfo.from_exception(RuntimeError("boom"))
+
+        assert info.traceback is not None
+        assert info.traceback.count("...1 third-party frame(s)...\n") == 1
+        assert (
+            "  ...1 third-party frame(s)...\nConnectError: connection refused\n" in info.traceback
+        )
+        assert (
+            "\nThe above exception was the direct cause of the following exception:\n\n"
+            in info.traceback
+        )
+        assert "raise exc from None" not in info.traceback
+        assert "    return client.fetch()\n" in info.traceback
+
+    def test_from_exception_collapse_preserves_exception_group_structure(self, monkeypatch):
+        # BaseExceptionGroup tracebacks prefix every line with a "| " gutter and
+        # delimit each sub-exception with a "+---" separator. The gutter has to
+        # be stripped before frames are compared, and the indented terminal
+        # message line of a child must not be swallowed as frame source text.
+        fake_traceback = [
+            "  + Exception Group Traceback (most recent call last):\n",
+            '  |   File "/app/main.py", line 5, in <module>\n',
+            "  |     raise ExceptionGroup('pipeline failed', [RuntimeError('boom')])\n",
+            "  | ExceptionGroup: pipeline failed (1 sub-exception)\n",
+            "  +-+---------------- 1 ----------------\n",
+            "    | Traceback (most recent call last):\n",
+            '    |   File "/x/site-packages/httpx/_client.py", line 10, in get\n',
+            "    |     resp = self._pool.handle_request(req)\n",
+            '    |   File "/x/site-packages/httpcore/_sync.py", line 20, in handle_request\n',
+            "    |     raise exc from None\n",
+            "    | RuntimeError: boom\n",
+            "    +------------------------------------\n",
+        ]
+        monkeypatch.setattr("traceback.format_exception", lambda *args, **kwargs: fake_traceback)
+
+        info = ErrorInfo.from_exception(RuntimeError("boom"))
+
+        assert info.traceback is not None
+        assert info.traceback.count("third-party frame(s)") == 1
+        assert "    |   ...2 third-party frame(s)...\n" in info.traceback
+        assert "handle_request(req)" not in info.traceback
+        assert "raise exc from None" not in info.traceback
+        # Group scaffolding and the child's own message survive the collapse.
+        assert '  |   File "/app/main.py", line 5, in <module>\n' in info.traceback
+        assert "  | ExceptionGroup: pipeline failed (1 sub-exception)\n" in info.traceback
+        assert "  +-+---------------- 1 ----------------\n" in info.traceback
+        assert "    | RuntimeError: boom\n" in info.traceback
+        assert "    +------------------------------------\n" in info.traceback
 
     def test_from_exception_captures_nested_exception_group_children(self):
         inner_left = ValueError("bad input")

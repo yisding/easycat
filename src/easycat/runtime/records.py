@@ -7,6 +7,7 @@ must have defaults so older bundles remain loadable.
 from __future__ import annotations
 
 import enum
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -71,36 +72,87 @@ class ErrorInfo:
     def from_exception(exc: BaseException, *, notes: str | None = None) -> ErrorInfo:
         """Capture an ``ErrorInfo`` from a live exception.
 
-        Third-party frames (site-packages) are collapsed to a single
-        ``...N frames...`` line to keep journal records readable.
-        PEP 678 notes attached to the exception are preserved in the
+        Runs of consecutive third-party frames (site-packages) are collapsed to
+        a single ``...N third-party frame(s)...`` line to keep journal records
+        readable.  PEP 678 notes attached to the exception are preserved in the
         structured ``notes`` field for journal filters and bundle export.
         """
         import traceback as tb_mod
 
         raw_lines = tb_mod.format_exception(type(exc), exc, exc.__traceback__)
-        collapsed: list[str] = []
-        skip_run = 0
-        for line in "".join(raw_lines).splitlines(keepends=True):
-            if "site-packages" in line:
-                skip_run += 1
-            else:
-                if skip_run:
-                    collapsed.append(f"  ...{skip_run} third-party frame(s)...\n")
-                    skip_run = 0
-                collapsed.append(line)
-        if skip_run:
-            collapsed.append(f"  ...{skip_run} third-party frame(s)...\n")
-
         combined_notes = _combine_error_notes(notes, exc)
 
         return ErrorInfo(
             type=type(exc).__qualname__,
             message=str(exc),
-            traceback="".join(collapsed),
+            traceback=_collapse_third_party_frames("".join(raw_lines)),
             notes=combined_notes,
             children=_exception_children(exc),
         )
+
+
+# ``traceback.format_exception`` renders one frame as several physical lines: the
+# ``File "...", line N, in f`` header, the source line beneath it, and any PEP 657
+# caret annotation.  Only the header carries the file path, so frame ownership is
+# decided from the header and the more-indented continuation lines underneath it
+# are folded into the same run.  ``BaseExceptionGroup`` output additionally
+# prefixes every line with a ``| `` gutter and marks each sub-exception with a
+# ``+---`` separator; the gutter is stripped before the indent comparison and
+# ``+`` lines never count as continuations, so group structure survives intact.
+_TRACEBACK_GUTTER = re.compile(r"[ \t]*\|[ \t]?")
+_TRACEBACK_FILE_HEADER = re.compile(r'File "(?P<path>.*)", line \d+')
+
+
+def _split_traceback_gutter(line: str) -> tuple[str, str]:
+    """Split a ``BaseExceptionGroup`` ``| `` gutter prefix off a traceback line."""
+    match = _TRACEBACK_GUTTER.match(line)
+    if match is None:
+        return "", line
+    return match.group(), line[match.end() :]
+
+
+def _collapse_third_party_frames(text: str) -> str:
+    """Fold runs of consecutive third-party frames into one summary marker."""
+    collapsed: list[str] = []
+    skip_run = 0
+    skip_gutter = ""
+    skip_indent = -1
+
+    def flush() -> None:
+        nonlocal skip_run, skip_indent
+        if skip_run:
+            collapsed.append(f"{skip_gutter}  ...{skip_run} third-party frame(s)...\n")
+            skip_run = 0
+        skip_indent = -1
+
+    for line in text.splitlines(keepends=True):
+        gutter, rest = _split_traceback_gutter(line)
+        body = rest.rstrip("\r\n")
+        content = body.lstrip(" \t")
+        indent = len(body) - len(content)
+
+        header = _TRACEBACK_FILE_HEADER.match(content)
+        if header is not None:
+            if "site-packages" in header["path"]:
+                if not skip_run:
+                    skip_gutter = gutter
+                skip_run += 1
+                skip_indent = indent
+                continue
+            flush()
+            collapsed.append(line)
+            continue
+
+        is_continuation = (
+            skip_indent >= 0 and indent > skip_indent and bool(content) and content[0] != "+"
+        )
+        if is_continuation:
+            continue
+        flush()
+        collapsed.append(line)
+
+    flush()
+    return "".join(collapsed)
 
 
 def _combine_error_notes(notes: str | None, exc: BaseException) -> str | None:
