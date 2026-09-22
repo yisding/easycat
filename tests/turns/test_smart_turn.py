@@ -394,34 +394,27 @@ async def test_smart_turn_warmup_swallows_load_errors() -> None:
 
 
 class _SmartTurnDoubleLoadError(AssertionError):
-    """Raised only when the known gh-1145 double-load reproduces.
+    """Raised only when the gh-1145 double-load regresses.
 
-    Scoping ``xfail`` to this exception (rather than to ``AssertionError`` or
-    the whole test) keeps an unrelated setup/synchronization failure -- a
-    ``wait_for`` timeout, a broken fixture -- reported as a real failure
-    instead of being silently absorbed as "the expected bug".
+    A dedicated exception (rather than a bare ``assert``) keeps the failure
+    message specific to the race, so an unrelated setup/synchronization
+    failure -- a ``wait_for`` timeout, a broken fixture -- is never mistaken
+    for the double load itself.
     """
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    raises=_SmartTurnDoubleLoadError,
-    strict=True,
-    reason="gh-1145: _ensure_loaded() has no lock, so warmup() (which never "
-    "touches _detect_semaphore) races a concurrent detect() and double-loads "
-    "the ONNX model",
-)
 async def test_concurrent_warmup_and_detect_do_not_double_load_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A racing warmup() and detect() on one instance must build the model once.
 
-    ``_ensure_loaded`` is a plain ``if self._session is not None: return``
-    check-then-act with no lock.  ``detect()`` serializes against other
-    ``detect()`` calls with ``_detect_semaphore``, but ``warmup()`` never
-    acquires that semaphore, so it provides no exclusion against a
-    concurrent ``detect()`` (e.g. a ``SmartTurnONNX`` instance shared across
-    more than one ``Session``).  Both can observe ``self._session is None``
+    ``detect()`` serializes against other ``detect()`` calls with
+    ``_detect_semaphore``, but ``warmup()`` never acquires that semaphore, so
+    it provides no exclusion against a concurrent ``detect()`` (e.g. a
+    ``SmartTurnONNX`` instance shared across more than one ``Session``).
+    ``_ensure_loaded`` therefore guards its check-then-act with
+    ``_load_lock``; without it both callers observe ``self._session is None``
     and each construct their own ``ort.InferenceSession``, wasting a model
     load and letting one overwrite the other's session/feature extractor.
     """
@@ -440,7 +433,10 @@ async def test_concurrent_warmup_and_detect_do_not_double_load_model(
         monkeypatch, session_started=session_started, release_session=release_session
     )
 
-    provider = SmartTurnONNX(model_path="unused.onnx", timeout_s=1.0)
+    # A generous timeout: detect() now legitimately blocks on _load_lock
+    # while warmup() finishes the build, and a slow CI box must not turn that
+    # wait into detect()'s own timeout fallback.
+    provider = SmartTurnONNX(model_path="unused.onnx", timeout_s=2.0)
     # A non-fallback-shaped result, so a passing test proves detect()
     # actually completed a real inference rather than coincidentally
     # matching detect()'s own contention/timeout fallback.
@@ -469,14 +465,15 @@ async def test_concurrent_warmup_and_detect_do_not_double_load_model(
             timeout=_WORKER_EVENT_TIMEOUT,
         )
 
-        # warmup()'s _ensure_loaded() is mid-build here, but since it never
-        # touches _detect_semaphore, detect() races in rather than waiting.
+        # warmup()'s _ensure_loaded() is mid-build here.  warmup() never
+        # touches _detect_semaphore, so detect() reaches _ensure_loaded()
+        # concurrently and must park on _load_lock instead of building again.
         detect_task = asyncio.create_task(provider.detect([chunk]))
         # Release only once *both* callers have entered _ensure_loaded().
-        # This is independent of whether detect() itself has finished, so
-        # it can't deadlock behind (or have its assertions coincidentally
-        # satisfied by) detect()'s own contention timeout once the race is
-        # fixed and detect() instead blocks briefly behind the shared load.
+        # tracking_ensure_loaded() records the entry before delegating, so
+        # this fires while the second caller waits on _load_lock -- it can't
+        # deadlock behind (or have its assertions coincidentally satisfied
+        # by) detect()'s own contention timeout.
         await asyncio.wait_for(
             loop.run_in_executor(None, both_entered.wait, _WORKER_EVENT_TIMEOUT),
             timeout=_WORKER_EVENT_TIMEOUT,
@@ -496,6 +493,66 @@ async def test_concurrent_warmup_and_detect_do_not_double_load_model(
     # once; the race lets both warmup() and detect() build one each.
     if build_calls != [0]:
         raise _SmartTurnDoubleLoadError(f"expected a single model load, got {build_calls}")
+
+
+def test_ensure_loaded_publishes_session_after_feature_extractor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_session`` gates the unlocked fast path, so it must be published last.
+
+    A caller that finds ``_session`` set skips ``_load_lock`` entirely.  If
+    ``_ensure_loaded()`` published ``_session`` before ``_feature_extractor``,
+    that caller could return while the provider is still half-built and then
+    raise ``TypeError: 'NoneType' object is not callable`` inside
+    ``_predict_sync()``.
+    """
+    feature_extractor_started = threading.Event()
+    release_feature_extractor = threading.Event()
+
+    fake_ort = SimpleNamespace(
+        ExecutionMode=SimpleNamespace(ORT_SEQUENTIAL="sequential"),
+        GraphOptimizationLevel=SimpleNamespace(ORT_ENABLE_ALL="all"),
+        SessionOptions=lambda: SimpleNamespace(),
+        InferenceSession=lambda model_path, sess_options=None: SimpleNamespace(id="session"),
+    )
+
+    def fake_require_module(name: str, *, extra: str, purpose: str) -> Any:
+        if name == "numpy":
+            return SimpleNamespace()
+        if name == "onnxruntime":
+            return fake_ort
+        raise AssertionError(f"unexpected module request: {name}")
+
+    def blocking_feature_extractor(*, np: Any, chunk_length: int) -> SimpleNamespace:
+        feature_extractor_started.set()
+        assert release_feature_extractor.wait(timeout=_WORKER_EVENT_TIMEOUT)
+        return SimpleNamespace(id="fe")
+
+    monkeypatch.setattr("easycat.smart_turn.require_module", fake_require_module)
+    monkeypatch.setattr(
+        "easycat.smart_turn._WhisperFeatureExtractorNP",
+        blocking_feature_extractor,
+    )
+
+    provider = SmartTurnONNX(model_path="unused.onnx")
+    loader = threading.Thread(target=provider._ensure_loaded)
+    loader.start()
+    observed: dict[str, Any] = {}
+    try:
+        assert feature_extractor_started.wait(timeout=_WORKER_EVENT_TIMEOUT)
+        # ``InferenceSession`` has already been constructed at this point, but
+        # only as a local -- nothing is visible on the provider yet.
+        observed["session"] = provider._session
+        observed["feature_extractor"] = provider._feature_extractor
+    finally:
+        release_feature_extractor.set()
+        loader.join(timeout=_WORKER_EVENT_TIMEOUT)
+
+    assert observed["session"] is None
+    assert observed["feature_extractor"] is None
+    assert provider._session is not None
+    assert provider._feature_extractor is not None
+    assert provider._np is not None
 
 
 def test_predict_boundary_equal_threshold_is_incomplete() -> None:

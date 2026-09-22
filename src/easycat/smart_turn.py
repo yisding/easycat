@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import sys
+import threading
 from dataclasses import dataclass, field
 from numbers import Real
 from pathlib import Path
@@ -175,6 +176,11 @@ class SmartTurnONNX:
         self._feature_extractor: Any = None  # NumPy Whisper frontend (lazy)
         self._np: Any = None  # numpy module (lazy)
         self._detect_semaphore = asyncio.Semaphore(1)
+        # A *thread* lock, not an asyncio one: ``_ensure_loaded()`` only ever
+        # runs inside ``loop.run_in_executor`` workers (``_warmup_sync`` and
+        # ``_detect_sync``), never on the event loop, so holding it cannot
+        # stall the loop.
+        self._load_lock = threading.Lock()
 
     async def warmup(self) -> None:
         """Load the ONNX model and run one dummy inference up front.
@@ -199,11 +205,26 @@ class SmartTurnONNX:
         self._predict_sync(audio)
 
     def _ensure_loaded(self) -> None:
-        """Lazy-load model and feature extractor on first inference."""
+        """Lazy-load model and feature extractor on first inference.
+
+        Runs in a worker thread, reached from both ``warmup()`` and
+        ``detect()``.  ``warmup()`` never acquires ``_detect_semaphore``, so
+        ``_load_lock`` is the only exclusion between them: without it a
+        provider shared across sessions could build the ~8 MB model twice and
+        let one build overwrite the other's session.  The unlocked fast path
+        keeps the steady-state per-detect cost at a single attribute read.
+        """
         if self._session is not None:
             return
 
-        self._np = require_module(
+        with self._load_lock:
+            if self._session is not None:
+                return
+            self._load_locked()
+
+    def _load_locked(self) -> None:
+        """Build the runtime pieces while holding ``_load_lock``."""
+        np_module = require_module(
             "numpy",
             extra="smart-turn",
             purpose="Smart-turn endpoint detection",
@@ -219,9 +240,15 @@ class SmartTurnONNX:
         so.inter_op_num_threads = 1
         so.intra_op_num_threads = _intra_op_thread_count()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self._session = ort.InferenceSession(self._model_path, sess_options=so)
+        session = ort.InferenceSession(self._model_path, sess_options=so)
+        feature_extractor = _WhisperFeatureExtractorNP(np=np_module, chunk_length=8)
 
-        self._feature_extractor = _WhisperFeatureExtractorNP(np=self._np, chunk_length=8)
+        # Publish ``_session`` last: it is the unlocked fast-path guard, so a
+        # racing caller that skips the lock must never observe it set while
+        # ``_np`` or ``_feature_extractor`` are still ``None``.
+        self._np = np_module
+        self._feature_extractor = feature_extractor
+        self._session = session
         logger.info("Smart-turn model loaded from %s", self._model_path)
 
     def _chunks_to_float32_16k(self, chunks: list[AudioChunk]) -> Any:
