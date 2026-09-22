@@ -545,7 +545,6 @@ EASYCAT_E209 = register(
 
 EASYCAT_E210 = register(
     "EASYCAT_E210",
-    "EASYCAT_E211",
     "Required project environment variable is missing or invalid: {var}",
     cause=(
         "The selected EasyCat project (its `[tool.easycat.scaffold]` table or its "
