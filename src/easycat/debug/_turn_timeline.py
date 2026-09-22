@@ -21,7 +21,7 @@ Three public entry points:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from easycat.runtime.records import (
@@ -56,17 +56,51 @@ _TTS_FIRST = (TTS_FRAME_RECORD_NAME, "tts_audio")
 
 # Barge-in milestone record names.  ``bot_started_speaking`` opens a playback
 # window the user can interrupt; the FIRST ``vad_start_speaking`` at/after that
-# is the user starting to barge in, and the FIRST ``bot_stopped_speaking`` /
-# ``playback_mark_ack`` after the barge-in is the bot actually going quiet.
+# is the user starting to barge in, and the bot actually going quiet after the
+# barge-in is the next ``bot_stopped_speaking`` or drain ``playback_mark_ack``.
 #
-# Only ``bot_stopped_speaking`` CLOSES the window: ``playback_mark_ack`` is a
-# mid-playback progress signal (transports with playback acknowledgements emit
-# one every ``_playback_mark_bytes_interval`` bytes, ~125ms), so it is usable as
-# the stop timestamp once a barge-in is in flight but must never end the window.
+# ``playback_mark_ack`` needs care in BOTH directions.  Transports with playback
+# acknowledgements emit one every ``_playback_mark_bytes_interval`` bytes
+# (~125ms) while audio is still streaming and one more when the outbound queue
+# drains, under the same record name.  So an ack must never CLOSE the window
+# (that would drop every barge-in after the first ack), and only the drain ack —
+# the last of its playback run, see :func:`drain_ack_indices` — is evidence the
+# bot went quiet.  Only ``bot_stopped_speaking`` closes the window.
 _BOT_STARTED = BOT_STARTED_SPEAKING_RECORD_NAME
 _USER_SPEECH_START = VAD_START_SPEAKING_RECORD_NAME
 _BOT_STOPPED = (BOT_STOPPED_SPEAKING_RECORD_NAME, PLAYBACK_MARK_ACK_RECORD_NAME)
 _BOT_WINDOW_CLOSED = BOT_STOPPED_SPEAKING_RECORD_NAME
+_PLAYBACK_MARK_ACK = PLAYBACK_MARK_ACK_RECORD_NAME
+
+
+def drain_ack_indices(names: Sequence[str]) -> frozenset[int]:
+    """Indices of the ``playback_mark_ack`` records that mean playback drained.
+
+    *names* is the record names of one turn in wall-clock order; the returned
+    indices point into that same sequence.
+
+    A transport that acknowledges playback marks emits an ack every
+    ``_playback_mark_bytes_interval`` bytes (~125ms) while the bot is still
+    streaming, plus a final one when the send queue drains
+    (``easycat.session._audio_router``).  Both carry the same record name, so a
+    single ack is not evidence that the bot stopped talking — an ack with
+    another ack behind it in the same playback run was emitted mid-utterance,
+    with more audio still to come.  Only the LAST ack of a run is a drain ack.
+
+    ``bot_started_speaking`` and ``bot_stopped_speaking`` bound a playback run,
+    so the last ack before either one is a drain ack as well.
+    """
+    drain: set[int] = set()
+    ack_follows = False
+    for index in range(len(names) - 1, -1, -1):
+        name = names[index]
+        if name == _PLAYBACK_MARK_ACK:
+            if not ack_follows:
+                drain.add(index)
+            ack_follows = True
+        elif name == _BOT_STARTED or name == _BOT_WINDOW_CLOSED:
+            ack_follows = False
+    return frozenset(drain)
 
 
 def record_wall_ns(record: Mapping[str, Any]) -> int | None:
@@ -392,9 +426,9 @@ def _barge_in_walls(pairs: list[tuple[int, str]]) -> tuple[int | None, int | Non
     Pure wall-clock ordering: a playback window is opened by
     ``bot_started_speaking`` and closed by ``bot_stopped_speaking``.  The FIRST
     ``vad_start_speaking`` inside an open window is the user starting to barge
-    in, and the FIRST ``bot_stopped_speaking`` / ``playback_mark_ack`` after
-    that is the bot going quiet.  Returns ``(None, None)`` when the turn never
-    opened a playback window or the user never spoke into one.
+    in, and the first ``bot_stopped_speaking`` or drain ``playback_mark_ack``
+    after that is the bot going quiet.  Returns ``(None, None)`` when the turn
+    never opened a playback window or the user never spoke into one.
 
     A turn can hold several playback windows (streaming synthesis, gated
     replay, interleaved hold audio), so a window that ends with no barge-in
@@ -402,18 +436,22 @@ def _barge_in_walls(pairs: list[tuple[int, str]]) -> tuple[int | None, int | Non
     latched in as "the" barge-in and shadows the real one.  ``playback_mark_ack``
     is deliberately NOT a window-closing name — it lands repeatedly mid-playback
     on transports that acknowledge playback marks, and closing on it would drop
-    every barge-in that happens after the first ack.
+    every barge-in that happens after the first ack.  For the same reason a
+    mid-playback ack is not the cutoff either: the bot is still streaming, so
+    only a drain ack (:func:`drain_ack_indices`) stops the clock.
     """
     ordered = sorted(pairs, key=lambda pair: pair[0])
+    drain_acks = drain_ack_indices([name for _wall, name in ordered])
     bot_speaking = False
     user_speech_start: int | None = None
-    for wall, name in ordered:
+    for index, (wall, name) in enumerate(ordered):
         if name == _BOT_STARTED:
             bot_speaking = True
         elif name == _USER_SPEECH_START and bot_speaking and user_speech_start is None:
             user_speech_start = wall
         elif name in _BOT_STOPPED:
-            if user_speech_start is not None:
+            quiet = name == _BOT_WINDOW_CLOSED or index in drain_acks
+            if user_speech_start is not None and quiet:
                 return user_speech_start, wall
             if name == _BOT_WINDOW_CLOSED:
                 bot_speaking = False

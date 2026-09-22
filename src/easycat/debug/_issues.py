@@ -34,7 +34,12 @@ from easycat.debug._audio_health import (
     collect_clipping,
     detect_dead_air,
 )
-from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id, turn_waterfall
+from easycat.debug._turn_timeline import (
+    drain_ack_indices,
+    record_wall_ns,
+    safe_turn_id,
+    turn_waterfall,
+)
 from easycat.runtime.records import (
     BOT_STARTED_SPEAKING_RECORD_NAME,
     BOT_STOPPED_SPEAKING_RECORD_NAME,
@@ -277,13 +282,23 @@ def _milestone_issues(
 # to talk over the bot is ``vad_start_speaking`` inside a playback window opened
 # by ``bot_started_speaking``.
 #
-# Once a barge-in is in flight, the bot going quiet is the first
-# ``bot_stopped_speaking`` / ``playback_mark_ack`` after it.  Only
-# ``bot_stopped_speaking`` CLOSES the window, though: ``playback_mark_ack`` is a
-# mid-playback progress signal (transports with playback acknowledgements emit
-# one every ``_playback_mark_bytes_interval`` bytes, ~125ms), so closing on it
-# would drop every barge-in that happens after the first ack.  This mirrors
-# ``easycat.debug._turn_timeline._barge_in_walls``.
+# ``playback_mark_ack`` is the subtle one, and it is wrong in both directions to
+# treat it as "the bot went quiet".  Transports with playback acknowledgements
+# emit one every ``_playback_mark_bytes_interval`` bytes (~125ms) while audio is
+# still streaming and one more when the send queue drains — same record name for
+# both.  So:
+#
+# - only ``bot_stopped_speaking`` CLOSES the playback window; closing on an ack
+#   would drop every barge-in that happens after the first ack, and
+# - only a DRAIN ack (the last of its playback run, see
+#   :func:`easycat.debug._turn_timeline.drain_ack_indices`) counts as the bot
+#   going quiet; accepting a mid-playback progress ack would resolve every
+#   missed barge-in ~125ms after it started, which is exactly the case this
+#   card exists to report.
+#
+# This mirrors ``easycat.debug._turn_timeline._barge_in_walls``, so the issue
+# cards and the ``user_speech_start_to_bot_stopped_ms`` milestone agree on the
+# same journal.
 _INTERRUPTION = INTERRUPTION_RECORD_NAME
 _CONTROL_SIGNAL = CONTROL_SIGNAL_RECORD_NAME
 _BOT_STARTED_SPEAKING = BOT_STARTED_SPEAKING_RECORD_NAME
@@ -310,10 +325,13 @@ def _barge_in_cards(
     """Flag slow barge-in cutoffs and missed barge-ins per turn.
 
     Detection is pure wall-clock ordering: an ``interruption`` whose next
-    bot-stopped marker lands more than ``barge_in_cutoff_ms`` later is a
+    bot-quiet marker lands more than ``barge_in_cutoff_ms`` later is a
     ``slow_barge_in``; a ``vad_start_speaking`` inside an open playback window
-    with no interruption and no bot-stop within ``missed_barge_in_window_ms`` is
-    a ``missed_barge_in`` (the bot talked over the user).
+    with no interruption and no bot-quiet marker within
+    ``missed_barge_in_window_ms`` is a ``missed_barge_in`` (the bot talked over
+    the user).  "Bot quiet" is ``bot_stopped_speaking`` or a drain
+    ``playback_mark_ack``; mid-playback progress acks are not, so both walkers
+    take the per-turn drain-ack indices computed here.
     """
     by_turn: dict[str, list[tuple[int, str, bool]]] = {}
     for record in records:
@@ -332,22 +350,35 @@ def _barge_in_cards(
     issues: list[dict[str, Any]] = []
     for turn_id, raw in by_turn.items():
         ordered = sorted(raw, key=lambda item: item[0])
-        issues.extend(_slow_barge_in_cards(turn_id, ordered, thresholds))
-        issues.extend(_missed_barge_in_cards(turn_id, ordered, thresholds))
+        drain_acks = drain_ack_indices([name for _wall, name, _interrupt in ordered])
+        issues.extend(_slow_barge_in_cards(turn_id, ordered, drain_acks, thresholds))
+        issues.extend(_missed_barge_in_cards(turn_id, ordered, drain_acks, thresholds))
     return issues
 
 
 def _slow_barge_in_cards(
     turn_id: str,
     ordered: list[tuple[int, str, bool]],
+    drain_acks: frozenset[int],
     thresholds: IssueThresholds,
 ) -> list[dict[str, Any]]:
+    """Flag barge-ins the bot kept talking through for too long.
+
+    The cutoff ends at the first record that really means the bot went quiet:
+    ``bot_stopped_speaking`` or a drain ``playback_mark_ack``.  A mid-playback
+    progress ack would stop the clock ~125ms after the interruption on every
+    ack-emitting transport and hide the slow cutoff it is meant to expose.
+    """
     issues: list[dict[str, Any]] = []
     for index, (wall, _name, is_interruption) in enumerate(ordered):
         if not is_interruption:
             continue
         stop_wall = next(
-            (w for w, n, _i in ordered[index + 1 :] if n in _BOT_STOPPED_NAMES),
+            (
+                w
+                for offset, (w, n, _i) in enumerate(ordered[index + 1 :], index + 1)
+                if n == _BOT_WINDOW_CLOSED or offset in drain_acks
+            ),
             None,
         )
         if stop_wall is None:
@@ -376,14 +407,18 @@ def _slow_barge_in_cards(
 def _missed_barge_in_cards(
     turn_id: str,
     ordered: list[tuple[int, str, bool]],
+    drain_acks: frozenset[int],
     thresholds: IssueThresholds,
 ) -> list[dict[str, Any]]:
     """Flag user speech inside a playback window that nothing ever stopped.
 
     ``bot_started_speaking`` opens the window and only ``bot_stopped_speaking``
     closes it, so a run of mid-playback ``playback_mark_ack`` records keeps the
-    bot "speaking" and later speech is still a barge-in candidate.  An ack
-    after the barge-in does resolve it: by then the bot really has gone quiet.
+    bot "speaking" and later speech is still a barge-in candidate.  Those same
+    progress acks do not resolve the candidate either: a missed barge-in means
+    the bot kept streaming, so acks keep arriving every ~125ms and the first one
+    after the user spoke would always land inside the window.  Only a drain ack
+    (the last of its playback run) is the bot actually going quiet.
     """
     issues: list[dict[str, Any]] = []
     bot_speaking = False
@@ -397,10 +432,12 @@ def _missed_barge_in_cards(
         if name != _VAD_START_SPEAKING or not bot_speaking:
             continue
         # User started speaking over the bot. A miss is when nothing stopped the
-        # bot (no interruption acted and no bot-stop) within the window.
+        # bot (no interruption acted and no bot-quiet marker) within the window.
         resolved = False
-        for next_wall, next_name, next_interrupt in ordered[index + 1 :]:
-            if next_interrupt or next_name in _BOT_STOPPED_NAMES:
+        for offset, (next_wall, next_name, next_interrupt) in enumerate(
+            ordered[index + 1 :], index + 1
+        ):
+            if next_interrupt or next_name == _BOT_WINDOW_CLOSED or offset in drain_acks:
                 if (next_wall - wall) / 1_000_000 <= thresholds.missed_barge_in_window_ms:
                     resolved = True
                 break

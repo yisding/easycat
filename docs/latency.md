@@ -51,7 +51,7 @@ VAD endpoint ──► STT final ──► agent request ──► agent first t
 | `agent_request_to_first_token_ms` | first `agent_request_started` → first `agent_delta` (or `agent_final`); the raw LLM time-to-first-token |
 | `agent_first_token_to_tts_first_byte_ms` | first `agent_delta` → first `tts_frame` / `tts_audio` |
 | `vad_endpoint_to_tts_first_byte_ms` | the full voice-to-voice response gap |
-| `user_speech_start_to_bot_stopped_ms` | first `vad_start_speaking` inside a playback window (opened by `bot_started_speaking`, closed by `bot_stopped_speaking`) → first `bot_stopped_speaking` / `playback_mark_ack` after it; the barge-in cutoff (how long the bot kept talking after the user spoke over it) |
+| `user_speech_start_to_bot_stopped_ms` | first `vad_start_speaking` inside a playback window (opened by `bot_started_speaking`, closed by `bot_stopped_speaking`) → the next `bot_stopped_speaking`, or the drain `playback_mark_ack` that ends the playback run; the barge-in cutoff (how long the bot kept talking after the user spoke over it). Mid-playback progress acks (one every ~125ms on transports that acknowledge playback marks) are skipped — the bot is still streaming through them |
 
 A delta is `null` when a turn never reached that milestone — text turns have
 no VAD endpoint, and a turn that errored before synthesis has no TTS byte. The
