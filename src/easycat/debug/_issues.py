@@ -404,6 +404,64 @@ def _slow_barge_in_cards(
     return issues
 
 
+def _resolve_missed_barge_in(
+    wall: int,
+    tail: list[tuple[int, str, bool]],
+    start_offset: int,
+    drain_acks: frozenset[int],
+    window_ms: float,
+) -> tuple[bool, float | None, float | None]:
+    """Scan forward from a barge-in candidate for what (if anything) resolved it.
+
+    Returns ``(resolved, stop_delay_ms, interrupt_delay_ms)``. ``stop_delay_ms``
+    is the delay to a genuine bot-quiet marker (``bot_stopped_speaking`` or a
+    drain ack), set whenever one is found regardless of whether it lands
+    inside the window. ``interrupt_delay_ms`` is the delay to an
+    ``interruption`` record found *before* any bot-quiet marker — interruption
+    only means firing was attempted, not that the bot's audio actually
+    stopped, so it never overrides a real stop marker and scanning continues
+    past it looking for one.
+    """
+    interrupt_delay_ms: float | None = None
+    for offset, (next_wall, next_name, next_interrupt) in enumerate(tail, start_offset):
+        is_stop_marker = next_name == _BOT_WINDOW_CLOSED or offset in drain_acks
+        if not is_stop_marker and not next_interrupt:
+            continue
+        delay_ms = (next_wall - wall) / 1_000_000
+        if is_stop_marker:
+            return delay_ms <= window_ms, delay_ms, interrupt_delay_ms
+        if interrupt_delay_ms is None:
+            interrupt_delay_ms = delay_ms
+        if delay_ms <= window_ms:
+            return True, None, interrupt_delay_ms
+        # The interruption fired outside the window; keep scanning for the
+        # bot-quiet marker that actually proves the bot's audio stopped.
+    return False, None, interrupt_delay_ms
+
+
+def _missed_barge_in_detail(
+    window_ms: float, stop_delay_ms: float | None, interrupt_delay_ms: float | None
+) -> str:
+    """Word the card from what actually resolved it, never claiming more."""
+    if stop_delay_ms is not None:
+        return (
+            "The user started speaking while the bot was talking, and the bot "
+            f"did not stop within {window_ms:.0f}ms (it stopped after "
+            f"{stop_delay_ms:.0f}ms). Check interruption detection."
+        )
+    if interrupt_delay_ms is not None:
+        return (
+            "The user started speaking while the bot was talking, and "
+            f"interruption was not detected within {window_ms:.0f}ms (it fired "
+            f"after {interrupt_delay_ms:.0f}ms, with no record confirming the "
+            "bot itself went quiet). Check interruption detection."
+        )
+    return (
+        "The user started speaking while the bot was talking, but "
+        "the bot never stopped. Check interruption detection."
+    )
+
+
 def _missed_barge_in_cards(
     turn_id: str,
     ordered: list[tuple[int, str, bool]],
@@ -431,29 +489,26 @@ def _missed_barge_in_cards(
             continue
         if name != _VAD_START_SPEAKING or not bot_speaking:
             continue
-        # User started speaking over the bot. A miss is when nothing stopped the
-        # bot (no interruption acted and no bot-quiet marker) within the window.
-        resolved = False
-        for offset, (next_wall, next_name, next_interrupt) in enumerate(
-            ordered[index + 1 :], index + 1
-        ):
-            if next_interrupt or next_name == _BOT_WINDOW_CLOSED or offset in drain_acks:
-                if (next_wall - wall) / 1_000_000 <= thresholds.missed_barge_in_window_ms:
-                    resolved = True
-                break
+        # User started speaking over the bot. A miss is when nothing resolved
+        # the candidate within the window; a resolving record found later
+        # still tells us when (if ever) the bot's audio actually stopped, so
+        # the card can say that instead of falsely claiming it never did.
+        resolved, stop_delay_ms, interrupt_delay_ms = _resolve_missed_barge_in(
+            wall, ordered[index + 1 :], index + 1, drain_acks, thresholds.missed_barge_in_window_ms
+        )
         if not resolved:
             issues.append(
                 _issue(
                     code="missed_barge_in",
                     severity="warning",
                     title="Missed barge-in",
-                    detail=(
-                        "The user started speaking while the bot was talking, but "
-                        "the bot never stopped. Check interruption detection."
+                    detail=_missed_barge_in_detail(
+                        thresholds.missed_barge_in_window_ms, stop_delay_ms, interrupt_delay_ms
                     ),
                     turn_id=turn_id,
                     stage="vad",
                     metric="missed_barge_in_window_ms",
+                    value=stop_delay_ms if stop_delay_ms is not None else interrupt_delay_ms,
                     threshold=thresholds.missed_barge_in_window_ms,
                 )
             )
