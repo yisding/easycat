@@ -433,27 +433,42 @@ def _missed_barge_in_cards(
             continue
         # User started speaking over the bot. A miss is when nothing stopped the
         # bot (no interruption acted and no bot-quiet marker) within the window.
+        # A resolving record found after the window still tells us *when* the
+        # bot actually stopped, so the card can say that instead of falsely
+        # claiming it never did.
         resolved = False
+        stop_delay_ms: float | None = None
         for offset, (next_wall, next_name, next_interrupt) in enumerate(
             ordered[index + 1 :], index + 1
         ):
             if next_interrupt or next_name == _BOT_WINDOW_CLOSED or offset in drain_acks:
-                if (next_wall - wall) / 1_000_000 <= thresholds.missed_barge_in_window_ms:
+                stop_delay_ms = (next_wall - wall) / 1_000_000
+                if stop_delay_ms <= thresholds.missed_barge_in_window_ms:
                     resolved = True
                 break
         if not resolved:
+            if stop_delay_ms is None:
+                detail = (
+                    "The user started speaking while the bot was talking, but "
+                    "the bot never stopped. Check interruption detection."
+                )
+            else:
+                detail = (
+                    "The user started speaking while the bot was talking, and the "
+                    f"bot did not stop within {thresholds.missed_barge_in_window_ms:.0f}ms "
+                    f"(it stopped after {stop_delay_ms:.0f}ms). Check interruption "
+                    "detection."
+                )
             issues.append(
                 _issue(
                     code="missed_barge_in",
                     severity="warning",
                     title="Missed barge-in",
-                    detail=(
-                        "The user started speaking while the bot was talking, but "
-                        "the bot never stopped. Check interruption detection."
-                    ),
+                    detail=detail,
                     turn_id=turn_id,
                     stage="vad",
                     metric="missed_barge_in_window_ms",
+                    value=stop_delay_ms,
                     threshold=thresholds.missed_barge_in_window_ms,
                 )
             )
