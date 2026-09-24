@@ -313,6 +313,64 @@ def test_shared_detector_flags_cassette_sensitive_patterns() -> None:
     assert not contains_unredacted_sensitive_text("[REDACTED_SECRET] [REDACTED_URL]")
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "_KEY_VALUE_SECRET_RE and _HEADER_SECRET_RE require the sensitive "
+        "keyword to sit directly against ':'/'=' with nothing in between, so "
+        "a JSON-style quote right before the colon (as in a captured raw "
+        "provider error body, or a malformed-JSON artifact that falls back "
+        "to text redaction) defeats the match entirely. The unquoted "
+        "'api_key: <value>' spelling redacts correctly; the JSON-quoted "
+        '\'"api_key": "<value>"\' spelling of the exact same pair does not.'
+    ),
+)
+def test_redact_text_misses_json_quoted_key_value_secret() -> None:
+    secret = "abcdefghijklmnopqrstuvwxyz0123456789AB"
+
+    # The unquoted form is the shape the regex is written for, and it works.
+    assert secret not in redact_text(f"api_key: {secret}")
+
+    # The JSON-quoted form of the identical key/value pair leaks the secret.
+    quoted = f'"api_key": "{secret}"'
+    assert secret not in redact_text(quoted)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "contains_unredacted_sensitive_text shares the same keyword-adjacent-"
+        "to-':' regexes as redact_text, so it reports a JSON-quoted "
+        '\'"api_key": "<value>"\' pair as clean even though the raw secret '
+        "is still present verbatim -- a false negative in the sentinel meant "
+        "to catch exactly this kind of leftover secret."
+    ),
+)
+def test_shared_detector_misses_json_quoted_key_value_secret() -> None:
+    secret = "abcdefghijklmnopqrstuvwxyz0123456789AB"
+    assert contains_unredacted_sensitive_text(f'"api_key": "{secret}"')
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "A string field that is not itself a secret-classified key (e.g. "
+        "'error_message') falls to the plain redact_text branch. When its "
+        "content happens to embed a captured JSON error body verbatim -- a "
+        "realistic case for upstream provider error text -- the JSON-quoted "
+        '\'"api_key": "<value>"\' pair inside it survives redact_value '
+        "untouched, the same quote-adjacency gap as redact_text."
+    ),
+)
+def test_redact_value_misses_secret_embedded_in_unclassified_text_field() -> None:
+    secret = "abcdefghijklmnopqrstuvwxyz0123456789AB"
+    payload = {"error_message": f'upstream rejected request: {{"api_key": "{secret}"}}'}
+
+    redacted = redact_value(payload)
+
+    assert secret not in redacted["error_message"]
+
+
 def test_shared_detector_tracks_dynamically_registered_provider_domains() -> None:
     class Provider:
         pass
