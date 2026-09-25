@@ -3669,6 +3669,44 @@ async def test_send_text_clears_turn_log_context_after_turn() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    reason="gh-1167: _execute_text_turn never drains/fences SessionActions",
+)
+async def test_send_text_drains_queued_session_actions() -> None:
+    """A tool-queued ``end_call`` must still run after a ``send_text`` turn.
+
+    ``run_streaming_agent`` drains ``SessionActions`` (and clears a stuck
+    ``no_interrupt`` barge-in guard) through ``finalize_speaking_turn`` /
+    ``_settle_unspoken_turn_actions`` -- see gh 1099 and
+    ``test_run_streaming_agent_quiet_turn_still_drains_actions``. Text turns
+    driven by ``send_text``/``prompt_agent(speak=False)`` go through
+    ``_execute_text_turn``/``_stream_text_turn`` instead, which never calls
+    ``_drain_session_actions`` or ``_fence_session_actions`` at all. An
+    ``end_call`` requested by an agent tool during a text turn is therefore
+    silently lost, and the action's ``no_interrupt=True`` flag is left set
+    forever, permanently blocking any later voice barge-in on the session.
+    """
+    actions = SessionActions()
+    actions.end_call(reason="done")
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            agent=_SimpleStreamingAgent(),
+            session_actions=actions,
+        )
+    )
+    session.stop = AsyncMock()
+
+    response = await session.send_text("hello")
+
+    assert response == "Reply."
+    session.stop.assert_awaited_once()
+    assert not actions.has_pending
+    assert not actions.no_interrupt
+
+
+@pytest.mark.asyncio
 async def test_tts_consumer_starts_before_agent_consumer() -> None:
     """The TTS consumer must observe ``BotStartedSpeaking`` before AgentFinal."""
     started: list[str] = []
