@@ -53,11 +53,17 @@ def _np_pcm_dtype(width: int) -> Any:
 
 
 def _np_tomono(data: bytes, width: int) -> bytes:
-    """Average stereo channels into mono using numpy (int8/16/32 PCM)."""
+    """Average stereo channels into mono using numpy (int8/16/32 PCM).
+
+    Rounds the frame sum half-to-even rather than flooring it (``>> 1``
+    rounds toward negative infinity and biases the signal negative on odd
+    sums), matching ``easycat.debug._pcm.decode_pcm_mono`` and
+    ``easycat.debugger._waveform.decode_pcm_peaks``.
+    """
     dt = _np_pcm_dtype(width)
     arr = _np.frombuffer(data, dtype=dt)  # type: ignore[union-attr]
     stereo = arr.reshape(-1, 2).astype(_np.int64)  # type: ignore[union-attr]
-    mono = ((stereo[:, 0] + stereo[:, 1]) >> 1).astype(dt)
+    mono = _np.round((stereo[:, 0] + stereo[:, 1]) / 2).astype(dt)  # type: ignore[union-attr]
     return mono.tobytes()
 
 

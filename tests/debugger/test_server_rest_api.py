@@ -1035,6 +1035,25 @@ def test_np_tomono_uses_wide_sum_for_int32_peak_values():
     assert struct.unpack("<i", mono) == (peak,)
 
 
+def test_np_tomono_rounds_odd_sums_instead_of_flooring():
+    """The numpy fallback must round (half-to-even), not floor, like the other decoders."""
+    if _audio._np is None:  # pragma: no cover
+        pytest.skip("numpy unavailable")
+    import struct
+
+    # Interleaved L/R (3, -4): sum -1, true average -0.5 -> rounds to 0.
+    # Then (3, 4): sum 7, true average 3.5 -> rounds to 4.
+    # `>> 1` (arithmetic right shift, i.e. floor division by 2) wrongly yields
+    # -1 and 3 -- it never rounds up, a systematic negative bias. Must agree
+    # with easycat.debug._pcm.decode_pcm_mono and
+    # easycat.debugger._waveform.decode_pcm_peaks, which round(sum/channels).
+    stereo = struct.pack("<hhhh", 3, -4, 3, 4)
+
+    mono = _audio._np_tomono(stereo, 2)
+
+    assert struct.unpack("<hh", mono) == (0, 4)
+
+
 def test_collect_audio_frames_mic_falls_back_from_unsafe_target_format():
     """The target WAV format is bounded before using untrusted mic metadata."""
     records = [
