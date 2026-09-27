@@ -65,6 +65,36 @@ class TestNumberHealthMonitor:
             monitor.record_call("+1555", answered=False, blocked=True)
         assert monitor.block_count("+1555") > 3
 
+    @pytest.mark.xfail(strict=True, reason="gh-1171: reputation thresholds are dead config")
+    def test_can_place_call_blocks_a_number_past_the_block_count_threshold(self) -> None:
+        """``can_place_call`` should refuse a number past ``block_count_threshold``.
+
+        ``block_count_threshold`` and ``answer_rate_threshold`` are accepted by
+        the constructor and stored, but ``can_place_call`` only ever checks
+        pacing/concurrency (``max_concurrent_per_number``,
+        ``min_inter_call_delay_s``, ``max_calls_per_minute``); it never reads
+        either threshold or calls ``answer_rate()``/``block_count()``. A number
+        blocked (SIP 607/608) on every one of its last 10 calls — 0% answer
+        rate, 10 blocks against a configured threshold of 5 — is still reported
+        placeable (gh-1171).
+        """
+        bus = EventBus()
+        number = "+15551234567"
+        monitor = NumberHealthMonitor(
+            bus,
+            answer_rate_threshold=0.4,
+            block_count_threshold=5,
+            min_inter_call_delay_s=0.0,
+            max_calls_per_minute=1000,
+            max_concurrent_per_number=1000,
+        )
+        for _ in range(10):
+            monitor.record_call(number, answered=False, blocked=True)
+
+        assert monitor.answer_rate(number) == 0.0
+        assert monitor.block_count(number) == 10
+        assert not monitor.can_place_call(number)
+
     def test_call_pacing_enforced(self) -> None:
         bus = EventBus()
         monitor = NumberHealthMonitor(bus, max_calls_per_minute=2, min_inter_call_delay_s=0.0)
