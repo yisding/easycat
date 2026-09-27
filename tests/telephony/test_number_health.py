@@ -73,10 +73,11 @@ class TestNumberHealthMonitor:
         the constructor and stored, but ``can_place_call`` only ever checks
         pacing/concurrency (``max_concurrent_per_number``,
         ``min_inter_call_delay_s``, ``max_calls_per_minute``); it never reads
-        either threshold or calls ``answer_rate()``/``block_count()``. A number
-        blocked (SIP 607/608) on every one of its last 10 calls — 0% answer
-        rate, 10 blocks against a configured threshold of 5 — is still reported
-        placeable (gh-1171).
+        either threshold or calls ``answer_rate()``/``block_count()``. Every
+        call here is recorded ``answered=True`` (answer rate stays 1.0, well
+        above ``answer_rate_threshold``) so only ``block_count_threshold`` is
+        exercised — a partial fix that rejects on answer rate alone must not
+        make this pass (gh-1171).
         """
         bus = EventBus()
         number = "+15551234567"
@@ -89,10 +90,36 @@ class TestNumberHealthMonitor:
             max_concurrent_per_number=1000,
         )
         for _ in range(10):
-            monitor.record_call(number, answered=False, blocked=True)
+            monitor.record_call(number, answered=True, blocked=True)
+
+        assert monitor.answer_rate(number) == 1.0
+        assert monitor.block_count(number) == 10
+        assert not monitor.can_place_call(number)
+
+    @pytest.mark.xfail(strict=True, reason="gh-1171: reputation thresholds are dead config")
+    def test_can_place_call_blocks_a_number_below_the_answer_rate_threshold(self) -> None:
+        """``can_place_call`` should refuse a number below ``answer_rate_threshold``.
+
+        Mirrors the block-count case above but isolates ``answer_rate_threshold``
+        instead: every call here is recorded ``blocked=False`` (block count
+        stays 0, well under ``block_count_threshold``) so a partial fix that
+        rejects on block count alone must not make this pass (gh-1171).
+        """
+        bus = EventBus()
+        number = "+15551234567"
+        monitor = NumberHealthMonitor(
+            bus,
+            answer_rate_threshold=0.4,
+            block_count_threshold=5,
+            min_inter_call_delay_s=0.0,
+            max_calls_per_minute=1000,
+            max_concurrent_per_number=1000,
+        )
+        for _ in range(10):
+            monitor.record_call(number, answered=False, blocked=False)
 
         assert monitor.answer_rate(number) == 0.0
-        assert monitor.block_count(number) == 10
+        assert monitor.block_count(number) == 0
         assert not monitor.can_place_call(number)
 
     def test_call_pacing_enforced(self) -> None:
