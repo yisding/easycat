@@ -516,16 +516,18 @@ class TurnManager:
         endpoint timer. A trailing run of two or more full stops, or a Unicode
         ellipsis, is a speaker trailing off rather than finishing, so those keep
         the full grace window however the STT backend spells them ("..", "...",
-        "…", "….", "．．"). The lease guard prevents a delayed segment final
-        from an earlier pause from leaking into a later pause.
+        "…", "….", "．．", "。。"). The lease guard prevents a delayed segment
+        final from an earlier pause from leaking into a later pause.
         """
         if self._state != TurnManagerState.USER_PAUSED or not pause.guard():
             return
         normalized = text.rstrip().rstrip("\"'”’)]}")
         # Count the trailing full-stop run instead of matching a fixed literal:
         # ".." is as much a trailing-off ellipsis as "..." is. Strip the
-        # fullwidth stop (U+FF0E) too so CJK transcripts get the same rule.
-        undotted = normalized.rstrip(".．")
+        # fullwidth stop (U+FF0E) and the CJK ideographic full stop (U+3002)
+        # too so CJK transcripts get the same rule regardless of which stop
+        # character the STT backend emits.
+        undotted = normalized.rstrip(".．。")
         if len(normalized) - len(undotted) >= 2 or undotted.endswith("…"):
             return
         if normalized.endswith((".", "!", "?", "。", "！", "？", "．")):

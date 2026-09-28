@@ -590,6 +590,7 @@ async def test_unpunctuated_stt_final_keeps_full_endpoint_timeout() -> None:
         "um..",
         "Wait….",
         "待って．．",
+        "終わり。。",
     ],
 )
 async def test_ellipsis_does_not_shorten_endpoint_timeout(text: str) -> None:
