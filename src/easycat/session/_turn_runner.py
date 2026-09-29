@@ -2154,6 +2154,9 @@ class TurnRunner:
         response = ""
         t0 = time.monotonic()
         result_attr = "fail"
+        agent_invoked = False
+        actions_settled = False
+        should_stop = False
         turn_token = bind_turn(turn_id)
         publication = publication or TurnPublication(
             source="text",
@@ -2172,6 +2175,7 @@ class TurnRunner:
             if not self._text_publication_is_current(publication):
                 return ""
             self._text_turn_accumulated = ""
+            agent_invoked = True
             response, structured_output = await self._stream_text_turn(
                 text,
                 cancel_token,
@@ -2192,6 +2196,8 @@ class TurnRunner:
                         turn_id=turn_id,
                     )
                 )
+            should_stop = await self._settle_text_turn_actions(cancel_token, publication)
+            actions_settled = True
             if self._journal_enabled:
                 self._journal_sink.append_record(
                     kind=JournalRecordKind.METRIC,
@@ -2222,6 +2228,12 @@ class TurnRunner:
             raise
         finally:
             try:
+                if agent_invoked and not actions_settled:
+                    # Error or cancellation unwind: the turn's request is
+                    # stale, so drop its queued actions (with a record each)
+                    # rather than letting a later turn execute them or a
+                    # stranded ``no_interrupt`` guard block barge-in (gh 1167).
+                    await self._fence_session_actions("text turn ended without completing")
                 with observability.span(
                     "easycat.turn.commit",
                     {
@@ -2245,7 +2257,38 @@ class TurnRunner:
                         await self._emit(TurnEnded(session_id=self._session_id, turn_id=turn_id))
             finally:
                 reset_turn(turn_token)
+        if should_stop:
+            # Same as the voice path's ``run_streaming_agent``: stop from
+            # inside the turn task. ``Session.stop()`` skips awaiting the
+            # current task, so this cannot deadlock on its own turn.
+            await self._stop()
         return response
+
+    async def _settle_text_turn_actions(
+        self,
+        cancel_token: CancelToken | None,
+        publication: TurnPublication,
+    ) -> bool:
+        """Drain (or fence) actions queued by agent tools during a text turn.
+
+        The text-turn counterpart of :meth:`_settle_unspoken_turn_actions`:
+        a completed turn executes its queued actions (``end_call``,
+        ``transfer_call``, ...) and clears the ``no_interrupt`` barge-in
+        guard; a cancelled or superseded turn fences them instead, since its
+        request is stale (gh 1099, gh 1167). Returns ``True`` when a drained
+        action asked the session to stop.
+        """
+        if (cancel_token and cancel_token.is_cancelled) or not self._text_publication_is_current(
+            publication
+        ):
+            await self._fence_session_actions("text turn cancelled")
+            return False
+        try:
+            return await self._drain_session_actions()
+        finally:
+            actions = self._session_actions()
+            if actions is not None:
+                actions.clear_no_interrupt()
 
     def _text_publication_is_current(self, publication: TurnPublication) -> bool:
         """Guard application text turns; standalone text has no voice identity."""
