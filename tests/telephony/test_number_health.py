@@ -65,15 +65,13 @@ class TestNumberHealthMonitor:
             monitor.record_call("+1555", answered=False, blocked=True)
         assert monitor.block_count("+1555") > 3
 
-    @pytest.mark.xfail(strict=True, reason="gh-1171: reputation thresholds are dead config")
     def test_can_place_call_blocks_a_number_past_the_block_count_threshold(self) -> None:
         """``can_place_call`` should refuse a number past ``block_count_threshold``.
 
-        ``block_count_threshold`` and ``answer_rate_threshold`` are accepted by
-        the constructor and stored, but ``can_place_call`` only ever checks
+        ``block_count_threshold`` and ``answer_rate_threshold`` used to be
+        stored but never read: ``can_place_call`` only checked
         pacing/concurrency (``max_concurrent_per_number``,
-        ``min_inter_call_delay_s``, ``max_calls_per_minute``); it never reads
-        either threshold or calls ``answer_rate()``/``block_count()``. Every
+        ``min_inter_call_delay_s``, ``max_calls_per_minute``). Every
         call here is recorded ``answered=True`` (answer rate stays 1.0, well
         above ``answer_rate_threshold``) so only ``block_count_threshold`` is
         exercised — a partial fix that rejects on answer rate alone must not
@@ -96,7 +94,6 @@ class TestNumberHealthMonitor:
         assert monitor.block_count(number) == 10
         assert not monitor.can_place_call(number)
 
-    @pytest.mark.xfail(strict=True, reason="gh-1171: reputation thresholds are dead config")
     def test_can_place_call_blocks_a_number_below_the_answer_rate_threshold(self) -> None:
         """``can_place_call`` should refuse a number below ``answer_rate_threshold``.
 
@@ -121,6 +118,63 @@ class TestNumberHealthMonitor:
         assert monitor.answer_rate(number) == 0.0
         assert monitor.block_count(number) == 0
         assert not monitor.can_place_call(number)
+
+    def test_can_place_call_allows_a_brand_new_number(self) -> None:
+        monitor = NumberHealthMonitor(EventBus(), min_inter_call_delay_s=0.0)
+        assert monitor.is_reputation_healthy("+1555")
+        assert monitor.can_place_call("+1555")
+
+    def test_answer_rate_needs_a_minimum_sample_before_refusing(self) -> None:
+        """A few unanswered first calls must not lock a number out (gh-1171)."""
+        monitor = NumberHealthMonitor(
+            EventBus(),
+            answer_rate_threshold=0.4,
+            answer_rate_min_calls=5,
+            min_inter_call_delay_s=0.0,
+            max_calls_per_minute=1000,
+        )
+        for _ in range(4):
+            monitor.record_call("+1555", answered=False)
+        assert monitor.answer_rate("+1555") == 0.0
+        assert monitor.can_place_call("+1555")
+
+        monitor.record_call("+1555", answered=False)
+        assert not monitor.can_place_call("+1555")
+
+    def test_answer_rate_at_threshold_is_still_placeable(self) -> None:
+        monitor = NumberHealthMonitor(
+            EventBus(),
+            answer_rate_threshold=0.4,
+            min_inter_call_delay_s=0.0,
+            max_calls_per_minute=1000,
+        )
+        for answered in (True, True, False, False, False):
+            monitor.record_call("+1555", answered=answered)
+        assert monitor.answer_rate("+1555") == 0.4
+        assert monitor.can_place_call("+1555")
+
+    def test_block_count_just_under_threshold_is_placeable(self) -> None:
+        monitor = NumberHealthMonitor(
+            EventBus(),
+            block_count_threshold=3,
+            min_inter_call_delay_s=0.0,
+            max_calls_per_minute=1000,
+        )
+        for _ in range(2):
+            monitor.record_call("+1555", answered=True, blocked=True)
+        assert monitor.can_place_call("+1555")
+        monitor.record_call("+1555", answered=True, blocked=True)
+        assert not monitor.can_place_call("+1555")
+
+    def test_reputation_refusal_expires_with_record_ttl(self) -> None:
+        monitor = NumberHealthMonitor(
+            EventBus(),
+            block_count_threshold=1,
+            min_inter_call_delay_s=0.0,
+            record_ttl_s=0.0,
+        )
+        monitor.record_call("+1555", answered=False, blocked=True)
+        assert monitor.can_place_call("+1555")
 
     def test_call_pacing_enforced(self) -> None:
         bus = EventBus()

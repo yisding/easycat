@@ -263,7 +263,11 @@ Twilio credentials themselves are secret.
 Useful EasyCat helpers include `SQLiteDNCList`, `check_calling_hours`,
 `NumberHealthMonitor`, `CallDispositionTracker`, and `RetryStrategy`. Keep retry
 decisions disposition-aware: blocked/DNC/invalid destinations are not transient
-failures.
+failures. `NumberHealthMonitor.can_place_call(from_number)` combines pacing and
+concurrency limits with reputation: it refuses a caller ID once its SIP 607/608
+block count reaches `block_count_threshold`, or once its answer rate drops below
+`answer_rate_threshold` over at least `answer_rate_min_calls` recorded calls.
+Both checks cover only calls within `record_ttl_s`.
 
 Configure outbound behavior per session with `TelephonyConfig(outbound=...)`.
 The account SID, auth token, source number, TwiML URL, and status callback URL

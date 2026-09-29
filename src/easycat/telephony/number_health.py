@@ -39,6 +39,13 @@ class NumberHealthMonitor:
 
     Monitors answer rate, block count, average duration, and enforces
     call pacing limits.
+
+    :meth:`can_place_call` refuses a number whose reputation has degraded:
+    when its block count (SIP 607/608 within ``record_ttl_s``) reaches
+    ``block_count_threshold``, or when its answer rate falls below
+    ``answer_rate_threshold`` once at least ``answer_rate_min_calls`` completed
+    calls are on record. The minimum sample keeps a brand-new number, or one
+    unlucky first call, from locking the number out.
     """
 
     _MAX_RECORDS_PER_NUMBER = 500
@@ -50,6 +57,7 @@ class NumberHealthMonitor:
         *,
         answer_rate_threshold: float = 0.4,
         block_count_threshold: int = 5,
+        answer_rate_min_calls: int = 5,
         max_calls_per_minute: int = 10,
         min_inter_call_delay_s: float = 2.0,
         max_concurrent_per_number: int = 3,
@@ -58,6 +66,7 @@ class NumberHealthMonitor:
         self._event_bus = event_bus
         self._answer_rate_threshold = answer_rate_threshold
         self._block_count_threshold = block_count_threshold
+        self._answer_rate_min_calls = max(1, answer_rate_min_calls)
         self._max_calls_per_minute = max_calls_per_minute
         self._min_inter_call_delay_s = min_inter_call_delay_s
         self._max_concurrent_per_number = max_concurrent_per_number
@@ -168,7 +177,14 @@ class NumberHealthMonitor:
         return sum(1 for r in records if r.blocked)
 
     def can_place_call(self, number: str) -> bool:
-        """Check if rate limits allow placing another call from this number."""
+        """Check whether this number may place another call right now.
+
+        Returns ``False`` when pacing or concurrency limits are hit, or when
+        the number's reputation has degraded (see :meth:`is_reputation_healthy`).
+        """
+        if not self.is_reputation_healthy(number):
+            return False
+
         now = time.monotonic()
 
         if self._concurrent.get(number, 0) >= self._max_concurrent_per_number:
@@ -183,6 +199,25 @@ class NumberHealthMonitor:
         recent = [r for r in self._records.get(number, []) if r.timestamp > one_minute_ago]
         in_flight = self._concurrent.get(number, 0)
         return not len(recent) + in_flight >= self._max_calls_per_minute
+
+    def is_reputation_healthy(self, number: str) -> bool:
+        """Return ``False`` when the number breaches a reputation threshold.
+
+        Both checks use only records within ``record_ttl_s``. The block count
+        must stay below ``block_count_threshold``; the answer rate must stay at
+        or above ``answer_rate_threshold``, judged only once at least
+        ``answer_rate_min_calls`` calls are on record.
+        """
+        records = self._active_records(number)
+        if not records:
+            return True
+        blocked = sum(1 for r in records if r.blocked)
+        if blocked >= self._block_count_threshold:
+            return False
+        if len(records) < self._answer_rate_min_calls:
+            return True
+        answered = sum(1 for r in records if r.answered)
+        return answered / len(records) >= self._answer_rate_threshold
 
     def _active_records(self, number: str) -> list[_CallRecord]:
         """Return records within TTL for a number, pruning expired entries."""
