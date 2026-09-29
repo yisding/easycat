@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from easycat.debug._issues import IssueThresholds, build_issues
 from easycat.debug._turn_timeline import drain_ack_indices, turn_milestones, turn_waterfall
 
@@ -230,6 +232,73 @@ def test_missed_barge_in_fires_when_bot_never_stops() -> None:
     assert issue["threshold"] == IssueThresholds().missed_barge_in_window_ms
     assert issue["stage"] == "vad"
     assert issue["turn_id"] == "t1"
+    # No stop record exists anywhere in the journal, so "never stopped" is true.
+    assert issue["value"] is None
+    assert "the bot never stopped" in issue["detail"]
+
+
+def test_missed_barge_in_reports_the_actual_delay_when_the_bot_did_stop() -> None:
+    """A late ``bot_stopped_speaking`` proves the bot stopped; say so, not "never"."""
+    thresholds = IssueThresholds()
+    stop_ms = 500 + thresholds.missed_barge_in_window_ms + 100
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "vad_start_speaking", wall_ms=500),
+        _rec(3, "bot_stopped_speaking", wall_ms=stop_ms),
+    ]
+    report = build_issues(records)
+    missed = [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+    assert len(missed) == 1
+    issue = missed[0]
+    # The journal proves the bot stopped 1600ms after the user spoke, so the
+    # card must not claim it "never stopped" and must carry the real delay.
+    assert issue["value"] == 1600.0
+    assert "never stopped" not in issue["detail"]
+    assert "1600ms" in issue["detail"]
+
+
+def test_missed_barge_in_keeps_scanning_past_a_late_interruption_for_the_real_stop() -> None:
+    """An ``interruption`` record isn't proof the bot's audio actually stopped.
+
+    Interruption is journaled before playback is actually cleared, so a card
+    that used the interruption's own (late) timestamp as "when the bot
+    stopped" would misreport how long the bot's audio kept playing. The card
+    must keep scanning past the interruption for the ``bot_stopped_speaking``
+    that actually proves the bot went quiet, and report that delay instead.
+    """
+    thresholds = IssueThresholds()
+    interrupt_ms = 500 + thresholds.missed_barge_in_window_ms + 50
+    stop_ms = interrupt_ms + 400
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "vad_start_speaking", wall_ms=500),
+        _rec(3, "interruption", wall_ms=interrupt_ms),  # fires late
+        _rec(4, "bot_stopped_speaking", wall_ms=stop_ms),  # audio stops later still
+    ]
+    report = build_issues(records)
+    missed = [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+    assert len(missed) == 1
+    issue = missed[0]
+    assert issue["value"] == pytest.approx(stop_ms - 500)
+    assert "never stopped" not in issue["detail"]
+    assert f"{stop_ms - 500:.0f}ms" in issue["detail"]
+
+
+def test_missed_barge_in_reports_the_interruption_delay_when_no_stop_marker_follows() -> None:
+    """A late interruption with no confirmed stop still avoids "never stopped"."""
+    thresholds = IssueThresholds()
+    interrupt_ms = 500 + thresholds.missed_barge_in_window_ms + 50
+    records = [
+        _rec(1, "bot_started_speaking", wall_ms=0),
+        _rec(2, "vad_start_speaking", wall_ms=500),
+        _rec(3, "interruption", wall_ms=interrupt_ms),  # fires late, nothing after it
+    ]
+    report = build_issues(records)
+    missed = [i for i in report["issues"] if i["code"] == "missed_barge_in"]
+    assert len(missed) == 1
+    issue = missed[0]
+    assert issue["value"] == pytest.approx(interrupt_ms - 500)
+    assert "never stopped" not in issue["detail"]
 
 
 def test_missed_barge_in_does_not_fire_when_interruption_acted() -> None:
@@ -312,6 +381,9 @@ def test_missed_barge_in_fires_when_ack_lands_after_the_window() -> None:
     missed = [i for i in report["issues"] if i["code"] == "missed_barge_in"]
     assert len(missed) == 1
     assert missed[0]["metric"] == "missed_barge_in_window_ms"
+    # The ack proves the bot did go quiet, just after the window closed.
+    assert missed[0]["value"] == pytest.approx(late_ms - 500)
+    assert "never stopped" not in missed[0]["detail"]
 
 
 def test_missed_barge_in_ignores_speech_after_the_window_closed() -> None:
