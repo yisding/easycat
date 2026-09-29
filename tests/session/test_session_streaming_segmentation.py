@@ -270,6 +270,14 @@ def test_split_first_clause_keeps_sentence_final_domains_and_emails_whole(
     assert split_first_clause(text) == (ready, remaining)
 
 
+def test_split_first_clause_splits_after_wrapped_sentence_final_domain() -> None:
+    # The sentence-ending "." inside "(example.com.)" is trailing punctuation,
+    # not part of the domain, so it is still a clause boundary.
+    ready, remaining = split_first_clause("Please visit (example.com.) Then continue, thanks")
+    assert ready == "Please visit (example.com."
+    assert remaining == ") Then continue, thanks"
+
+
 def test_split_first_phrase_bounds_punctuation_free_opener() -> None:
     text = "This response keeps streaming words without reaching punctuation for quite a while"
 
