@@ -102,19 +102,41 @@ _URL_QUERY_SECRET_RE = re.compile(
 )
 _SECRET_RE = re.compile(r"\b(?:sk|sess|key|tok)-[A-Za-z0-9_-]{12,}\b")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
+# A keyword may be followed by the closing quote of a JSON/Python-style key
+# (``"api_key": ...``), optionally backslash-escaped when that JSON is itself
+# embedded in a serialized string (``\"api_key\": ...``), and by horizontal
+# whitespace before the ``:`` separator.
+_KEY_CLOSING_QUOTE = r"""(?:\\?["'])?[ \t]*"""
+# A quoted value is consumed up to its matching closing quote so the whole
+# value (including spaces or commas) is redacted and the quotes stay balanced;
+# anything else falls back to the historical unquoted ``[^\s;,]+`` value. An
+# empty quoted value (``"api_key": ""``) carries no secret and is left alone.
+_SECRET_VALUE = (
+    r"""(?!""|''|\\"\\")"""
+    r"""(?:(?P<quote>\\?["'])(?:\\.|(?!(?P=quote))[^\\\n])+(?P=quote)|"""
+)
 _HEADER_SECRET_RE = re.compile(
     r"(?i)((?:authorization|x-api-key|xi-api-key|openai-organization|openai-project)"
-    r"\s*[:=]\s*)(?:bearer\s+)?[^\s;,]+"
+    + _KEY_CLOSING_QUOTE
+    + r"[:=]\s*)"
+    + _SECRET_VALUE
+    + r"(?:bearer\s+)?[^\s;,]+)"
 )
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s;,]+")
 _KEY_VALUE_SECRET_RE = re.compile(
     r"(?i)((?:--(?:api[-_]?key|token|secret|password|access[-_]?token|client[-_]?secret)"
     r"\s+)|"
-    r"(?:(?:--)?(?:api[-_]?key|token|secret|password|access[-_]?token|client[-_]?secret)="
-    r")|"
+    r"(?:(?:--)?(?:api[-_]?key|token|secret|password|access[-_]?token|client[-_]?secret)"
+    # Bare ``key = value`` stays unmatched (TOML guidance such as
+    # ``token = 'bearer-env:NAME'`` names a reference, not a secret); spacing
+    # around ``=`` is tolerated only after a quoted key.
+    + r"""(?:\\?["'][ \t]*=[ \t]*|=))|"""
     r"(?:(?:api[-_]?key|x[-_]?api[-_]?key|xi[-_]?api[-_]?key|token|secret|password|"
-    r"access[-_]?token|refresh[-_]?token|client[-_]?secret|signed[-_]?url|signature):"
-    r"\s*))[^\s;,]+"
+    r"access[-_]?token|refresh[-_]?token|client[-_]?secret|signed[-_]?url|signature)"
+    + _KEY_CLOSING_QUOTE
+    + r":\s*))"
+    + _SECRET_VALUE
+    + r"[^\s;,]+)"
 )
 _REQUEST_ID_RE = re.compile(r"\b(?:req|request|resp|response)_[A-Za-z0-9_-]{6,}\b")
 _PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
@@ -122,7 +144,8 @@ _HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
 
 
 def _secret_after_prefix(match: re.Match[str]) -> str:
-    return f"{match.group(1)}{REDACTED_SECRET}"
+    quote = match.groupdict().get("quote") or ""
+    return f"{match.group(1)}{quote}{REDACTED_SECRET}{quote}"
 
 
 def _redacted_home_path(match: re.Match[str]) -> str:
