@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from easycat._turn_context import TURN_AUDIO_LOG_MAXLEN, TurnContext
 from easycat.cancel import CancelToken
 from easycat.session.interruption import (
@@ -238,6 +240,34 @@ def test_split_first_clause_does_not_split_email_address() -> None:
     ready, remaining = split_first_clause("My email is john@example.com, thanks")
     assert ready == "My email is john@example.com, "
     assert remaining == "thanks"
+
+
+@pytest.mark.parametrize(
+    ("text", "ready", "remaining"),
+    [
+        (
+            "Please visit example.com. Then continue here.",
+            "Please visit example.com. ",
+            "Then continue here.",
+        ),
+        (
+            "Please visit www.example.com, it is helpful",
+            "Please visit www.example.com, ",
+            "it is helpful",
+        ),
+        (
+            "Mail me at john.doe@example.com. Thanks a lot!",
+            "Mail me at john.doe@example.com. ",
+            "Thanks a lot!",
+        ),
+    ],
+)
+def test_split_first_clause_keeps_sentence_final_domains_and_emails_whole(
+    text: str, ready: str, remaining: str
+) -> None:
+    # The sentence-ending "." after a hostname or email must not stop the
+    # token from being recognized, or the split lands inside the token.
+    assert split_first_clause(text) == (ready, remaining)
 
 
 def test_split_first_phrase_bounds_punctuation_free_opener() -> None:

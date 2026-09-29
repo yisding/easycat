@@ -93,7 +93,7 @@ _FIRST_PHRASE_MIN_CHARS = 24
 _FIRST_CLAUSE_BOUNDARY_CHARS = ".!?。！？．,;:"
 _URL_SCHEMES_HELD_FOR_LOOKAHEAD = frozenset({"ftp", "ftps", "http", "https", "ws", "wss"})
 _URL_LEADING_WRAPPERS = "([{<\"'`"
-_URL_TRAILING_PUNCTUATION = ",;:!?)]}\"'`"
+_URL_TRAILING_PUNCTUATION = ".,;:!?)]}\"'`"
 
 # Recognizes a scheme-less hostname (``example.com``, ``www.example.com``) or
 # an email address (``user@example.com``) as a whole token, so the internal
