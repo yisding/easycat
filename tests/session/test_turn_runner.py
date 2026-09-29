@@ -3669,10 +3669,6 @@ async def test_send_text_clears_turn_log_context_after_turn() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="gh-1167: _execute_text_turn never drains/fences SessionActions",
-)
 async def test_send_text_drains_queued_session_actions() -> None:
     """A tool-queued ``end_call`` must still run after a ``send_text`` turn.
 
@@ -3681,11 +3677,11 @@ async def test_send_text_drains_queued_session_actions() -> None:
     ``_settle_unspoken_turn_actions`` -- see gh 1099 and
     ``test_run_streaming_agent_quiet_turn_still_drains_actions``. Text turns
     driven by ``send_text``/``prompt_agent(speak=False)`` go through
-    ``_execute_text_turn``/``_stream_text_turn`` instead, which never calls
-    ``_drain_session_actions`` or ``_fence_session_actions`` at all. An
-    ``end_call`` requested by an agent tool during a text turn is therefore
-    silently lost, and the action's ``no_interrupt=True`` flag is left set
-    forever, permanently blocking any later voice barge-in on the session.
+    ``_execute_text_turn``/``_stream_text_turn`` instead, which never called
+    ``_drain_session_actions`` or ``_fence_session_actions`` at all (gh 1167).
+    An ``end_call`` requested by an agent tool during a text turn was
+    therefore silently lost, and the action's ``no_interrupt=True`` flag was
+    left set forever, permanently blocking any later voice barge-in.
     """
     actions = SessionActions()
     actions.end_call(reason="done")
@@ -3704,6 +3700,142 @@ async def test_send_text_drains_queued_session_actions() -> None:
     session.stop.assert_awaited_once()
     assert not actions.has_pending
     assert not actions.no_interrupt
+
+
+@pytest.mark.asyncio
+async def test_unspoken_prompt_agent_drains_queued_session_actions() -> None:
+    """``prompt_agent(speak=False)`` on a voice session drains like ``send_text``."""
+    actions = SessionActions()
+    actions.end_call(reason="done")
+    session = Session(_config(session_actions=actions))
+    session.stop = AsyncMock()
+
+    response = await session.prompt_agent("wrap up", role="user", speak=False)
+
+    assert response == "Reply."
+    session.stop.assert_awaited_once()
+    assert not actions.has_pending
+    assert not actions.no_interrupt
+    assert session._turn_manager.state is TurnManagerState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_send_text_end_call_really_stops_session_without_deadlock() -> None:
+    """The drained ``end_call`` stops the session from inside the text-turn task."""
+    actions = SessionActions()
+    actions.end_call(reason="done")
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            agent=_SimpleStreamingAgent(),
+            session_actions=actions,
+        )
+    )
+    response = await asyncio.wait_for(session.send_text("hello"), timeout=5.0)
+
+    assert response == "Reply."
+    assert not actions.no_interrupt
+    with pytest.raises(RuntimeError, match="stopped"):
+        await session.send_text("again")
+
+
+class _EndCallThenBlockAgent(_TestBridgeBase):
+    """First turn queues ``end_call`` and stalls; later turns just reply."""
+
+    def __init__(self, actions: SessionActions) -> None:
+        super().__init__()
+        self._actions = actions
+        self.calls = 0
+        self.first_started = asyncio.Event()
+
+    async def run(self, text: str) -> str:
+        return "Reply."
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder
+        self.calls += 1
+        if self.calls == 1:
+            self._actions.end_call(reason="stale")
+            self.first_started.set()
+            assert cancel_token is not None
+            await cancel_token.wait()
+            return
+        yield AgentBridgeEvent(kind="done", text="Reply.")
+
+
+@pytest.mark.asyncio
+async def test_superseded_send_text_fences_queued_session_actions() -> None:
+    """A cancelled text turn drops its queued actions and clears ``no_interrupt``."""
+    actions = SessionActions()
+    agent = _EndCallThenBlockAgent(actions)
+    session = Session(
+        SessionConfig(runtime_mode="text_session", agent=agent, session_actions=actions)
+    )
+    session.stop = AsyncMock()
+    failed: list[SessionActionFailed] = []
+    session.event_bus.subscribe(SessionActionFailed, failed.append)
+
+    first = asyncio.create_task(session.send_text("first"))
+    await asyncio.wait_for(agent.first_started.wait(), timeout=2.0)
+    assert actions.no_interrupt
+
+    response = await session.send_text("second")
+    await asyncio.gather(first, return_exceptions=True)
+
+    assert response == "Reply."
+    session.stop.assert_not_awaited()
+    assert not actions.has_pending
+    assert not actions.no_interrupt
+    assert [event.action.type for event in failed] == ["end_call"]
+
+
+class _EndCallThenRaiseAgent(_TestBridgeBase):
+    def __init__(self, actions: SessionActions) -> None:
+        super().__init__()
+        self._actions = actions
+
+    async def run(self, text: str) -> str:
+        return ""
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder, cancel_token
+        self._actions.end_call(reason="then failed")
+        raise RuntimeError("boom")
+        yield  # pragma: no cover
+
+
+@pytest.mark.asyncio
+async def test_failed_send_text_fences_queued_session_actions() -> None:
+    """An agent error must not strand the turn's ``no_interrupt`` guard."""
+    actions = SessionActions()
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            agent=_EndCallThenRaiseAgent(actions),
+            session_actions=actions,
+        )
+    )
+    session.stop = AsyncMock()
+    failed: list[SessionActionFailed] = []
+    session.event_bus.subscribe(SessionActionFailed, failed.append)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await session.send_text("hello")
+
+    session.stop.assert_not_awaited()
+    assert not actions.has_pending
+    assert not actions.no_interrupt
+    assert [event.action.type for event in failed] == ["end_call"]
 
 
 @pytest.mark.asyncio

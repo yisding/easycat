@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "update_rationale": "gh 1024: on_turn_ended drains a superseded predecessor first, so the end_time commit is now post-await; the identity/activity guards are already re-checked after that await",
+  "update_rationale": "gh-1167: text turns stop the session after a drained end_call, mirroring run_streaming_agent",
   "counts": {
     "categories": {
       "activity_commit": 5,
@@ -8,7 +8,7 @@
       "phase_latch_commit": 1,
       "provider_commit": 11,
       "public_observation_commit": 26,
-      "session_lifecycle_commit": 1,
+      "session_lifecycle_commit": 2,
       "turn_field_commit": 9
     },
     "guards": {
@@ -20,7 +20,7 @@
       "identity_phase": 1,
       "phase_latch": 1,
       "publication_scope": 6,
-      "session_scope": 2,
+      "session_scope": 3,
       "text_task": 5
     },
     "roles": {
@@ -28,12 +28,12 @@
       "phase_latch": 1,
       "provider_dispatch": 11,
       "public_observation": 26,
-      "session_lifecycle": 1,
+      "session_lifecycle": 2,
       "turn_bookkeeping": 9,
       "turn_identity": 8
     },
     "suspensions": {
-      "awaited": 40,
+      "awaited": 41,
       "post_await": 17,
       "synchronous": 4
     }
@@ -90,6 +90,7 @@
     "public_observation_commit\tsession/_turn_runner.py\tTurnRunner.on_turn_publication\tawaited call self._emit<Error>\ta7a01803284e1ac4\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
     "public_observation_commit\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tawaited call self._emit<AgentFinal>\td9c869d865463360\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tidentity_activity",
     "public_observation_commit\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tawaited call self._emit<Error>\t734eb31d047751b9\t0\tpublic_observation\tPublishes an externally observable lifecycle or output event.\tcorrelated_observation",
+    "session_lifecycle_commit\tsession/_turn_runner.py\tTurnRunner._execute_text_turn\tawaited call self._stop\t40622b923f60e073\t0\tsession_lifecycle\tCommits a whole-Session lifecycle effect.\tsession_scope",
     "session_lifecycle_commit\tsession/_turn_runner.py\tTurnRunner.run_streaming_agent\tawaited call self._stop\t40622b923f60e073\t0\tsession_lifecycle\tCommits a whole-Session lifecycle effect.\tsession_scope",
     "turn_field_commit\tsession/_stt_committer.py\tSTTCommitter.commit_now\tpost_await assign turn.stt_has_uncommitted_audio\t70db579042829ada\t0\tturn_bookkeeping\tMutates bookkeeping retained on the shared TurnContext.\tidentity_activity",
     "turn_field_commit\tsession/_stt_committer.py\tSTTCommitter.commit_now\tsynchronous assign turn.stt_has_uncommitted_audio\td28e2f00e3c8f8a2\t0\tturn_bookkeeping\tMutates bookkeeping retained on the shared TurnContext.\tidentity_activity",
