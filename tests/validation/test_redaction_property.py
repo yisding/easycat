@@ -315,72 +315,102 @@ def test_shared_detector_flags_cassette_sensitive_patterns() -> None:
 
 @pytest.mark.parametrize("policy", ["pii", "secrets"])
 def test_redact_text_redacts_unquoted_key_value_secret_control(policy) -> None:
-    """Control for the xfail below: the unquoted spelling always redacts.
-
-    Kept as its own always-enforced (non-xfail) test so a future regression
-    that breaks unquoted ``key: value`` redaction fails loudly here, instead
-    of being swallowed as "still expected to fail" by the JSON-quote xfail.
-    """
+    """The unquoted ``key: value`` spelling keeps redacting after the quote fix."""
     secret = "abcdefghijklmnopqrstuvwxyz0123456789AB"
-    assert secret not in redact_text(f"api_key: {secret}", policy=policy)
+    assert redact_text(f"api_key: {secret}", policy=policy) == "api_key: [REDACTED_SECRET]"
+
+
+_JSON_QUOTED_SECRET = "abcdefghijklmnopqrstuvwxyz0123456789AB"
 
 
 @pytest.mark.parametrize("policy", ["pii", "secrets"])
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "_KEY_VALUE_SECRET_RE and _HEADER_SECRET_RE require the sensitive "
-        "keyword to sit directly against ':'/'=' with nothing in between, so "
-        "a JSON-style quote right before the colon (as in a captured raw "
-        "provider error body, or a malformed-JSON artifact that falls back "
-        "to text redaction) defeats the match entirely, under both the "
-        "'pii' and 'secrets' policies. The unquoted 'api_key: <value>' "
-        "spelling redacts correctly (see the control test above); the "
-        'JSON-quoted \'"api_key": "<value>"\' spelling of the exact same '
-        "pair does not."
-    ),
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Regression for #1165: a JSON-style quote between keyword and colon.
+        (
+            f'"api_key": "{_JSON_QUOTED_SECRET}"',
+            '"api_key": "[REDACTED_SECRET]"',
+        ),
+        (
+            f"'api_key': '{_JSON_QUOTED_SECRET}'",
+            "'api_key': '[REDACTED_SECRET]'",
+        ),
+        (
+            f'"password"="{_JSON_QUOTED_SECRET}"',
+            '"password"="[REDACTED_SECRET]"',
+        ),
+        (
+            f'"client_secret" : "{_JSON_QUOTED_SECRET}"',
+            '"client_secret" : "[REDACTED_SECRET]"',
+        ),
+        (
+            f'{{"model": "gpt", "access_token": "{_JSON_QUOTED_SECRET}", "n": 1}}',
+            '{"model": "gpt", "access_token": "[REDACTED_SECRET]", "n": 1}',
+        ),
+        # JSON embedded in an already-serialized string keeps its escapes.
+        (
+            f'\\"api_key\\": \\"{_JSON_QUOTED_SECRET}\\"',
+            '\\"api_key\\": \\"[REDACTED_SECRET]\\"',
+        ),
+        # A quoted value with spaces/commas is redacted whole.
+        (
+            f'"password": "hunter 2, {_JSON_QUOTED_SECRET}"',
+            '"password": "[REDACTED_SECRET]"',
+        ),
+        (
+            f'"Authorization": "Bearer {_JSON_QUOTED_SECRET}"',
+            '"Authorization": "[REDACTED_SECRET]"',
+        ),
+    ],
 )
-def test_redact_text_misses_json_quoted_key_value_secret(policy) -> None:
-    secret = "abcdefghijklmnopqrstuvwxyz0123456789AB"
-    quoted = f'"api_key": "{secret}"'
-    assert secret not in redact_text(quoted, policy=policy)
+def test_redact_text_redacts_json_quoted_key_value_secret(policy, text, expected) -> None:
+    redacted = redact_text(text, policy=policy)
+
+    assert _JSON_QUOTED_SECRET not in redacted
+    assert redacted == expected
+    assert redact_text(redacted, policy=policy) == redacted
+    assert not contains_unredacted_sensitive_text(redacted)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "contains_unredacted_sensitive_text shares the same keyword-adjacent-"
-        "to-':' regexes as redact_text, so it reports a JSON-quoted "
-        '\'"api_key": "<value>"\' pair as clean even though the raw secret '
-        "is still present verbatim -- a false negative in the sentinel meant "
-        "to catch exactly this kind of leftover secret."
-    ),
+@pytest.mark.parametrize(
+    "text",
+    [
+        f'"api_key": "{_JSON_QUOTED_SECRET}"',
+        f"'token': '{_JSON_QUOTED_SECRET}'",
+        f'"password"="{_JSON_QUOTED_SECRET}"',
+        f'"Authorization": "Bearer {_JSON_QUOTED_SECRET}"',
+    ],
 )
-def test_shared_detector_misses_json_quoted_key_value_secret() -> None:
-    secret = "abcdefghijklmnopqrstuvwxyz0123456789AB"
-    assert contains_unredacted_sensitive_text(f'"api_key": "{secret}"')
+def test_shared_detector_flags_json_quoted_key_value_secret(text) -> None:
+    assert contains_unredacted_sensitive_text(text)
 
 
 @pytest.mark.parametrize("policy", ["pii", "secrets"])
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "A string field that is not itself a secret-classified key (e.g. "
-        "'error_message') falls to the plain redact_text branch under both "
-        "the 'pii' and 'secrets' policies. When its content happens to embed "
-        "a captured JSON error body verbatim -- a realistic case for "
-        'upstream provider error text -- the JSON-quoted \'"api_key": '
-        '"<value>"\' pair inside it survives redact_value untouched, the '
-        "same quote-adjacency gap as redact_text."
-    ),
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"tokenizer": "cl100k", "secretary": "bob", "token_count": 5, "api_key": ""}',
+        # Doctor/manifest guidance names a secret reference, not a secret.
+        "set token = 'bearer-env:TWILIO_STREAM_TOKEN_SECRET'",
+    ],
 )
-def test_redact_value_misses_secret_embedded_in_unclassified_text_field(policy) -> None:
-    secret = "abcdefghijklmnopqrstuvwxyz0123456789AB"
-    payload = {"error_message": f'upstream rejected request: {{"api_key": "{secret}"}}'}
+def test_redact_text_keeps_non_secret_json_keys_and_guidance(policy, text) -> None:
+    assert redact_text(text, policy=policy) == text
+    assert not contains_unredacted_sensitive_text(text)
+
+
+@pytest.mark.parametrize("policy", ["pii", "secrets"])
+def test_redact_value_redacts_secret_embedded_in_unclassified_text_field(policy) -> None:
+    payload = {
+        "error_message": f'upstream rejected request: {{"api_key": "{_JSON_QUOTED_SECRET}"}}'
+    }
 
     redacted = redact_value(payload, policy=policy)
 
-    assert secret not in redacted["error_message"]
+    assert redacted["error_message"] == (
+        'upstream rejected request: {"api_key": "[REDACTED_SECRET]"}'
+    )
 
 
 def test_shared_detector_tracks_dynamically_registered_provider_domains() -> None:
