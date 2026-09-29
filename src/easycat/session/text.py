@@ -193,7 +193,13 @@ def _is_url_separator(text: str, index: int) -> bool:
         while end < len(text) and not text[end].isspace():
             end += 1
         token = text[start + 1 : end].lstrip(_URL_LEADING_WRAPPERS)
-        if _looks_like_domain_or_email(token):
+        token_start = end - len(token)
+        cleaned_length = len(token.rstrip(_URL_TRAILING_PUNCTUATION))
+        # Only protect a "." that falls inside the validated domain/email
+        # span itself, not one that only survives because it was stripped
+        # off as trailing punctuation (e.g. the true sentence-ending period
+        # in a wrapped, sentence-final address like "(example.com.)").
+        if index < token_start + cleaned_length and _looks_like_domain_or_email(token):
             return True
 
     return False

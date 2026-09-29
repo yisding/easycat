@@ -270,6 +270,18 @@ def test_split_first_clause_keeps_sentence_final_domains_and_emails_whole(
     assert split_first_clause(text) == (ready, remaining)
 
 
+def test_split_first_clause_splits_after_wrapped_sentence_final_domain() -> None:
+    # Regression test: a wrapped, sentence-final domain like "(example.com.)"
+    # must not have its true sentence-ending "." (the one right before the
+    # closing wrapper) mistaken for part of the domain just because that "."
+    # gets stripped off as trailing punctuation when validating the token.
+    # Protection must be limited to the "." that is genuinely inside the
+    # validated domain/email span.
+    ready, remaining = split_first_clause("Please visit (example.com.) Then continue, thanks")
+    assert ready == "Please visit (example.com."
+    assert remaining == ") Then continue, thanks"
+
+
 def test_split_first_phrase_bounds_punctuation_free_opener() -> None:
     text = "This response keeps streaming words without reaching punctuation for quite a while"
 
