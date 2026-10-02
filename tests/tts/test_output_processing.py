@@ -22,6 +22,25 @@ def test_phonetic_replacement_processor_replaces_whole_terms_case_insensitive() 
     assert payload.format == "plain"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="replacements are applied sequentially, so a spoken term is re-replaced by later rules",
+)
+def test_phonetic_replacement_does_not_rewrite_already_spoken_terms() -> None:
+    """Each source term must be replaced once, against the original text.
+
+    ``"Dr"`` is spoken as ``"Doctor"``, and ``"Doctor"`` has its own entry. The
+    output of the first rule must not be fed back through the second rule.
+    """
+    processor = PhoneticReplacementProcessor({"Dr": "Doctor", "Doctor": "Dok-tur"})
+    payload = processor.process(
+        TTSInput("Dr Smith asked the Doctor."),
+        is_final=True,
+        is_streaming=False,
+    )
+    assert payload.text == "Doctor Smith asked the Dok-tur."
+
+
 def test_default_pronunciation_processors_order() -> None:
     processors = default_pronunciation_processors(
         name_pronunciations={"Siobhan": "shi-vawn"},
