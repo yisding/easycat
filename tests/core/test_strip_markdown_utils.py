@@ -371,3 +371,17 @@ class TestStripMarkdown:
         assert "Reset Password" in result
         assert "our help page" in result
         assert "https://example.com/help" in result
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="_BLOCKQUOTE_RE's \\s* crosses newlines and collapses quoted paragraph breaks",
+)
+def test_strip_markdown_keeps_paragraph_break_inside_multi_paragraph_blockquote() -> None:
+    """A bare ``>`` line separates quoted paragraphs and must stay a paragraph break.
+
+    ``_BLOCKQUOTE_RE`` uses ``\\s*`` after ``>``, which can match the newline, so
+    the marker-only line and the next line's marker are consumed together and
+    the two quoted paragraphs run together.
+    """
+    assert strip_markdown("> Quote one.\n>\n> Quote two.") == "Quote one.\n\nQuote two."
