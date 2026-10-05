@@ -320,14 +320,10 @@ class TestStripMarkdown:
         assert "Above" in result
         assert "Below" in result
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="gh 1184: emphasis passes run before HR passes and leave stray characters",
-    )
     @pytest.mark.parametrize("rule", ["___", "_____", "****"])
     def test_horizontal_rule_underscores_and_long_asterisks_removed(self, rule: str) -> None:
-        # Emphasis passes run before the HR passes and eat part of the rule,
-        # leaving a stray "_" / "**" that TTS would speak.
+        # HR lines are stripped before the emphasis passes, which would otherwise
+        # eat part of the rule and leave a stray "_" / "**" that TTS would speak.
         result = strip_markdown(f"Above\n{rule}\nBelow")
         assert "_" not in result
         assert "*" not in result
