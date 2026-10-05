@@ -22,6 +22,16 @@ def test_phonetic_replacement_processor_replaces_whole_terms_case_insensitive() 
     assert payload.format == "plain"
 
 
+def test_phonetic_replacement_processor_does_not_rewrite_its_own_output() -> None:
+    processor = PhoneticReplacementProcessor({"AI": "A I", "I": "eye"})
+    payload = processor.process(
+        TTSInput("AI and I"),
+        is_final=True,
+        is_streaming=False,
+    )
+    assert payload.text == "A I and eye"
+
+
 def test_phonetic_replacement_does_not_rewrite_already_spoken_terms() -> None:
     """Each source term must be replaced once, against the original text.
 
