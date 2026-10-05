@@ -164,30 +164,45 @@ class PhoneticReplacementProcessor:
 
     The mapping is applied case-insensitively with whole-word boundaries to
     avoid replacing partial substrings inside larger words.
+
+    All terms are replaced in a single pass over the original text, so a
+    spoken form is never rewritten by another entry (``{"Dr": "Doctor",
+    "Doctor": "Dok-tur"}`` speaks ``"Dr"`` as ``"Doctor"``). Where terms
+    overlap at the same position, the longest term wins.
     """
 
     replacements: dict[str, str]
 
     def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
+        if not self.replacements:
+            return payload
         source = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
-        transformed = source
-        for source_term, spoken_term in self.replacements.items():
-            # Retain word boundaries for all terms, including punctuation like "C++" (gh 1004).
-            pattern = re.compile(rf"(?<!\w){re.escape(source_term)}(?!\w)", flags=re.IGNORECASE)
 
-            # The spoken term is substituted through a callable so ``re`` never
-            # reads it as a replacement *template*.  Passing it directly made a
-            # backslash in a pronunciation — natural in this domain, for unit
-            # symbols and technical names — either corrupt speech or disable
-            # every pronunciation: ``"\alpha"`` emitted a BEL control character,
-            # ``"\1"`` injected the matched text, and ``"\d"`` raised a
-            # ``PatternError`` that ``apply_output_processors`` fails open on,
-            # silently dropping this processor for the rest of the session
-            # (gh 1101).
-            def _literal_replacement(_match: re.Match[str], spoken: str = spoken_term) -> str:
-                return spoken
+        # Longest terms first so "New York" wins over "York" at the same
+        # position; ``sorted`` is stable, so equal-length terms (including
+        # case-only duplicates) keep insertion order and the first one wins.
+        entries = sorted(self.replacements.items(), key=lambda item: len(item[0]), reverse=True)
+        spoken_terms = [spoken for _term, spoken in entries]
+        # One capture group per term identifies which entry matched without
+        # re-deriving it from the matched text's case. Word boundaries are
+        # retained for all terms, including punctuation like "C++" (gh 1004).
+        alternation = "|".join(f"({re.escape(term)})" for term, _spoken in entries)
+        pattern = re.compile(rf"(?<!\w)(?:{alternation})(?!\w)", flags=re.IGNORECASE)
 
-            transformed = pattern.sub(_literal_replacement, transformed)
+        # The spoken term is substituted through a callable so ``re`` never
+        # reads it as a replacement *template*.  Passing it directly made a
+        # backslash in a pronunciation — natural in this domain, for unit
+        # symbols and technical names — either corrupt speech or disable
+        # every pronunciation: ``"\alpha"`` emitted a BEL control character,
+        # ``"\1"`` injected the matched text, and ``"\d"`` raised a
+        # ``PatternError`` that ``apply_output_processors`` fails open on,
+        # silently dropping this processor for the rest of the session
+        # (gh 1101).
+        def _literal_replacement(match: re.Match[str]) -> str:
+            assert match.lastindex is not None
+            return spoken_terms[match.lastindex - 1]
+
+        transformed = pattern.sub(_literal_replacement, source)
 
         if transformed == source:
             return payload

@@ -395,3 +395,13 @@ def test_strip_markdown_does_not_treat_escaped_asterisks_as_emphasis(
     the unescaped literal marker.
     """
     assert strip_markdown(text) in acceptable
+
+
+def test_strip_markdown_keeps_paragraph_break_inside_multi_paragraph_blockquote() -> None:
+    """A bare ``>`` line separates quoted paragraphs and must stay a paragraph break.
+
+    ``_BLOCKQUOTE_RE`` must only consume horizontal whitespace after ``>``; matching
+    the newline would swallow the marker-only line together with the next line's
+    marker and run the two quoted paragraphs together.
+    """
+    assert strip_markdown("> Quote one.\n>\n> Quote two.") == "Quote one.\n\nQuote two."
