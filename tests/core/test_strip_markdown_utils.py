@@ -381,20 +381,17 @@ class TestStripMarkdown:
     [
         (r"\*literal\*", {r"\*literal\*", "*literal*"}),
         (r"price \*5\* ok", {r"price \*5\* ok", "price *5* ok"}),
+        (r"\_literal\_", {r"\_literal\_", "_literal_"}),
     ],
-)
-@pytest.mark.xfail(
-    strict=True,
-    reason="escaped emphasis markers are treated as italic, leaving stray backslashes",
 )
 def test_strip_markdown_does_not_treat_escaped_asterisks_as_emphasis(
     text: str, acceptable: set[str]
 ) -> None:
     """``\\*x\\*`` is literal text in Markdown, not italic.
 
-    Today the italic regex consumes the ``*`` between the backslash and the
-    word, so ``\\*literal\\*`` becomes ``\\literal\\`` and TTS speaks
+    The italic regex used to consume the ``*`` between the backslash and the
+    word, so ``\\*literal\\*`` became ``\\literal\\`` and TTS spoke
     "backslash". The result must be either the untouched escape sequence or
-    the unescaped literal asterisks.
+    the unescaped literal marker.
     """
     assert strip_markdown(text) in acceptable
