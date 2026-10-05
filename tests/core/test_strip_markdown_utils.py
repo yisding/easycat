@@ -320,10 +320,6 @@ class TestStripMarkdown:
         assert "Above" in result
         assert "Below" in result
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="two `___` horizontal rules are consumed as bold, leaving stray underscores",
-    )
     def test_multiple_underscore_horizontal_rules_are_removed(self) -> None:
         text = "A\n\n___\n\nB\n\n___\n\nC"
         assert strip_markdown(text) == "A\n\nB\n\nC"
