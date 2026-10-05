@@ -62,7 +62,7 @@ _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 _STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~")
 _HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
-_BLOCKQUOTE_RE = re.compile(r"^(?:>\s*)+", re.MULTILINE)
+_BLOCKQUOTE_RE = re.compile(r"^(?:>[ \t]*)+", re.MULTILINE)
 _UNORDERED_LIST_RE = re.compile(r"^(\s*)[-*+]\s+", re.MULTILINE)
 # Ordered lists: cap to 1–3 digits (mirrors the detect pattern) to avoid
 # stripping leading year-like numeric sentences (e.g. "2026. We launched").
