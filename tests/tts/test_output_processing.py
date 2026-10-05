@@ -22,10 +22,6 @@ def test_phonetic_replacement_processor_replaces_whole_terms_case_insensitive() 
     assert payload.format == "plain"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="replacements are applied sequentially, so a spoken term is re-replaced by later rules",
-)
 def test_phonetic_replacement_does_not_rewrite_already_spoken_terms() -> None:
     """Each source term must be replaced once, against the original text.
 
