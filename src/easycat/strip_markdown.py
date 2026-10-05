@@ -62,7 +62,7 @@ _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 _STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~")
 _HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
-_BLOCKQUOTE_RE = re.compile(r"^(?:>\s*)+", re.MULTILINE)
+_BLOCKQUOTE_RE = re.compile(r"^(?:>[ \t]*)+", re.MULTILINE)
 _UNORDERED_LIST_RE = re.compile(r"^(\s*)[-*+]\s+", re.MULTILINE)
 # Ordered lists: cap to 1–3 digits (mirrors the detect pattern) to avoid
 # stripping leading year-like numeric sentences (e.g. "2026. We launched").
@@ -81,8 +81,21 @@ _DUNDER_NAME_RE = re.compile(r"^__([A-Za-z][A-Za-z0-9_]*)__$")
 # output was silently replaced with an unrelated stashed code span (gh 1069).
 _CODE_TOKEN_OPEN = "\ue002"
 _CODE_TOKEN_CLOSE = "\ue003"
-_CODE_TOKEN_CHARS_RE = re.compile(f"[{_CODE_TOKEN_OPEN}{_CODE_TOKEN_CLOSE}]")
 _CODE_TOKEN_RE = re.compile(rf"{_CODE_TOKEN_OPEN}(\d+){_CODE_TOKEN_CLOSE}")
+# Backslash-escaped emphasis markers (``\*`` / ``\_``) are literal text, not
+# delimiters.  They are swapped for private-use stand-ins before the emphasis
+# passes run and restored as the bare character afterwards, so ``\*x\*``
+# reads as ``*x*`` instead of the italic regex eating the ``*`` and leaving a
+# spoken "backslash".  A ``\\`` pair is consumed as a unit so the character
+# after an escaped backslash is still treated as markdown.
+_ESCAPED_STAR = "\ue004"
+_ESCAPED_UNDERSCORE = "\ue005"
+_ESCAPED_EMPHASIS_RE = re.compile(r"\\([\\*_])")
+_ESCAPED_EMPHASIS_STANDINS = {"*": _ESCAPED_STAR, "_": _ESCAPED_UNDERSCORE}
+_RESTORE_ESCAPED_EMPHASIS = str.maketrans({_ESCAPED_STAR: "*", _ESCAPED_UNDERSCORE: "_"})
+_SENTINEL_CHARS_RE = re.compile(
+    f"[{_CODE_TOKEN_OPEN}{_CODE_TOKEN_CLOSE}{_ESCAPED_STAR}{_ESCAPED_UNDERSCORE}]"
+)
 
 _SHORT_CODE_MAX_CHARS = 24
 
@@ -139,6 +152,11 @@ def _stash_code_span(
 
 def _extract_inline_code(match: re.Match[str]) -> str:
     return match.group(1)
+
+
+def _protect_escaped_emphasis(match: re.Match[str]) -> str:
+    char = match.group(1)
+    return _ESCAPED_EMPHASIS_STANDINS.get(char, match.group(0))
 
 
 def _restore_code_spans(text: str, code_spans: list[str]) -> str:
@@ -450,11 +468,11 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     if not text:
         return text
 
-    # Drop any sentinel delimiter the input already carries, so a stashed
+    # Drop any sentinel character the input already carries, so a stashed
     # placeholder cannot be confused with the caller's own text.  These are
     # unassigned private-use code points with no spoken form, so removing them
     # costs nothing downstream (gh 1069).
-    result = _CODE_TOKEN_CHARS_RE.sub("", text)
+    result = _SENTINEL_CHARS_RE.sub("", text)
     code_spans: list[str] = []
 
     # 1. Fenced and inline code: remove markdown wrappers, then protect
@@ -467,7 +485,11 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     result = _FENCED_CODE_RE.sub(_stash_code_span(code_spans, fenced_extractor), result)
     result = _INLINE_CODE_RE.sub(_stash_code_span(code_spans, inline_extractor), result)
 
-    # 2. Horizontal rules (---, ***, ___) before the emphasis and list passes,
+    # 2a. Backslash-escaped emphasis markers are literal text: hide them from
+    # the bold/italic/list/rule passes (code spans keep their escapes).
+    result = _ESCAPED_EMPHASIS_RE.sub(_protect_escaped_emphasis, result)
+
+    # 2b. Horizontal rules (---, ***, ___) before the emphasis and list passes,
     # which would otherwise eat part of a ``___`` / ``****`` / ``* * *`` rule
     # and leave stray characters for TTS to speak.
     result = _HR_RE.sub("", result)
@@ -502,7 +524,9 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # (e.g. ``> ---``).
     result = _HR_RE.sub("", result)
 
-    # 13. Restore protected code spans in one substitution pass.
+    # 13. Restore escaped emphasis markers as literal characters, then the
+    # protected code spans in one substitution pass.
+    result = result.translate(_RESTORE_ESCAPED_EMPHASIS)
     result = _restore_code_spans(result, code_spans)
 
     # 14. Collapse runs of blank lines
