@@ -324,6 +324,15 @@ class TestStripMarkdown:
         text = "A\n\n___\n\nB\n\n___\n\nC"
         assert strip_markdown(text) == "A\n\nB\n\nC"
 
+    @pytest.mark.parametrize("rule", ["___", "_____", "****"])
+    def test_horizontal_rule_underscores_and_long_asterisks_removed(self, rule: str) -> None:
+        # HR lines are stripped before the emphasis passes, which would otherwise
+        # eat part of the rule and leave a stray "_" / "**" that TTS would speak.
+        result = strip_markdown(f"Above\n{rule}\nBelow")
+        assert "_" not in result
+        assert "*" not in result
+        assert result.split() == ["Above", "Below"]
+
     def test_fenced_code_block(self) -> None:
         text = "Here is code:\n```python\nprint('hello')\n```"
         result = strip_markdown(text)
@@ -375,3 +384,37 @@ class TestStripMarkdown:
         assert "Reset Password" in result
         assert "our help page" in result
         assert "https://example.com/help" in result
+
+
+# ── Backslash-escaped emphasis markers ─────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("text", "acceptable"),
+    [
+        (r"\*literal\*", {r"\*literal\*", "*literal*"}),
+        (r"price \*5\* ok", {r"price \*5\* ok", "price *5* ok"}),
+        (r"\_literal\_", {r"\_literal\_", "_literal_"}),
+    ],
+)
+def test_strip_markdown_does_not_treat_escaped_asterisks_as_emphasis(
+    text: str, acceptable: set[str]
+) -> None:
+    """``\\*x\\*`` is literal text in Markdown, not italic.
+
+    The italic regex used to consume the ``*`` between the backslash and the
+    word, so ``\\*literal\\*`` became ``\\literal\\`` and TTS spoke
+    "backslash". The result must be either the untouched escape sequence or
+    the unescaped literal marker.
+    """
+    assert strip_markdown(text) in acceptable
+
+
+def test_strip_markdown_keeps_paragraph_break_inside_multi_paragraph_blockquote() -> None:
+    """A bare ``>`` line separates quoted paragraphs and must stay a paragraph break.
+
+    ``_BLOCKQUOTE_RE`` must only consume horizontal whitespace after ``>``; matching
+    the newline would swallow the marker-only line together with the next line's
+    marker and run the two quoted paragraphs together.
+    """
+    assert strip_markdown("> Quote one.\n>\n> Quote two.") == "Quote one.\n\nQuote two."
