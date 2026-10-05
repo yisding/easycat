@@ -320,6 +320,15 @@ class TestStripMarkdown:
         assert "Above" in result
         assert "Below" in result
 
+    @pytest.mark.parametrize("rule", ["___", "_____", "****"])
+    def test_horizontal_rule_underscores_and_long_asterisks_removed(self, rule: str) -> None:
+        # HR lines are stripped before the emphasis passes, which would otherwise
+        # eat part of the rule and leave a stray "_" / "**" that TTS would speak.
+        result = strip_markdown(f"Above\n{rule}\nBelow")
+        assert "_" not in result
+        assert "*" not in result
+        assert result.split() == ["Above", "Below"]
+
     def test_fenced_code_block(self) -> None:
         text = "Here is code:\n```python\nprint('hello')\n```"
         result = strip_markdown(text)

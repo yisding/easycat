@@ -67,9 +67,9 @@ _UNORDERED_LIST_RE = re.compile(r"^(\s*)[-*+]\s+", re.MULTILINE)
 # Ordered lists: cap to 1–3 digits (mirrors the detect pattern) to avoid
 # stripping leading year-like numeric sentences (e.g. "2026. We launched").
 _ORDERED_LIST_RE = re.compile(r"^(\s*)\d{1,3}\.\s+", re.MULTILINE)
-_HR_DASH_RE = re.compile(r"^-{3,}\s*$", re.MULTILINE)
-_HR_ASTERISK_RE = re.compile(r"^\*{3,}\s*$", re.MULTILINE)
-_HR_UNDERSCORE_RE = re.compile(r"^_{3,}\s*$", re.MULTILINE)
+# Horizontal rules: three or more of one of ``-``, ``*`` or ``_`` alone on a
+# line, optionally spaced (``* * *``) and indented up to three spaces.
+_HR_RE = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}\s*$", re.MULTILINE)
 _EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
 _WS_RE = re.compile(r"\s+")
 _DUNDER_NAME_RE = re.compile(r"^__([A-Za-z][A-Za-z0-9_]*)__$")
@@ -485,9 +485,14 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     result = _FENCED_CODE_RE.sub(_stash_code_span(code_spans, fenced_extractor), result)
     result = _INLINE_CODE_RE.sub(_stash_code_span(code_spans, inline_extractor), result)
 
-    # 2. Backslash-escaped emphasis markers are literal text: hide them from
+    # 2a. Backslash-escaped emphasis markers are literal text: hide them from
     # the bold/italic/list/rule passes (code spans keep their escapes).
     result = _ESCAPED_EMPHASIS_RE.sub(_protect_escaped_emphasis, result)
+
+    # 2b. Horizontal rules (---, ***, ___) before the emphasis and list passes,
+    # which would otherwise eat part of a ``___`` / ``****`` / ``* * *`` rule
+    # and leave stray characters for TTS to speak.
+    result = _HR_RE.sub("", result)
 
     # 3/4. Links/images with balanced destination parsing.
     result = _replace_markdown_links_and_images(result)
@@ -515,10 +520,9 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # 11. Ordered list markers (preserve indentation)
     result = _ORDERED_LIST_RE.sub(r"\1", result)
 
-    # 12. Horizontal rules (---, ***, ___)
-    result = _HR_DASH_RE.sub("", result)
-    result = _HR_ASTERISK_RE.sub("", result)
-    result = _HR_UNDERSCORE_RE.sub("", result)
+    # 12. Horizontal rules exposed by stripping blockquote/list markers
+    # (e.g. ``> ---``).
+    result = _HR_RE.sub("", result)
 
     # 13. Restore escaped emphasis markers as literal characters, then the
     # protected code spans in one substitution pass.
