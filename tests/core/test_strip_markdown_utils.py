@@ -418,3 +418,24 @@ def test_strip_markdown_keeps_paragraph_break_inside_multi_paragraph_blockquote(
     marker and run the two quoted paragraphs together.
     """
     assert strip_markdown("> Quote one.\n>\n> Quote two.") == "Quote one.\n\nQuote two."
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="ATX closing hash sequence is not stripped (known bug, gh 1197)",
+)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("# Title #", "Title"),
+        ("## Overview ##\n\nBody text.", "Overview\n\nBody text."),
+        ("### Steps ###   ", "Steps"),
+    ],
+)
+def test_strip_markdown_removes_atx_heading_closing_sequence(text: str, expected: str) -> None:
+    """``# Title #`` is an ATX heading whose trailing ``#`` run is only decoration.
+
+    ``_HEADING_RE`` strips the opening marker but leaves the closing sequence, so
+    TTS speaks a stray "hash"/"pound" after the heading text.
+    """
+    assert strip_markdown(text) == expected
