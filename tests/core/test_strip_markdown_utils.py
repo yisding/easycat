@@ -320,6 +320,10 @@ class TestStripMarkdown:
         assert "Above" in result
         assert "Below" in result
 
+    def test_multiple_underscore_horizontal_rules_are_removed(self) -> None:
+        text = "A\n\n___\n\nB\n\n___\n\nC"
+        assert strip_markdown(text) == "A\n\nB\n\nC"
+
     @pytest.mark.parametrize("rule", ["___", "_____", "****"])
     def test_horizontal_rule_underscores_and_long_asterisks_removed(self, rule: str) -> None:
         # HR lines are stripped before the emphasis passes, which would otherwise
