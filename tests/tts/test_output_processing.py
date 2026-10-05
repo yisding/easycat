@@ -22,10 +22,6 @@ def test_phonetic_replacement_processor_replaces_whole_terms_case_insensitive() 
     assert payload.format == "plain"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="replacements are applied sequentially, so earlier output is rewritten by later terms",
-)
 def test_phonetic_replacement_processor_does_not_rewrite_its_own_output() -> None:
     processor = PhoneticReplacementProcessor({"AI": "A I", "I": "eye"})
     payload = processor.process(
