@@ -418,3 +418,26 @@ def test_strip_markdown_keeps_paragraph_break_inside_multi_paragraph_blockquote(
     marker and run the two quoted paragraphs together.
     """
     assert strip_markdown("> Quote one.\n>\n> Quote two.") == "Quote one.\n\nQuote two."
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="_INLINE_CODE_RE only matches single-backtick spans, leaking backticks",
+)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("``a``", "a"),
+        ("``co`de``", "co`de"),
+        ("see ``a`b`` ok", "see a`b ok"),
+    ],
+)
+def test_strip_markdown_handles_multi_backtick_inline_code_spans(text: str, expected: str) -> None:
+    """A CommonMark code span delimited by N backticks must lose its delimiters.
+
+    ``_INLINE_CODE_RE`` is ``\\`(.+?)\\``` so ``\\`\\`a\\`\\``` is read as an empty
+    span plus a single-backtick span, leaving stray backticks in the TTS text
+    (``\\`a\\``` instead of ``a``). Double-backtick spans are the standard way to
+    embed a literal backtick in inline code.
+    """
+    assert strip_markdown(text) == expected
