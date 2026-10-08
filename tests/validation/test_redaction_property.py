@@ -24,6 +24,7 @@ from easycat.validation import redaction as redaction_module
 from easycat.validation.redaction import (
     REDACTED_SECRET,
     ArtifactRedactionError,
+    RedactionPolicy,
     contains_unredacted_sensitive_text,
     redact_command,
     redact_runtime_secrets,
@@ -441,3 +442,19 @@ def test_redact_command_redacts_split_secret_flags() -> None:
     assert redact_command("easycat validate --api-key=short") == (
         f"easycat validate --api-key={REDACTED_SECRET}"
     )
+
+
+@pytest.mark.parametrize("policy", ["secrets", "pii"])
+@pytest.mark.xfail(strict=True, reason="Authorization non-Bearer credentials leak")
+@pytest.mark.parametrize("scheme", ["Basic", "Token"])
+def test_redact_text_hides_non_bearer_authorization_credentials(
+    policy: RedactionPolicy, scheme: str
+) -> None:
+    # ``Authorization: Basic <base64(user:password)>`` carries a reusable
+    # credential. Only the scheme word is redacted today, so the credential
+    # itself leaks into reports.
+    credential = "dXNlcjpodW50ZXIyLXBhc3N3b3Jk"
+
+    redacted = redact_text(f"Authorization: {scheme} {credential}", policy=policy)
+
+    assert credential not in redacted
