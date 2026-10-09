@@ -524,6 +524,67 @@ class TestSqliteJournalLifecycle:
         ro = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
         assert ro.degraded is True
 
+    def test_readonly_latest_sequence_ignores_degraded_marker_row(self, tmp_path):
+        """Postmortem latest_sequence must not report the -1 degraded marker.
+
+        When the first append degrades the journal, the only persisted row is
+        the out-of-band ``JournalDegraded`` marker at sequence -1. The read-only
+        view used to return ``MAX(sequence) == -1`` while the live journal
+        reported 0, so ``session.journal.latest_sequence`` changed across stop().
+        """
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        assert (
+            j.append(kind=JournalRecordKind.EVENT, name="fail", session_id="sess", data=circular)
+            == -1
+        )
+        assert j.degraded is True
+        live_latest = j.latest_sequence
+        assert live_latest == 0
+        view = ReadonlySqliteJournal(j.db_path, degraded=True)
+        j.close()
+
+        assert view.latest_sequence == 0
+        assert JournalView(view).latest_sequence == live_latest
+        assert view.degraded is True
+        # The marker row itself stays readable.
+        degraded_rows = view.slice(kind=JournalRecordKind.DEGRADED)
+        assert [(r.sequence, r.name) for r in degraded_rows] == [(-1, "journal_degraded")]
+        assert [r.sequence for r in view.read(start=-1)] == [-1]
+
+        fresh = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
+        assert fresh.latest_sequence == 0
+        assert fresh.degraded is True
+
+    def test_readonly_latest_sequence_with_real_rows_and_degraded_marker(self, tmp_path):
+        """Real records plus the degraded marker report the highest real sequence."""
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        for name in ("a", "b"):
+            j.append(kind=JournalRecordKind.EVENT, name=name, session_id="sess")
+        j.flush()
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        assert (
+            j.append(kind=JournalRecordKind.EVENT, name="fail", session_id="sess", data=circular)
+            == -1
+        )
+        assert j.degraded is True
+        live_latest = j.latest_sequence
+        assert live_latest > 0
+        j.close()
+
+        view = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
+        assert view.latest_sequence == live_latest
+        assert view.degraded is True
+        assert view.slice(kind=JournalRecordKind.DEGRADED)[0].sequence == -1
+
+    def test_readonly_latest_sequence_is_zero_for_empty_journal(self, tmp_path):
+        """An empty persisted journal reports 0, matching the documented contract."""
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        j.close()
+        assert ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite").latest_sequence == 0
+
     def test_reused_session_clears_persisted_degraded_marker(self, tmp_path):
         from easycat.runtime import ReadonlySqliteJournal
 
