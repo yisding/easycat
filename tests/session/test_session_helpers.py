@@ -98,3 +98,41 @@ class TestInlineCodeRunPairing:
     def test_emphasis_inside_multi_backtick_span_is_ignored(self) -> None:
         assert not has_unclosed_markdown_delimiters("Call ``a`**`` now.")
         assert has_unclosed_markdown_delimiters("Call ``a`b`` and **still open")
+
+
+class TestEscapedBacktickPairing:
+    """An escaped backtick (``\\` ``) is literal text, matching ``strip_markdown``.
+
+    It must neither open a run that holds the streaming window open nor close
+    or pair with a real run, while a backslash inside a code span stays literal
+    and never escapes that span's closing backtick.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            r"Type \`ls",
+            r"Type \`ls\` to list.",
+            r"x \`*a*",
+            # The backslash is code content, so its backtick closes the span.
+            r"Type `ls\`",
+            # An escaped backslash leaves the following backtick unescaped.
+            r"\\`code`",
+        ],
+    )
+    def test_closed(self, text: str) -> None:
+        assert markdown_open_state(text) == (False, False)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # The escaped backtick cannot pair with the real opener after it.
+            r"Use \` c `a b",
+            r"\\`still open",
+            # An escaped backtick hides the emphasis that follows it no more
+            # than any other literal text does.
+            r"\` and **still open",
+        ],
+    )
+    def test_open(self, text: str) -> None:
+        assert markdown_open_state(text) == (True, False)
