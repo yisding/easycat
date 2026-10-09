@@ -376,6 +376,46 @@ def test_from_websocket_treats_lookup_error_from_partial_mapping_as_invalid() ->
     assert result.reason == "invalid"
 
 
+@pytest.mark.parametrize("message_type", ["email", "http.client"])
+def test_from_websocket_accepts_stdlib_message_headers(message_type: str) -> None:
+    """Stdlib ``Message`` headers (``get_all`` returns ``None`` when absent) work.
+
+    ``http.server`` hands request headers over as ``http.client.HTTPMessage``;
+    an absent ``Authorization`` must stay a clean ``"missing"`` (with the query
+    fallback intact), and present or repeated values behave like ``Headers``.
+    """
+    import email.message
+    import http.client
+
+    def make() -> email.message.Message:
+        if message_type == "email":
+            return email.message.Message()
+        return http.client.HTTPMessage()
+
+    auth = BearerTokenAuth(token="sekrit", allow_query_token=True)
+
+    absent = from_websocket(make(), "/voice?token=sekrit")
+    assert absent.authorization_header is None
+    assert absent.query_token == "sekrit"
+    assert auth.authorize(absent).allowed is True
+    assert BearerTokenAuth(token="sekrit").authorize(from_websocket(make(), "/")).reason == (
+        "missing"
+    )
+
+    single = make()
+    single["Authorization"] = "Bearer sekrit"
+    single_req = from_websocket(single, "/voice")
+    assert single_req.authorization_header == "Bearer sekrit"
+    assert auth.authorize(single_req).allowed is True
+
+    repeated = make()
+    repeated["Authorization"] = "Bearer sekrit"
+    repeated["Authorization"] = "Bearer sekrit"
+    result = auth.authorize(from_websocket(repeated, "/voice"))
+    assert result.allowed is False
+    assert result.reason == "invalid"
+
+
 def test_from_websocket_adapter_handles_none_headers() -> None:
     req = from_websocket(None, "/voice?token=qtok")
     assert req.authorization_header is None

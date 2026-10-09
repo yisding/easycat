@@ -118,10 +118,12 @@ def _websocket_authorization(headers: Any) -> str | None:
 
     ``websockets`` ``Headers.get`` raises ``MultipleValuesError`` (a
     ``LookupError``, not a ``KeyError``) when the header repeats, so read every
-    value via ``get_all`` instead. Exactly one value is used as-is; repeated
-    values are combined RFC 9110-style (``", "``), which never matches a single
-    bearer token, so an ambiguous credential fails closed even when one copy is
-    correct. Any ``LookupError`` from a partial mapping is treated as invalid.
+    value via ``get_all`` instead (a ``None`` result, as from the stdlib
+    ``email.message.Message`` family, means absent). Exactly one value is used
+    as-is; repeated values are combined RFC 9110-style (``", "``), which never
+    matches a single bearer token, so an ambiguous credential fails closed even
+    when one copy is correct. Any ``LookupError`` from a partial mapping is
+    treated as invalid.
     """
     if headers is None:
         return None
@@ -130,7 +132,9 @@ def _websocket_authorization(headers: Any) -> str | None:
         if get_all is None:
             single: str | None = headers.get("Authorization")
             return single
-        values: list[str] = list(get_all("Authorization"))
+        # stdlib ``email.message.Message`` / ``http.client.HTTPMessage``
+        # return ``None`` (their ``failobj``) for an absent header.
+        values: list[str] = list(get_all("Authorization") or ())
     except LookupError:
         return _UNREADABLE_AUTHORIZATION
     if not values:
