@@ -62,7 +62,9 @@ _DEFAULT_PHONE_PATTERN = (
     r"|\+\d{1,3}(?:[ .-]\d{1,4}){2,5}"
     r"|\+\d{7,15}"
     r")"
-    r"(?!\w|[.\-/:]\d)"
+    # A number may touch an attached extension ("2671x22", "2671ext22"); any
+    # other word character still marks a longer token.
+    r"(?!(?!(?i:x|ext\.?)\d)\w|[.\-/:]\d)"
 )
 
 

@@ -188,6 +188,64 @@ def test_default_phone_pauses_pace_phone_number_shapes(text: str, expected: str)
     assert result.format == "plain"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Call 415-555-2671x22.",
+            "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1x22.",
+        ),
+        (
+            "Call (415) 555-2671x22.",
+            "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1x22.",
+        ),
+        (
+            "Call 415-555-2671X22.",
+            "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1X22.",
+        ),
+        (
+            "Call 415-555-2671ext22.",
+            "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1ext22.",
+        ),
+        (
+            "Call 415-555-2671ext.22.",
+            "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1ext.22.",
+        ),
+    ],
+)
+def test_default_phone_pauses_pace_base_number_before_attached_extension(
+    text: str, expected: str
+) -> None:
+    """An extension glued to the number is not a word continuation.
+
+    Only the base number is paced; the extension stays literal text.
+    """
+    processors = default_pronunciation_processors()
+
+    result = processors[-1].process(TTSInput(text), is_final=True, is_streaming=False)
+
+    assert result.text == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Call 415-555-2671abc.",
+        "Call 415-555-2671xyz22.",
+        "Call 415-555-2671x.",
+        "Call 415-555-2671ext.",
+    ],
+)
+def test_default_phone_pauses_reject_other_word_continuations(text: str) -> None:
+    """Only ``x``/``ext`` followed by digits may touch the number."""
+    processors = default_pronunciation_processors()
+    payload = TTSInput(text)
+
+    result = processors[-1].process(payload, is_final=True, is_streaming=False)
+
+    assert result is payload
+
+
 def test_default_pronunciation_helper_can_opt_into_exact_ssml_breaks() -> None:
     processors = default_pronunciation_processors(
         phone_pause_style="ssml",
