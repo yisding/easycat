@@ -687,24 +687,30 @@ async def test_repeated_parked_provider_end_attempts_prune_retired_owner_scopes(
     registry = committer._runtime_scope.survivor_registry
     assert registry is not None
 
-    for index in range(3):
-        stt.release = asyncio.Event()
-        committer.mark_active()
-        assert await committer.cancel(_new_turn(f"turn-{index}")) is False
-        [owned_end] = committer._runtime_scope.tasks(committer.PROVIDER_END_TASK_NAME)
-        assert not owned_end.done()
-        assert registry.active_count == 1
+    try:
+        for index in range(3):
+            stt.release = asyncio.Event()
+            committer.mark_active()
+            assert await committer.cancel(_new_turn(f"turn-{index}")) is False
+            [owned_end] = committer._runtime_scope.tasks(committer.PROVIDER_END_TASK_NAME)
+            assert not owned_end.done()
+            assert registry.active_count == 1
 
+            stt.release.set()
+            await asyncio.wait_for(owned_end, timeout=1)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+            assert committer._runtime_scope.children() == ()
+            assert registry.active_count == 0
+            assert registry._owner_states == {}
+
+        assert stt.end_stream_calls == 3
+    finally:
+        # A failed assertion must not leave a parked attempt that swallows
+        # cancellation, or loop teardown would hang instead of reporting it.
         stt.release.set()
-        await asyncio.wait_for(owned_end, timeout=1)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-
-        assert committer._runtime_scope.children() == ()
-        assert registry.active_count == 0
-        assert registry._owner_states == {}
-
-    assert stt.end_stream_calls == 3
+        await committer._runtime_scope.drain(suppress_errors=True)
 
 
 @pytest.mark.asyncio
