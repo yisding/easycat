@@ -480,10 +480,15 @@ def _render_markdown_reference(
 ) -> str:
     if reference.is_image:
         return reference.label
-    url = reference.destination_url
+    label, url = reference.label, reference.destination_url
     if url and protect_destination is not None:
+        # A label that repeats the destination (``[https://x/_a_](https://x/_a_)``,
+        # common in LLM output) is a URL too, so it gets the same protection;
+        # every other label stays prose.
+        if label == url:
+            label = protect_destination(label)
         url = protect_destination(url)
-    return " ".join(part for part in (reference.label, url) if part)
+    return " ".join(part for part in (label, url) if part)
 
 
 def _stash_link_destination(code_spans: list[str]) -> Callable[[str], str]:

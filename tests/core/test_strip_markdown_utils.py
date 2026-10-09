@@ -671,3 +671,27 @@ def test_strip_markdown_code_span_inside_link_destination_is_restored() -> None:
         strip_markdown(text, normalize_code_spans=True)
         == "docs https://x/underscore a underscore/b"
     )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("[https://x/_a_](https://x/_a_)", "https://x/_a_ https://x/_a_"),
+        (
+            "[https://x/__init__/*b*](https://x/__init__/*b*)",
+            ("https://x/__init__/*b* " * 2).strip(),
+        ),
+        ("[https://x/_a_](<https://x/_a_>)", "https://x/_a_ https://x/_a_"),
+        ("[https://x/\\_a\\_](https://x/\\_a\\_)", "https://x/_a_ https://x/_a_"),
+        # Only a label that repeats the destination is protected; any other
+        # label, even a URL-shaped one, stays prose.
+        ("[https://x/_a_](https://x/_b_)", "https://x/a https://x/_b_"),
+        ("[_docs_](https://x/_a_)", "docs https://x/_a_"),
+    ],
+)
+def test_strip_markdown_link_label_repeating_destination_is_kept_verbatim(
+    text: str, expected: str
+) -> None:
+    """LLMs often write ``[url](url)``; the label is then a URL, not prose."""
+    assert strip_markdown(text) == expected
+    assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected
