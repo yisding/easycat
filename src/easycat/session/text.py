@@ -27,7 +27,7 @@ from __future__ import annotations
 import functools
 import re
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import sentencesplit
 
@@ -75,6 +75,11 @@ def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     # ``char_span=True`` yields TextSpan objects with offsets; the plain
     # string variant of the union is narrowed via suffix length.
     last_start = len(text) - len(last) if isinstance(last, str) else last.start
+    if last_start > 0 and text[last_start - 1] in _SENTENCE_END_OR_CLOSING_CHARS:
+        # The segmenter can leave a closing quote or citation that it has
+        # not yet attached at the start of the held tail (``'Hi." Then'``);
+        # keep it with the sentence it closes.
+        last_start = _skip_whitespace(text, _sentence_end_extent(text, last_start - 1))
     return text[:last_start], text[last_start:]
 
 
@@ -103,6 +108,11 @@ _FIRST_CLAUSE_SENTENCE_TERMINATORS = ".!?。！？．"
 # (``"Hello."`` / ``(example.com.)``); a terminator followed only by these is
 # still at that sentence's end.
 _SENTENCE_CLOSING_CHARS = ")]}\"'`”’»」』）】"
+# A bracketed numeric citation or footnote marker (``[1]``, ``[12]``,
+# ``[^1]``) written directly after a sentence end belongs to that sentence,
+# like a closing quote does.
+_ATTACHED_CITATION_RE = re.compile(r"\[\^?\d+\]")
+_SENTENCE_END_OR_CLOSING_CHARS = _FIRST_CLAUSE_SENTENCE_TERMINATORS + _SENTENCE_CLOSING_CHARS
 _URL_SCHEMES_HELD_FOR_LOOKAHEAD = frozenset({"ftp", "ftps", "http", "https", "ws", "wss"})
 _URL_LEADING_WRAPPERS = "([{<\"'`"
 _URL_TRAILING_PUNCTUATION = ".,;:!?)]}\"'`"
@@ -147,11 +157,10 @@ def split_first_clause(text: str) -> tuple[str, str]:
             continue
         if _is_numeric_separator(text, i):
             continue
-        # Include any trailing whitespace so the remaining buffer starts at
-        # the next clause's first non-space character.
-        end = i + 1
-        while end < len(text) and text[end].isspace():
-            end += 1
+        # Keep closing quotes/brackets and attached citations with the clause
+        # they close, and include any trailing whitespace so the remaining
+        # buffer starts at the next clause's first non-space character.
+        end = _skip_whitespace(text, _sentence_end_extent(text, i))
         ready = text[:end]
         if len(ready.strip()) < _FIRST_CLAUSE_MIN_CHARS:
             # Too short to ship on its own; keep scanning for a later boundary.
@@ -234,14 +243,39 @@ def _stable_sentence_ends(text: str) -> frozenset[int]:
 
 def _ends_sentence(text: str, index: int, sentence_ends: frozenset[int]) -> bool:
     """Whether the terminator at *index* ends a stable segmenter sentence."""
+    return any(end in sentence_ends for end in _sentence_end_offsets(text, index))
+
+
+def _sentence_end_offsets(text: str, index: int) -> Iterator[int]:
+    """Yield candidate sentence ends for the boundary character at *index*.
+
+    The first offset is just past *index*; each further one extends past a
+    directly following closing quote/bracket (``_SENTENCE_CLOSING_CHARS``) or
+    bracketed numeric citation (``[1]``, ``[^1]``), since the segmenter keeps
+    those with the sentence they close.
+    """
     end = index + 1
-    if end in sentence_ends:
-        return True
-    while end < len(text) and text[end] in _SENTENCE_CLOSING_CHARS:
-        end += 1
-        if end in sentence_ends:
-            return True
-    return False
+    yield end
+    while end < len(text):
+        if text[end] in _SENTENCE_CLOSING_CHARS:
+            end += 1
+        elif match := _ATTACHED_CITATION_RE.match(text, end):
+            end = match.end()
+        else:
+            return
+        yield end
+
+
+def _sentence_end_extent(text: str, index: int) -> int:
+    """Return the offset past *index* and any closers/citations attached to it."""
+    # Offsets only grow, so the largest is the last one yielded.
+    return max(_sentence_end_offsets(text, index))
+
+
+def _skip_whitespace(text: str, index: int) -> int:
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
 
 
 def _split_first_phrase(text: str) -> tuple[str, str]:

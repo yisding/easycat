@@ -272,10 +272,92 @@ def test_split_first_clause_keeps_sentence_final_domains_and_emails_whole(
 
 def test_split_first_clause_splits_after_wrapped_sentence_final_domain() -> None:
     # The sentence-ending "." inside "(example.com.)" is trailing punctuation,
-    # not part of the domain, so it is still a clause boundary.
+    # not part of the domain, so it is still a clause boundary, and the
+    # closing ")" stays with the clause it closes.
     ready, remaining = split_first_clause("Please visit (example.com.) Then continue, thanks")
-    assert ready == "Please visit (example.com."
-    assert remaining == ") Then continue, thanks"
+    assert ready == "Please visit (example.com.) "
+    assert remaining == "Then continue, thanks"
+
+
+@pytest.mark.parametrize(
+    ("text", "ready", "remaining"),
+    [
+        (
+            '"Hello there my friend." More text here.',
+            '"Hello there my friend." ',
+            "More text here.",
+        ),
+        (
+            "Please (see the docs here.) Next thing.",
+            "Please (see the docs here.) ",
+            "Next thing.",
+        ),
+        (
+            "\u201cThat sounds great to me,\u201d she said.",
+            "\u201cThat sounds great to me,\u201d ",
+            "she said.",
+        ),
+    ],
+)
+def test_split_first_clause_keeps_closing_punctuation_with_clause(
+    text: str, ready: str, remaining: str
+) -> None:
+    """Closing quotes/brackets after a boundary ship with the first clause.
+
+    Regression: the first payload ended at the terminator and the next one
+    started with the detached closer (``'"Hello."'`` / ``'" More'``).
+    """
+    assert split_first_clause(text) == (ready, remaining)
+
+
+def test_split_at_sentence_boundaries_keeps_detached_closer_with_sentence() -> None:
+    # The segmenter can hold a closing quote with the uncertain tail; it
+    # belongs to the sentence before it, as in ``split_first_clause``.
+    assert split_at_sentence_boundaries('Hi." Then') == ('Hi." ', "Then")
+    assert split_at_sentence_boundaries('First one. "Second one." More') == (
+        'First one. "Second one." ',
+        "More",
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "ready", "remaining"),
+    [
+        (
+            "This is a known fact.[1] Next sentence.",
+            "This is a known fact.[1] ",
+            "Next sentence.",
+        ),
+        (
+            "This is a known fact.[12] Next sentence.",
+            "This is a known fact.[12] ",
+            "Next sentence.",
+        ),
+        (
+            "This is a known fact.[^1] Next sentence.",
+            "This is a known fact.[^1] ",
+            "Next sentence.",
+        ),
+        ("This is a known fact.[1]", "This is a known fact.[1]", ""),
+    ],
+)
+def test_split_first_clause_keeps_attached_citation_with_sentence(
+    text: str, ready: str, remaining: str
+) -> None:
+    """A citation glued to a sentence end does not delay or detach.
+
+    Regression: the segmenter keeps ``[1]`` in the sentence, so the
+    terminator was rejected and the first payload waited for the next
+    sentence end; ``[^1]`` was instead split off into the next payload.
+    """
+    assert split_first_clause(text) == (ready, remaining)
+
+
+def test_split_at_sentence_boundaries_keeps_attached_citation_with_sentence() -> None:
+    assert split_at_sentence_boundaries("First one. Second fact.[^1] Next") == (
+        "First one. Second fact.[^1] ",
+        "Next",
+    )
 
 
 @pytest.mark.parametrize(
