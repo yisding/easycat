@@ -30,6 +30,28 @@ from easycat.runtime.artifacts import (
 from easycat.runtime.records import JournalRecordKind
 
 
+def _assert_descriptor_released(identity: tuple[int, int, int, int]) -> None:
+    """Assert the descriptor ``(fd, st_dev, st_ino, file_type)`` was closed.
+
+    The kernel hands out the lowest free number, so the instant the store
+    closes ``fd`` any other thread in the process (an xdist worker's I/O, a
+    lingering executor or journal thread from an earlier test) may open an
+    unrelated file that receives the same number.  Probing with a bare
+    ``os.fstat(fd)`` and expecting ``OSError`` races that reuse.  One number
+    names one open file at a time, so the number being closed *or* naming a
+    different file both prove the store's descriptor is gone; only a number
+    that still names the original file means it leaked.
+    """
+    fd, device, inode, _file_type = identity
+    try:
+        metadata = os.fstat(fd)
+    except OSError:
+        return
+    assert (metadata.st_dev, metadata.st_ino) != (device, inode), (
+        f"descriptor {fd} still references the cached accounting file"
+    )
+
+
 class TestInMemoryArtifactStore:
     def test_put_and_get(self):
         store = InMemoryArtifactStore()
@@ -1773,13 +1795,11 @@ print(store.put(sys.argv[2].encode("ascii")), flush=True)
         assert store.put(b"b" * 10)
         cached = store._accounting_fd
         assert cached is not None
-        cached_fd = cached[1][0]
 
         store.close()
 
         assert store._accounting_fd is None
-        with pytest.raises(OSError):
-            os.fstat(cached_fd)
+        _assert_descriptor_released(cached[1])
 
     def test_dropped_store_releases_cached_accounting_descriptor(self, tmp_path):
         if not artifacts_module._SUPPORTS_DESCRIPTOR_ARTIFACT_IO:
@@ -1789,15 +1809,13 @@ print(store.put(sys.argv[2].encode("ascii")), flush=True)
         assert store.put(b"b" * 10)
         cached = store._accounting_fd
         assert cached is not None
-        cached_fd = cached[1][0]
         store_ref = weakref.ref(store)
 
         del store
         gc.collect()
 
         assert store_ref() is None
-        with pytest.raises(OSError):
-            os.fstat(cached_fd)
+        _assert_descriptor_released(cached[1])
 
     @pytest.mark.serial
     @pytest.mark.timeout(0)
