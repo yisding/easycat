@@ -55,7 +55,11 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
 
 
 _FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
-_INLINE_CODE_RE = re.compile(r"`(.+?)`")
+# Inline code span (CommonMark): a run of N backticks closed by the next run of
+# exactly N backticks, so a double-backtick span can carry a literal backtick.
+# The lookarounds pin both delimiter runs to their full length; an opener with
+# no matching closer is left as literal text.
+_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
 _BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)([\s\S]+?)(?<=\S)__")
 _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
@@ -151,7 +155,13 @@ def _stash_code_span(
 
 
 def _extract_inline_code(match: re.Match[str]) -> str:
-    return match.group(1)
+    code = match.group(2)
+    # CommonMark strips one space from each side when both are present and the
+    # span is not all spaces; the padding lets a span start or end with a
+    # backtick (a double-backtick span around " `a` " reads as "`a`").
+    if code.startswith(" ") and code.endswith(" ") and code.strip(" "):
+        return code[1:-1]
+    return code
 
 
 def _protect_escaped_emphasis(match: re.Match[str]) -> str:

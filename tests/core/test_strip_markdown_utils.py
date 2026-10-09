@@ -418,3 +418,73 @@ def test_strip_markdown_keeps_paragraph_break_inside_multi_paragraph_blockquote(
     marker and run the two quoted paragraphs together.
     """
     assert strip_markdown("> Quote one.\n>\n> Quote two.") == "Quote one.\n\nQuote two."
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("``a``", "a"),
+        ("``co`de``", "co`de"),
+        ("see ``a`b`` ok", "see a`b ok"),
+        ("```a``` and ``b``", "a and b"),
+        ("``a`` then `b` then ``c`d``", "a then b then c`d"),
+        ("``__init__`` and ``*x*``", "__init__ and *x*"),
+    ],
+)
+def test_strip_markdown_handles_multi_backtick_inline_code_spans(text: str, expected: str) -> None:
+    """A CommonMark code span delimited by N backticks must lose its delimiters.
+
+    ``_INLINE_CODE_RE`` only matched single-backtick spans, leaving stray
+    backticks in the TTS text. Double-backtick spans are the standard way to
+    embed a literal backtick in inline code.
+    """
+    assert strip_markdown(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # One padding space is stripped from each side so a span can begin or
+        # end with a literal backtick.
+        ("`` `a` ``", "`a`"),
+        ("say `` ` `` now", "say ` now"),
+        ("x ` a ` y", "x a y"),
+        # Padding on only one side is kept.
+        ("x `` a`` y", "x  a y"),
+        # An all-space span is not stripped.
+        ("x ``  `` y", "x    y"),
+    ],
+)
+def test_strip_markdown_strips_one_padding_space_from_code_spans(text: str, expected: str) -> None:
+    assert strip_markdown(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A closer must be exactly as long as its opener; otherwise the run is
+        # literal text.
+        "``a```",
+        "```a``",
+        "`a`` b",
+        "a ` b",
+        "a `` b",
+    ],
+)
+def test_strip_markdown_leaves_unmatched_backtick_runs_literal(text: str) -> None:
+    assert strip_markdown(text) == text
+
+
+def test_strip_markdown_unmatched_opener_run_does_not_swallow_later_span() -> None:
+    # ``a has no closing double run, so it stays literal; the later single
+    # backtick pair is still a code span.
+    assert strip_markdown("``a `b` c") == "``a b c"
+
+
+def test_strip_markdown_normalizes_multi_backtick_code_spans_for_tts() -> None:
+    text = "Call ``print()`` or ``a`b``."
+
+    assert (
+        strip_markdown(text, normalize_code_spans=True)
+        == "Call print open paren close paren or a`b."
+    )
