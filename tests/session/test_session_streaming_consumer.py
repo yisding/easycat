@@ -927,3 +927,25 @@ async def test_flush_commits_text_before_first_payload_handoff():
     assert first.text == "A short final reply."
     assert await buffer.flush() is False
     assert tts_queue.empty()
+
+
+def test_compaction_cuts_ignore_paragraph_breaks_after_bound() -> None:
+    """A paragraph break only in the unspoken tail must not yield a spurious cut.
+
+    ``rfind`` misses with -1; adding the separator length to that used to
+    offer a 1- or 3-character cut, which ``_compact`` took instead of the
+    sentence cut, so long turns stayed unbounded.
+    """
+    from easycat.session._streaming import _compaction_cuts
+
+    raw = "First one. Second two. tail\n\nnext"
+    bound = raw.index("tail")
+    cuts = _compaction_cuts(raw, bound)
+    assert cuts == [len("First one. Second two. ")]
+    assert 1 not in cuts and 3 not in cuts
+
+    crlf = "First one. Second two. tail\r\n\r\nnext"
+    assert _compaction_cuts(crlf, crlf.index("tail")) == [len("First one. Second two. ")]
+    # A break before the bound is still the preferred cut.
+    with_break = "Head para.\n\nFirst one. Second two. tail"
+    assert _compaction_cuts(with_break, with_break.index("tail"))[0] == len("Head para.\n\n")

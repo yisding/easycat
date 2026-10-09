@@ -84,10 +84,15 @@ def _compaction_cuts(raw: str, bound: int) -> list[int]:
     on the opener in the head).
     """
     cuts: list[int] = []
-    paragraph = max(
-        (raw.rfind(sep, 0, bound) + len(sep) for sep in _PARAGRAPH_BREAKS if sep in raw),
-        default=0,
-    )
+    paragraph = 0
+    for sep in _PARAGRAPH_BREAKS:
+        # A break that only occurs at or after ``bound`` must not count: an
+        # ``rfind`` miss (-1) plus the separator length would otherwise look
+        # like a tiny cut near the start, which ``_compact`` would take instead
+        # of a useful sentence cut further on.
+        found = raw.rfind(sep, 0, bound)
+        if found >= 0:
+            paragraph = max(paragraph, found + len(sep))
     line = raw.rfind("\n", 0, bound) + 1
     for cut in (paragraph, line, _last_sentence_cut(raw, bound)):
         if cut > 0 and cut not in cuts:
