@@ -1178,23 +1178,33 @@ class EasyConfig(_AgentSessionConfig):
             (self.stt, "STT"),
             (self.tts, "TTS"),
         )
+        # A programmatic ``openai_api_key`` overrides ``OPENAI_API_KEY`` for
+        # typed configs exactly as it does for string/wrapper specs.
+        api_key_overrides = (
+            {"OPENAI_API_KEY": self.openai_api_key}
+            if has_usable_credential(self.openai_api_key)
+            else {}
+        )
         for cfg, kind in provider_configs:
             if _provider_requires_api_key(cfg, kind) and not has_usable_credential(
                 getattr(cfg, "api_key", None)
             ):
-                # Also check ambient env var so typed configs match
-                # string/wrapper (gh 1018).
+                # Also check the credential override and ambient env var so
+                # typed configs match string/wrapper (gh 1018).
                 provider_name = _catalog_provider_name(cfg, kind)
                 env_var = (
                     _catalog_for(kind).env_vars.get(provider_name)
                     if provider_name is not None
                     else None
                 )
-                if env_var and has_usable_credential(os.getenv(env_var)):
-                    # Inject ambient credential so create_session
+                resolved_key = (
+                    (api_key_overrides.get(env_var) or os.getenv(env_var)) if env_var else None
+                )
+                if has_usable_credential(resolved_key):
+                    # Inject the resolved credential so create_session
                     # succeeds (gh 1041 review).
                     try:
-                        cfg.api_key = os.getenv(env_var) or cfg.api_key
+                        cfg.api_key = resolved_key or cfg.api_key
                     except Exception:  # noqa: BLE001, S110
                         pass
                     if has_usable_credential(getattr(cfg, "api_key", None)):
