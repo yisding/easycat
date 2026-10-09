@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import pathlib
 import sys
 import types
 
@@ -420,6 +421,102 @@ def test_resolve_agent_bad_module_raises_e605() -> None:
     with pytest.raises(EasyCatError) as exc_info:
         manifest.resolve_agent("default")
     assert exc_info.value.code == "EASYCAT_E605"
+
+
+def _write_agent_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, source: str
+) -> None:
+    """Write ``<name>.py`` under ``tmp_path`` and make it importable for one test."""
+    (tmp_path / f"{name}.py").write_text(source, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, name, raising=False)
+
+
+def _resolve_profile_agent(module_name: str) -> EasyCatError:
+    manifest = parse_manifest(
+        {
+            "voice": {
+                "default": {
+                    "transport": "local",
+                    "agent": f"python:{module_name}:create_agent",
+                }
+            }
+        }
+    )
+    with pytest.raises(EasyCatError) as exc_info:
+        manifest.resolve_agent("default")
+    return exc_info.value
+
+
+def test_resolve_agent_bad_module_detail_names_exception_type() -> None:
+    """A missing module still raises E605, now naming ``ModuleNotFoundError``."""
+    error = _resolve_profile_agent("_easycat_no_such_agent_mod")
+    assert error.code == "EASYCAT_E605"
+    assert "could not import '_easycat_no_such_agent_mod'" in str(error)
+    assert "ModuleNotFoundError" in str(error)
+    assert isinstance(error.__cause__, ModuleNotFoundError)
+
+
+def test_resolve_agent_module_syntax_error_raises_e605(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A syntax error in the agent module is E605, not a raw ``SyntaxError``.
+
+    The import step used to catch only ``ImportError``, so a broken module
+    escaped ``resolve_agent`` uncoded instead of with the catalogued fix text.
+    """
+    _write_agent_module(
+        tmp_path, monkeypatch, "_easycat_syntax_err_agent", "def create_agent(:\n    pass\n"
+    )
+    error = _resolve_profile_agent("_easycat_syntax_err_agent")
+    assert error.code == "EASYCAT_E605"
+    assert "could not import '_easycat_syntax_err_agent'" in str(error)
+    assert "SyntaxError" in str(error)
+    assert isinstance(error.__cause__, SyntaxError)
+
+
+@pytest.mark.parametrize(
+    ("source", "exc_type"),
+    [
+        ("raise RuntimeError('missing config')\n", RuntimeError),
+        ("import os\nos.environ['_EASYCAT_SURELY_UNSET_VAR_XYZ']\n", KeyError),
+    ],
+    ids=["runtime-error", "key-error"],
+)
+def test_resolve_agent_module_raising_at_import_raises_e605(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    exc_type: type[Exception],
+) -> None:
+    """Any ``Exception`` raised while importing the agent module becomes E605."""
+    module_name = f"_easycat_import_raises_{exc_type.__name__.lower()}"
+    _write_agent_module(tmp_path, monkeypatch, module_name, source)
+    monkeypatch.delenv("_EASYCAT_SURELY_UNSET_VAR_XYZ", raising=False)
+    error = _resolve_profile_agent(module_name)
+    assert error.code == "EASYCAT_E605"
+    assert f"could not import {module_name!r}" in str(error)
+    assert exc_type.__name__ in str(error)
+    assert isinstance(error.__cause__, exc_type)
+
+
+def test_resolve_agent_module_import_does_not_swallow_system_exit(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``BaseException`` subclasses such as ``SystemExit`` still propagate."""
+    _write_agent_module(tmp_path, monkeypatch, "_easycat_sys_exit_agent", "raise SystemExit(3)\n")
+    manifest = parse_manifest(
+        {
+            "voice": {
+                "default": {
+                    "transport": "local",
+                    "agent": "python:_easycat_sys_exit_agent:create_agent",
+                }
+            }
+        }
+    )
+    with pytest.raises(SystemExit):
+        manifest.resolve_agent("default")
 
 
 def test_resolve_agent_missing_attribute_raises_e605(_agent_module: object) -> None:
