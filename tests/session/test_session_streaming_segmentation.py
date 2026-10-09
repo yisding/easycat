@@ -278,6 +278,86 @@ def test_split_first_clause_splits_after_wrapped_sentence_final_domain() -> None
     assert remaining == ") Then continue, thanks"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I spoke with Dr. Smith about your results today.",
+        "We stock many tools e.g. hammers and saws.",
+        "The economy of the U.S. is growing quickly now.",
+        "Meet me tomorrow at 10 a.m. in the main lobby.",
+        "Please call Mrs. Johnson back tomorrow morning.",
+    ],
+)
+def test_split_first_clause_does_not_split_inside_abbreviation(text: str) -> None:
+    """Abbreviation periods are not first-clause boundaries.
+
+    Regression: every ``.`` past the minimum length was treated as a clause
+    terminator, so the first TTS payload was cut mid-abbreviation
+    ("I spoke with Dr. " / "We stock many tools e."), unlike
+    ``split_at_sentence_boundaries`` which keeps these sentences whole.
+    """
+    assert split_first_clause(text) == (text, "")
+
+
+def test_split_first_clause_still_splits_at_real_sentence_end() -> None:
+    ready, remaining = split_first_clause("Your appointment is confirmed. See you then.")
+    assert ready == "Your appointment is confirmed. "
+    assert remaining == "See you then."
+
+    ready, remaining = split_first_clause("Call me at 5 p.m. Then we talk.")
+    assert ready == "Call me at 5 p.m. "
+    assert remaining == "Then we talk."
+
+
+def test_split_first_clause_ships_complete_sentence_without_lookahead() -> None:
+    # A genuine sentence end at the end of the buffer still ships at once,
+    # so time-to-first-audio does not wait for the next delta.
+    text = "I spoke with you about it today."
+    assert split_first_clause(text) == (text, "")
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["I spoke with Dr.", "I spoke with Dr. ", "We stock many tools e.g."],
+)
+def test_split_first_clause_holds_trailing_abbreviation_for_lookahead(text: str) -> None:
+    """A buffer ending in an abbreviation waits for the next delta."""
+    assert split_first_clause(text) == ("", text)
+
+
+def test_split_first_clause_still_splits_at_comma_before_abbreviation() -> None:
+    ready, remaining = split_first_clause("Hello there, Mrs. Jones.")
+    assert ready == "Hello there, "
+    assert remaining == "Mrs. Jones."
+
+
+@pytest.mark.parametrize("strip_md", [False, True])
+async def test_streaming_first_payload_does_not_split_inside_abbreviation(
+    strip_md: bool,
+) -> None:
+    """Streaming "e.g." must not ship "e." and "g. " as separate payloads."""
+    import asyncio
+
+    from easycat.session._streaming import _SentenceStreamBuffer
+
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    buffer = _SentenceStreamBuffer(
+        tts_queue=tts_queue,
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=strip_md,
+    )
+    for delta in ["We stock many tools", " e.g.", " hammers", " and saws."]:
+        await buffer.add_delta(delta)
+    await buffer.flush()
+
+    payloads = []
+    while not tts_queue.empty():
+        item = tts_queue.get_nowait()
+        assert item is not None
+        payloads.append(item.text)
+    assert payloads == ["We stock many tools e.g. hammers and saws."]
+
+
 def test_split_first_phrase_bounds_punctuation_free_opener() -> None:
     text = "This response keeps streaming words without reaching punctuation for quite a while"
 

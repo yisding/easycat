@@ -91,6 +91,15 @@ _FIRST_PHRASE_MIN_CHARS = 24
 # terminators ``split_at_sentence_boundaries`` honours plus mid-sentence
 # punctuation (comma/semicolon/colon) that marks a natural early pause.
 _FIRST_CLAUSE_BOUNDARY_CHARS = ".!?。！？．,;:"
+# The sentence-terminator subset of the boundaries above.  Unlike the cheap
+# ``,``/``;``/``:`` test, these only count when the sentence segmenter agrees
+# the sentence ends there, so abbreviation periods ("Dr.", "e.g.", "U.S.",
+# "a.m.") are not mistaken for clause boundaries.
+_FIRST_CLAUSE_SENTENCE_TERMINATORS = ".!?。！？．"
+# Closing quotes/brackets the segmenter keeps attached to a sentence end
+# (``"Hello."`` / ``(example.com.)``); a terminator followed only by these is
+# still at that sentence's end.
+_SENTENCE_CLOSING_CHARS = ")]}\"'`”’»」』）】"
 _URL_SCHEMES_HELD_FOR_LOOKAHEAD = frozenset({"ftp", "ftps", "http", "https", "ws", "wss"})
 _URL_LEADING_WRAPPERS = "([{<\"'`"
 _URL_TRAILING_PUNCTUATION = ".,;:!?)]}\"'`"
@@ -126,6 +135,7 @@ def split_first_clause(text: str) -> tuple[str, str]:
     if not text.strip():
         return "", text
 
+    sentence_ends: frozenset[int] | None = None
     for i, ch in enumerate(text):
         if ch not in _FIRST_CLAUSE_BOUNDARY_CHARS:
             continue
@@ -139,11 +149,56 @@ def split_first_clause(text: str) -> tuple[str, str]:
         while end < len(text) and text[end].isspace():
             end += 1
         ready = text[:end]
-        if len(ready.strip()) >= _FIRST_CLAUSE_MIN_CHARS:
-            return ready, text[end:]
-        # Too short to ship on its own; keep scanning for a later boundary.
+        if len(ready.strip()) < _FIRST_CLAUSE_MIN_CHARS:
+            # Too short to ship on its own; keep scanning for a later boundary.
+            continue
+        if ch in _FIRST_CLAUSE_SENTENCE_TERMINATORS:
+            if sentence_ends is None:
+                sentence_ends = _stable_sentence_ends(text)
+            if not _ends_sentence(text, i, sentence_ends):
+                # Abbreviation period ("Dr.", "e.g.") or a trailing boundary
+                # that could still shift once more text arrives.
+                continue
+        return ready, text[end:]
 
     return "", text
+
+
+def _stable_sentence_ends(text: str) -> frozenset[int]:
+    """Return offsets where the segmenter ends a sentence that cannot shift.
+
+    Each offset is the segment's end with trailing whitespace ignored.  The
+    final segment is excluded when the segmenter wants more lookahead (for
+    example a buffer ending in ``"Dr."``), matching what
+    :func:`split_at_sentence_boundaries` would hold back.
+    """
+    result = _SENTENCE_SEGMENTER.segment_with_lookahead(text)
+    segments = result.segments
+    if result.should_wait_for_more:
+        segments = segments[:-1]
+    ends: set[int] = set()
+    pos = 0
+    for segment in segments:
+        if isinstance(segment, str):
+            start = text.find(segment, pos)
+            seg_end = (start if start >= 0 else pos) + len(segment)
+        else:
+            seg_end = segment.end
+        pos = seg_end
+        ends.add(len(text[:seg_end].rstrip()))
+    return frozenset(ends)
+
+
+def _ends_sentence(text: str, index: int, sentence_ends: frozenset[int]) -> bool:
+    """Whether the terminator at *index* ends a stable segmenter sentence."""
+    end = index + 1
+    if end in sentence_ends:
+        return True
+    while end < len(text) and text[end] in _SENTENCE_CLOSING_CHARS:
+        end += 1
+        if end in sentence_ends:
+            return True
+    return False
 
 
 def _split_first_phrase(text: str) -> tuple[str, str]:
