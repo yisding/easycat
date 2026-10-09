@@ -462,7 +462,14 @@ def _resolve_named_provider_config(
     kind: Literal["STT", "TTS"],
     api_key_overrides: dict[str, str] | None,
 ) -> Any:
-    """Resolve a named wrapper to its concrete config without creating a client."""
+    """Resolve a named wrapper to its concrete config without creating a client.
+
+    Credential precedence: a usable top-level ``config.api_key`` wins, then a
+    usable ``params["api_key"]``. Ambient credentials (``api_key_overrides`` or
+    the provider's env var) are only a fallback when neither explicit key is
+    usable. This keeps an explicit params key, as ``ProviderCatalog.create_provider``
+    does; unlike that path, a blank top-level ``api_key`` does not displace it.
+    """
     if kind == "STT":
         from easycat.stt.factory import _CATALOG as catalog
     else:
@@ -472,7 +479,10 @@ def _resolve_named_provider_config(
     kwargs = dict(config.params or {})
     env_var = catalog.env_vars[provider_name]
     resolved_key = config.api_key
-    if not has_usable_credential(resolved_key) and env_var is not None:
+    if not has_usable_credential(resolved_key) and has_usable_credential(kwargs.get("api_key")):
+        # An explicit params key beats ambient env/override credentials.
+        resolved_key = None
+    elif not has_usable_credential(resolved_key) and env_var is not None:
         resolved_key = (api_key_overrides or {}).get(env_var) or os.getenv(env_var)
     if has_usable_credential(resolved_key):
         kwargs["api_key"] = resolved_key

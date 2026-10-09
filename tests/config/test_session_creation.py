@@ -436,6 +436,104 @@ def test_named_provider_configs_wrap_value_validation_errors(
     assert f"Unsupported Deepgram {kind} encoding" in str(exc_info.value)
 
 
+_NAMED_WRAPPERS = pytest.mark.parametrize(
+    ("field_name", "wrapper_cls"),
+    [("stt", STTProviderConfig), ("tts", TTSProviderConfig)],
+)
+
+
+@_NAMED_WRAPPERS
+def test_named_provider_params_api_key_beats_ambient_env(
+    monkeypatch: pytest.MonkeyPatch,
+    field_name: str,
+    wrapper_cls: type[STTProviderConfig | TTSProviderConfig],
+) -> None:
+    """An explicit ``params["api_key"]`` must not be replaced by an ambient env key.
+
+    Regression: EasyConfig resolved named wrappers by overwriting the params key
+    with ``DEEPGRAM_API_KEY`` whenever the top-level ``api_key`` was unset, while
+    ``create_stt_provider``/``create_tts_provider`` kept the explicit params key.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "ambient-env-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
+
+    config = EasyConfig(
+        **{field_name: wrapper_cls(provider="deepgram", params={"api_key": "params-key"})},
+        debug="off",
+    )
+
+    assert getattr(config, field_name).api_key == "params-key"
+
+
+@_NAMED_WRAPPERS
+def test_named_provider_top_level_api_key_beats_params_and_env(
+    monkeypatch: pytest.MonkeyPatch,
+    field_name: str,
+    wrapper_cls: type[STTProviderConfig | TTSProviderConfig],
+) -> None:
+    """A usable top-level wrapper ``api_key`` still wins over params and env."""
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "ambient-env-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
+
+    config = EasyConfig(
+        **{
+            field_name: wrapper_cls(
+                provider="deepgram",
+                api_key="top-level-key",
+                params={"api_key": "params-key"},
+            )
+        },
+        debug="off",
+    )
+
+    assert getattr(config, field_name).api_key == "top-level-key"
+
+
+@_NAMED_WRAPPERS
+@pytest.mark.parametrize("params_key", [None, ""])
+def test_named_provider_falls_back_to_env_without_explicit_key(
+    monkeypatch: pytest.MonkeyPatch,
+    field_name: str,
+    wrapper_cls: type[STTProviderConfig | TTSProviderConfig],
+    params_key: str | None,
+) -> None:
+    """Without a usable explicit key, the provider env var is still the fallback."""
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "ambient-env-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
+    params = {} if params_key is None else {"api_key": params_key}
+
+    config = EasyConfig(
+        **{field_name: wrapper_cls(provider="deepgram", params=params)},
+        debug="off",
+    )
+
+    assert getattr(config, field_name).api_key == "ambient-env-key"
+
+
+@_NAMED_WRAPPERS
+def test_named_openai_provider_params_key_beats_openai_api_key_override(
+    monkeypatch: pytest.MonkeyPatch,
+    field_name: str,
+    wrapper_cls: type[STTProviderConfig | TTSProviderConfig],
+) -> None:
+    """``openai_api_key`` is a fallback for wrappers, not an override of params."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    explicit = EasyConfig(
+        openai_api_key="override-key",
+        **{field_name: wrapper_cls(provider="openai", params={"api_key": "params-key"})},
+        debug="off",
+    )
+    fallback = EasyConfig(
+        openai_api_key="override-key",
+        **{field_name: wrapper_cls(provider="openai")},
+        debug="off",
+    )
+
+    assert getattr(explicit, field_name).api_key == "params-key"
+    assert getattr(fallback, field_name).api_key == "override-key"
+
+
 def test_named_provider_configs_preserve_easycat_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
