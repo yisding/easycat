@@ -136,3 +136,49 @@ class TestEscapedBacktickPairing:
     )
     def test_open(self, text: str) -> None:
         assert markdown_open_state(text) == (True, False)
+
+
+class TestEscapedBacktickFences:
+    """An escaped backtick never opens or closes a fence, as in ``strip_markdown``.
+
+    The fence scan consumes escapes in document order, so the backtick run
+    after ``\\` `` is judged on its own: ``\\``` `` is a literal tick then a
+    two-backtick inline run, never a fence delimiter.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "```a```",
+            # An escaped backslash leaves the fence after it unescaped.
+            r"\\```a```",
+            # An escaped tick before a real fence pair: the pair still closes.
+            r"\` then ```a``` ok.",
+            r"\``` then ```a``` and ``.",
+            # An escaped tick, then a two-backtick run closed by a later ``.
+            r"See \``` here``.",
+            r"Hello there. See \```x`` now.",
+            # The fence after the escaped tick closes and the `` run pairs.
+            r"\```x```. Next ``` ``",
+        ],
+    )
+    def test_closed(self, text: str) -> None:
+        assert markdown_open_state(text) == (False, False)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "```a",
+            # strip_markdown leaves an unpaired `` run (and a lone ```) here,
+            # so a later delta could still rewrite the text after it.
+            r"\```x```.",
+            # The `` run pairs, but the lone ``` inside it could still open a
+            # fence with a later ```, which strip_markdown matches first.
+            r"\```x```. Next ``",
+            # No fence here: what is left after the escape is an unpaired ``.
+            "Hello there.\n\\```x",
+            r"See \``` here.",
+        ],
+    )
+    def test_open(self, text: str) -> None:
+        assert markdown_open_state(text) == (True, False)
