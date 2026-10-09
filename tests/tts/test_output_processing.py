@@ -89,6 +89,173 @@ def test_default_pronunciation_helper_phone_regex_behavior() -> None:
     assert "<break" not in payload.text
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Released on 2024-01-15.",
+        "Released on 2024/01/15.",
+        "Meeting 2024-01-15 at 10.30",
+        "10:30 2024-01-15",
+        "Revenue grew in 2023 (12.5%) overall.",
+        "Pi is roughly 3.14159265.",
+        "The ratio was 123.4567890.",
+        "Scores: 12 34 56 78.",
+        "Upgrade to 1.2.3.4.5.6.7 today.",
+        "Room 555\n1234 is free.",
+        "Call 555\n123\n4567 later.",
+        "Part 555-123-4567-89 shipped.",
+        "ID 12-555-1234 closed.",
+        "2024-01-15",
+        "12.5%",
+        "100-2000",
+        "Read pages 100-2000 first.",
+        "pages 555-1234",
+        "Valid range 555-1234 to 555-9999.",
+        "Serial 12345678901 shipped.",
+        "Path a/555-2671 moved.",
+        "At 10:555-2671 it stopped.",
+        "Token x)555-2671 expired.",
+        "Extension 415-555-2671/22 is busy.",
+        r"File C:\Users\4155552671 saved.",
+        r"File D:\2024\415-555-2671 saved.",
+        "Call +1 2345 6789 0123 4567 8901 now.",
+        "Call +123 4567 8901 2345 6789.",
+        "He was recalled 555-0100 times.",
+    ],
+)
+def test_default_phone_pauses_leave_non_phone_numbers_unchanged(text: str) -> None:
+    """Dates, decimals, ranges, and runs of short numbers are not phone numbers.
+
+    A bare dash-joined 3+4 digit pair is paced only after a phone cue such as
+    "call" or "tel:", and the tail of a longer token (after ``)``, ``/``, or
+    ``:``) is never paced on its own.
+
+    The default pattern used to match any run of seven or more digits joined by
+    spaces, dots, dashes, or parentheses (including across newlines), so an ISO
+    date became ``"2 ... 0 ... 2 ... 4 ..."`` and ``"2023 (12.5%)"`` lost its
+    decimal point and opening parenthesis.
+    """
+    processors = default_pronunciation_processors()
+    payload = TTSInput(text)
+
+    result = processors[-1].process(payload, is_final=True, is_streaming=False)
+
+    assert result is payload
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Call (415) 555-2671.", "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1."),
+        ("Call 415-555-2671.", "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1."),
+        ("Call 415.555.2671.", "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1."),
+        ("Call 415 555 0142.", "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 0 ... 1 ... 4 ... 2."),
+        ("Call 555-0100.", "Call 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0."),
+        ("call me at 555-0100", "call me at 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0"),
+        ("Phone number: 555-0100", "Phone number: 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0"),
+        ("Text me at 555-0100", "Text me at 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0"),
+        ("Text us at 555-0100", "Text us at 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0"),
+        ("Fax number: 555-0100", "Fax number: 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0"),
+        ("Cell number is 555-0100", "Cell number is 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0"),
+        ("Contact: 555-0100", "Contact: 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0"),
+        ("Tel: 555-0100", "Tel: 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0"),
+        ("(415) 555-2671", "4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1"),
+        ("1(415)555-2671", "1 ... 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1"),
+        (
+            "Call 1(415)555-2671 now.",
+            "Call 1 ... 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1 now.",
+        ),
+        ("+1 415 555 2671", "1 ... 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1"),
+        (
+            "+44 20 7946 0958",
+            "4 ... 4 ... 2 ... 0 ... 7 ... 9 ... 4 ... 6 ... 0 ... 9 ... 5 ... 8",
+        ),
+        (
+            "Call +1 (555) 123-4567.",
+            "Call 1 ... 5 ... 5 ... 5 ... 1 ... 2 ... 3 ... 4 ... 5 ... 6 ... 7.",
+        ),
+        (
+            "Call +1 415 555 0100.",
+            "Call 1 ... 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0.",
+        ),
+        (
+            "Call +44 20 7946 0958.",
+            "Call 4 ... 4 ... 2 ... 0 ... 7 ... 9 ... 4 ... 6 ... 0 ... 9 ... 5 ... 8.",
+        ),
+        (
+            "Call 2024-01-15 at (415) 555-2671.",
+            "Call 2024-01-15 at 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1.",
+        ),
+    ],
+)
+def test_default_phone_pauses_pace_phone_number_shapes(text: str, expected: str) -> None:
+    """Phone-number shapes are still paced digit by digit, whole and balanced."""
+    processors = default_pronunciation_processors()
+
+    result = processors[-1].process(TTSInput(text), is_final=True, is_streaming=False)
+
+    assert result.text == expected
+    assert result.format == "plain"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Call 415-555-2671x22.",
+            "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1x22.",
+        ),
+        (
+            "Call (415) 555-2671x22.",
+            "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1x22.",
+        ),
+        (
+            "Call 415-555-2671X22.",
+            "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1X22.",
+        ),
+        (
+            "Call 415-555-2671ext22.",
+            "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1ext22.",
+        ),
+        (
+            "Call 415-555-2671ext.22.",
+            "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1ext.22.",
+        ),
+    ],
+)
+def test_default_phone_pauses_pace_base_number_before_attached_extension(
+    text: str, expected: str
+) -> None:
+    """An extension glued to the number is not a word continuation.
+
+    Only the base number is paced; the extension stays literal text.
+    """
+    processors = default_pronunciation_processors()
+
+    result = processors[-1].process(TTSInput(text), is_final=True, is_streaming=False)
+
+    assert result.text == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Call 415-555-2671abc.",
+        "Call 415-555-2671xyz22.",
+        "Call 415-555-2671x.",
+        "Call 415-555-2671ext.",
+    ],
+)
+def test_default_phone_pauses_reject_other_word_continuations(text: str) -> None:
+    """Only ``x``/``ext`` followed by digits may touch the number."""
+    processors = default_pronunciation_processors()
+    payload = TTSInput(text)
+
+    result = processors[-1].process(payload, is_final=True, is_streaming=False)
+
+    assert result is payload
+
+
 def test_default_pronunciation_helper_can_opt_into_exact_ssml_breaks() -> None:
     processors = default_pronunciation_processors(
         phone_pause_style="ssml",

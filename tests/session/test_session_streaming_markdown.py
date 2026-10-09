@@ -22,6 +22,7 @@ from easycat.session._types import SessionConfig
 from easycat.session.text import (
     has_unclosed_markdown_delimiters,
 )
+from easycat.strip_markdown import strip_markdown
 from tests._bridge_helpers import _TestBridgeBase
 from tests.session._session_streaming_helpers import (
     _FAST_TURN,
@@ -604,3 +605,79 @@ async def test_streaming_strip_markdown_failed_turn_does_not_rewrite_prior_histo
     session._turn = TurnContext("turn-2", CancelToken())
     await session._turn_runner.run_streaming_agent("second", token=None)
     assert runner.history == history_after_success
+
+
+async def _stream_markdown_deltas(deltas: list[str]) -> list[str]:
+    """Stream *deltas* through a markdown-stripping session; return TTS payloads."""
+
+    full = "".join(deltas)
+
+    class DeltaAgent(_TestBridgeBase):
+        async def run(self, text: str) -> str:
+            return full
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = recorder, turn_input
+            for delta in deltas:
+                if cancel_token and cancel_token.is_cancelled:
+                    break
+                yield AgentBridgeEvent(kind="text_delta", text=delta)
+            yield AgentBridgeEvent(kind="done", text=full)
+
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(chunks=[_chunk(), _chunk()]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="test"),
+            agent=DeltaAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            strip_markdown=True,
+        )
+    )
+
+    await session.start()
+    await asyncio.sleep(0.3)
+    await session.stop()
+    return list(tts.synthesized_texts)
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_escaped_fence_tick_does_not_emit_rewritable_text():
+    """An escaped tick before ``` must not hide the unpaired `` run that follows.
+
+    ``\\```x```.`` strips to a literal tick and an unpaired ``\\`\\` `` run, so
+    emitting it would let the later `` close that run and rewrite the payload.
+    """
+    deltas = ["\\```x```.", " Next ``", " done."]
+
+    payloads = await _stream_markdown_deltas(deltas)
+
+    one_shot = strip_markdown("".join(deltas), normalize_code_spans=True)
+    assert " ".join(payloads).split() == one_shot.split()
+
+
+@pytest.mark.asyncio
+async def test_streaming_strip_markdown_escaped_tick_run_closes_without_fence():
+    """An escaped tick before ``` leaves a `` run; its `` closer releases the text.
+
+    The raw ``` count is odd, but no fence is open once the escape is consumed,
+    so the first sentence is emitted when the `` closer arrives instead of
+    waiting for a fence closer that never comes (the final flush).
+    """
+    deltas = ["Hello there. See \\```x", "`` now. More", " text."]
+
+    payloads = await _stream_markdown_deltas(deltas)
+
+    # The first clause goes out on the `` closer, not at the final flush.
+    assert len(payloads) > 1
+    assert payloads[0].strip() == "Hello there."
+    one_shot = strip_markdown("".join(deltas), normalize_code_spans=True)
+    assert " ".join(payloads).split() == one_shot.split()

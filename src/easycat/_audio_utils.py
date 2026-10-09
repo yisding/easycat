@@ -169,7 +169,7 @@ def _resample_soxr_impl(data: bytes, from_rate: int, to_rate: int) -> bytes:
 
     samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
     resampled = soxr.resample(samples, from_rate, to_rate)
-    out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+    out = np.clip(np.rint(resampled * 32768.0), -32768, 32767).astype(np.int16)
     return out.tobytes()
 
 
@@ -198,7 +198,7 @@ def _resample_scipy_impl(data: bytes, from_rate: int, to_rate: int) -> bytes:
     up = to_rate // g
     down = from_rate // g
     resampled = resample_poly(samples, up, down)
-    out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+    out = np.clip(np.rint(resampled * 32768.0), -32768, 32767).astype(np.int16)
     return out.tobytes()
 
 

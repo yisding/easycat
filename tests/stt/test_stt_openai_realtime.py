@@ -1340,6 +1340,149 @@ async def _collect_events(stt: OpenAIRealtimeSTT) -> list[STTEvent]:
 
 
 @pytest.mark.asyncio
+async def test_openai_realtime_aclose_ends_active_stream_before_releasing_socket():
+    """aclose() must leave the provider reusable after active-stream teardown.
+
+    ``close_if_supported`` prefers ``aclose`` over ``close``; ``aclose`` used
+    to tear the socket down without ending the logical stream, so a later
+    ``start_stream()`` failed with "Stream already started".
+    """
+    first_socket = _PersistentMockWSConnection()
+    second_socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([first_socket, second_socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+    await stt.start_stream()
+
+    await stt.aclose()
+
+    assert stt._running is False
+    assert first_socket.close_code == 1000
+    assert first_socket.commit_count == 0
+
+    await stt.start_stream()
+    assert factory.call_count == 2
+    await stt.aclose()
+    assert second_socket.close_code == 1000
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_aclose_commits_pending_audio_before_closing_socket():
+    """aclose() during an active stream must not drop audio pending commit."""
+    socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+    await stt.start_stream()
+    collector = asyncio.create_task(_collect_events(stt))
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=100)):
+        await stt.send_audio(chunk)
+
+    await stt.aclose()
+    events = await asyncio.wait_for(collector, timeout=1.0)
+
+    assert socket.commit_count == 1
+    assert [(event.type, event.text) for event in events] == [(STTEventType.FINAL, "turn 1")]
+    assert socket.close_code == 1000
+    assert stt._running is False
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_aclose_without_active_stream_is_idempotent():
+    """aclose() with no active stream only releases the socket, never commits."""
+    socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+    await stt.warmup()
+
+    await stt.aclose()
+    await stt.aclose()
+
+    assert socket.close_code == 1000
+    assert socket.commit_count == 0
+    assert stt._ws is None
+    assert stt._running is False
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_start_stream_during_aclose_fails_cleanly():
+    """A start_stream() queued behind aclose() must not adopt the closing socket.
+
+    aclose() releases the lifecycle lock between ending the logical stream and
+    closing the socket. A stream admitted in that gap used to reuse the socket
+    aclose() then closed, leaving ``_running`` set with no connection.
+    """
+    first_socket = _PersistentMockWSConnection(respond_to_commit=False)
+    second_socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([first_socket, second_socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+    await stt.start_stream()
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=100)):
+        await stt.send_audio(chunk)
+
+    closer = asyncio.create_task(stt.aclose())
+    # aclose() -> end_stream() now holds the lifecycle lock awaiting the final.
+    for _ in range(100):
+        if first_socket.commit_count:
+            break
+        await asyncio.sleep(0)
+    assert first_socket.commit_count == 1
+    starter = asyncio.create_task(stt.start_stream())
+    await asyncio.sleep(0)
+    await first_socket.push(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": "x"}
+    )
+
+    await asyncio.wait_for(closer, timeout=1.0)
+    with pytest.raises(RuntimeError, match="closing"):
+        await asyncio.wait_for(starter, timeout=1.0)
+
+    assert stt._running is False
+    assert stt._ws is None
+    assert first_socket.close_code == 1000
+    assert factory.call_count == 1
+
+    # Once aclose() returns the provider is reusable on a fresh socket.
+    await stt.start_stream()
+    assert factory.call_count == 2
+    await stt.aclose()
+    assert second_socket.close_code == 1000
+    assert stt._running is False
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_aclose_joins_errors_emitted_during_socket_close():
+    """Provider errors raised while aclose() closes the socket are joined too."""
+    from easycat.events import Error, EventBus
+
+    class _ErrorOnCloseSocket(_PersistentMockWSConnection):
+        async def close(self) -> None:
+            if self.close_code is None:
+                await self.push({"type": "error", "error": {"message": "late close error"}})
+            await super().close()
+
+    delivered: list[Error] = []
+
+    async def slow_subscriber(event: Error) -> None:
+        await asyncio.sleep(0.05)
+        delivered.append(event)
+
+    bus = EventBus()
+    bus.subscribe(Error, slow_subscriber)
+    socket = _ErrorOnCloseSocket()
+    factory = _PersistentMockWSFactory([socket])
+    stt = OpenAIRealtimeSTT(
+        OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory, event_bus=bus)
+    )
+    await stt.start_stream()
+
+    await stt.aclose()
+
+    assert [str(event.exception) for event in delivered] == ["late close error"]
+    assert stt._emit_tasks == set()
+    assert socket.close_code == 1000
+    assert stt._running is False
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_reusable_across_streams():
     factory1 = _MockWSFactory([_make_transcription_completed("stream one")])
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory1)
