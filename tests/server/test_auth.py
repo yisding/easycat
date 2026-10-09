@@ -326,6 +326,102 @@ def test_from_websocket_adapter_handles_missing_credentials() -> None:
     assert req.query_token is None
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["Bearer sekrit", "Bearer other"],
+        ["Bearer other", "Bearer sekrit"],
+        ["Bearer sekrit", "Bearer sekrit"],
+    ],
+)
+def test_from_websocket_rejects_duplicate_authorization_headers_as_invalid(
+    values: list[str],
+) -> None:
+    """A repeated ``Authorization`` header must yield a clean ``"invalid"``.
+
+    ``websockets`` ``Headers.get`` raises ``MultipleValuesError`` on a repeated
+    header, which used to escape the adapter and turn the handshake into an
+    HTTP 500 / close 1011. Ambiguous credentials are denied even when one copy
+    carries the valid token.
+    """
+    from websockets.datastructures import Headers
+
+    headers = Headers([("Authorization", value) for value in values])
+    req = from_websocket(headers, "/voice")
+    result = BearerTokenAuth(token="sekrit").authorize(req)
+    assert result.allowed is False
+    assert result.reason == "invalid"
+
+
+def test_from_websocket_reads_single_header_from_real_websockets_headers() -> None:
+    from websockets.datastructures import Headers
+
+    auth = BearerTokenAuth(token="sekrit")
+    req = from_websocket(Headers([("Authorization", "Bearer sekrit")]), "/voice")
+    assert req.authorization_header == "Bearer sekrit"
+    assert auth.authorize(req).allowed is True
+    missing = from_websocket(Headers(), "/voice")
+    assert missing.authorization_header is None
+    assert auth.authorize(missing).reason == "missing"
+
+
+def test_from_websocket_treats_lookup_error_from_partial_mapping_as_invalid() -> None:
+    class _RaisingHeaders:
+        def get(self, _name: str) -> str | None:
+            raise LookupError("Authorization")
+
+    req = from_websocket(_RaisingHeaders(), "/voice")
+    result = BearerTokenAuth(token="sekrit").authorize(req)
+    assert result.allowed is False
+    assert result.reason == "invalid"
+
+
+@pytest.mark.parametrize("message_type", ["email", "http.client"])
+def test_from_websocket_accepts_stdlib_message_headers(message_type: str) -> None:
+    """Stdlib ``Message`` headers (``get_all`` returns ``None`` when absent) work.
+
+    ``http.server`` hands request headers over as ``http.client.HTTPMessage``;
+    an absent ``Authorization`` must stay a clean ``"missing"`` (with the query
+    fallback intact), and present or repeated values behave like ``Headers``.
+    """
+    import email.message
+    import http.client
+
+    def make() -> email.message.Message:
+        if message_type == "email":
+            return email.message.Message()
+        return http.client.HTTPMessage()
+
+    auth = BearerTokenAuth(token="sekrit", allow_query_token=True)
+
+    absent = from_websocket(make(), "/voice?token=sekrit")
+    assert absent.authorization_header is None
+    assert absent.query_token == "sekrit"
+    assert auth.authorize(absent).allowed is True
+    assert BearerTokenAuth(token="sekrit").authorize(from_websocket(make(), "/")).reason == (
+        "missing"
+    )
+
+    single = make()
+    single["Authorization"] = "Bearer sekrit"
+    single_req = from_websocket(single, "/voice")
+    assert single_req.authorization_header == "Bearer sekrit"
+    assert auth.authorize(single_req).allowed is True
+
+    repeated = make()
+    repeated["Authorization"] = "Bearer sekrit"
+    repeated["Authorization"] = "Bearer sekrit"
+    result = auth.authorize(from_websocket(repeated, "/voice"))
+    assert result.allowed is False
+    assert result.reason == "invalid"
+
+
+def test_from_websocket_adapter_handles_none_headers() -> None:
+    req = from_websocket(None, "/voice?token=qtok")
+    assert req.authorization_header is None
+    assert req.query_token == "qtok"
+
+
 def test_from_h3_headers_adapter_reads_bearer_and_query_token() -> None:
     req = from_h3_headers(
         [

@@ -111,7 +111,7 @@ def _diff_table(turns: list[dict[str, Any]]) -> Table:
     return table
 
 
-@cli_command
+@cli_command("diff")
 def diff_command(
     path_a: Path = typer.Argument(
         ...,

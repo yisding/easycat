@@ -266,7 +266,7 @@ def test_vad_reset_restarts_audio_position_clock(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
     monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
     vad = SileroVAD()
-    vad._advance_audio_time(0.5)
+    vad._advance_audio_time(8000, 16000)
 
     vad.reset()
 

@@ -37,7 +37,6 @@ class TenVAD(_VADBase):
         super().__init__()
         self._hop_size = hop_size
         self._buffer: bytes = b""
-        self._buffer_rate: int | None = None
         self._ten_vad: Any = None
         self._numpy: Any = None
         self._audio_resampler = PCM16StreamResampler(_TEN_SAMPLE_RATE)
@@ -76,17 +75,10 @@ class TenVAD(_VADBase):
         chunk = self._source_frame_aligner.align(chunk)
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
-        # Drop stale remainder and reset resampler on format switch (gh 1000, same as Silero).
-        if self._audio_resampler.source_rate is not None and chunk.format.sample_rate in (
-            _TEN_SAMPLE_RATE,
-        ):
-            # Native-rate segment: discard interpolator tail rather than mixing rates.
-            self._audio_resampler.reset()
-        target_rate = chunk.format.sample_rate
-        if self._buffer_rate is not None and self._buffer_rate != target_rate:
-            self._buffer = b""
-        self._buffer_rate = target_rate
-
+        # The buffer only ever holds 16 kHz model-rate PCM, so a source-rate
+        # switch must not clear it. The resampler flushes the old segment's
+        # interpolation tail ahead of the new chunk on any rate change,
+        # including a switch to native 16 kHz passthrough.
         self._buffer += self._audio_resampler.process(
             chunk.data,
             chunk.format.sample_rate,
@@ -99,8 +91,8 @@ class TenVAD(_VADBase):
 
             frame = self._numpy.frombuffer(frame_data, dtype=self._numpy.int16).copy()
             speech_prob, _ = self._ten_vad.process(frame)
-            audio_time_s = self._advance_audio_time(self._hop_size / _TEN_SAMPLE_RATE)
-            for event in self._evaluate_speech(float(speech_prob), audio_time_s):
+            audio_time = self._advance_audio_time(self._hop_size, _TEN_SAMPLE_RATE)
+            for event in self._evaluate_speech(float(speech_prob), audio_time):
                 yield event
 
             # Buffered transports may deliver many model frames in one chunk.
@@ -115,7 +107,6 @@ class TenVAD(_VADBase):
         self._audio_resampler.reset()
         self._source_frame_aligner.reset()
         self._buffer = b""
-        self._buffer_rate = None
 
     def close(self) -> None:
         """Release the native ``ten_vad`` handle."""
@@ -124,7 +115,6 @@ class TenVAD(_VADBase):
         self._source_frame_aligner.reset()
         self._ten_vad = None
         self._buffer = b""
-        self._buffer_rate = None
 
     def __del__(self) -> None:
         self.close()

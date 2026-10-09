@@ -1449,3 +1449,85 @@ def test_init_json_reports_portable_git_source(
     assert payload["easycat_source"] is None
     assert payload["easycat_git"] == _EASYCAT_GIT_URL
     assert payload["easycat_git_rev"] == _EASYCAT_GIT_REV
+
+
+# ── human output renders source paths and URLs literally ─────────────
+
+
+def _wide_stderr_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Swap in a wide stderr console so long tmp paths are not folded."""
+    from easycat.cli import _output
+
+    console = Console(stderr=True, width=400, no_color=True)
+    monkeypatch.setattr(_output, "stderr_console", console)
+    monkeypatch.setattr(init_module, "stderr_console", console)
+
+
+def test_init_human_output_prints_bracketed_local_checkout_path_verbatim(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The local checkout path is printed exactly as written to [tool.uv.sources].
+
+    ``info()`` escapes Rich markup itself; init used to escape the path first,
+    so ``.../[work]/easycat`` rendered as ``.../\\[work]/easycat``.
+    """
+    _wide_stderr_console(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    checkout = tmp_path / "[work]" / "easycat"
+    checkout.mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text('[project]\nname = "easycat"\n', encoding="utf-8")
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+
+    result = cli.invoke(
+        app,
+        ["init", "demo", "--config", config, "--no-git", "--easycat-source", str(checkout)],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    pyproject = tomllib.loads((tmp_path / "demo" / "pyproject.toml").read_text(encoding="utf-8"))
+    written_path = pyproject["tool"]["uv"]["sources"]["easycat"]["path"]
+    assert written_path == str(checkout.resolve())
+    assert f"easycat resolved from local checkout: {written_path}\n" in result.stderr
+    assert "\\[" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("git_url", "git_rev", "expected"),
+    [
+        (
+            "https://example.com/[org]/easycat.git",
+            None,
+            "https://example.com/[org]/easycat.git",
+        ),
+        (
+            _EASYCAT_GIT_URL,
+            "feature/[beta]",
+            f"{_EASYCAT_GIT_URL} at feature/[beta]",
+        ),
+    ],
+)
+def test_init_human_output_prints_bracketed_git_source_verbatim(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    git_url: str,
+    git_rev: str | None,
+    expected: str,
+) -> None:
+    """Git source URLs and revisions with brackets print without a stray backslash."""
+    _wide_stderr_console(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    args = ["init", "demo", "--config", config, "--no-git", "--easycat-git", git_url]
+    if git_rev is not None:
+        args += ["--easycat-git-rev", git_rev]
+
+    result = cli.invoke(app, args)
+
+    assert result.exit_code == 0, result.stderr
+    pyproject = tomllib.loads((tmp_path / "demo" / "pyproject.toml").read_text(encoding="utf-8"))
+    source = pyproject["tool"]["uv"]["sources"]["easycat"]
+    assert source["git"] == git_url
+    assert source.get("rev") == git_rev
+    assert f"easycat resolved from portable Git source: {expected}\n" in result.stderr
+    assert "\\[" not in result.stderr

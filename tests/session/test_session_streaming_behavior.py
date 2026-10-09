@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import pytest
 
 from easycat import create_text_session
 from easycat._turn_context import TurnContext
+from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import (
     AgentDelta,
@@ -1425,6 +1426,330 @@ async def test_streaming_tts_timeout_does_not_poison_next_turn() -> None:
     assert isinstance(errors[0].exception, TTSTimeoutError)
     assert [event.text for event in finals] == ["Quick reply.", "Quick reply."]
     assert tts.synthesized_texts == ["Quick reply.", "Quick reply."]
+
+
+class _HeldOpenTransport(FakeTransport):
+    """Yield the configured chunks, then keep ingress open until disconnect."""
+
+    def __init__(self, chunks: list[AudioChunk]) -> None:
+        super().__init__(chunks=chunks)
+        self._closed = asyncio.Event()
+
+    async def disconnect(self) -> None:
+        await super().disconnect()
+        self._closed.set()
+
+    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
+        for chunk in self.chunks:
+            yield chunk
+        await self._closed.wait()
+
+
+@pytest.mark.asyncio
+async def test_voice_turn_tts_timeout_settles_published_turn_task() -> None:
+    """A first-byte TTS timeout in a real voice turn must not wedge the turn task.
+
+    The streaming TTS consumer runs inside the ``on_turn_ended`` task that
+    ``schedule_turn_ended`` publishes as ``active_turn_task``. Its timeout
+    handler used to call ``TTSScheduler.cancel()``, which cancelled and then
+    awaited that parent task from inside the child: the turn stayed
+    BOT_SPEAKING forever, asyncio hit ``RecursionError`` in ``Task.cancel``,
+    and ``stop(force=True)`` crashed the interpreter.
+    """
+    tts = TimeoutThenRecoverTTS()
+    session = Session(
+        SessionConfig(
+            transport=_HeldOpenTransport(chunks=[_chunk(), _chunk()]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=FastDoneAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            timeout_config=TimeoutConfig(tts_first_byte_timeout=0.01),
+        )
+    )
+    errors: list[Error] = []
+    finals: list[AgentFinal] = []
+    stopped_speaking: list[BotStoppedSpeaking] = []
+    timed_out = asyncio.Event()
+
+    def _record_error(event: Error) -> None:
+        errors.append(event)
+        timed_out.set()
+
+    session.event_bus.subscribe(Error, _record_error)
+    session.event_bus.subscribe(AgentFinal, finals.append)
+    session.event_bus.subscribe(BotStoppedSpeaking, stopped_speaking.append)
+
+    await session.start()
+    try:
+        await asyncio.wait_for(timed_out.wait(), timeout=2.0)
+        turn_task = session._tts_scheduler.active_turn_task
+        assert turn_task is not None
+        done, _ = await asyncio.wait({turn_task}, timeout=2.0)
+        assert turn_task in done, "on_turn_ended task never settled after the TTS timeout"
+        assert not turn_task.cancelled()
+        assert turn_task.exception() is None
+        assert session._turn_manager.state is TurnManagerState.IDLE
+    finally:
+        await asyncio.wait_for(session.stop(force=True), timeout=2.0)
+
+    assert len(errors) == 1
+    assert errors[0].stage == ErrorStage.TTS
+    assert isinstance(errors[0].exception, TTSTimeoutError)
+    assert [event.text for event in finals] == ["Quick reply."]
+    assert len(stopped_speaking) == 1
+    assert tts.synthesized_texts == ["Quick reply."]
+
+
+@pytest.mark.asyncio
+async def test_voice_turn_tts_timeout_then_graceful_stop_completes() -> None:
+    """After a TTS timeout settles, a graceful ``stop()`` closes the session."""
+    session = Session(
+        SessionConfig(
+            transport=_HeldOpenTransport(chunks=[_chunk(), _chunk()]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=FastDoneAgent(),
+            tts=TimeoutThenRecoverTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            timeout_config=TimeoutConfig(tts_first_byte_timeout=0.01),
+        )
+    )
+    stopped_speaking = asyncio.Event()
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda _e: stopped_speaking.set())
+
+    await session.start()
+    try:
+        await asyncio.wait_for(stopped_speaking.wait(), timeout=2.0)
+        await asyncio.wait_for(session.stop(), timeout=2.0)
+    finally:
+        await asyncio.wait_for(session.stop(force=True), timeout=2.0)
+
+    assert not session.is_running
+
+
+@pytest.mark.asyncio
+async def test_graceful_stop_from_bot_stopped_speaking_handler_completes() -> None:
+    """``await session.stop()`` from a turn's own lifecycle handler must not deadlock.
+
+    ``BotStoppedSpeaking`` handlers run inside the streaming TTS consumer, a
+    child of the published ``on_turn_ended`` task. Graceful stop's
+    ``TTSScheduler.cancel()`` used to cancel and await that enclosing task
+    from inside its child, the same circular cancel/await as the TTS timeout.
+    """
+    session = Session(
+        SessionConfig(
+            transport=_HeldOpenTransport(chunks=[_chunk(), _chunk()]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=FastDoneAgent(),
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+    handler_stop_done = asyncio.Event()
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, errors.append)
+
+    async def _stop_from_handler(_event: BotStoppedSpeaking) -> None:
+        await session.stop()
+        handler_stop_done.set()
+
+    session.event_bus.subscribe(BotStoppedSpeaking, _stop_from_handler)
+
+    await session.start()
+    try:
+        await asyncio.wait_for(handler_stop_done.wait(), timeout=2.0)
+        turn_task = session._tts_scheduler.active_turn_task
+        if turn_task is not None:
+            await asyncio.wait_for(asyncio.shield(turn_task), timeout=2.0)
+    finally:
+        await asyncio.wait_for(session.stop(force=True), timeout=2.0)
+
+    assert not session.is_running
+    assert errors == []
+
+
+async def _handler_cancel_turn(session: Session) -> None:
+    await session.cancel_turn()
+
+
+async def _handler_prompt_agent(session: Session) -> None:
+    assert await session.prompt_agent("Say bye.", speak=False) == "Quick reply."
+
+
+async def _handler_force_stop(session: Session) -> None:
+    await session.stop(force=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("speaking_event", "action"),
+    [
+        (BotStoppedSpeaking, _handler_cancel_turn),
+        (BotStoppedSpeaking, _handler_prompt_agent),
+        (BotStoppedSpeaking, _handler_force_stop),
+        (BotStartedSpeaking, _handler_cancel_turn),
+        (BotStartedSpeaking, _handler_force_stop),
+    ],
+    ids=[
+        "stopped-cancel_turn",
+        "stopped-prompt_agent",
+        "stopped-force_stop",
+        "started-cancel_turn",
+        "started-force_stop",
+    ],
+)
+async def test_turn_control_from_bot_speaking_handler_settles(
+    speaking_event: type[BotStartedSpeaking | BotStoppedSpeaking],
+    action: Callable[[Session], Awaitable[None]],
+) -> None:
+    """Cancel/prompt/force-stop from a handler inside the turn must not wedge it.
+
+    Bot speaking handlers run inside the streaming TTS consumer, a child of
+    the published ``on_turn_ended`` task. ``cancel_turn()`` (and
+    ``prompt_agent()``, which calls it) drains the captured turn task from a
+    fresh cleanup task, and force stop cancels and awaits ``active_turn_task``;
+    handing either the caller's own enclosing turn made a circular wait, so
+    the handler never returned and even ``stop(force=True)`` hung or crashed.
+    """
+    session = Session(
+        SessionConfig(
+            transport=_HeldOpenTransport(chunks=[_chunk(), _chunk()]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=FastDoneAgent(),
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+    handler_done = asyncio.Event()
+    handler_errors: list[BaseException] = []
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, errors.append)
+
+    async def _handler(_event: object) -> None:
+        try:
+            await action(session)
+        except BaseException as exc:
+            handler_errors.append(exc)
+            raise
+        finally:
+            handler_done.set()
+
+    session.event_bus.subscribe(speaking_event, _handler)
+
+    await session.start()
+    try:
+        await asyncio.wait_for(handler_done.wait(), timeout=2.0)
+        turn_task = session._tts_scheduler.active_turn_task
+        assert turn_task is not None
+        done, _ = await asyncio.wait({turn_task}, timeout=2.0)
+        assert turn_task in done, "on_turn_ended task never settled after the handler"
+        assert session._turn_manager.state is TurnManagerState.IDLE
+    finally:
+        await asyncio.wait_for(session.stop(force=True), timeout=2.0)
+
+    assert handler_errors == []
+    assert errors == []
+    assert not session.is_running
+
+
+async def _handler_graceful_stop(session: Session) -> None:
+    await session.stop()
+
+
+async def _handler_reset_state(session: Session) -> None:
+    await session.reset_state()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "speaking_event",
+    [BotStoppedSpeaking, BotStartedSpeaking],
+    ids=["stopped", "started"],
+)
+@pytest.mark.parametrize(
+    ("action", "stops_session"),
+    [
+        (_handler_force_stop, True),
+        (_handler_graceful_stop, True),
+        (_handler_cancel_turn, False),
+        (_handler_reset_state, False),
+    ],
+    ids=["force_stop", "graceful_stop", "cancel_turn", "reset_state"],
+)
+async def test_turn_control_from_spoken_prompt_handler_settles(
+    speaking_event: type[BotStartedSpeaking | BotStoppedSpeaking],
+    action: Callable[[Session], Awaitable[None]],
+    stops_session: bool,
+) -> None:
+    """Turn control from a handler inside a spoken ``prompt_agent`` must not cancel it.
+
+    In a spoken application prompt the bot-speaking handlers run inside the
+    streaming TTS consumer, an adopted child of the application-prompt task
+    rather than of ``active_turn_task``. ``stop()`` and
+    ``cancel_application_prompt()`` only recognized the prompt task itself as
+    the caller, so force stop, ``cancel_turn()`` and ``reset_state()``
+    cancelled the handler's own enclosing prompt (``CancelledError`` inside
+    the handler, session left half-stopped), and graceful stop waited on that
+    prompt until the 5s prompt bound expired.
+    """
+    session = Session(
+        SessionConfig(
+            transport=_HeldOpenTransport(chunks=[]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=FastDoneAgent(),
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+    handler_done = asyncio.Event()
+    handler_calls = 0
+    handler_errors: list[BaseException] = []
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, errors.append)
+
+    async def _handler(_event: object) -> None:
+        nonlocal handler_calls
+        handler_calls += 1
+        if handler_calls > 1:
+            return
+        try:
+            await action(session)
+        except BaseException as exc:
+            handler_errors.append(exc)
+            raise
+        finally:
+            handler_done.set()
+
+    session.event_bus.subscribe(speaking_event, _handler)
+
+    await session.start()
+    prompt = asyncio.create_task(session.prompt_agent("Say hi.", speak=True))
+    try:
+        # Well under the 5s graceful prompt bound: the handler's stop must not
+        # wait on its own enclosing prompt task.
+        await asyncio.wait_for(handler_done.wait(), timeout=2.0)
+        assert await asyncio.wait_for(prompt, timeout=2.0) == "Quick reply."
+        assert session._turn_manager.state is TurnManagerState.IDLE
+        assert session._turn_runner.active_application_prompt is None
+    finally:
+        if not prompt.done():
+            prompt.cancel()
+        await asyncio.wait_for(session.stop(force=True), timeout=2.0)
+
+    assert handler_errors == []
+    assert errors == []
+    if stops_session:
+        assert session._closed
 
 
 @pytest.mark.asyncio

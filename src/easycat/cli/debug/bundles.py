@@ -118,7 +118,7 @@ def _format_mtime(mtime: float) -> str:
 # ── `easycat bundles list` ───────────────────────────────────────
 
 
-@cli_command
+@cli_command("bundles_list")
 def list_bundles(
     path: Path | None = typer.Option(
         None,
@@ -407,7 +407,7 @@ def _turn_waterfall_table(turns: list[dict[str, Any]]) -> Table:
 
 
 @debugger_app.command("serve")
-@cli_command
+@cli_command("debugger_serve")
 def serve_debugger_ui(
     bundle_path: Path = typer.Argument(
         ...,
@@ -476,7 +476,7 @@ def serve_debugger_ui(
 # ── `easycat bundles show` / `easycat inspect` ───────────────────
 
 
-@cli_command
+@cli_command("bundles_show")
 def show_bundle(
     bundle_path: Path = typer.Argument(
         ...,
@@ -496,7 +496,7 @@ def show_bundle(
     _show_bundle_summary(bundle_path, json_output=json_output, issues=issues)
 
 
-@cli_command
+@cli_command("bundles_show")
 def inspect_bundle(
     bundle_path: Path = typer.Argument(
         ...,

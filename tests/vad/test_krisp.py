@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -142,3 +143,38 @@ async def test_short_noise_burst_no_event():
         assert not any(isinstance(e, VADStartSpeaking) for e in events)
     finally:
         del sys.modules["krisp_audio"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lead_chunks", [0, 1, 7, 33, 100])
+async def test_krisp_vad_125_sample_chunks_confirm_speech_at_exactly_250_ms(
+    monkeypatch: pytest.MonkeyPatch, lead_chunks: int
+):
+    """125-sample chunks @ 16 kHz last 7812.5 us, not a whole number of microseconds.
+
+    The 250 ms gate is met exactly 32 chunks after the first speech chunk, so
+    the start event must fire on the 33rd speech chunk at every lead-in. A
+    per-chunk microsecond-rounded clock fired it on the 34th.
+    """
+    mock_module = MagicMock()
+    calls = [0]
+
+    def _vad_process(_session: object, _data: bytes, _rate: int) -> float:
+        calls[0] += 1
+        return 0.0 if calls[0] <= lead_chunks else 1.0
+
+    mock_module.vad_process.side_effect = _vad_process
+    monkeypatch.setitem(sys.modules, "krisp_audio", mock_module)
+
+    vad = KrispVAD()
+    vad.configure(min_speech_duration_ms=250)
+    chunks = 0
+    while True:
+        chunks += 1
+        events = [event async for event in vad.process(_make_chunk(n_samples=125))]
+        if events:
+            assert [type(event) for event in events] == [VADStartSpeaking]
+            break
+        assert chunks < 200, "speech was never confirmed"
+
+    assert chunks - lead_chunks == 33

@@ -160,25 +160,43 @@ def _adapt_llama_workflow(agent: Any, _model: str | None) -> _AdaptedAgent | Non
     return _AdaptedAgent(LlamaAgentsBridge(workflow=agent))
 
 
-_BRIDGE_SUPPLIED_WORKFLOW_KWARGS = frozenset({"recorder", "cancel_token"})
+# GenericWorkflowBridge picks deep mode when ``on_user_turn`` declares
+# ``recorder``; only deep mode passes ``cancel_token``. Shallow mode passes
+# just ``text``, and only when it has no ``on_user_turn_streaming`` (which
+# shallow mode calls instead, leaving ``on_user_turn`` unused).
+_DEEP_MODE_WORKFLOW_KWARGS = frozenset({"recorder", "cancel_token"})
 
 
 def _adapt_generic_workflow(agent: Any, _model: str | None) -> _AdaptedAgent | None:
     on_user_turn = getattr(agent, "on_user_turn", None)
     if not callable(on_user_turn) or isinstance(agent, type):
         return None
-    if not _workflow_signature_is_supported(on_user_turn):
-        return None
-    from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
+    from easycat.integrations.agents.generic_workflow import (
+        GenericWorkflowBridge,
+        has_streaming_entry_point,
+    )
 
+    if not _workflow_signature_is_supported(
+        on_user_turn, streaming=has_streaming_entry_point(agent)
+    ):
+        return None
     return _AdaptedAgent(GenericWorkflowBridge(workflow=agent))
 
 
-def _workflow_signature_is_supported(on_user_turn: Callable[..., Any]) -> bool:
+def _workflow_signature_is_supported(
+    on_user_turn: Callable[..., Any], *, streaming: bool = False
+) -> bool:
     try:
-        parameters = inspect.signature(on_user_turn).parameters.values()
+        signature_parameters = inspect.signature(on_user_turn).parameters
     except (ValueError, TypeError):
         return True
+
+    parameters = signature_parameters.values()
+    deep_mode = "recorder" in signature_parameters
+    # Shallow mode with on_user_turn_streaming never calls on_user_turn, so the
+    # fallback may keep a required cancel_token without being rejected.
+    shallow_streaming = streaming and not deep_mode
+    bridge_supplied = _DEEP_MODE_WORKFLOW_KWARGS if deep_mode or shallow_streaming else frozenset()
 
     positional = [
         parameter
@@ -194,15 +212,20 @@ def _workflow_signature_is_supported(on_user_turn: Callable[..., Any]) -> bool:
         and parameter.default is inspect.Parameter.empty
     ]
     unsupplied_keyword_only = [
-        parameter
-        for parameter in required_keyword_only
-        if parameter.name not in _BRIDGE_SUPPLIED_WORKFLOW_KWARGS
+        parameter for parameter in required_keyword_only if parameter.name not in bridge_supplied
     ]
     if len(positional) > 1:
         raise BridgeInputError(
             f"on_user_turn() has {len(positional)} required positional "
             "parameters but GenericWorkflowBridge only passes (text). "
             "Remove extra required parameters or construct the bridge explicitly."
+        )
+    if any(parameter.name == "cancel_token" for parameter in unsupplied_keyword_only):
+        raise BridgeInputError(
+            "on_user_turn() requires keyword-only parameter cancel_token, but "
+            "GenericWorkflowBridge supplies cancel_token only in deep mode. "
+            "Add a recorder parameter to opt into deep mode or give cancel_token "
+            "a default."
         )
     if unsupplied_keyword_only:
         names = ", ".join(parameter.name for parameter in unsupplied_keyword_only)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import types
 import unittest.mock
 from contextlib import contextmanager
@@ -12,9 +13,11 @@ import pytest
 
 from easycat.events import (
     CallAnswered,
+    CallEnded,
     CallInitiated,
     EventBus,
 )
+from easycat.telephony.call_state import OutboundCallState, OutboundCallStateMachine
 from easycat.telephony.outbound import (
     OutboundCallClient,
     OutboundCallManager,
@@ -24,6 +27,8 @@ from easycat.telephony.outbound import (
     emit_telnyx_call_event,
     telnyx_dial_payload_from_create_kwargs,
 )
+from easycat.telephony.telnyx import decode_client_state
+from easycat.transports.telnyx_media import TelnyxTransport, TelnyxTransportConfig
 
 
 @contextmanager
@@ -360,6 +365,48 @@ class TestDialPayloadTranslation:
         assert payload["stream_bidirectional_codec"] == "L16"
         assert payload["stream_bidirectional_sampling_rate"] == 16000
 
+    def test_stream_url_marks_client_state_outbound(self) -> None:
+        """A streamed Dial must carry ``direction="outbound"`` (gh 1157).
+
+        The Dial body used to have no ``client_state``, so the media stream's
+        start frame defaulted to inbound and the outbound state machine
+        dropped its own call's ``CallAnswered`` / ``CallEnded``.
+        """
+        payload = telnyx_dial_payload_from_create_kwargs(
+            {"to": "+1", "from_": "+2", "stream_url": "wss://media.example/stream"},
+            connection_id="conn",
+        )
+
+        assert decode_client_state(payload["client_state"]) == {"direction": "outbound"}
+
+    def test_stream_url_merges_caller_client_state(self) -> None:
+        caller_state = {"campaign": "spring", "lead_id": "L-7"}
+        payload = telnyx_dial_payload_from_create_kwargs(
+            {
+                "to": "+1",
+                "from_": "+2",
+                "stream_url": "wss://media.example/stream",
+                "client_state": caller_state,
+            },
+            connection_id="conn",
+        )
+
+        assert decode_client_state(payload["client_state"]) == {
+            "campaign": "spring",
+            "lead_id": "L-7",
+            "direction": "outbound",
+        }
+        assert caller_state == {"campaign": "spring", "lead_id": "L-7"}
+
+    def test_without_stream_url_omits_client_state(self) -> None:
+        payload = telnyx_dial_payload_from_create_kwargs(
+            {"to": "+1", "from_": "+2"},
+            connection_id="conn",
+        )
+
+        assert "client_state" not in payload
+        assert "stream_url" not in payload
+
     @pytest.mark.parametrize("amd_mode", ["DetectMessageEnd", "Enable", "Disabled"])
     def test_amd_mode_mapping(self, amd_mode: str) -> None:
         payload = telnyx_dial_payload_from_create_kwargs(
@@ -405,6 +452,73 @@ class TestDialPayloadTranslation:
         )
 
         assert "answering_machine_detection" not in payload
+
+
+class _NullTelnyxWebSocket:
+    request = None
+
+    async def send(self, message: str) -> None:
+        return None
+
+    async def close(self, *args: object) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_streamed_dial_start_frame_drives_outbound_state_machine() -> None:
+    """The client_state a Dial embeds must make its media stream outbound (gh 1157).
+
+    Telnyx echoes the Dial's ``client_state`` on the stream ``start`` frame;
+    with no direction marker the leg parsed as inbound, the caller/called
+    numbers were not swapped, and the ``OutboundCallStateMachine`` on the
+    same bus stayed in ``INITIATING`` after the stream's ``CallAnswered``.
+    """
+    our_did, callee = "+15551234567", "+15557654321"
+    payload = telnyx_dial_payload_from_create_kwargs(
+        {"to": callee, "from_": our_did, "stream_url": "wss://media.example/stream"},
+        connection_id="conn",
+    )
+    bus = EventBus()
+    lifecycle: list[Any] = []
+    bus.subscribe(CallAnswered, lifecycle.append)
+    bus.subscribe(CallEnded, lifecycle.append)
+    machine = OutboundCallStateMachine(bus)
+    machine.start()
+    await bus.emit(CallInitiated(call_sid="CC1", to=callee, from_=our_did))
+    transport = TelnyxTransport(TelnyxTransportConfig(), event_bus=bus)
+    transport._ws = _NullTelnyxWebSocket()
+
+    start = {
+        "event": "start",
+        "stream_id": "ST1",
+        "start": {
+            "call_control_id": "CC1",
+            "from": our_did,
+            "to": callee,
+            "client_state": payload["client_state"],
+            "media_format": {"encoding": "L16", "sample_rate": 16000, "channels": 1},
+        },
+    }
+    await transport._handle_message(json.dumps(start))
+    await transport._drain_emit_tasks()
+
+    identity = transport.call_identity
+    assert identity is not None
+    assert identity.direction == "outbound"
+    assert identity.caller_number == callee
+    assert identity.called_number == our_did
+    assert "direction" not in identity.custom_fields
+    assert machine.state is OutboundCallState.CLASSIFYING
+
+    await transport._handle_message(json.dumps({"event": "stop", "stop": {"stream_id": "ST1"}}))
+    await transport._drain_emit_tasks()
+
+    assert [(type(e), e.direction) for e in lifecycle] == [
+        (CallAnswered, "outbound"),
+        (CallEnded, "outbound"),
+    ]
+    assert machine.state is OutboundCallState.ENDED
+    machine.stop()
 
 
 class TestEmitTelnyxCallEvent:

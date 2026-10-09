@@ -37,6 +37,7 @@ import math
 from typing import Any
 
 from easycat.debug._pcm import decode_pcm_mono
+from easycat.debug._turn_timeline import record_mono_ns
 from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
 
 # Track keys in the aligned view returned by :func:`align_tracks`.
@@ -53,12 +54,14 @@ def _record_sequence(record: dict[str, Any]) -> int | None:
 
 
 def _record_mono_ns(record: dict[str, Any]) -> int:
-    """Best-effort monotonic timestamp for ordering aligned frames."""
-    timing = record.get("timing")
-    if isinstance(timing, dict):
-        value = timing.get("mono_ns")
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
+    """Best-effort monotonic timestamp for ordering aligned frames.
+
+    Reads nested ``timing.mono_ns`` or a flat top-level ``mono_ns`` (SQLite /
+    crash-dump journals), falling back to the sequence number.
+    """
+    value = record_mono_ns(record)
+    if value is not None:
+        return value
     seq = _record_sequence(record)
     return seq if seq is not None else 0
 

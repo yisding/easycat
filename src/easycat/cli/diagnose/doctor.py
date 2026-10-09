@@ -34,7 +34,7 @@ from rich.table import Table
 from easycat._audio_utils import resample_backend
 from easycat._credentials import has_usable_credential
 from easycat._extras import PORTAUDIO_INSTALL_FIX
-from easycat._provider_registry import credential_env_vars
+from easycat._provider_registry import credential_env_vars, provider_env_vars
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, emit_json, json_envelope, stderr_console
 from easycat.cli.diagnose._requirements import (
@@ -198,9 +198,21 @@ def _provider_env() -> dict[str, str]:
     ``easycat.stt_providers`` / ``easycat.tts_providers`` entry-point
     groups get the same checks as built-ins.  Providers sharing an env
     var are collapsed to one row (e.g. ``openai`` and ``openai-realtime``
-    both use ``OPENAI_API_KEY``).
+    both use ``OPENAI_API_KEY``).  ``--provider NAME`` scoping uses
+    :func:`_scoped_provider_env` instead, so every provider name is accepted.
     """
     return credential_env_vars()
+
+
+def _scoped_provider_env() -> dict[str, str]:
+    """Every credentialed provider → env var, without credential dedup.
+
+    ``doctor --provider NAME`` validates and resolves *NAME* against this
+    map so a provider that shares a credential with another (for example
+    ``openai-realtime``, which shares ``OPENAI_API_KEY`` with ``openai``)
+    is still a valid scope.
+    """
+    return provider_env_vars()
 
 
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -651,9 +663,8 @@ def check_env_vars(
     # Scoped mode: user asked to verify a specific provider.  A missing
     # key for *that* provider must fail — otherwise `doctor --provider X`
     # can false-green when a different provider happens to be configured.
-    provider_env = _provider_env()
     if only_provider is not None:
-        var = provider_env.get(only_provider)
+        var = _scoped_provider_env().get(only_provider)
         if var is None:
             return []
         state = _env_value_state(os.getenv(var))
@@ -668,6 +679,7 @@ def check_env_vars(
             ]
         return [_missing_provider_result(only_provider, var, state=state)]
 
+    provider_env = _provider_env()
     required_env_names = selected.required_env if selected is not None else ()
     optional_env_names = selected.optional_env if selected is not None else ()
     requirements_scoped = selected is not None
@@ -751,8 +763,19 @@ def check_provider_reachability(
     requirements_scoped = selected is not None
     required = set(selected.required_env) if selected is not None else set()
     scoped = required | (set(selected.optional_env) if selected is not None else set())
-    for provider, var in _provider_env().items():
-        if only_provider and only_provider != provider:
+    provider_env = _provider_env()
+    probe_provider = only_provider
+    if only_provider:
+        # A scoped provider that shares its credential with another (for
+        # example ``openai-realtime`` → ``OPENAI_API_KEY``) probes the
+        # canonical provider that owns that credential's row (``openai``).
+        scoped_var = _scoped_provider_env().get(only_provider)
+        probe_provider = next(
+            (name for name, var in provider_env.items() if var == scoped_var),
+            only_provider,
+        )
+    for provider, var in provider_env.items():
+        if probe_provider and probe_provider != provider:
             continue
         if requirements_scoped and var not in scoped:
             continue
@@ -1487,7 +1510,7 @@ def doctor(
     _validate_doctor_scope(
         environment=environment,
         only_provider=only_provider,
-        provider_env=provider_env,
+        provider_env=_scoped_provider_env(),
         manifest_mode=manifest_mode,
         json_output=json_output,
     )

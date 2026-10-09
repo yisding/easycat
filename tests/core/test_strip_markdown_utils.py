@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import sys
 from collections.abc import Callable
 
 import pytest
@@ -140,6 +142,136 @@ class TestMarkdownReferenceScanner:
         assert has_markdown(text) is detected
         assert strip_markdown(text) == expected
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Press [Enter] (the big key on the right) to continue.",
+            "Choose [yes] (or no) now.",
+            "Press [Enter](the big key) now.",
+            "Item [1] (see above).",
+            "![chart] (shown below)",
+            '[Docs](https://example.test "title" extra)',
+            "[Enter]\n(Return)",
+            "[Enter]\r\n(Return)",
+            "[Enter]\v(Return)",
+            "[Enter]\f(Return)",
+            "[Enter]\x85(Return)",
+            "[Enter]\u2028(Return)",
+            "[Enter]\u2029(Return)",
+            "[a](<b\u2028c>)",
+        ],
+    )
+    def test_bracketed_prose_before_parenthetical_is_kept_verbatim(self, text: str) -> None:
+        """A parenthetical that is not a valid link destination is prose.
+
+        The scanner used to treat any ``[x] (...)`` as a link and keep only the
+        first word inside the parentheses as its "URL", so ``Press [Enter]
+        (the big key on the right)`` was spoken as ``Press Enter the``. A line
+        break between ``]`` and ``(`` also made one.
+        """
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[Enter] (Return)", "Enter Return"),
+            ("[Docs](https://example.test 'title')", "Docs https://example.test"),
+            ("[Docs](https://example.test (title))", "Docs https://example.test"),
+            ('[Docs](https://example.test "a \\" b")', "Docs https://example.test"),
+            ("[Docs](<https://example.test/a b> 'title')", "Docs https://example.test/a b"),
+            ("[Docs]( https://example.test )", "Docs https://example.test"),
+            ("[Docs]()", "Docs"),
+            ("![alt](img.png 'caption')", "alt"),
+            ("[x](not a url) then [ok](url)", "[x](not a url) then ok url"),
+            ("[x]([ok](url) more)", "[x](ok url more)"),
+            ("[x](foo\\ 'title')", "x foo\\"),
+        ],
+    )
+    def test_valid_destinations_with_titles_still_render(self, text: str, expected: str) -> None:
+        assert has_markdown(text) is True
+        assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[x](<foo\\>bar>)", "x foo\\>bar"),
+            ("[x](<foo\\>bar> 'title')", "x foo\\>bar"),
+        ],
+    )
+    def test_escaped_angle_close_stays_inside_destination(self, text: str, expected: str) -> None:
+        """A backslash-escaped ``>`` does not close an ``<...>`` destination,
+        and the rendered URL runs to the unescaped closing ``>``."""
+        assert has_markdown(text) is True
+        assert strip_markdown(text) == expected
+
+    def test_backslash_does_not_escape_whitespace_in_destination(self) -> None:
+        """CommonMark only escapes ASCII punctuation: ``foo\\ bar`` is two
+        tokens, so the parenthetical is not a destination and stays prose."""
+        text = "Use [x](foo\\ bar) here."
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda n: "[a](" * n + "x y" + ")" * n,
+            lambda n: "[a](<" * n + "x y" + ")" * n,
+        ],
+        ids=["nested_tokens", "nested_angle"],
+    )
+    def test_nested_invalid_destinations_are_left_verbatim(
+        self, build: Callable[[int], str]
+    ) -> None:
+        text = build(2000)
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("prefix", "inner"),
+        [
+            ("[a](", 'x "{title}"'),
+            ("[a](<", 'x> "{title}"'),
+            ("[a](", "x ({title})"),
+        ],
+        ids=["double_quoted", "angle_double_quoted", "parenthesized"],
+    )
+    def test_nested_candidates_sharing_one_title_scan_it_once(
+        self, monkeypatch: pytest.MonkeyPatch, prefix: str, inner: str
+    ) -> None:
+        """Every nesting level resolves to the same title start; only the
+        innermost level's destination ends with the title, so it alone is a
+        link. Each title start must be matched once, not once per level, or
+        the scan turns quadratic in the nesting depth times the title length.
+        """
+        import easycat.strip_markdown as module
+
+        title_pattern = module._LINK_TITLE_RE
+        title_starts: list[int] = []
+
+        class _CountingPattern:
+            def match(self, text: str, pos: int = 0) -> re.Match[str] | None:
+                title_starts.append(pos)
+                return title_pattern.match(text, pos)
+
+            def fullmatch(self, text: str, pos: int = 0, endpos: int = sys.maxsize) -> object:
+                title_starts.append(pos)
+                return title_pattern.fullmatch(text, pos, endpos)
+
+        monkeypatch.setattr(module, "_LINK_TITLE_RE", _CountingPattern())
+        n = 2000
+        text = prefix * n + inner.format(title="t" * n) + ")" * n
+        expected = prefix * (n - 1) + "a x" + ")" * (n - 1)
+
+        assert has_markdown(text) is True
+        assert title_starts
+        assert len(title_starts) == len(set(title_starts))
+
+        title_starts.clear()
+        assert strip_markdown(text) == expected
+        assert title_starts
+        assert len(title_starts) == len(set(title_starts))
+
     def test_scanner_yields_consecutive_typed_references(self) -> None:
         references = list(
             _MarkdownReferenceScanner('![diagram](image.png) [Docs](https://example.test "title")')
@@ -273,6 +405,54 @@ class TestStripMarkdown:
     def test_image_with_parenthesized_url(self) -> None:
         text = "Diagram: ![plot](https://example.com/a(b))."
         assert strip_markdown(text) == "Diagram: plot."
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            (
+                "[![build](https://img.shields.io/b.svg)](https://ci.example.com)",
+                "build https://ci.example.com",
+            ),
+            ("See [![logo](a.png)](https://x.com) here", "See logo https://x.com here"),
+            ("[![moon](moon.jpg)](/uri)", "moon /uri"),
+            ("[a ![b](c) d](e)", "a b d e"),
+        ],
+        ids=["badge", "badge-in-sentence", "commonmark-moon", "image-mid-label"],
+    )
+    def test_image_nested_in_link_label_renders_as_alt_text(
+        self, text: str, expected: str
+    ) -> None:
+        """A badge-style ``[![alt](img)](url)`` speaks the alt text and link URL.
+
+        The scanner resumed after the outer destination without rendering the
+        label, so the inner image markup and its URL reached TTS verbatim.
+        """
+        assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[a [b](c) d](e)", "a b c d e"),
+            ("![alt [x](y)](img.png)", "alt x y"),
+            ("[outer [inner]](url)", "outer [inner] url"),
+        ],
+        ids=["link-in-link-label", "link-in-image-alt", "bare-brackets-in-label"],
+    )
+    def test_nested_references_in_labels_are_rendered(self, text: str, expected: str) -> None:
+        """Links nested in labels render too; bracket pairs without a destination stay."""
+        assert strip_markdown(text) == expected
+
+    def test_deeply_nested_link_labels_do_not_exhaust_the_stack(self) -> None:
+        """Adversarial ``[[[...x](u)](u)`` nesting must not raise RecursionError.
+
+        Label rendering recurses once per nesting level, so it is depth-capped:
+        the outer levels render and the deepest label is left literal.
+        """
+        depth = 2000
+        payload = "[" * depth + "x" + "](u)" * depth
+        result = strip_markdown(payload)
+        assert result.endswith(")](u) u u u u u")
+        assert result.count("u") == depth
 
     @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
@@ -467,6 +647,53 @@ def test_strip_markdown_does_not_treat_escaped_asterisks_as_emphasis(
     assert strip_markdown(text) in acceptable
 
 
+@pytest.mark.parametrize("normalize_code_spans", [False, True])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (r"Type \`ls\` to list.", "Type `ls` to list."),
+        (r"\`x\`", "`x`"),
+        (r"Use \`a\` and `b`.", "Use `a` and b."),
+        (r"a \` b", "a ` b"),
+        # CommonMark: the escaped backtick is literal and ``x``` has no
+        # closing run of exactly two, so every backtick stays as text.
+        (r"\```x```", "```x```"),
+        (r"\```code``", "`code"),
+    ],
+)
+def test_strip_markdown_does_not_treat_escaped_backticks_as_code_spans(
+    text: str, expected: str, normalize_code_spans: bool
+) -> None:
+    """``\\`x\\``` is literal text in Markdown, not an inline code span.
+
+    The inline-code regex used to open a span at the escaped backtick and take
+    the closing backslash into the code body, so ``\\`ls\\``` became
+    ``\\ls\\`` and TTS spoke "backslash" twice. The escaping backslash must be
+    dropped and the backtick kept, exactly as ``\\*`` becomes ``*``.
+    """
+    assert strip_markdown(text, normalize_code_spans=normalize_code_spans) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "normalize_code_spans", "expected"),
+    [
+        # An escaped backslash does not escape the backtick after it.
+        (r"\\`code`", False, r"\\code"),
+        (r"\\`code`", True, r"\\code"),
+        # Backslashes inside a code span are literal and do not escape its close.
+        (r"`a\`b`", False, r"a\b`"),
+        (r"`foo\`bar`", True, "foo backslashbar`"),
+        (r"`\*x\*`", False, r"\*x\*"),
+        ("```\n\\`\n```", False, r"\`"),
+    ],
+)
+def test_strip_markdown_keeps_code_span_backslashes_literal(
+    text: str, normalize_code_spans: bool, expected: str
+) -> None:
+    """Escape handling applies outside code spans only, never to their contents."""
+    assert strip_markdown(text, normalize_code_spans=normalize_code_spans) == expected
+
+
 def test_strip_markdown_keeps_paragraph_break_inside_multi_paragraph_blockquote() -> None:
     """A bare ``>`` line separates quoted paragraphs and must stay a paragraph break.
 
@@ -659,6 +886,134 @@ def test_strip_markdown_fenced_code_wins_over_wrapped_inline_span() -> None:
     assert strip_markdown(text) == "x = `a\nb`"
 
 
+@pytest.mark.parametrize("normalize_code_spans", [False, True])
+def test_strip_markdown_fence_run_inside_inline_span_is_span_content(
+    normalize_code_spans: bool,
+) -> None:
+    """A triple-backtick run inside a double-backtick span is code content.
+
+    The fenced pass used to stash ```` ```b``` ```` first; the inline pass then
+    wrapped that placeholder in the surrounding span, so the restore pass
+    never expanded it and ``a <sentinel>0<sentinel> c`` reached TTS.
+    CommonMark reads one span: the triple run cannot close a double-run span.
+    """
+    text = "``a ```b``` c``"
+
+    assert strip_markdown(text, normalize_code_spans=normalize_code_spans) == "a ```b``` c"
+    assert has_markdown(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("`x` ```py\ncode\n```", "x code"),
+        ("`x` ```py\ncode\n``` and `y`", "x code and y"),
+        ("Use `x`\n```py\nprint(1)\n```\nthen `y`.", "Use x\nprint(1)\nthen y."),
+        # A stray backtick before a fence line cannot pair across the block.
+        ("`a\n```py\ncode\n```\nb`", "`a\ncode\nb`"),
+    ],
+)
+def test_strip_markdown_fenced_block_after_inline_span_stays_a_block(
+    text: str, expected: str
+) -> None:
+    assert strip_markdown(text) == expected
+
+
+def test_strip_markdown_fence_closer_takes_whole_backtick_run() -> None:
+    """A longer closing run is all delimiter, never a stray spoken backtick."""
+    assert strip_markdown("````\ncode\n````") == "code"
+    assert strip_markdown("```a````") == "a"
+    assert strip_markdown("```a```` b `c`") == "a b c"
+    # A run that ends its line is all closer, however long.
+    assert strip_markdown("```py\nx\n``````\nafter") == "x\nafter"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("```py\nx\n``````js\ny\n```", "xy"),
+        ("b cDone. ```z``````z```", "b cDone. zz"),
+    ],
+)
+@pytest.mark.parametrize("normalize_code_spans", [False, True])
+def test_strip_markdown_fence_closer_leaves_the_next_fence_opener(
+    text: str, expected: str, normalize_code_spans: bool
+) -> None:
+    """A closer run with text after it on the line keeps a following opener.
+
+    Taking the whole run as the closer swallowed the next block's opening
+    backticks, so its info string and code were spoken with the fence after
+    them (``xjs y ```...``) and the streaming window stayed open.
+    """
+    assert strip_markdown(text, normalize_code_spans=normalize_code_spans) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("`a\n````\ncode with `tick\n````", "`a\ncode with `tick"),
+        ("`a\n````py\ncode `x`\n````\nb`", "`a\ncode `x`\nb`"),
+        ("`a\n  `````\ncode\n`````\nb`", "`a\n  code\nb`"),
+        # A double-backtick span cannot cross the fence line either.  The fence
+        # it opens has no closer, so the whole text stays literal, as it does
+        # with a three-backtick line.
+        ("``a\n````\nb``", "``a\n````\nb``"),
+        ("``a\n```\nb``", "``a\n```\nb``"),
+    ],
+)
+def test_strip_markdown_stray_tick_never_pairs_across_long_fence_line(
+    text: str, expected: str
+) -> None:
+    """A fence line of four or more backticks ends the paragraph too.
+
+    Only exactly-three-backtick lines stopped an inline span, so a stray tick
+    before a ```` ```` ```` fence paired with a tick after the block, read the
+    block as one wrapped span and spoke its fence markers.
+    """
+    assert strip_markdown(text) == expected
+
+
+def test_strip_markdown_code_scan_stays_fast_on_fence_runs_after_ticks() -> None:
+    """Ticks left mid-run by a fence closer would rescan the paragraph each time.
+
+    With a closer that stopped after three backticks, every leftover tick
+    searched to the end of the text for a single-tick closer, so this input
+    took quadratic time.
+    """
+    text = "`a ```" * 20_000
+
+    assert strip_markdown(text) == "`a " + "`aa " * 9_999 + "`a"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("``a ```b``` c``", "a ```b``` c"),
+        ("`a ```b``` c`", "a ```b``` c"),
+        ("``a ```b``` c`` and ```d```", "a ```b``` c and d"),
+        ("`x ```y` z```", "x ```y z```"),
+        ("```a``` ``b ```c``` d`` `e`", "a b ```c``` d e"),
+        ("``a\n```b``` c``", "a ```b``` c"),
+        # A code span inside a link destination is restored there too.
+        ("[l](https://x/``a ```b``` c``)", "l https://x/a ```b``` c"),
+    ],
+)
+@pytest.mark.parametrize("normalize_code_spans", [False, True])
+def test_strip_markdown_nested_backtick_runs_never_leak_placeholders(
+    text: str, expected: str, normalize_code_spans: bool
+) -> None:
+    from easycat.strip_markdown import _SENTINEL_CHARS_RE
+
+    result = strip_markdown(text, normalize_code_spans=normalize_code_spans)
+
+    assert _SENTINEL_CHARS_RE.search(result) is None
+    assert not any(0xE000 <= ord(ch) <= 0xF8FF for ch in result)
+    # The leak read as a bare stash index ("a 0 c") once the sentinels were
+    # dropped downstream.
+    assert not any(ch.isdigit() for ch in result)
+    assert result == expected
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
@@ -750,5 +1105,34 @@ def test_strip_markdown_link_label_repeating_destination_is_kept_verbatim(
     text: str, expected: str
 ) -> None:
     """LLMs often write ``[url](url)``; the label is then a URL, not prose."""
+    assert strip_markdown(text) == expected
+    assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "[![build](https://img.shields.io/b.svg)](https://ci.example.com/_a_)",
+            "build https://ci.example.com/_a_",
+        ),
+        ("[[docs](https://x/_a_)](https://y/_b_)", "docs https://x/_a_ https://y/_b_"),
+        (
+            "[see [docs](https://x/__a__) _now_](https://y/*b*)",
+            "see docs https://x/__a__ now https://y/*b*",
+        ),
+        # Nested image alt text is prose even when its image URL has underscores.
+        ("[![_alt_](https://i/_x_.png)](https://y/_b_)", "alt https://y/_b_"),
+    ],
+    ids=["badge", "link-in-link-label", "link-and-emphasis-in-label", "image-alt-is-prose"],
+)
+def test_strip_markdown_nested_link_destinations_are_kept_verbatim(
+    text: str, expected: str
+) -> None:
+    """URLs of links nested in a label are stashed like the outer destination.
+
+    Label rendering recurses into nested links (gh 1209 follow-up); the inner
+    URL must get the same protection or its ``_`` / ``*`` read as emphasis.
+    """
     assert strip_markdown(text) == expected
     assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected

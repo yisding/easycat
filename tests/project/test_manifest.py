@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import pathlib
 import sys
 import types
 
@@ -367,6 +368,112 @@ def test_to_easyconfig_unknown_vad_backend_raises_e602(
     assert excinfo.value.code == "EASYCAT_E602"
 
 
+def test_to_easyconfig_builtin_vad_with_model_suffix_raises_e602(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed built-in shortcut (``ValueError``) stays a manifest error."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    manifest = parse_manifest(
+        {"voice": {"default": {"transport": "websocket", "vad": "silero/big"}}}
+    )
+    with pytest.raises(EasyCatError) as excinfo:
+        manifest.to_easyconfig("default", resolve_agent=False)
+    assert excinfo.value.code == "EASYCAT_E602"
+    assert excinfo.value.context["path"] == "[voice.default]"
+
+
+@dataclasses.dataclass
+class _KeyedVADConfig:
+    """A registered third-party VAD config whose provider needs a credential."""
+
+    api_key: str = ""
+
+
+class _KeyedVADProvider:
+    def __init__(self, config: _KeyedVADConfig) -> None:  # pragma: no cover - never built
+        self.config = config
+
+
+@pytest.fixture
+def keyed_vad_catalog():
+    """Register a credential-bearing VAD provider, then restore the catalog.
+
+    Same snapshot/restore shape as ``tests/planning/test_resolution.py``.
+    """
+    from easycat.vad.factory import _CATALOG as vad_catalog
+    from easycat.vad.factory import register_vad_provider
+
+    tables = (
+        "providers",
+        "env_vars",
+        "extras",
+        "api_domains",
+        "probe_modules",
+        "capabilities",
+        "capability_resolvers",
+        "config_to_provider",
+    )
+    saved = {name: dict(getattr(vad_catalog, name)) for name in tables}
+    discovered = vad_catalog._discovered
+    register_vad_provider(
+        "keyedvad", _KeyedVADProvider, _KeyedVADConfig, env_var="KEYED_VAD_API_KEY"
+    )
+    yield
+    for name, entries in saved.items():
+        table = getattr(vad_catalog, name)
+        table.clear()
+        table.update(entries)
+    object.__setattr__(vad_catalog, "_discovered", discovered)
+
+
+def test_to_easyconfig_keyed_vad_missing_key_raises_e203_not_e602(
+    keyed_vad_catalog: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A known VAD's missing credential must surface as E203, not "unknown provider".
+
+    REGRESSION: ``_coerce_vad`` wrapped EVERY ``EasyCatError`` from
+    ``parse_vad_string`` as ``EASYCAT_E602 ... is not a known provider``, so the
+    ``EASYCAT_E203`` raised for a registered provider whose ``env_var`` is unset
+    reached startup under a different code than ``easycat plan``/``doctor``
+    report for the same manifest.
+    """
+    from easycat.planning.selection import build_manifest_plan, plan_issues
+
+    monkeypatch.delenv("KEYED_VAD_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    manifest = parse_manifest(
+        {"voice": {"default": {"transport": "websocket", "vad": "keyedvad"}}}
+    )
+
+    with pytest.raises(EasyCatError) as excinfo:
+        manifest.to_easyconfig("default", resolve_agent=False)
+
+    assert excinfo.value.code == "EASYCAT_E203"
+    assert "KEYED_VAD_API_KEY" in excinfo.value.message
+    assert "is not a known provider" not in excinfo.value.message
+    # Startup and the planner agree on the code for the same manifest.
+    plan = build_manifest_plan(manifest, profile="default")
+    assert ("EASYCAT_E203", "KEYED_VAD_API_KEY") in [
+        (issue.code, issue.field) for issue in plan_issues(plan)
+    ]
+
+
+def test_to_easyconfig_keyed_vad_with_key_resolves_registered_config(
+    keyed_vad_catalog: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the credential set, the registered VAD shortcut resolves normally."""
+    monkeypatch.setenv("KEYED_VAD_API_KEY", "kv-test-abcdefghijklmnopqrstuvwxyz")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    manifest = parse_manifest(
+        {"voice": {"default": {"transport": "websocket", "vad": "keyedvad"}}}
+    )
+
+    config = manifest.to_easyconfig("default", resolve_agent=False)
+
+    assert isinstance(config.vad, _KeyedVADConfig)
+    assert config.vad.api_key == "kv-test-abcdefghijklmnopqrstuvwxyz"
+
+
 def test_to_easyconfig_resolves_python_agent(
     _agent_module: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -420,6 +527,102 @@ def test_resolve_agent_bad_module_raises_e605() -> None:
     with pytest.raises(EasyCatError) as exc_info:
         manifest.resolve_agent("default")
     assert exc_info.value.code == "EASYCAT_E605"
+
+
+def _write_agent_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, source: str
+) -> None:
+    """Write ``<name>.py`` under ``tmp_path`` and make it importable for one test."""
+    (tmp_path / f"{name}.py").write_text(source, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, name, raising=False)
+
+
+def _resolve_profile_agent(module_name: str) -> EasyCatError:
+    manifest = parse_manifest(
+        {
+            "voice": {
+                "default": {
+                    "transport": "local",
+                    "agent": f"python:{module_name}:create_agent",
+                }
+            }
+        }
+    )
+    with pytest.raises(EasyCatError) as exc_info:
+        manifest.resolve_agent("default")
+    return exc_info.value
+
+
+def test_resolve_agent_bad_module_detail_names_exception_type() -> None:
+    """A missing module still raises E605, now naming ``ModuleNotFoundError``."""
+    error = _resolve_profile_agent("_easycat_no_such_agent_mod")
+    assert error.code == "EASYCAT_E605"
+    assert "could not import '_easycat_no_such_agent_mod'" in str(error)
+    assert "ModuleNotFoundError" in str(error)
+    assert isinstance(error.__cause__, ModuleNotFoundError)
+
+
+def test_resolve_agent_module_syntax_error_raises_e605(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A syntax error in the agent module is E605, not a raw ``SyntaxError``.
+
+    The import step used to catch only ``ImportError``, so a broken module
+    escaped ``resolve_agent`` uncoded instead of with the catalogued fix text.
+    """
+    _write_agent_module(
+        tmp_path, monkeypatch, "_easycat_syntax_err_agent", "def create_agent(:\n    pass\n"
+    )
+    error = _resolve_profile_agent("_easycat_syntax_err_agent")
+    assert error.code == "EASYCAT_E605"
+    assert "could not import '_easycat_syntax_err_agent'" in str(error)
+    assert "SyntaxError" in str(error)
+    assert isinstance(error.__cause__, SyntaxError)
+
+
+@pytest.mark.parametrize(
+    ("source", "exc_type"),
+    [
+        ("raise RuntimeError('missing config')\n", RuntimeError),
+        ("import os\nos.environ['_EASYCAT_SURELY_UNSET_VAR_XYZ']\n", KeyError),
+    ],
+    ids=["runtime-error", "key-error"],
+)
+def test_resolve_agent_module_raising_at_import_raises_e605(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    exc_type: type[Exception],
+) -> None:
+    """Any ``Exception`` raised while importing the agent module becomes E605."""
+    module_name = f"_easycat_import_raises_{exc_type.__name__.lower()}"
+    _write_agent_module(tmp_path, monkeypatch, module_name, source)
+    monkeypatch.delenv("_EASYCAT_SURELY_UNSET_VAR_XYZ", raising=False)
+    error = _resolve_profile_agent(module_name)
+    assert error.code == "EASYCAT_E605"
+    assert f"could not import {module_name!r}" in str(error)
+    assert exc_type.__name__ in str(error)
+    assert isinstance(error.__cause__, exc_type)
+
+
+def test_resolve_agent_module_import_does_not_swallow_system_exit(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``BaseException`` subclasses such as ``SystemExit`` still propagate."""
+    _write_agent_module(tmp_path, monkeypatch, "_easycat_sys_exit_agent", "raise SystemExit(3)\n")
+    manifest = parse_manifest(
+        {
+            "voice": {
+                "default": {
+                    "transport": "local",
+                    "agent": "python:_easycat_sys_exit_agent:create_agent",
+                }
+            }
+        }
+    )
+    with pytest.raises(SystemExit):
+        manifest.resolve_agent("default")
 
 
 def test_resolve_agent_missing_attribute_raises_e605(_agent_module: object) -> None:

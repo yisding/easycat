@@ -12,12 +12,13 @@ telephony stack.
 
 from __future__ import annotations
 
+import copy
 import inspect
 import logging
 import math
 import os
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, is_dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
@@ -447,6 +448,33 @@ def _provider_display_name(cfg: Any, kind: Literal["STT", "TTS"]) -> str:
     return type(cfg).__name__.replace("Config", "")
 
 
+def _with_resolved_api_key(cfg: Any, api_key: str) -> Any:
+    """Return ``cfg`` with ``api_key`` set, leaving the caller's object untouched.
+
+    Typed provider configs are often module-level defaults shared across many
+    ``EasyConfig`` instances, each possibly with its own ``openai_api_key``.
+    Writing the resolved credential into the shared object would leak the
+    first caller's key into every later config, so copy it instead.
+    """
+    if is_dataclass(cfg) and not isinstance(cfg, type):
+        try:
+            return replace(cfg, api_key=api_key)
+        except (TypeError, ValueError):
+            pass
+    try:
+        clone = copy.copy(cfg)
+        clone.api_key = api_key
+    except Exception:  # noqa: BLE001
+        # Uncopyable third-party config: fall back to the historical in-place
+        # injection so create_session still receives a credential.
+        try:
+            cfg.api_key = api_key
+        except Exception:  # noqa: BLE001, S110
+            pass
+        return cfg
+    return clone
+
+
 def _provider_requires_api_key(cfg: Any, kind: Literal["STT", "TTS"]) -> bool:
     """Consult the open catalog instead of assuming every ``api_key`` field is required."""
     provider_name = _catalog_provider_name(cfg, kind, strict=True)
@@ -462,7 +490,14 @@ def _resolve_named_provider_config(
     kind: Literal["STT", "TTS"],
     api_key_overrides: dict[str, str] | None,
 ) -> Any:
-    """Resolve a named wrapper to its concrete config without creating a client."""
+    """Resolve a named wrapper to its concrete config without creating a client.
+
+    Credential precedence: a usable top-level ``config.api_key`` wins, then a
+    usable ``params["api_key"]``. Ambient credentials (``api_key_overrides`` or
+    the provider's env var) are only a fallback when neither explicit key is
+    usable. This keeps an explicit params key, as ``ProviderCatalog.create_provider``
+    does; unlike that path, a blank top-level ``api_key`` does not displace it.
+    """
     if kind == "STT":
         from easycat.stt.factory import _CATALOG as catalog
     else:
@@ -472,7 +507,10 @@ def _resolve_named_provider_config(
     kwargs = dict(config.params or {})
     env_var = catalog.env_vars[provider_name]
     resolved_key = config.api_key
-    if not has_usable_credential(resolved_key) and env_var is not None:
+    if not has_usable_credential(resolved_key) and has_usable_credential(kwargs.get("api_key")):
+        # An explicit params key beats ambient env/override credentials.
+        resolved_key = None
+    elif not has_usable_credential(resolved_key) and env_var is not None:
         resolved_key = (api_key_overrides or {}).get(env_var) or os.getenv(env_var)
     if has_usable_credential(resolved_key):
         kwargs["api_key"] = resolved_key
@@ -1174,29 +1212,40 @@ class EasyConfig(_AgentSessionConfig):
             raise EasyConfigError("STT configuration is required.")
         if self.tts is None:
             raise EasyConfigError("TTS configuration is required.")
-        provider_configs: tuple[tuple[Any, Literal["STT", "TTS"]], ...] = (
-            (self.stt, "STT"),
-            (self.tts, "TTS"),
+        provider_configs: tuple[tuple[Literal["stt", "tts"], Literal["STT", "TTS"]], ...] = (
+            ("stt", "STT"),
+            ("tts", "TTS"),
         )
-        for cfg, kind in provider_configs:
+        # A programmatic ``openai_api_key`` overrides ``OPENAI_API_KEY`` for
+        # typed configs exactly as it does for string/wrapper specs.
+        api_key_overrides = (
+            {"OPENAI_API_KEY": self.openai_api_key}
+            if has_usable_credential(self.openai_api_key)
+            else {}
+        )
+        for attr, kind in provider_configs:
+            cfg = getattr(self, attr)
             if _provider_requires_api_key(cfg, kind) and not has_usable_credential(
                 getattr(cfg, "api_key", None)
             ):
-                # Also check ambient env var so typed configs match
-                # string/wrapper (gh 1018).
+                # Also check the credential override and ambient env var so
+                # typed configs match string/wrapper (gh 1018).
                 provider_name = _catalog_provider_name(cfg, kind)
                 env_var = (
                     _catalog_for(kind).env_vars.get(provider_name)
                     if provider_name is not None
                     else None
                 )
-                if env_var and has_usable_credential(os.getenv(env_var)):
-                    # Inject ambient credential so create_session
-                    # succeeds (gh 1041 review).
-                    try:
-                        cfg.api_key = os.getenv(env_var) or cfg.api_key
-                    except Exception:  # noqa: BLE001, S110
-                        pass
+                resolved_key = (
+                    (api_key_overrides.get(env_var) or os.getenv(env_var)) if env_var else None
+                )
+                if has_usable_credential(resolved_key):
+                    # Inject the resolved credential so create_session
+                    # succeeds (gh 1041 review).  Store it on a copy: the
+                    # caller's config may be a shared default reused across
+                    # EasyConfigs with different ``openai_api_key`` values.
+                    cfg = _with_resolved_api_key(cfg, resolved_key)
+                    setattr(self, attr, cfg)
                     if has_usable_credential(getattr(cfg, "api_key", None)):
                         continue
                 name = _provider_display_name(cfg, kind)

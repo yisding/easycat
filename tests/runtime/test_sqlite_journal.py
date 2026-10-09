@@ -2355,23 +2355,26 @@ class _FailOnceCloseConn(_LockProbeConn):
 
 
 class _SqliteBackedLibsqlConn:
-    """Fake libSQL connection that persists to a real local SQLite file."""
+    """Fake libSQL connection that persists to a real local SQLite file.
 
-    def __init__(self, path: str) -> None:
-        self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+    Lets clean-close/reuse tests observe durable state across a simulated
+    crash without the optional ``libsql_experimental`` SDK.
+    """
 
-    def execute(self, sql, params=None):
-        return self._conn.execute(sql, params or ())
+    def __init__(self, uri: str) -> None:
+        self._conn = sqlite3.connect(uri, check_same_thread=False)
 
-    def executemany(self, sql, rows):
-        return self._conn.executemany(sql, rows)
+    def execute(self, sql, params=()):
+        return self._conn.execute(sql, params)
 
     def executescript(self, sql):
         return self._conn.executescript(sql)
 
+    def executemany(self, sql, params):
+        return self._conn.executemany(sql, params)
+
     def commit(self) -> None:
-        if self._conn.in_transaction:
-            self._conn.commit()
+        self._conn.commit()
 
     def rollback(self) -> None:
         self._conn.rollback()
@@ -2384,11 +2387,34 @@ class _SqliteBackedLibsqlConn:
 
 
 class _SqliteBackedLibsqlModule:
-    """``libsql_experimental`` stand-in that opens a fresh SQLite-backed conn."""
-
     @staticmethod
-    def connect(**kwargs: object) -> _SqliteBackedLibsqlConn:
-        return _SqliteBackedLibsqlConn(str(kwargs["uri"]))
+    def connect(*, uri: str, **_kwargs: object) -> _SqliteBackedLibsqlConn:
+        return _SqliteBackedLibsqlConn(uri)
+
+
+def _simulate_libsql_crash(journal) -> None:
+    """Drop a LibsqlJournal's connection without running ``close()``."""
+    journal._conn.close()
+    journal._closed = True
+    journal._sync_stop.set()
+    journal._release_live_journal()
+
+
+def _durable_libsql_state(db_path: Path) -> tuple[tuple[str] | None, list[str]]:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        marker = conn.execute(
+            "SELECT value FROM session_state WHERE key = 'clean_close'"
+        ).fetchone()
+        names = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM journal WHERE sequence >= 0 ORDER BY sequence"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+    return marker, names
 
 
 class TestLibsqlJournal:
@@ -2704,6 +2730,117 @@ class TestLibsqlJournal:
                 close_thread.join(timeout=1)
 
         assert not close_thread.is_alive()
+
+    def test_append_after_finalize_clears_clean_marker(self, tmp_path: Path) -> None:
+        """A durable post-finalize append must drop the clean_close marker.
+
+        Regression: LibsqlJournal kept ``clean_close='1'`` after a committed
+        post-finalize append, so a crash before close() reopened as a clean
+        reuse and truncated every record of the crashed session.
+        """
+        from easycat.runtime import LibsqlJournal
+
+        db_path = tmp_path / "journals" / "sess.sqlite"
+        with mock.patch.dict("sys.modules", {"libsql_experimental": _SqliteBackedLibsqlModule()}):
+            j1 = LibsqlJournal("sess", data_dir=tmp_path)
+            j1.append(kind=JournalRecordKind.EVENT, name="before_finalize", session_id="sess")
+            j1.finalize()
+            assert _durable_libsql_state(db_path) == (("1",), ["before_finalize"])
+
+            j1.append(kind=JournalRecordKind.EVENT, name="after_finalize", session_id="sess")
+            assert _durable_libsql_state(db_path) == (
+                None,
+                ["before_finalize", "after_finalize"],
+            )
+
+            _simulate_libsql_crash(j1)
+
+            # Unclean reuse: libSQL retains prior rows and continues the
+            # sequence counter rather than truncating as a clean reuse.
+            j2 = LibsqlJournal("sess", data_dir=tmp_path)
+            try:
+                assert [r.name for r in j2.read(start=0)] == [
+                    "before_finalize",
+                    "after_finalize",
+                ]
+                assert j2.latest_sequence == 2
+                assert (
+                    j2.append(kind=JournalRecordKind.EVENT, name="reused", session_id="sess") == 3
+                )
+            finally:
+                j2.close()
+
+    def test_failed_append_after_finalize_keeps_clean_marker(self, tmp_path: Path) -> None:
+        """A rolled-back post-finalize append must leave clean_close intact."""
+        from easycat.runtime import LibsqlJournal
+
+        db_path = tmp_path / "journals" / "sess.sqlite"
+        with mock.patch.dict("sys.modules", {"libsql_experimental": _SqliteBackedLibsqlModule()}):
+            j1 = LibsqlJournal("sess", data_dir=tmp_path)
+            j1.append(kind=JournalRecordKind.EVENT, name="before_finalize", session_id="sess")
+            j1.finalize()
+
+            circular: dict[str, object] = {}
+            circular["self"] = circular
+            assert (
+                j1.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="after_finalize",
+                    session_id="sess",
+                    data=circular,
+                )
+                == -1
+            )
+            assert j1._clean_close_marked is True
+            assert _durable_libsql_state(db_path) == (("1",), ["before_finalize"])
+
+            _simulate_libsql_crash(j1)
+
+            j2 = LibsqlJournal("sess", data_dir=tmp_path)
+            try:
+                assert j2.read(start=0) == []
+            finally:
+                j2.close()
+
+    def test_finalize_then_crash_without_append_still_reuses_cleanly(self, tmp_path: Path) -> None:
+        """With no write after finalize(), a crash is still a clean reuse."""
+        from easycat.runtime import LibsqlJournal
+
+        db_path = tmp_path / "journals" / "sess.sqlite"
+        with mock.patch.dict("sys.modules", {"libsql_experimental": _SqliteBackedLibsqlModule()}):
+            j1 = LibsqlJournal("sess", data_dir=tmp_path)
+            j1.append(kind=JournalRecordKind.EVENT, name="before_finalize", session_id="sess")
+            j1.finalize()
+            _simulate_libsql_crash(j1)
+            assert _durable_libsql_state(db_path) == (("1",), ["before_finalize"])
+
+            j2 = LibsqlJournal("sess", data_dir=tmp_path)
+            try:
+                assert j2.read(start=0) == []
+            finally:
+                j2.close()
+
+    def test_close_after_post_finalize_append_writes_clean_marker(self, tmp_path: Path) -> None:
+        """A graceful close after post-finalize appends is still a clean close."""
+        from easycat.runtime import LibsqlJournal
+
+        db_path = tmp_path / "journals" / "sess.sqlite"
+        with mock.patch.dict("sys.modules", {"libsql_experimental": _SqliteBackedLibsqlModule()}):
+            j1 = LibsqlJournal("sess", data_dir=tmp_path)
+            j1.append(kind=JournalRecordKind.EVENT, name="before_finalize", session_id="sess")
+            j1.finalize()
+            j1.append(kind=JournalRecordKind.EVENT, name="after_finalize", session_id="sess")
+            j1.close()
+            assert _durable_libsql_state(db_path) == (
+                ("1",),
+                ["before_finalize", "after_finalize"],
+            )
+
+            j2 = LibsqlJournal("sess", data_dir=tmp_path)
+            try:
+                assert j2.read(start=0) == []
+            finally:
+                j2.close()
 
     def test_fallback_when_sdk_missing(self, tmp_path):
         """When libsql_experimental is not installed, factory falls back to SQLite."""

@@ -151,6 +151,11 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         self._commit_pending: bool = False
         self._final_wait_timed_out: bool = False
         self._audio_resampler = PCM16StreamResampler(_REALTIME_SAMPLE_RATE)
+        # Number of in-flight ``aclose()`` calls. ``aclose`` must release the
+        # lifecycle lock between ending the logical stream and closing the
+        # socket; a ``start_stream()`` admitted in that gap would otherwise
+        # adopt the socket that is about to be torn down.
+        self._aclose_in_progress = 0
 
     def _persistent_enabled(self) -> bool:
         return self._config.persistent_ws
@@ -200,6 +205,12 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         )
 
     async def _on_start(self) -> None:
+        if self._aclose_in_progress:
+            # Fail before touching provider state: the failed-start rollback
+            # only releases the socket that aclose() is closing anyway.
+            raise RuntimeError(
+                "OpenAI Realtime STT is closing; call start_stream() after aclose() returns"
+            )
         if self._close_task is not None:
             # ``start_stream`` installs this turn's queue before entering the
             # provider hook. The old persistent receive loop may terminate
@@ -605,14 +616,38 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
                     self._session_ready.set_result(None)
 
     async def aclose(self) -> None:
-        """Close a persistent Realtime socket during Session teardown."""
+        """End any logical stream, then close the persistent Realtime socket."""
+        # ``_on_start`` rejects streams while this is set, so a start_stream()
+        # that wins the lifecycle lock between the two phases below fails
+        # cleanly instead of adopting a socket this call is about to close.
+        self._aclose_in_progress += 1
         try:
-            await self._drain_scheduled_close()
-            await self._close_active_websocket(close_before_drain=True)
-            self._session_ready = None
-            self._reset_logical_turn_state()
+            # ``close_if_supported`` prefers ``aclose`` over ``close``.  Do
+            # not bypass STTBase.close(): doing so left an active logical
+            # stream marked running (and its pending audio uncommitted) after
+            # the socket had been torn down, making a later start_stream()
+            # fail as "already started".
+            await super().close()
         finally:
-            await self._close_owned_runtime_scope_if_idle()
+            try:
+                # Hold the lifecycle lock (as ``_on_start``/``_on_end`` do for
+                # socket replacement) so socket teardown cannot interleave with
+                # a concurrent start_stream() or warmup().
+                async with self._lifecycle_lock:
+                    await self._drain_scheduled_close()
+                    await self._close_active_websocket(close_before_drain=True)
+                    self._session_ready = None
+                    self._reset_logical_turn_state()
+            finally:
+                self._aclose_in_progress -= 1
+                try:
+                    # The receive loop can emit provider errors while the
+                    # socket closes, after STTBase.close() already drained
+                    # them. Join those too, outside the lifecycle lock, since
+                    # an Error subscriber may re-enter close().
+                    await self._drain_provider_error_tasks()
+                finally:
+                    await self._close_owned_runtime_scope_if_idle()
 
     def version_info(self) -> dict[str, str]:
         return {

@@ -390,6 +390,112 @@ def test_funasr_vad_configure_updates_model_silence(monkeypatch: pytest.MonkeyPa
     assert vad._model.max_end_sil == 320
 
 
+class _ScriptedFunASRRuntime:
+    """Fake in-tree runtime: start on call 1, segment end on call ``end_call``."""
+
+    def __init__(self, *, end_call: int = 10, **kwargs: object) -> None:
+        self.max_end_sil = kwargs["max_end_sil"]
+        self.calls = 0
+        self.end_call = end_call
+
+    def __call__(self, audio_in: object, param_dict: dict[str, object]) -> list[list[int]]:
+        self.calls += 1
+        if self.calls == 1:
+            return [[0, -1]]
+        if self.calls == self.end_call:
+            return [[-1, 450]]
+        return []
+
+
+def _install_scripted_funasr_runtime(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    import easycat.vad._funasr_runtime as runtime_pkg
+
+    seen_max_end_sil: list[object] = []
+
+    def _factory(**kwargs: object) -> _ScriptedFunASRRuntime:
+        seen_max_end_sil.append(kwargs["max_end_sil"])
+        return _ScriptedFunASRRuntime(**kwargs)
+
+    monkeypatch.setattr(runtime_pkg, "FunASROnlineRuntime", _factory)
+    return seen_max_end_sil
+
+
+async def _funasr_event_chunks(vad: FunASROnnxVAD, n_chunks: int) -> list[tuple[int, str]]:
+    observed: list[tuple[int, str]] = []
+    for index in range(1, n_chunks + 1):
+        chunk = _make_chunk(n_samples=vad._chunk_samples)
+        async for event in vad.process(chunk):
+            observed.append((index, type(event).__name__))
+    return observed
+
+
+@pytest.mark.asyncio
+async def test_funasr_vad_direct_construction_stops_on_model_end_frame(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A directly built FunASROnnxVAD must not wait for silence twice.
+
+    FunASR applies min_silence_duration_ms inside the model via max_end_sil,
+    but the shared state machine's silence gate used to be disabled only in
+    configure().  A FunASROnnxVAD() passed straight to a session therefore
+    delayed VADStopSpeaking by another 150 ms after the model's segment end.
+    """
+    _install_scripted_funasr_runtime(monkeypatch)
+
+    direct = FunASROnnxVAD()
+    direct._min_speech_duration_ms = 0
+    configured = FunASROnnxVAD()
+    configured.configure(min_speech_duration_ms=0, min_silence_duration_ms=150)
+
+    direct_events = await _funasr_event_chunks(direct, 19)
+    configured_events = await _funasr_event_chunks(configured, 19)
+
+    assert direct_events == [(1, "VADStartSpeaking"), (10, "VADStopSpeaking")]
+    assert direct_events == configured_events
+    assert direct._model.max_end_sil == 150
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("silence_ms", [150, 400])
+async def test_funasr_vad_reinitialize_after_close_keeps_configured_silence(
+    monkeypatch: pytest.MonkeyPatch, silence_ms: int
+):
+    """A runtime rebuilt after close() must keep the configured max_end_sil.
+
+    _initialize used to read max_end_sil from the shared silence gate, which
+    configure() zeroes, so the model re-created by process() after close()
+    was built with max_end_sil=0 instead of the configured duration.
+    """
+    seen_max_end_sil = _install_scripted_funasr_runtime(monkeypatch)
+
+    vad = FunASROnnxVAD()
+    vad.configure(min_speech_duration_ms=0, min_silence_duration_ms=silence_ms)
+    assert vad._model.max_end_sil == silence_ms
+    vad.close()
+    vad.reset()
+
+    events = await _funasr_event_chunks(vad, 12)
+
+    assert seen_max_end_sil == [150, silence_ms]
+    assert vad._model.max_end_sil == silence_ms
+    assert vad._min_silence_duration_ms == 0
+    assert events == [(1, "VADStartSpeaking"), (10, "VADStopSpeaking")]
+
+
+@pytest.mark.asyncio
+async def test_funasr_vad_default_reinitialize_after_close_uses_default_silence(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Without configure(), a runtime rebuilt after close() gets the 150 ms default."""
+    seen_max_end_sil = _install_scripted_funasr_runtime(monkeypatch)
+
+    vad = FunASROnnxVAD()
+    vad.close()
+    await _funasr_event_chunks(vad, 1)
+
+    assert seen_max_end_sil == [150, 150]
+
+
 def test_funasr_vad_reset_clears_streaming_state(monkeypatch: pytest.MonkeyPatch):
     """Reset should clear buffered audio and cached FunASR state."""
 
@@ -425,3 +531,133 @@ def test_resolve_funasr_model_dir_uses_bundled_assets(
 
     resolved = vad_funasr_module._resolve_funasr_model_dir(vad_funasr_module._FUNASR_DEFAULT_MODEL)
     assert resolved == str(bundled)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lead_chunks", range(8))
+async def test_funasr_vad_default_start_debounce_is_independent_of_lead_in(
+    monkeypatch: pytest.MonkeyPatch, lead_chunks: int
+):
+    """Default 50 ms chunks / 250 ms debounce always confirm speech 300 ms after onset.
+
+    Float accumulation of the consumed-audio clock used to delay the start
+    event to 350 ms when 50-250 ms of silence preceded the speech.
+    """
+
+    class _FakeWaveform:
+        def astype(self, _dtype: object) -> _FakeWaveform:
+            return self
+
+        def __truediv__(self, _value: float) -> _FakeWaveform:
+            return self
+
+    class _FakeNumpy:
+        int16 = "int16"
+        float32 = "float32"
+
+        @staticmethod
+        def frombuffer(_data: bytes, dtype: object) -> _FakeWaveform:
+            return _FakeWaveform()
+
+    class _FakeModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self, audio_in: object, param_dict: dict[str, object]) -> list[list[int]]:
+            self.calls += 1
+            if self.calls == lead_chunks + 1:
+                return [[self.calls * 50, -1]]
+            return []
+
+    def _initialize(self: FunASROnnxVAD) -> None:
+        self._numpy = _FakeNumpy()
+        self._model = _FakeModel()
+        self._param_dict = {"in_cache": []}
+
+    monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
+
+    vad = FunASROnnxVAD()
+    vad.configure()
+    chunks = 0
+    while True:
+        chunks += 1
+        events = [event async for event in vad.process(_make_chunk(0, n_samples=800))]
+        if events:
+            assert [type(event) for event in events] == [VADStartSpeaking]
+            break
+        assert chunks < 50
+
+    assert (chunks - lead_chunks) * 50 == 300
+
+
+def _install_counting_funasr(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Patch FunASR with fakes that record how many samples each frame carries."""
+    frame_samples: list[int] = []
+
+    class _FakeWaveform:
+        def __init__(self, data: bytes) -> None:
+            self.samples = len(data) // 2
+
+        def astype(self, _dtype: object) -> _FakeWaveform:
+            return self
+
+        def __truediv__(self, _value: float) -> _FakeWaveform:
+            return self
+
+    class _FakeNumpy:
+        int16 = "int16"
+        float32 = "float32"
+
+        @staticmethod
+        def frombuffer(data: bytes, dtype: object) -> _FakeWaveform:
+            assert dtype == "int16"
+            return _FakeWaveform(data)
+
+    class _FakeModel:
+        def __call__(self, audio_in: _FakeWaveform, param_dict: dict[str, object]) -> list[int]:
+            frame_samples.append(audio_in.samples)
+            return []
+
+    def _initialize(self: FunASROnnxVAD) -> None:
+        self._numpy = _FakeNumpy()
+        self._model = _FakeModel()
+        self._param_dict = {"in_cache": []}
+
+    monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
+    return frame_samples
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_rate", "second_rate"),
+    [(48_000, 16_000), (24_000, 16_000), (8_000, 16_000), (48_000, 24_000), (16_000, 48_000)],
+)
+async def test_funasr_vad_keeps_buffered_audio_across_source_rate_switch(
+    monkeypatch: pytest.MonkeyPatch, first_rate: int, second_rate: int
+):
+    """A mid-stream source-rate switch must not drop already-resampled 16 kHz audio.
+
+    The buffer always holds 16 kHz model-rate PCM, but it used to be cleared
+    whenever the *source* rate changed, and the resampler tail was reset
+    instead of flushed. A 48 kHz segment followed by native 16 kHz input
+    therefore lost up to one model frame plus the interpolation tail, and
+    the VAD clock fell behind the audio actually fed.
+    """
+    frame_samples = _install_counting_funasr(monkeypatch)
+    vad = FunASROnnxVAD()
+    fed_samples_16k = 0
+    for rate, chunks in ((first_rate, 2), (second_rate, 10)):
+        fmt = AudioFormat(sample_rate=rate, channels=1, sample_width=2)
+        samples_per_chunk = rate // 50  # 20 ms
+        for _ in range(chunks):
+            chunk = AudioChunk(data=bytes(samples_per_chunk * 2), format=fmt)
+            async for _ in vad.process(chunk):
+                pass
+            fed_samples_16k += 320
+
+    assert all(n == vad._chunk_samples for n in frame_samples)
+    accounted = (
+        sum(frame_samples) + len(vad._buffer) // 2 + vad._audio_resampler.pending_output_bytes // 2
+    )
+    assert abs(accounted - fed_samples_16k) <= 1
+    assert vad._audio_time_s == pytest.approx(len(frame_samples) * vad._chunk_size_ms / 1000)

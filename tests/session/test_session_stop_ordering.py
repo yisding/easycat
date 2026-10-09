@@ -401,8 +401,8 @@ async def test_first_executor_close_failure_still_closes_remaining_executors() -
     failing = _RecordingExecutor(lambda name: None, close_error=RuntimeError("boom"))
     healthy = _RecordingExecutor(lambda name: None)
     session = Session(_full_config())
-    session.register_action_executor(healthy)
     session.register_action_executor(failing)
+    session.register_action_executor(healthy)
 
     with pytest.raises(RuntimeError, match="boom"):
         await session.stop()

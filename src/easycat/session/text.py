@@ -24,8 +24,10 @@ Naming convention for this module:
 
 from __future__ import annotations
 
+import functools
 import re
 import struct
+from collections.abc import Callable, Iterator
 
 import sentencesplit
 
@@ -37,7 +39,7 @@ __all__ = [
 ]
 
 from easycat.audio_format import AudioChunk
-from easycat.strip_markdown import _INLINE_CODE_RE
+from easycat.strip_markdown import _CODE_SPAN_RE
 from easycat.tts.input import TTSInput, strip_ssml_tags
 
 # ── Sentence splitting ──────────────────────────────────────────────
@@ -65,7 +67,7 @@ def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     result = _SENTENCE_SEGMENTER.segment_with_lookahead(text)
     if not result.segments:
         return "", text
-    if not result.should_wait_for_more:
+    if not result.should_wait_for_more and not _ends_with_held_initial_period(text):
         return text, ""
     if len(result.segments) == 1:
         return "", text
@@ -73,6 +75,11 @@ def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     # ``char_span=True`` yields TextSpan objects with offsets; the plain
     # string variant of the union is narrowed via suffix length.
     last_start = len(text) - len(last) if isinstance(last, str) else last.start
+    if last_start > 0 and text[last_start - 1] in _SENTENCE_END_OR_CLOSING_CHARS:
+        # The segmenter can leave a closing quote or citation that it has
+        # not yet attached at the start of the held tail (``'Hi." Then'``);
+        # keep it with the sentence it closes.
+        last_start = _skip_whitespace(text, _sentence_end_extent(text, last_start - 1))
     return text[:last_start], text[last_start:]
 
 
@@ -92,6 +99,20 @@ _FIRST_PHRASE_MIN_CHARS = 24
 # terminators ``split_at_sentence_boundaries`` honours plus mid-sentence
 # punctuation (comma/semicolon/colon) that marks a natural early pause.
 _FIRST_CLAUSE_BOUNDARY_CHARS = ".!?。！？．,;:"
+# The sentence-terminator subset of the boundaries above.  Unlike the cheap
+# ``,``/``;``/``:`` test, these only count when the sentence segmenter agrees
+# the sentence ends there, so abbreviation periods ("Dr.", "e.g.", "U.S.",
+# "a.m.") are not mistaken for clause boundaries.
+_FIRST_CLAUSE_SENTENCE_TERMINATORS = ".!?。！？．"
+# Closing quotes/brackets the segmenter keeps attached to a sentence end
+# (``"Hello."`` / ``(example.com.)``); a terminator followed only by these is
+# still at that sentence's end.
+_SENTENCE_CLOSING_CHARS = ")]}\"'`”’»」』）】"
+# A bracketed numeric citation or footnote marker (``[1]``, ``[12]``,
+# ``[^1]``) written directly after a sentence end belongs to that sentence,
+# like a closing quote does.
+_ATTACHED_CITATION_RE = re.compile(r"\[\^?\d+\]")
+_SENTENCE_END_OR_CLOSING_CHARS = _FIRST_CLAUSE_SENTENCE_TERMINATORS + _SENTENCE_CLOSING_CHARS
 _URL_SCHEMES_HELD_FOR_LOOKAHEAD = frozenset({"ftp", "ftps", "http", "https", "ws", "wss"})
 _URL_LEADING_WRAPPERS = "([{<\"'`"
 _URL_TRAILING_PUNCTUATION = ".,;:!?)]}\"'`"
@@ -127,6 +148,8 @@ def split_first_clause(text: str) -> tuple[str, str]:
     if not text.strip():
         return "", text
 
+    # Run the segmenter at most once, and only if a terminator needs it.
+    sentence_ends = functools.cache(functools.partial(_stable_sentence_ends, text))
     for i, ch in enumerate(text):
         if ch not in _FIRST_CLAUSE_BOUNDARY_CHARS:
             continue
@@ -134,17 +157,125 @@ def split_first_clause(text: str) -> tuple[str, str]:
             continue
         if _is_numeric_separator(text, i):
             continue
-        # Include any trailing whitespace so the remaining buffer starts at
-        # the next clause's first non-space character.
-        end = i + 1
-        while end < len(text) and text[end].isspace():
-            end += 1
+        # Keep closing quotes/brackets and attached citations with the clause
+        # they close, and include any trailing whitespace so the remaining
+        # buffer starts at the next clause's first non-space character.
+        end = _skip_whitespace(text, _sentence_end_extent(text, i))
         ready = text[:end]
-        if len(ready.strip()) >= _FIRST_CLAUSE_MIN_CHARS:
-            return ready, text[end:]
-        # Too short to ship on its own; keep scanning for a later boundary.
+        if len(ready.strip()) < _FIRST_CLAUSE_MIN_CHARS:
+            # Too short to ship on its own; keep scanning for a later boundary.
+            continue
+        if ch in _FIRST_CLAUSE_SENTENCE_TERMINATORS and not _is_sentence_terminal_boundary(
+            text, i, sentence_ends
+        ):
+            continue
+        return ready, text[end:]
 
     return "", text
+
+
+def _is_sentence_terminal_boundary(
+    text: str, index: int, sentence_ends: Callable[[], frozenset[int]]
+) -> bool:
+    """Whether the sentence terminator at *index* may end the first clause.
+
+    A terminator only counts when the segmenter also ends a stable sentence
+    there, so an abbreviation period (``"Dr."``, ``"e.g."``, ``"a.m."``) or a
+    trailing terminator that could still shift once more text arrives is not
+    a boundary.  *sentence_ends* lazily returns the
+    :func:`_stable_sentence_ends` offsets for *text*.
+    """
+    if _is_held_initial_period(text, index):
+        return False
+    return _ends_sentence(text, index, sentence_ends())
+
+
+def _is_held_initial_period(text: str, index: int) -> bool:
+    """Whether the ``.`` at *index* ends the buffer right after a lone letter.
+
+    A streamed delta can stop exactly at the first period of a dotted
+    abbreviation or initial (``"tools e."`` before ``"g. hammers"`` arrives,
+    ``"10 a."`` before ``"m."``), and the segmenter then reports a finished
+    sentence.  Hold such a period until a later non-space character arrives;
+    from then on the segmenter decides as usual.  The trade-off is that a
+    genuine sentence ending in a one-letter word (``"I chose option a."``)
+    also waits for the next delta, or for the end-of-stream flush.
+    """
+    return (
+        text[index] == "."
+        and not text[index + 1 :].strip()
+        and index >= 1
+        and text[index - 1].isalpha()
+        and (index == 1 or not _is_word_char(text[index - 2]))
+    )
+
+
+def _ends_with_held_initial_period(text: str) -> bool:
+    """Whether *text* ends (ignoring whitespace) in a held initial period."""
+    stripped = text.rstrip()
+    return bool(stripped) and _is_held_initial_period(stripped, len(stripped) - 1)
+
+
+def _stable_sentence_ends(text: str) -> frozenset[int]:
+    """Return offsets where the segmenter ends a sentence that cannot shift.
+
+    Each offset is the segment's end with trailing whitespace ignored.  The
+    final segment is excluded when the segmenter wants more lookahead (for
+    example a buffer ending in ``"Dr."``), matching what
+    :func:`split_at_sentence_boundaries` would hold back.
+    """
+    result = _SENTENCE_SEGMENTER.segment_with_lookahead(text)
+    segments = result.segments
+    if result.should_wait_for_more:
+        segments = segments[:-1]
+    ends: set[int] = set()
+    pos = 0
+    for segment in segments:
+        if isinstance(segment, str):
+            start = text.find(segment, pos)
+            seg_end = (start if start >= 0 else pos) + len(segment)
+        else:
+            seg_end = segment.end
+        pos = seg_end
+        ends.add(len(text[:seg_end].rstrip()))
+    return frozenset(ends)
+
+
+def _ends_sentence(text: str, index: int, sentence_ends: frozenset[int]) -> bool:
+    """Whether the terminator at *index* ends a stable segmenter sentence."""
+    return any(end in sentence_ends for end in _sentence_end_offsets(text, index))
+
+
+def _sentence_end_offsets(text: str, index: int) -> Iterator[int]:
+    """Yield candidate sentence ends for the boundary character at *index*.
+
+    The first offset is just past *index*; each further one extends past a
+    directly following closing quote/bracket (``_SENTENCE_CLOSING_CHARS``) or
+    bracketed numeric citation (``[1]``, ``[^1]``), since the segmenter keeps
+    those with the sentence they close.
+    """
+    end = index + 1
+    yield end
+    while end < len(text):
+        if text[end] in _SENTENCE_CLOSING_CHARS:
+            end += 1
+        elif match := _ATTACHED_CITATION_RE.match(text, end):
+            end = match.end()
+        else:
+            return
+        yield end
+
+
+def _sentence_end_extent(text: str, index: int) -> int:
+    """Return the offset past *index* and any closers/citations attached to it."""
+    # Offsets only grow, so the largest is the last one yielded.
+    return max(_sentence_end_offsets(text, index))
+
+
+def _skip_whitespace(text: str, index: int) -> int:
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
 
 
 def _split_first_phrase(text: str) -> tuple[str, str]:
@@ -442,6 +573,49 @@ def _has_open_inline_code_run(text: str) -> bool:
     return last_tick >= 0 and _BLANK_LINE_RE.search(text, last_tick) is None
 
 
+def _drop_closed_code(text: str) -> tuple[str, bool]:
+    """Remove closed code and escaped backticks; report whether code may be open.
+
+    Scans with ``strip_markdown``'s own ``_CODE_SPAN_RE``, which finds fenced
+    blocks, inline spans and backslash escapes in one left-to-right pass, so a
+    fence that opens inside an already-open inline span is span content and an
+    escaped backtick can neither open nor close either.  Closed blocks and
+    spans are dropped, and so is an escaped backtick (``\\` ``): it is literal
+    text, so it neither pairs with a run nor counts as an open one.  Other
+    escapes and unpaired backtick runs are kept for the open-run check.
+
+    The scan stops early, reporting code as open (and returning no text, as
+    the caller needs none), where a later delta could still change how the
+    buffered backticks pair:
+
+    - An unpaired run of three or more backticks: no ```` ``` ```` follows it
+      yet, and a later one would close it as a fence.  Stopping there keeps a
+      long fenced block cheap to recheck while it streams.
+    - An inline span whose closing run ends the text: the run may still grow,
+      and a longer run no longer closes the span.  A span holding a
+      ```` ``` ```` then loses to a fence that the grown run closes, and its
+      opener becomes a literal backtick, so text already split off inside
+      the span would be rewritten.
+    """
+    kept: list[str] = []
+    pos = 0
+    for match in _CODE_SPAN_RE.finditer(text):
+        kept.append(text[pos : match.start()])
+        pos = match.end()
+        if match.group("code") is not None:
+            if pos == len(text):
+                return "", True
+            continue
+        if match.group("fence") is not None or match.group("escape") == "\\`":
+            continue
+        token = match.group(0)
+        if match.group("escape") is None and len(token) >= 3:
+            return "", True
+        kept.append(token)
+    kept.append(text[pos:])
+    return "".join(kept), False
+
+
 def markdown_open_state(text: str) -> tuple[bool, bool]:
     """Best-effort markdown openness check for a rolling streaming buffer.
 
@@ -461,20 +635,13 @@ def markdown_open_state(text: str) -> tuple[bool, bool]:
     The streaming path defers sentence emission while markdown delimiters
     are still open so later deltas cannot rewrite already-emitted text.
     """
-    fenced_count = text.count("```")
-    if fenced_count % 2 == 1:
-        return True, False
-
-    # Remove fenced blocks so inline delimiter counts are not distorted.
-    normalized = re.sub(r"```[\s\S]*?```", "", text)
-
-    # Remove closed inline-code spans so markdown chars inside code do
-    # not affect emphasis/link-state tracking.  Spans pair the CommonMark
-    # way, with the same pattern ``strip_markdown`` uses: a run of N
+    # Remove closed fenced blocks and inline-code spans so markdown chars
+    # inside code do not affect emphasis/link-state tracking.  Spans pair the
+    # CommonMark way, with the same scan ``strip_markdown`` uses: a run of N
     # backticks closes at the next run of exactly N, so ``co`de`` is one
     # closed span and the lone backtick inside it is content.
-    normalized = _INLINE_CODE_RE.sub("", normalized)
-    if _has_open_inline_code_run(normalized):
+    normalized, code_open = _drop_closed_code(text)
+    if code_open or _has_open_inline_code_run(normalized):
         return True, False
 
     for delimiter in ("**", "__", "~~"):

@@ -203,8 +203,10 @@ class InMemoryRingBuffer:
             # Collect artifact refs from the record about to be evicted.
             evicted_refs = self._refs_of_next_eviction() if was_full else []
 
-            self._seq += 1
-            seq = self._seq
+            # Build the record before committing any state: the redaction write
+            # filter can raise, and a failed append must not consume a sequence
+            # number (matching the SQL backends, which restore ``_seq``).
+            seq = self._seq + 1
             record = _journal_record_for_append(
                 sequence=seq,
                 session_id=session_id,
@@ -219,6 +221,7 @@ class InMemoryRingBuffer:
                 tags=tags,
                 redaction=self._redaction,
             )
+            self._seq = seq
             self._buf.append(record)
 
             # Reference counts exist solely to release artifacts when their

@@ -1674,8 +1674,14 @@ class Session:
                 self._finalize_debug_backends()
                 return
 
+            # A caller inside a streaming turn helper (a bot-speaking handler,
+            # agent stream code) runs under the turn or application-prompt
+            # task that awaits it: cancelling or awaiting that enclosing task
+            # from here is a circular cancel/await, so treat the whole
+            # adopted chain like ``current_task``.
+            enclosing_tasks = self._tts_scheduler.enclosing_turn_tasks()
             prompt_task = self._turn_runner.active_application_prompt
-            prompt_is_current = prompt_task is current_task
+            prompt_is_current = prompt_task is not None and prompt_task in enclosing_tasks
             if (
                 not force
                 and prompt_task is not None
@@ -1747,7 +1753,7 @@ class Session:
                 current_tts_task = self._tts_scheduler.active_turn_task
                 if (
                     current_tts_task
-                    and current_tts_task is not current_task
+                    and current_tts_task not in enclosing_tasks
                     and not current_tts_task.done()
                 ):
                     current_tts_task.cancel()
@@ -1768,7 +1774,7 @@ class Session:
                     self._runtime_scope.signal_cohort(
                         cohort,
                         force=True,
-                        _exclude_tasks={current_task} if current_task is not None else None,
+                        _exclude_tasks=enclosing_tasks or None,
                     )
                     for cohort in self._runtime_scope.cohorts(force=True)
                 )
@@ -1984,6 +1990,11 @@ class Session:
             self._turn_runner.cancel_application_prompt(),
             name="application_prompt_cancel_cleanup",
         )
+        # The cleanup runs on behalf of this caller. Adopting it keeps a
+        # caller inside a spoken application prompt (a bot-speaking handler)
+        # visible to ``cancel_application_prompt``, which then leaves the
+        # caller's own enclosing prompt task to wind down cooperatively.
+        self._tts_scheduler.adopt_turn_child_task(prompt_cleanup)
         # Let the cleanup task request cancellation and the prompt task observe
         # it before returning from the cutoff path, without waiting for
         # cancellation-resistant teardown. Both handoffs are event-loop turns;
@@ -2230,8 +2241,12 @@ class Session:
 
         Executors are tried in the order they were registered. The first
         executor whose ``supports(...)`` method returns true handles the action.
+        Executors supplied through ``SessionConfig.action_executors`` come first,
+        then runtime registrations, and the built-in core executor is always the
+        final fallback.
         """
-        self._action_executors.insert(0, executor)
+        # The core executor appended in ``__init__`` stays last as the fallback.
+        self._action_executors.insert(len(self._action_executors) - 1, executor)
 
     async def _drain_session_actions(self) -> bool:
         """Execute any session actions queued by agent tools during this turn.

@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import typer
 
-from easycat.cli._errors import exit_code_for
+from easycat.cli._errors import cli_command, exit_code_for
 from easycat.errors import (
     EASYCAT_E101,
     EASYCAT_E104,
@@ -251,6 +252,37 @@ def test_exit_code_mapping() -> None:
 # ── SetupIssue: the shared coded projection (DX2) ──────────────────────
 
 _SECRET_SHAPED = "sk-live-secret-token-abcdef1234567890"
+
+
+def _raise_e404(json_output: bool = False) -> None:
+    raise EasyCatError("EASYCAT_E404", "missing journal")
+
+
+@pytest.mark.parametrize(
+    ("decorated", "expected_command"),
+    [
+        pytest.param(cli_command(_raise_e404), "_raise_e404", id="bare"),
+        pytest.param(cli_command("journal_follow")(_raise_e404), "journal_follow", id="named"),
+    ],
+)
+def test_cli_command_labels_escaped_errors_with_the_envelope_name(
+    capsys: pytest.CaptureFixture[str], decorated: object, expected_command: str
+) -> None:
+    """An explicit name wins over ``fn.__name__``; the bare form keeps the old label.
+
+    Commands whose function name differs from their envelope name (``tail`` is
+    ``follow_journal`` but emits ``journal_follow``) used to report two
+    ``command`` values depending on whether the error escaped to the wrapper.
+    """
+    assert callable(decorated)
+    assert decorated.__name__ == "_raise_e404"  # type: ignore[attr-defined]
+    with pytest.raises(typer.Exit) as exc_info:
+        decorated(json_output=True)
+
+    assert exc_info.value.exit_code == 5
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == expected_command
+    assert payload["code"] == "EASYCAT_E404"
 
 
 def test_setup_issue_projects_registry_text() -> None:

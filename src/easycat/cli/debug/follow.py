@@ -314,7 +314,7 @@ def _redact_follow_record(record: Mapping[str, Any]) -> dict[str, Any]:
     return redacted
 
 
-@cli_command
+@cli_command("journal_follow")
 def follow_journal(
     bundle_path: Path = typer.Argument(
         ...,

@@ -3,8 +3,9 @@ from __future__ import annotations
 import pytest
 
 import easycat.integrations.agents._factory as agent_factory
+from easycat.cancel import CancelToken
 from easycat.integrations.agents._factory import auto_adapt_agent
-from easycat.integrations.agents.base import BridgeInputError
+from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput, BridgeInputError
 
 
 class _CustomAgent:
@@ -25,6 +26,43 @@ class _ExtraPositionalWorkflow:
 class _UnsupportedKeywordWorkflow:
     async def on_user_turn(self, text: str, *, tenant: str) -> str:
         return text
+
+
+class _ShallowRequiredCancelTokenWorkflow:
+    async def on_user_turn(self, text: str, *, cancel_token: CancelToken) -> str:
+        return text
+
+
+class _StreamingRequiredCancelTokenFallbackWorkflow:
+    """Shallow streaming workflow; shallow mode never calls the on_user_turn fallback."""
+
+    def __init__(self) -> None:
+        self.fallback_calls = 0
+
+    async def on_user_turn(self, text: str, *, cancel_token: CancelToken) -> str:
+        self.fallback_calls += 1
+        return f"fallback {text}"
+
+    async def on_user_turn_streaming(self, text: str):
+        yield f"stream {text}"
+
+
+class _ShallowOptionalCancelTokenWorkflow:
+    def __init__(self) -> None:
+        self.received: list[CancelToken | None] = []
+
+    async def on_user_turn(self, text: str, *, cancel_token: CancelToken | None = None) -> str:
+        self.received.append(cancel_token)
+        return f"echo {text}"
+
+
+class _DeepRequiredCancelTokenWorkflow:
+    def __init__(self) -> None:
+        self.received: list[CancelToken] = []
+
+    async def on_user_turn(self, text: str, *, recorder: object, cancel_token: CancelToken) -> str:
+        self.received.append(cancel_token)
+        return f"echo {text}"
 
 
 class _FakeGraph:
@@ -145,6 +183,7 @@ def test_auto_adapt_agent_consults_builtin_adapters_in_order(
     [
         (_ExtraPositionalWorkflow, "2 required positional"),
         (_UnsupportedKeywordWorkflow, "tenant"),
+        (_ShallowRequiredCancelTokenWorkflow, "cancel_token.*only in deep mode"),
     ],
 )
 def test_auto_adapt_agent_rejects_uncallable_workflow_signatures(
@@ -153,6 +192,63 @@ def test_auto_adapt_agent_rejects_uncallable_workflow_signatures(
 ) -> None:
     with pytest.raises(BridgeInputError, match=message):
         auto_adapt_agent(workflow_type())
+
+
+async def _collect_text(bridge, token: CancelToken) -> list[str]:
+    return [
+        event.text
+        async for event in bridge.invoke(AgentTurnInput(text="hi"), NULL_RECORDER, token)
+        if event.kind == "done"
+    ]
+
+
+async def test_auto_adapt_agent_deep_workflow_receives_required_cancel_token() -> None:
+    """A required cancel_token is supplied when recorder opts into deep mode.
+
+    Regression guard for the shallow-mode fix: only signatures without
+    ``recorder`` are rejected for requiring ``cancel_token``.
+    """
+    from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
+
+    workflow = _DeepRequiredCancelTokenWorkflow()
+    bridge = auto_adapt_agent(workflow)
+    assert isinstance(bridge, GenericWorkflowBridge)
+    assert bridge.deep_mode
+
+    token = CancelToken()
+    assert await _collect_text(bridge, token) == ["echo hi"]
+    assert workflow.received == [token]
+
+
+async def test_auto_adapt_agent_streaming_workflow_keeps_required_cancel_token_fallback() -> None:
+    """on_user_turn_streaming takes precedence in shallow mode, so the unused
+    on_user_turn fallback may still require cancel_token."""
+    from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
+
+    workflow = _StreamingRequiredCancelTokenFallbackWorkflow()
+    bridge = auto_adapt_agent(workflow)
+    assert isinstance(bridge, GenericWorkflowBridge)
+    assert not bridge.deep_mode
+
+    assert await _collect_text(bridge, CancelToken()) == ["stream hi"]
+    assert workflow.fallback_calls == 0
+
+
+async def test_auto_adapt_agent_shallow_workflow_keeps_optional_cancel_token_default() -> None:
+    """Shallow workflows may declare cancel_token=None; it keeps its default.
+
+    Shallow mode never passes the session token, so only a required
+    ``cancel_token`` is rejected at adaptation time.
+    """
+    from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
+
+    workflow = _ShallowOptionalCancelTokenWorkflow()
+    bridge = auto_adapt_agent(workflow)
+    assert isinstance(bridge, GenericWorkflowBridge)
+    assert not bridge.deep_mode
+
+    assert await _collect_text(bridge, CancelToken()) == ["echo hi"]
+    assert workflow.received == [None]
 
 
 @pytest.fixture
