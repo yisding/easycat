@@ -89,6 +89,76 @@ def test_default_pronunciation_helper_phone_regex_behavior() -> None:
     assert "<break" not in payload.text
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Released on 2024-01-15.",
+        "Released on 2024/01/15.",
+        "Meeting 2024-01-15 at 10.30",
+        "10:30 2024-01-15",
+        "Revenue grew in 2023 (12.5%) overall.",
+        "Pi is roughly 3.14159265.",
+        "The ratio was 123.4567890.",
+        "Scores: 12 34 56 78.",
+        "Upgrade to 1.2.3.4.5.6.7 today.",
+        "Room 555\n1234 is free.",
+        "Call 555\n123\n4567 later.",
+        "Part 555-123-4567-89 shipped.",
+        "ID 12-555-1234 closed.",
+    ],
+)
+def test_default_phone_pauses_leave_non_phone_numbers_unchanged(text: str) -> None:
+    """Dates, decimals, and runs of short numbers are not phone numbers.
+
+    The default pattern used to match any run of seven or more digits joined by
+    spaces, dots, dashes, or parentheses (including across newlines), so an ISO
+    date became ``"2 ... 0 ... 2 ... 4 ..."`` and ``"2023 (12.5%)"`` lost its
+    decimal point and opening parenthesis.
+    """
+    processors = default_pronunciation_processors()
+    payload = TTSInput(text)
+
+    result = processors[-1].process(payload, is_final=True, is_streaming=False)
+
+    assert result is payload
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Call (415) 555-2671.", "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1."),
+        ("Call 415-555-2671.", "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1."),
+        ("Call 415.555.2671.", "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1."),
+        ("Call 415 555 0142.", "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 0 ... 1 ... 4 ... 2."),
+        ("Call 555-0100.", "Call 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0."),
+        (
+            "Call +1 (555) 123-4567.",
+            "Call 1 ... 5 ... 5 ... 5 ... 1 ... 2 ... 3 ... 4 ... 5 ... 6 ... 7.",
+        ),
+        (
+            "Call +1 415 555 0100.",
+            "Call 1 ... 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0.",
+        ),
+        (
+            "Call +44 20 7946 0958.",
+            "Call 4 ... 4 ... 2 ... 0 ... 7 ... 9 ... 4 ... 6 ... 0 ... 9 ... 5 ... 8.",
+        ),
+        (
+            "Call 2024-01-15 at (415) 555-2671.",
+            "Call 2024-01-15 at 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1.",
+        ),
+    ],
+)
+def test_default_phone_pauses_pace_phone_number_shapes(text: str, expected: str) -> None:
+    """Phone-number shapes are still paced digit by digit, whole and balanced."""
+    processors = default_pronunciation_processors()
+
+    result = processors[-1].process(TTSInput(text), is_final=True, is_streaming=False)
+
+    assert result.text == expected
+    assert result.format == "plain"
+
+
 def test_default_pronunciation_helper_can_opt_into_exact_ssml_breaks() -> None:
     processors = default_pronunciation_processors(
         phone_pause_style="ssml",

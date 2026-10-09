@@ -17,6 +17,27 @@ PauseStyle = Literal["ssml", "ellipsis", "emdash"]
 MAX_SSML_BREAK_MS = 5_000
 _PAUSE_STYLES: frozenset[str] = frozenset({"ssml", "ellipsis", "emdash"})
 
+# Phone-number shapes paced by ``default_pronunciation_processors``. Explicit
+# groupings keep ISO dates, decimals, version strings, and runs of short
+# numbers out of the match; separators are a single space, dot, or dash, so a
+# match never crosses a newline. The boundaries stop a match from starting or
+# ending inside a word, decimal, or longer dash/dot-joined number.
+_DEFAULT_PHONE_PATTERN = (
+    r"(?<![\w.+-])"
+    r"(?:"
+    # Optional country code, then a 10-digit NANP number: "(415) 555-2671",
+    # "415-555-2671", "415 555 0142", "415.555.2671", "4155552671".
+    r"(?:\+\d{1,3}[ .-]?|1[ .-])?"
+    r"(?:\(\d{3}\) ?\d{3}[ .-]?\d{4}|\d{3}[ .-]\d{3}[ .-]\d{4}|\d{10})"
+    # 7-digit local number: "555-0100".
+    r"|\d{3}-\d{4}"
+    # International numbers with a leading "+": "+44 20 7946 0958".
+    r"|\+\d{1,3}(?:[ .-]\d{1,4}){2,5}"
+    r"|\+\d{7,15}"
+    r")"
+    r"(?!\w|[.-]\d)"
+)
+
 
 @dataclass(frozen=True)
 class _SSMLBreak:
@@ -222,7 +243,7 @@ def default_pronunciation_processors(
         processors.append(PhoneticReplacementProcessor(name_pronunciations))
     processors.append(
         PauseProcessor(
-            pattern=r"\+?\d[\d\s().-]{5,}\d",
+            pattern=_DEFAULT_PHONE_PATTERN,
             pause_ms=phone_pause_ms,
             unit_pattern=r"\d",
             minimum_units=7,
