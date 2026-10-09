@@ -148,7 +148,9 @@ async def serve_supervisor_websocket(
         {
             "type": "hello",
             "role": "supervisor",
-            "auth_required": not allow_unauthenticated,
+            # supervisor_message_authorized() always enforces a configured token,
+            # so allow_unauthenticated only relaxes auth when no token is set.
+            "auth_required": expected_token is not None,
             "message": 'Send {"type":"subscribe","session_id":"...","token":"..."}',
         },
     )
@@ -160,7 +162,10 @@ async def serve_supervisor_websocket(
             ws,
             code=4408,
             reason="Subscribe timed out",
-            message="Expected subscribe message with session_id within 10 seconds.",
+            message=(
+                "Expected subscribe message with session_id within "
+                f"{_format_timeout_seconds(subscribe_timeout_s)}."
+            ),
         )
         return
 
@@ -208,6 +213,12 @@ async def serve_supervisor_websocket(
         return
 
     await _stream_supervisor_audio(ws, broadcaster, session_id=session_id)
+
+
+def _format_timeout_seconds(seconds: float) -> str:
+    """Render a timeout for client-facing text, e.g. ``10 seconds`` or ``2.5 seconds``."""
+    amount = f"{seconds:g}"
+    return f"{amount} second" if amount == "1" else f"{amount} seconds"
 
 
 def _decode_supervisor_subscribe(raw: object) -> dict[str, object] | None:
