@@ -887,8 +887,14 @@ async def test_elevenlabs_reconnect_releases_waiting_commit_with_partial_fallbac
 
 @pytest.mark.asyncio
 async def test_elevenlabs_reconnect_promotes_uncommitted_partial_at_socket_boundary():
-    """A dropped socket cannot carry an old partial into the next audio epoch."""
-    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))
+    """A dropped socket cannot carry an old partial into the next audio epoch.
+
+    Under the manual commit strategy EasyCat owns the endpoint, so the partial
+    is promoted immediately as a mid-turn segment.
+    """
+    stt = ElevenLabsSTT(
+        ElevenLabsSTTConfig(api_key="k", mode="realtime", realtime_commit_strategy="manual")
+    )
     stt._audio_pending_commit = True
     stt._audio_epoch = 1
     stt._partial_text = "before reconnect"
@@ -898,6 +904,9 @@ async def test_elevenlabs_reconnect_promotes_uncommitted_partial_at_socket_bound
     event = stt._event_queue.get_nowait()
     assert event.type is STTEventType.FINAL
     assert event.text == "before reconnect"
+    # A socket drop is a transport boundary, not an endpoint: the promoted
+    # FINAL must not end a native-endpointing (realtime + VAD) turn.
+    assert event.ends_turn is False
     assert stt._partial_text == ""
     assert not stt._audio_pending_commit
     assert stt._committed_through_epoch == 1
@@ -919,7 +928,160 @@ async def test_elevenlabs_reconnect_promotes_partial_for_lost_manual_commit():
     event = stt._event_queue.get_nowait()
     assert event.type is STTEventType.FINAL
     assert event.text == "manual segment"
+    assert event.ends_turn is False
     assert stt._partial_text == ""
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_reconnect_without_partial_emits_no_final():
+    """A reconnect with uncommitted audio but no partial has nothing to promote."""
+    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))
+    stt._audio_pending_commit = True
+    stt._audio_epoch = 1
+
+    await stt._on_reconnect()
+
+    assert stt._event_queue.empty()
+
+
+def _native_endpoint_stt_after_reconnect(
+    partial: str, *, timeout_s: float = 0.05
+) -> ElevenLabsSTT:
+    """Default realtime + VAD provider whose socket just dropped mid-utterance."""
+    from easycat.stt.factory import _CATALOG
+
+    config = ElevenLabsSTTConfig(api_key="k", final_transcript_timeout_s=timeout_s)
+    assert "native_endpointing" in _CATALOG.capabilities_for_config(config)
+    stt = ElevenLabsSTT(config)
+    stt._running = True
+    stt._audio_pending_commit = True
+    stt._audio_epoch = 1
+    stt._partial_text = partial
+    return stt
+
+
+def _drain_queue(stt: ElevenLabsSTT) -> list:
+    events = []
+    while not stt._event_queue.empty():
+        events.append(stt._event_queue.get_nowait())
+    return events
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_reconnect_final_does_not_end_native_endpoint_turn():
+    """Regression: a reconnect-boundary FINAL ended the user's turn mid-utterance.
+
+    The default realtime + VAD config resolves to native endpointing, so the
+    committer auto-ends the turn on every FINAL with ``ends_turn=True``. The
+    partial cut off only because the socket dropped used to be promoted with
+    the default ``True`` and truncated the user's utterance. When speech
+    resumes on the fresh socket it must land as a mid-turn segment instead,
+    ahead of the new partial.
+    """
+    stt = _native_endpoint_stt_after_reconnect("I would like to")
+
+    await stt._on_reconnect()
+
+    # Held, not emitted: the fresh socket has not yet shown what follows.
+    assert stt._event_queue.empty()
+    assert stt._partial_text == ""
+
+    stt._handle_json_message({"message_type": "partial_transcript", "text": "book a table"})
+
+    final, partial = _drain_queue(stt)
+    assert final.type is STTEventType.FINAL
+    assert final.text == "I would like to"
+    assert final.ends_turn is False
+    assert partial.type is STTEventType.PARTIAL
+    assert partial.text == "book a table"
+    assert stt._reconnect_endpoint_timer is None
+
+    # The cancelled fallback never fires a second, turn-ending FINAL.
+    await asyncio.sleep(0.15)
+    assert stt._event_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_reconnect_silent_fresh_socket_ends_native_endpoint_turn():
+    """Regression: a drop after the user stopped talking left the turn open.
+
+    The fresh socket starts with an empty server buffer and receives only
+    silence, so ElevenLabs' VAD never commits. Without a fallback, nothing
+    would ever send an endpoint-bearing FINAL and the native-endpointing turn
+    would hang until the user spoke again. After ``final_transcript_timeout_s``
+    the held text ends the turn.
+    """
+    stt = _native_endpoint_stt_after_reconnect("what time is it")
+
+    await stt._on_reconnect()
+    assert stt._event_queue.empty()
+    # A silence-only commit on the fresh socket is not speech: keep waiting.
+    stt._handle_json_message({"message_type": "committed_transcript", "text": ""})
+    assert stt._event_queue.empty()
+
+    event = await asyncio.wait_for(stt._event_queue.get(), timeout=1.0)
+    assert event.type is STTEventType.FINAL
+    assert event.text == "what time is it"
+    assert event.ends_turn is True
+    assert stt._reconnect_endpoint_timer is None
+    assert stt._reconnect_held_text == ""
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_reconnect_hold_precedes_committed_transcript():
+    """A VAD commit with no prior partial still follows the held text."""
+    stt = _native_endpoint_stt_after_reconnect("first half")
+
+    await stt._on_reconnect()
+    stt._handle_json_message({"message_type": "committed_transcript", "text": "second half"})
+
+    held, committed = _drain_queue(stt)
+    assert (held.text, held.ends_turn) == ("first half", False)
+    assert (committed.text, committed.ends_turn) == ("second half", True)
+    assert stt._reconnect_endpoint_timer is None
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_reconnect_hold_released_once_by_end_stream():
+    """end_stream() delivers the held text and the fallback never fires after it."""
+    ws = _BlockingWebSocket([])
+
+    async def connect(url: str, **kwargs):
+        return ws
+
+    stt = ElevenLabsSTT(
+        ElevenLabsSTTConfig(api_key="k", ws_connect=connect, final_transcript_timeout_s=0.05)
+    )
+    await stt.start_stream()
+    stt._audio_pending_commit = True
+    stt._audio_epoch = 1
+    stt._partial_text = "cut off"
+    await stt._on_reconnect()
+    assert stt._reconnect_endpoint_timer is not None
+
+    await stt.end_stream()
+
+    events = [event async for event in stt.events()]
+    assert [(e.type, e.text, e.ends_turn) for e in events] == [
+        (STTEventType.FINAL, "cut off", True)
+    ]
+    assert stt._reconnect_endpoint_timer is None
+    await asyncio.sleep(0.15)
+    # Only terminal sentinels (receive loop + end_stream) may remain.
+    assert all(event is None for event in _drain_queue(stt))
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_reconnect_fallback_does_not_fire_after_stream_stopped():
+    """A timer that races end_stream() leaves the release to end_stream()."""
+    stt = _native_endpoint_stt_after_reconnect("late", timeout_s=0.01)
+
+    await stt._on_reconnect()
+    stt._running = False
+    await asyncio.sleep(0.05)
+
+    assert stt._event_queue.empty()
+    assert stt._reconnect_held_text == "late"
 
 
 @pytest.mark.asyncio
@@ -943,6 +1105,8 @@ async def test_elevenlabs_realtime_promotes_partial_on_commit_timeout(monkeypatc
     finals = [e for e in events if e.type == STTEventType.FINAL]
     assert len(finals) == 1
     assert finals[0].text == "hello wor"
+    # The end-of-turn commit-timeout promotion is the real end of the turn.
+    assert finals[0].ends_turn is True
 
 
 @pytest.mark.asyncio

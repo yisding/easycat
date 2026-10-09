@@ -36,6 +36,16 @@ from easycat.runtime.records import ErrorInfo
 logger = logging.getLogger(__name__)
 
 
+def has_streaming_entry_point(workflow: Any) -> bool:
+    """Return whether shallow mode dispatches to ``on_user_turn_streaming``.
+
+    Shallow mode prefers ``on_user_turn_streaming`` and then never calls
+    ``on_user_turn``; deep mode ignores it. The bridge and the auto-adapt
+    factory both use this check so they agree on which entry point runs.
+    """
+    return hasattr(workflow, "on_user_turn_streaming")
+
+
 class GenericWorkflowBridge(BridgeTemplate):
     """Bridge for user-defined orchestration code.
 
@@ -91,6 +101,24 @@ class GenericWorkflowBridge(BridgeTemplate):
         sig = inspect.signature(fn)
         self._deep_mode = "recorder" in sig.parameters
         self._accepts_cancel_token = "cancel_token" in sig.parameters
+        cancel_param = sig.parameters.get("cancel_token")
+        if (
+            not self._deep_mode
+            and not has_streaming_entry_point(workflow)
+            and cancel_param is not None
+            and cancel_param.kind is inspect.Parameter.KEYWORD_ONLY
+            and cancel_param.default is inspect.Parameter.empty
+        ):
+            # Shallow mode calls on_user_turn(text) only, so a required
+            # cancel_token would fail every turn with TypeError. A workflow
+            # with on_user_turn_streaming never reaches on_user_turn in
+            # shallow mode, so its fallback signature is left alone.
+            raise BridgeInputError(
+                "on_user_turn() requires keyword-only parameter cancel_token, but "
+                "GenericWorkflowBridge supplies cancel_token only in deep mode. "
+                "Add a recorder parameter to opt into deep mode or give cancel_token "
+                "a default."
+            )
         self._mcp_warning_emitted = False
 
     @property
@@ -251,7 +279,7 @@ class GenericWorkflowBridge(BridgeTemplate):
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         # Check for streaming variant first.
-        if hasattr(self._workflow, "on_user_turn_streaming"):
+        if has_streaming_entry_point(self._workflow):
             # Streaming chunks are inherently unstructured text, so we leave
             # ``_last_output`` at its ``None`` default rather than emitting the
             # concatenated text as ``structured_output``.  That would merely

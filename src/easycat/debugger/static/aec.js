@@ -201,6 +201,21 @@
     });
   }
 
+  // Read a record's monotonic timestamp in nanoseconds.  Mirrors the
+  // Python ``record_mono_ns`` helper: exported bundles nest it under
+  // ``timing.mono_ns``, while crash-dump SQLite journals served raw by
+  // ``/api/records`` keep it at the top level.  Nested wins; non-numbers
+  // (including booleans) are ignored; a missing timestamp reads as 0.
+  function _aecRecordMonoNs(r) {
+    if (!r) return 0;
+    const timing = r.timing;
+    if (timing && typeof timing === "object" && Number.isFinite(timing.mono_ns)) {
+      return timing.mono_ns;
+    }
+    if (Number.isFinite(r.mono_ns)) return r.mono_ns;
+    return 0;
+  }
+
   // Build the turn FSM swimlane from ``turn_state_changed`` records, mapping
   // each contiguous state to a coloured span on the px(ms) timeline.
   function _aecSwimlane(stateRecords, wallMs, width) {
@@ -216,7 +231,7 @@
     // relative to the first transition.
     const ordered = (stateRecords || [])
       .map((r) => ({
-        ns: (r.timing && r.timing.mono_ns) || 0,
+        ns: _aecRecordMonoNs(r),
         to: (r.data && r.data.to) || "idle",
       }))
       .sort((a, b) => a.ns - b.ns);
@@ -364,5 +379,7 @@
 
   global.EasyCatAec = {
     renderAecView: renderAecView,
+    _recordMonoNs: _aecRecordMonoNs,
+    _swimlane: _aecSwimlane,
   };
 })(typeof window !== "undefined" ? window : this);

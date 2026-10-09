@@ -588,3 +588,76 @@ async def test_funasr_vad_default_start_debounce_is_independent_of_lead_in(
         assert chunks < 50
 
     assert (chunks - lead_chunks) * 50 == 300
+
+
+def _install_counting_funasr(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Patch FunASR with fakes that record how many samples each frame carries."""
+    frame_samples: list[int] = []
+
+    class _FakeWaveform:
+        def __init__(self, data: bytes) -> None:
+            self.samples = len(data) // 2
+
+        def astype(self, _dtype: object) -> _FakeWaveform:
+            return self
+
+        def __truediv__(self, _value: float) -> _FakeWaveform:
+            return self
+
+    class _FakeNumpy:
+        int16 = "int16"
+        float32 = "float32"
+
+        @staticmethod
+        def frombuffer(data: bytes, dtype: object) -> _FakeWaveform:
+            assert dtype == "int16"
+            return _FakeWaveform(data)
+
+    class _FakeModel:
+        def __call__(self, audio_in: _FakeWaveform, param_dict: dict[str, object]) -> list[int]:
+            frame_samples.append(audio_in.samples)
+            return []
+
+    def _initialize(self: FunASROnnxVAD) -> None:
+        self._numpy = _FakeNumpy()
+        self._model = _FakeModel()
+        self._param_dict = {"in_cache": []}
+
+    monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
+    return frame_samples
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_rate", "second_rate"),
+    [(48_000, 16_000), (24_000, 16_000), (8_000, 16_000), (48_000, 24_000), (16_000, 48_000)],
+)
+async def test_funasr_vad_keeps_buffered_audio_across_source_rate_switch(
+    monkeypatch: pytest.MonkeyPatch, first_rate: int, second_rate: int
+):
+    """A mid-stream source-rate switch must not drop already-resampled 16 kHz audio.
+
+    The buffer always holds 16 kHz model-rate PCM, but it used to be cleared
+    whenever the *source* rate changed, and the resampler tail was reset
+    instead of flushed. A 48 kHz segment followed by native 16 kHz input
+    therefore lost up to one model frame plus the interpolation tail, and
+    the VAD clock fell behind the audio actually fed.
+    """
+    frame_samples = _install_counting_funasr(monkeypatch)
+    vad = FunASROnnxVAD()
+    fed_samples_16k = 0
+    for rate, chunks in ((first_rate, 2), (second_rate, 10)):
+        fmt = AudioFormat(sample_rate=rate, channels=1, sample_width=2)
+        samples_per_chunk = rate // 50  # 20 ms
+        for _ in range(chunks):
+            chunk = AudioChunk(data=bytes(samples_per_chunk * 2), format=fmt)
+            async for _ in vad.process(chunk):
+                pass
+            fed_samples_16k += 320
+
+    assert all(n == vad._chunk_samples for n in frame_samples)
+    accounted = (
+        sum(frame_samples) + len(vad._buffer) // 2 + vad._audio_resampler.pending_output_bytes // 2
+    )
+    assert abs(accounted - fed_samples_16k) <= 1
+    assert vad._audio_time_s == pytest.approx(len(frame_samples) * vad._chunk_size_ms / 1000)

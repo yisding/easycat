@@ -68,6 +68,35 @@ class FakeHTTPStreamResponse:
         await self.aclose()
 
 
+class CloseRaisesReadErrorHTTPResponse(FakeHTTPStreamResponse):
+    """Yield one chunk, then block until closed and fail the pending read.
+
+    Models real httpx: closing a live streaming response underneath an
+    in-flight ``aiter_bytes()`` makes the suspended read raise ``ReadError``.
+    """
+
+    def __init__(self, chunks: list[bytes], status_code: int = 200):
+        super().__init__(chunks, status_code)
+        self._closed_event = asyncio.Event()
+
+    async def aiter_bytes(self, chunk_size: int = 4096):
+        yield _pcm16_bytes(480)
+        await self._closed_event.wait()
+        raise httpx.ReadError("")
+
+    async def aclose(self):
+        self.is_closed = True
+        self._closed_event.set()
+
+
+class StreamClosedHTTPResponse(FakeHTTPStreamResponse):
+    """Yield one chunk, then model a close racing the next stream read."""
+
+    async def aiter_bytes(self, chunk_size: int = 4096):
+        yield _pcm16_bytes(480)
+        raise httpx.StreamClosed()
+
+
 class FakeReconnectingWS:
     """Mock ReconnectingWebSocket for ElevenLabs WebSocket mode."""
 
@@ -399,6 +428,88 @@ class TestElevenLabsTTSHTTP:
 
         assert len(events) == 2
         assert provider.is_cancelled
+
+    async def test_http_stop_mid_stream_ends_quietly(self):
+        """A graceful stop() during HTTP synthesis must not surface an error.
+
+        stop() closes the live response, which makes the suspended read raise
+        httpx.ReadError. It used to escape synthesize() and emit a provider
+        Error because only cancel() marked the close as self-inflicted.
+        """
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+        provider = self._make_provider(event_bus=bus)
+        fake_response = CloseRaisesReadErrorHTTPResponse([])
+        first_audio = asyncio.Event()
+
+        async def consume() -> int:
+            count = 0
+            async for _event in provider.synthesize("long text"):
+                count += 1
+                first_audio.set()
+            return count
+
+        client = provider._get_http_client()
+        with patch.object(client, "stream", return_value=fake_response):
+            task = asyncio.create_task(consume())
+            await asyncio.wait_for(first_audio.wait(), 1)
+            await provider.stop()
+            count = await asyncio.wait_for(task, 1)
+
+        await asyncio.sleep(0)
+        assert count == 1
+        assert errors == []
+        assert fake_response.is_closed
+        assert not provider.is_cancelled
+        assert not provider.is_active
+        await provider.close()
+
+    async def test_http_cancel_suppresses_stream_closed_race(self):
+        """A StreamClosed racing a barge-in cancel ends the stream quietly."""
+        provider = self._make_provider()
+        fake_response = StreamClosedHTTPResponse([])
+        client = provider._get_http_client()
+
+        with patch.object(client, "stream", return_value=fake_response):
+            async for _event in provider.synthesize("long text"):
+                await provider.cancel()
+
+        assert provider.is_cancelled
+        await provider.close()
+
+    async def test_http_stream_closed_without_stop_propagates(self):
+        """A StreamClosed with neither stop() nor cancel() still propagates."""
+        provider = self._make_provider()
+        await provider.stop()  # an idle stop must not mask the next call's error
+        fake_response = StreamClosedHTTPResponse([])
+        client = provider._get_http_client()
+
+        with patch.object(client, "stream", return_value=fake_response):  # noqa: SIM117 nested scopes clarify setup and cleanup
+            with pytest.raises(httpx.StreamClosed):
+                async for _event in provider.synthesize("long text"):
+                    pass
+        await provider.close()
+
+    async def test_http_read_error_without_stop_emits_error(self):
+        """A genuine transport ReadError still logs, emits an Error, and raises."""
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+        provider = self._make_provider(event_bus=bus)
+        fake_response = CloseRaisesReadErrorHTTPResponse([])
+        client = provider._get_http_client()
+
+        with patch.object(client, "stream", return_value=fake_response):
+            stream = provider.synthesize("long text")
+            await anext(stream)
+            fake_response._closed_event.set()  # transport drop, not a stop()
+            with pytest.raises(httpx.ReadError):
+                await anext(stream)
+
+        await asyncio.sleep(0)
+        assert len(errors) == 1
+        await provider.close()
 
     async def test_synthesize_http_active_tracking(self):
         provider = self._make_provider()

@@ -189,6 +189,9 @@ class ElevenLabsTTS(_WSTTSBase):
         self._source_format = _ELEVENLABS_FORMAT_MAP[config.output_format]
         self._client: httpx.AsyncClient | None = None
         self._response: httpx.Response | None = None
+        # Set by stop() before it closes the live HTTP response so the
+        # resulting read error is treated as a graceful end of stream.
+        self._stopping = False
         # Init/text/EOS frames for the in-flight utterance, replayed by the
         # on_reconnect hook so a mid-stream drop restarts the utterance from
         # the top instead of aborting it. Known tradeoff: replaying the full
@@ -270,9 +273,19 @@ class ElevenLabsTTS(_WSTTSBase):
             async for event in owned_stream:
                 yield event
 
+    async def _iter_http_audio(self, response: httpx.Response) -> AsyncGenerator[TTSEvent, None]:
+        async for chunk in response.aiter_bytes(chunk_size=4800):
+            if self._cancelled or self._stopping:
+                break
+            if chunk:
+                event = self._make_audio_event(chunk, self._source_format)
+                if event is not None:
+                    yield event
+
     async def _synthesize_http(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         """Synthesize via HTTP chunked transfer encoding."""
         self._start_synthesis()
+        self._stopping = False
         client = self._get_http_client()
 
         try:
@@ -300,13 +313,8 @@ class ElevenLabsTTS(_WSTTSBase):
                     await response.aread()
                 response.raise_for_status()
 
-                async for chunk in response.aiter_bytes(chunk_size=4800):
-                    if self._cancelled:
-                        break
-                    if chunk:
-                        event = self._make_audio_event(chunk, self._source_format)
-                        if event is not None:
-                            yield event
+                async for event in self._iter_http_audio(response):
+                    yield event
             tail = self._finish_audio_event()
             if tail is not None:
                 yield tail
@@ -321,11 +329,16 @@ class ElevenLabsTTS(_WSTTSBase):
                 exc, http_status=exc.response.status_code, body=exc.response.text[:400]
             )
             raise
+        except httpx.StreamError as exc:
+            if not (self._cancelled or self._stopping):
+                raise
+            logger.debug("ElevenLabs TTS stream closed after cancel/stop: %s", exc)
         except httpx.HTTPError as exc:
-            if not self._cancelled:
+            if not (self._cancelled or self._stopping):
                 logger.error("ElevenLabs TTS HTTP error: %s", exc)
                 self._emit_provider_error(exc)
                 raise
+            logger.debug("ElevenLabs TTS HTTP error after cancel/stop: %s", exc)
         finally:
             self._response = None
             self._end_synthesis()
@@ -691,6 +704,7 @@ class ElevenLabsTTS(_WSTTSBase):
                 await self._mgr.cancel_all()
             return
         if self._response is not None:
+            self._stopping = True
             await self._response.aclose()
         await self._close_ws()
 

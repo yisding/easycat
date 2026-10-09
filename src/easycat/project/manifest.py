@@ -73,9 +73,13 @@ def _resolve_python_agent(reference: str) -> Any:
         )
     try:
         module = import_module(module_path)
-    except ImportError as exc:
+    except Exception as exc:
+        # Not just ImportError: a SyntaxError or any exception the module raises
+        # at import time is equally "could not import". BaseException (SystemExit,
+        # KeyboardInterrupt) still propagates.
         raise EASYCAT_E605(
-            reference=reference, detail=f"could not import {module_path!r}: {exc}"
+            reference=reference,
+            detail=f"could not import {module_path!r}: {type(exc).__name__}: {exc}",
         ) from exc
     target: Any = module
     for part in attribute_path.split("."):
@@ -241,8 +245,8 @@ class ProjectManifest:
             value = getattr(spec, field_name)
             if value is not None:
                 kwargs[field_name] = value
-        # Resolve VAD here so manifest failures remain EASYCAT_E602-scoped while
-        # still allowing installed ``easycat.vad_providers`` entry points.
+        # Resolve VAD here so unknown-provider failures remain EASYCAT_E602-scoped
+        # while still allowing installed ``easycat.vad_providers`` entry points.
         if spec.vad is not None:
             kwargs["vad"] = self._coerce_vad(spec.vad, profile)
 
@@ -289,13 +293,19 @@ class ProjectManifest:
 
         Keeping resolution in this manifest boundary preserves the structured
         :data:`EASYCAT_E602` error contract for unknown providers while entry
-        points make third-party VADs name-selectable.
+        points make third-party VADs name-selectable. Only an unknown name
+        (``EASYCAT_E104``) or an invalid shortcut (``ValueError``) is a manifest
+        error; any other ``EasyCatError`` -- notably ``EASYCAT_E203`` for a
+        registered provider whose ``env_var`` is unset -- propagates unchanged
+        so startup reports the same code and fix as ``easycat plan``/``doctor``.
         """
         from easycat.vad import parse_vad_string
 
         try:
             return parse_vad_string(shortcut)
         except (EasyCatError, ValueError) as exc:
+            if isinstance(exc, EasyCatError) and exc.code != "EASYCAT_E104":
+                raise
             raise EASYCAT_E602(
                 path=f"[voice.{profile}]",
                 problem=f"vad {shortcut!r} is not a known provider: {exc}",

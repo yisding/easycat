@@ -141,6 +141,33 @@ def test_plan_unresolvable_backend_reports_e602(
     assert "silro" in payload["message"]
 
 
+def test_non_utf8_manifest_reports_e602_envelope_like_invalid_toml(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """A non-UTF-8 manifest gets the same E602 envelope/exit as invalid TOML.
+
+    It used to crash ``plan``/``doctor --json`` with an uncaught
+    ``UnicodeDecodeError``, exit 1 and an empty stdout.
+    """
+    bad_encoding = tmp_path / "latin1" / "easycat.toml"
+    bad_encoding.parent.mkdir()
+    bad_encoding.write_bytes(
+        b'[project]\nname = "Z\xfcrich"\n[voice.default]\ntransport = "webrtc"\n'
+    )
+    bad_syntax = tmp_path / "syntax" / "easycat.toml"
+    bad_syntax.parent.mkdir()
+    bad_syntax.write_text("[server\nport = ", encoding="utf-8")
+
+    reference = cli.invoke(app, ["plan", "--manifest", str(bad_syntax), "--json"])
+    for command in ("plan", "doctor"):
+        result = cli.invoke(app, [command, "--manifest", str(bad_encoding), "--json"])
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "error"
+        assert payload["code"] == "EASYCAT_E602"
+        assert "not valid UTF-8" in payload["message"]
+        assert payload["exit_code"] == result.exit_code == reference.exit_code
+
+
 def test_plan_unknown_provider_still_exits_two_with_e104(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
