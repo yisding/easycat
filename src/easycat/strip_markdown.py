@@ -405,7 +405,13 @@ class _MarkdownReferenceScanner:
         return index
 
 
-def _replace_markdown_links_and_images(text: str) -> str:
+# Deepest label nesting rendered recursively. Real Markdown nests a level or
+# two (a badge image inside a link); the cap keeps adversarial ``[[[...](u)](u)``
+# input from exhausting the stack or going quadratic. Deeper labels stay literal.
+_MAX_LABEL_NESTING = 4
+
+
+def _replace_markdown_links_and_images(text: str, *, depth: int = 0) -> str:
     """Render links as label+URL and images as alt text for voice output."""
     if "[" not in text:
         return text
@@ -415,7 +421,7 @@ def _replace_markdown_links_and_images(text: str) -> str:
     changed = False
     for reference in _MarkdownReferenceScanner(text):
         out.append(text[cursor : reference.start])
-        out.append(_render_markdown_reference(reference))
+        out.append(_render_markdown_reference(reference, depth=depth))
         cursor = reference.end
         changed = True
     if not changed:
@@ -424,10 +430,17 @@ def _replace_markdown_links_and_images(text: str) -> str:
     return "".join(out)
 
 
-def _render_markdown_reference(reference: _MarkdownReference) -> str:
+def _render_markdown_reference(reference: _MarkdownReference, *, depth: int = 0) -> str:
+    # The label may itself hold inline links/images (for example a README badge
+    # ``[![build](img.svg)](https://ci)``). The scanner resumes after the outer
+    # destination, so render the label here or the nested markup reaches TTS
+    # verbatim. Each call scans a strict substring of the label.
+    label = reference.label
+    if depth < _MAX_LABEL_NESTING:
+        label = _replace_markdown_links_and_images(label, depth=depth + 1)
     if reference.is_image:
-        return reference.label
-    return " ".join(part for part in (reference.label, reference.destination_url) if part)
+        return label
+    return " ".join(part for part in (label, reference.destination_url) if part)
 
 
 def _has_markdown_link_or_image(text: str) -> bool:

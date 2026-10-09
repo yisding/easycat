@@ -267,6 +267,54 @@ class TestStripMarkdown:
         assert strip_markdown(text) == "Diagram: plot."
 
     @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            (
+                "[![build](https://img.shields.io/b.svg)](https://ci.example.com)",
+                "build https://ci.example.com",
+            ),
+            ("See [![logo](a.png)](https://x.com) here", "See logo https://x.com here"),
+            ("[![moon](moon.jpg)](/uri)", "moon /uri"),
+            ("[a ![b](c) d](e)", "a b d e"),
+        ],
+        ids=["badge", "badge-in-sentence", "commonmark-moon", "image-mid-label"],
+    )
+    def test_image_nested_in_link_label_renders_as_alt_text(
+        self, text: str, expected: str
+    ) -> None:
+        """A badge-style ``[![alt](img)](url)`` speaks the alt text and link URL.
+
+        The scanner resumed after the outer destination without rendering the
+        label, so the inner image markup and its URL reached TTS verbatim.
+        """
+        assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[a [b](c) d](e)", "a b c d e"),
+            ("![alt [x](y)](img.png)", "alt x y"),
+            ("[outer [inner]](url)", "outer [inner] url"),
+        ],
+        ids=["link-in-link-label", "link-in-image-alt", "bare-brackets-in-label"],
+    )
+    def test_nested_references_in_labels_are_rendered(self, text: str, expected: str) -> None:
+        """Links nested in labels render too; bracket pairs without a destination stay."""
+        assert strip_markdown(text) == expected
+
+    def test_deeply_nested_link_labels_do_not_exhaust_the_stack(self) -> None:
+        """Adversarial ``[[[...x](u)](u)`` nesting must not raise RecursionError.
+
+        Label rendering recurses once per nesting level, so it is depth-capped:
+        the outer levels render and the deepest label is left literal.
+        """
+        depth = 2000
+        payload = "[" * depth + "x" + "](u)" * depth
+        result = strip_markdown(payload)
+        assert result.endswith(")](u) u u u u u")
+        assert result.count("u") == depth
+
+    @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
     )
     def test_adversarial_brackets_left_intact(self, build: Callable[[int], str]) -> None:
