@@ -230,6 +230,49 @@ class TestBuildDialPayload:
 
         assert "answering_machine_detection" not in payload
 
+    def test_dial_client_state_defaults_direction_to_outbound(self) -> None:
+        """A Dial must mark its media stream outbound (gh 1157).
+
+        Without the marker the stream's start frame parsed as inbound, so the
+        outbound state machine dropped its own call's ``CallAnswered``.
+        """
+        payload = build_dial_payload(
+            to="+15550001111",
+            from_="+15550002222",
+            connection_id="conn-1",
+            stream_url="wss://example.com/stream",
+        )
+
+        assert decode_client_state(payload["client_state"]) == {"direction": "outbound"}
+
+    def test_dial_client_state_merges_caller_claims(self) -> None:
+        caller_state = {"campaign": "spring", "lead_id": 7}
+        payload = build_dial_payload(
+            to="+15550001111",
+            from_="+15550002222",
+            connection_id="conn-1",
+            stream_url="wss://example.com/stream",
+            client_state=caller_state,
+        )
+
+        assert decode_client_state(payload["client_state"]) == {
+            "campaign": "spring",
+            "lead_id": 7,
+            "direction": "outbound",
+        }
+        assert caller_state == {"campaign": "spring", "lead_id": 7}
+
+    def test_dial_client_state_keeps_explicit_direction(self) -> None:
+        payload = build_dial_payload(
+            to="+15550001111",
+            from_="+15550002222",
+            connection_id="conn-1",
+            stream_url="wss://example.com/stream",
+            client_state={"direction": "outbound-api"},
+        )
+
+        assert decode_client_state(payload["client_state"]) == {"direction": "outbound-api"}
+
     def test_empty_connection_id_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match="connection_id"):
             build_dial_payload(

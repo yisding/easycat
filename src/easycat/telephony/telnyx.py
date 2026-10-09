@@ -289,9 +289,16 @@ def build_dial_payload(
     timeout_secs: int | None = None,
     webhook_url: str | None = None,
 ) -> dict[str, Any]:
-    """Build the ``POST /v2/calls`` (Dial) body with media-stream parameters."""
+    """Build the ``POST /v2/calls`` (Dial) body with media-stream parameters.
+
+    The ``client_state`` blob defaults ``direction`` to ``"outbound"`` (an
+    explicit caller value wins) so the media stream's start frame parses as
+    an outbound leg rather than the transport's inbound default.
+    """
     if not connection_id:
         raise ValueError("connection_id must be non-empty")
+    dial_state = dict(client_state or {})
+    dial_state.setdefault("direction", "outbound")
     payload: dict[str, Any] = {
         "to": to,
         "from": from_,
@@ -300,7 +307,7 @@ def build_dial_payload(
     payload.update(
         build_stream_parameters(
             stream_url=stream_url,
-            client_state=client_state,
+            client_state=dial_state,
             codec=codec,
             sampling_rate=sampling_rate,
         )
