@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import pathlib
 import struct
 
 import pytest
@@ -811,8 +812,10 @@ def test_align_tracks_orders_flat_records_by_top_level_mono_ns():
 
 
 def test_record_mono_ns_reads_both_shapes_and_rejects_bools():
+    from easycat.debug import _turn_timeline
     from easycat.debug._turn_timeline import record_mono_ns
 
+    assert "record_mono_ns" in _turn_timeline.__all__
     assert record_mono_ns({"timing": {"mono_ns": 7}}) == 7
     assert record_mono_ns({"mono_ns": 9}) == 9
     # Nested timing wins when both shapes are present.
@@ -823,3 +826,138 @@ def test_record_mono_ns_reads_both_shapes_and_rejects_bools():
     assert record_mono_ns({"mono_ns": "5"}) is None
     assert record_mono_ns({"timing": "bad"}) is None
     assert record_mono_ns({}) is None
+
+
+# ── aec.js FSM swimlane: flat (SQLite / crash-dump) records ──────
+
+_AEC_JS = (
+    pathlib.Path(__file__).resolve().parent.parent.parent / "src/easycat/debugger/static/aec.js"
+)
+
+# Loads aec.js in a bare Node VM with a minimal ``el()`` stub and prints the
+# swimlane's span geometry as JSON.  stdin: {"records": [...], "wall_ms": N}.
+_SWIMLANE_NODE_SCRIPT = r"""
+const fs = require("fs");
+const vm = require("vm");
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
+function el(tag, attrs, ...kids) {
+  return { tag, attrs: attrs || {}, kids, children: [],
+           appendChild(c) { this.children.push(c); return c; } };
+}
+const ctx = { el };
+ctx.window = ctx;
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const aec = ctx.EasyCatAec;
+const lane = aec._swimlane(input.records, input.wall_ms, input.width);
+const track = lane.children[1];
+const spans = track.children.map((s) => {
+  const m = /left:([\d.]+)px; width:([\d.]+)px/.exec(s.attrs.style);
+  return { to: s.kids[0], left: Number(m[1]), width: Number(m[2]) };
+});
+const mono = input.records.map((r) => aec._recordMonoNs(r));
+const edge = [
+  aec._recordMonoNs({ timing: { mono_ns: 7 }, mono_ns: 9 }),
+  aec._recordMonoNs({ timing: { mono_ns: true }, mono_ns: 9 }),
+  aec._recordMonoNs({ mono_ns: true }),
+  aec._recordMonoNs({ mono_ns: "5" }),
+  aec._recordMonoNs({ timing: "bad" }),
+  aec._recordMonoNs(null),
+];
+process.stdout.write(JSON.stringify({ spans, mono, edge }));
+"""
+
+
+def _run_swimlane(records, *, wall_ms, width=1000):
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    proc = subprocess.run(
+        [node, "-e", _SWIMLANE_NODE_SCRIPT, str(_AEC_JS)],
+        input=json.dumps({"records": records, "wall_ms": wall_ms, "width": width}),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    return json.loads(proc.stdout)
+
+
+def test_aec_js_swimlane_does_not_read_timing_only():
+    """The swimlane must not use the old ``timing``-only timestamp lookup."""
+    text = _AEC_JS.read_text(encoding="utf-8")
+    assert "(r.timing && r.timing.mono_ns) || 0" not in text
+    assert "ns: _aecRecordMonoNs(r)" in text
+    assert "function _aecRecordMonoNs" in text
+
+
+async def test_aec_js_swimlane_spans_flat_sqlite_records(tmp_path):
+    """FSM spans from a flat SQLite journal sit at their real offsets.
+
+    Regression: ``/api/records`` returns crash-dump journal rows raw, with a
+    top-level ``mono_ns`` and no ``timing`` key.  ``_aecSwimlane`` read only
+    ``timing.mono_ns``, so every transition mapped to 0 and every span but
+    the last collapsed to the 2px minimum at x=0.
+    """
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from easycat.debugger._sources import _run_bundle_source
+    from easycat.debugger.server import _make_app
+
+    bundle = _flat_journal_bundle(
+        tmp_path,
+        [
+            (1, "turn_state_changed", 1_000_000_000, {"to": "user_speaking"}, None),
+            (2, "turn_state_changed", 1_500_000_000, {"to": "bot_speaking"}, None),
+        ],
+        {},
+    )
+    app = _make_app(_run_bundle_source(bundle, label="journal.sqlite"))
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/records?turn=t1&name=turn_state_changed&limit=500")
+        assert resp.status == 200
+        records = (await resp.json())["records"]
+    assert len(records) == 2
+    assert all("timing" not in r and isinstance(r["mono_ns"], int) for r in records)
+
+    out = _run_swimlane(records, wall_ms=1000, width=1000)
+
+    assert out["mono"] == [1_000_000_000, 1_500_000_000]
+    assert out["spans"] == [
+        {"to": "user_speaking", "left": 0, "width": 500},
+        {"to": "bot_speaking", "left": 500, "width": 500},
+    ]
+
+
+def test_aec_js_swimlane_flat_and_nested_records_match():
+    """Nested ``timing.mono_ns`` and flat ``mono_ns`` draw identical spans."""
+    nested = [
+        {
+            "name": "turn_state_changed",
+            "data": {"to": "user_speaking"},
+            "timing": {"mono_ns": 2_000_000_000},
+        },
+        {
+            "name": "turn_state_changed",
+            "data": {"to": "bot_speaking"},
+            "timing": {"mono_ns": 2_250_000_000},
+        },
+    ]
+    flat = [
+        {"name": r["name"], "data": r["data"], "mono_ns": r["timing"]["mono_ns"]} for r in nested
+    ]
+
+    nested_out = _run_swimlane(nested, wall_ms=1000)
+    flat_out = _run_swimlane(flat, wall_ms=1000)
+
+    assert nested_out["spans"] == [
+        {"to": "user_speaking", "left": 0, "width": 250},
+        {"to": "bot_speaking", "left": 250, "width": 750},
+    ]
+    assert flat_out["spans"] == nested_out["spans"]
+    # Mirrors the Python ``record_mono_ns`` precedence and type checks.
+    assert flat_out["edge"] == [7, 9, 0, 0, 0, 0]

@@ -619,6 +619,7 @@ __all__ = [
     "STAGE_ORDER",
     "build_timeline",
     "extract_turn_transcripts",
+    "record_mono_ns",
     "record_wall_ns",
     "safe_turn_id",
     "summarise_turns",
