@@ -177,11 +177,32 @@ class TestMarkdownReferenceScanner:
             ("![alt](img.png 'caption')", "alt"),
             ("[x](not a url) then [ok](url)", "[x](not a url) then ok url"),
             ("[x]([ok](url) more)", "[x](ok url more)"),
+            ("[x](foo\\ 'title')", "x foo\\"),
         ],
     )
     def test_valid_destinations_with_titles_still_render(self, text: str, expected: str) -> None:
         assert has_markdown(text) is True
         assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[x](<foo\\>bar>)", "x foo\\>bar"),
+            ("[x](<foo\\>bar> 'title')", "x foo\\>bar"),
+        ],
+    )
+    def test_escaped_angle_close_stays_inside_destination(self, text: str, expected: str) -> None:
+        """A backslash-escaped ``>`` does not close an ``<...>`` destination,
+        and the rendered URL runs to the unescaped closing ``>``."""
+        assert has_markdown(text) is True
+        assert strip_markdown(text) == expected
+
+    def test_backslash_does_not_escape_whitespace_in_destination(self) -> None:
+        """CommonMark only escapes ASCII punctuation: ``foo\\ bar`` is two
+        tokens, so the parenthetical is not a destination and stays prose."""
+        text = "Use [x](foo\\ bar) here."
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
 
     @pytest.mark.parametrize(
         "build",

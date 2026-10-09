@@ -13,6 +13,7 @@ content.
 from __future__ import annotations
 
 import re
+import string
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
@@ -334,6 +335,30 @@ class _DelimiterScanner:
         return self._next_closes.get(start)
 
 
+# CommonMark backslash escapes apply only to ASCII punctuation: ``\ `` is a
+# literal backslash followed by a (still significant) space.
+_ESCAPABLE = frozenset(string.punctuation)
+
+
+def _escapes_next(text: str, idx: int) -> bool:
+    """Return True when ``text[idx]`` is a backslash escaping the next char."""
+    return text[idx] == "\\" and idx + 1 < len(text) and text[idx + 1] in _ESCAPABLE
+
+
+def _find_unescaped(text: str, start: int, stop: Callable[[str], bool]) -> int:
+    """Return the first index from *start* whose char satisfies *stop*,
+    skipping backslash-escaped characters, or ``len(text)`` when none does."""
+    i = start
+    while i < len(text):
+        if _escapes_next(text, i):
+            i += 2
+            continue
+        if stop(text[i]):
+            return i
+        i += 1
+    return len(text)
+
+
 def _extract_markdown_destination_url(destination: str) -> str:
     """Extract URL token from markdown destination, dropping optional titles."""
     token = destination.strip()
@@ -341,20 +366,11 @@ def _extract_markdown_destination_url(destination: str) -> str:
         return ""
 
     if token.startswith("<"):
-        end = token.find(">")
-        if end > 1:
+        end = _find_unescaped(token, 1, lambda ch: ch == ">")
+        if 1 < end < len(token):
             return token[1:end].strip()
 
-    i = 0
-    while i < len(token):
-        ch = token[i]
-        if ch == "\\":
-            i += 2
-            continue
-        if ch.isspace():
-            break
-        i += 1
-    return token[:i].strip()
+    return token[: _find_unescaped(token, 0, str.isspace)].strip()
 
 
 # A link title after the destination: one ``"..."``, ``'...'`` or ``(...)``
@@ -483,7 +499,7 @@ class _MarkdownReferenceScanner:
         """Return True when ``text[start:end]`` is a link destination.
 
         Valid destinations (after trimming whitespace) are empty, ``<...>``
-        without a line break, or one token without unescaped whitespace, each
+        without a line break, or one token without whitespace, each
         optionally followed by whitespace and a single title (see
         ``_LINK_TITLE_RE``) that runs to the end. Anything else is prose. The
         lookup tables keep each check cheap, so nested invalid candidates such
@@ -530,13 +546,16 @@ class _MarkdownReferenceScanner:
         return title_end
 
     def _build_destination_index(self) -> list[int]:
-        """Index the next unescaped whitespace, the next non-whitespace and the
-        next ``>`` or line break for every position, in linear time."""
+        """Index the next whitespace, the next non-whitespace and the next
+        unescaped ``>`` or line break for every position, in linear time."""
         text = self._text
         length = self._length
+        # ``escaped[i]``: ``text[i]`` is ASCII punctuation escaped by an
+        # unescaped backslash. Whitespace is never escapable, so a backslash
+        # before it does not stop it ending the destination token.
         escaped = [False] * length
         for i in range(1, length):
-            escaped[i] = text[i - 1] == "\\" and not escaped[i - 1]
+            escaped[i] = text[i - 1] == "\\" and not escaped[i - 1] and text[i] in _ESCAPABLE
 
         next_space = [length] * (length + 1)
         next_non_space = [length] * (length + 1)
@@ -544,9 +563,9 @@ class _MarkdownReferenceScanner:
         for i in range(length - 1, -1, -1):
             ch = text[i]
             is_space = ch.isspace()
-            next_space[i] = i if is_space and not escaped[i] else next_space[i + 1]
+            next_space[i] = i if is_space else next_space[i + 1]
             next_non_space[i] = next_non_space[i + 1] if is_space else i
-            stop = ch == ">" or ch in _LINE_BREAKS
+            stop = (ch == ">" and not escaped[i]) or ch in _LINE_BREAKS
             next_angle_stop[i] = i if stop else next_angle_stop[i + 1]
 
         self._next_space = next_space
