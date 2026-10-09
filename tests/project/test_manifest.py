@@ -367,6 +367,112 @@ def test_to_easyconfig_unknown_vad_backend_raises_e602(
     assert excinfo.value.code == "EASYCAT_E602"
 
 
+def test_to_easyconfig_builtin_vad_with_model_suffix_raises_e602(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed built-in shortcut (``ValueError``) stays a manifest error."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    manifest = parse_manifest(
+        {"voice": {"default": {"transport": "websocket", "vad": "silero/big"}}}
+    )
+    with pytest.raises(EasyCatError) as excinfo:
+        manifest.to_easyconfig("default", resolve_agent=False)
+    assert excinfo.value.code == "EASYCAT_E602"
+    assert excinfo.value.context["path"] == "[voice.default]"
+
+
+@dataclasses.dataclass
+class _KeyedVADConfig:
+    """A registered third-party VAD config whose provider needs a credential."""
+
+    api_key: str = ""
+
+
+class _KeyedVADProvider:
+    def __init__(self, config: _KeyedVADConfig) -> None:  # pragma: no cover - never built
+        self.config = config
+
+
+@pytest.fixture
+def keyed_vad_catalog():
+    """Register a credential-bearing VAD provider, then restore the catalog.
+
+    Same snapshot/restore shape as ``tests/planning/test_resolution.py``.
+    """
+    from easycat.vad.factory import _CATALOG as vad_catalog
+    from easycat.vad.factory import register_vad_provider
+
+    tables = (
+        "providers",
+        "env_vars",
+        "extras",
+        "api_domains",
+        "probe_modules",
+        "capabilities",
+        "capability_resolvers",
+        "config_to_provider",
+    )
+    saved = {name: dict(getattr(vad_catalog, name)) for name in tables}
+    discovered = vad_catalog._discovered
+    register_vad_provider(
+        "keyedvad", _KeyedVADProvider, _KeyedVADConfig, env_var="KEYED_VAD_API_KEY"
+    )
+    yield
+    for name, entries in saved.items():
+        table = getattr(vad_catalog, name)
+        table.clear()
+        table.update(entries)
+    object.__setattr__(vad_catalog, "_discovered", discovered)
+
+
+def test_to_easyconfig_keyed_vad_missing_key_raises_e203_not_e602(
+    keyed_vad_catalog: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A known VAD's missing credential must surface as E203, not "unknown provider".
+
+    REGRESSION: ``_coerce_vad`` wrapped EVERY ``EasyCatError`` from
+    ``parse_vad_string`` as ``EASYCAT_E602 ... is not a known provider``, so the
+    ``EASYCAT_E203`` raised for a registered provider whose ``env_var`` is unset
+    reached startup under a different code than ``easycat plan``/``doctor``
+    report for the same manifest.
+    """
+    from easycat.planning.selection import build_manifest_plan, plan_issues
+
+    monkeypatch.delenv("KEYED_VAD_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    manifest = parse_manifest(
+        {"voice": {"default": {"transport": "websocket", "vad": "keyedvad"}}}
+    )
+
+    with pytest.raises(EasyCatError) as excinfo:
+        manifest.to_easyconfig("default", resolve_agent=False)
+
+    assert excinfo.value.code == "EASYCAT_E203"
+    assert "KEYED_VAD_API_KEY" in excinfo.value.message
+    assert "is not a known provider" not in excinfo.value.message
+    # Startup and the planner agree on the code for the same manifest.
+    plan = build_manifest_plan(manifest, profile="default")
+    assert ("EASYCAT_E203", "KEYED_VAD_API_KEY") in [
+        (issue.code, issue.field) for issue in plan_issues(plan)
+    ]
+
+
+def test_to_easyconfig_keyed_vad_with_key_resolves_registered_config(
+    keyed_vad_catalog: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the credential set, the registered VAD shortcut resolves normally."""
+    monkeypatch.setenv("KEYED_VAD_API_KEY", "kv-test-abcdefghijklmnopqrstuvwxyz")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    manifest = parse_manifest(
+        {"voice": {"default": {"transport": "websocket", "vad": "keyedvad"}}}
+    )
+
+    config = manifest.to_easyconfig("default", resolve_agent=False)
+
+    assert isinstance(config.vad, _KeyedVADConfig)
+    assert config.vad.api_key == "kv-test-abcdefghijklmnopqrstuvwxyz"
+
+
 def test_to_easyconfig_resolves_python_agent(
     _agent_module: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
