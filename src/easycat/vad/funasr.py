@@ -63,6 +63,14 @@ class FunASROnnxVAD(_VADBase):
         cache_dir: str | None = None,
     ) -> None:
         super().__init__()
+        # FunASR applies the end-of-speech silence inside the model via
+        # max_end_sil.  Keep that duration in its own attribute (seeded from
+        # the shared default) and disable the shared state machine's silence
+        # gate here as well as in configure(), so a directly constructed
+        # instance does not wait for the same silence twice.
+        self._model_end_sil_ms: int = self._min_silence_duration_ms
+        self._min_silence_duration_ms = 0
+        self._threshold = 0.5
         if cache_dir is not None:
             raise ValueError(
                 "cache_dir is not supported by EasyCat's in-tree FunASR runtime; "
@@ -106,7 +114,7 @@ class FunASROnnxVAD(_VADBase):
                 device_id=self._device_id,
                 quantize=self._quantize,
                 intra_op_num_threads=self._intra_op_num_threads,
-                max_end_sil=self._min_silence_duration_ms,
+                max_end_sil=self._model_end_sil_ms,
             )
         except Exception as exc:
             raise RuntimeError(f"FunASR ONNX VAD initialization failed: {exc}") from exc
@@ -127,6 +135,7 @@ class FunASROnnxVAD(_VADBase):
             min_silence_duration_ms=min_silence_duration_ms,
             sensitivity=sensitivity,
         )
+        self._model_end_sil_ms = min_silence_duration_ms
         if self._model is not None and hasattr(self._model, "max_end_sil"):
             try:
                 self._model.max_end_sil = min_silence_duration_ms
