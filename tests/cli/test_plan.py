@@ -152,7 +152,7 @@ def test_non_utf8_manifest_reports_e602_envelope_like_invalid_toml(
     bad_encoding = tmp_path / "latin1" / "easycat.toml"
     bad_encoding.parent.mkdir()
     bad_encoding.write_bytes(
-        b'[project]\nname = "caf\xe9"\n[voice.default]\ntransport = "webrtc"\n'
+        b'[project]\nname = "Z\xfcrich"\n[voice.default]\ntransport = "webrtc"\n'
     )
     bad_syntax = tmp_path / "syntax" / "easycat.toml"
     bad_syntax.parent.mkdir()
