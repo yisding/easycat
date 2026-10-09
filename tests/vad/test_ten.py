@@ -129,3 +129,58 @@ async def test_ten_vad_yields_to_event_loop_while_draining_backlog(
         assert observer_ran
     finally:
         await observer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_rate", "second_rate"),
+    [(48_000, 16_000), (24_000, 16_000), (8_000, 16_000), (48_000, 24_000), (16_000, 48_000)],
+)
+async def test_ten_vad_keeps_buffered_audio_across_source_rate_switch(
+    monkeypatch: pytest.MonkeyPatch, first_rate: int, second_rate: int
+):
+    """A mid-stream source-rate switch must not drop already-resampled 16 kHz audio.
+
+    The buffer always holds 16 kHz model-rate PCM, but it used to be cleared
+    whenever the *source* rate changed, and the resampler tail was reset
+    instead of flushed. A 48 kHz segment followed by native 16 kHz input
+    therefore lost up to one hop plus the interpolation tail, and the VAD
+    clock fell behind the audio actually fed.
+    """
+    frame_samples: list[int] = []
+    mock_ten_vad = MagicMock()
+    mock_instance = MagicMock()
+
+    def _process(frame: int) -> tuple[float, int]:
+        frame_samples.append(frame)
+        return 0.0, 0
+
+    mock_instance.process.side_effect = _process
+    mock_ten_vad.TenVad.return_value = mock_instance
+    fake_numpy = types.SimpleNamespace(
+        int16="int16",
+        frombuffer=lambda data, dtype: types.SimpleNamespace(copy=lambda: len(data) // 2),
+    )
+    monkeypatch.setattr(
+        vad_ten_module,
+        "require_module",
+        lambda name, **_kwargs: {"ten_vad": mock_ten_vad, "numpy": fake_numpy}[name],
+    )
+
+    vad = TenVAD()
+    fed_samples_16k = 0
+    for rate, chunks in ((first_rate, 2), (second_rate, 10)):
+        fmt = AudioFormat(sample_rate=rate, channels=1, sample_width=2)
+        samples_per_chunk = rate * 15 // 1000  # 15 ms
+        for _ in range(chunks):
+            chunk = AudioChunk(data=bytes(samples_per_chunk * 2), format=fmt)
+            async for _ in vad.process(chunk):
+                pass
+            fed_samples_16k += 240
+
+    assert all(n == vad._hop_size for n in frame_samples)
+    accounted = (
+        sum(frame_samples) + len(vad._buffer) // 2 + vad._audio_resampler.pending_output_bytes // 2
+    )
+    assert abs(accounted - fed_samples_16k) <= 1
+    assert vad._audio_time_s == pytest.approx(len(frame_samples) * vad._hop_size / 16_000)
