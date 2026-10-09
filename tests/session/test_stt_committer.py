@@ -161,6 +161,21 @@ def _new_turn(turn_id: str = "turn-1") -> TurnContext:
     return turn
 
 
+async def _await_provider_error_notification_parked(committer: STTCommitter) -> None:
+    """Join the Error-notification controller that parks a resistant handler.
+
+    The controller parks the handler only after its hard deadline plus a few
+    more loop iterations, so a fixed sleep past the deadline loses that race
+    when a CPU-starved loop fires both timers in the same iteration. A
+    controller that already finished has parked the handler and dropped out
+    of the scope, which leaves nothing to join.
+    """
+    controllers = committer._provider_error_runtime_scope.tasks(
+        f"{committer.PROVIDER_ERROR_TASK_NAME}_controller"
+    )
+    await asyncio.wait_for(asyncio.gather(*controllers), timeout=1)
+
+
 @pytest.mark.asyncio
 async def test_schedule_then_cancel_scheduled_cancels_task() -> None:
     committer, _stt, _emitted, _no_turn, tm = _make_committer(segment_silence_ms=200)
@@ -424,7 +439,7 @@ async def test_await_pending_timeout_does_not_wait_for_resistant_error_subscribe
         assert await asyncio.wait_for(committer.await_pending(turn), timeout=0.5) is False
         assert turn.pending_stt_segment_futures == []
         await asyncio.wait_for(handler_started.wait(), timeout=0.5)
-        await asyncio.sleep(0.02)
+        await _await_provider_error_notification_parked(committer)
         assert committer._provider_error_supervisor.survivor_count == 1
     finally:
         release_handler.set()
