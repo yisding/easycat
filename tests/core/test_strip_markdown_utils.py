@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import sys
 from collections.abc import Callable
 
 import pytest
@@ -88,6 +90,14 @@ class TestHasMarkdown:
         """Underscores in snake_case identifiers should not trigger detection."""
         assert not has_markdown("The variable my_variable_name is defined")
 
+    @pytest.mark.parametrize(
+        "text",
+        ["foo__bar__baz", "Files test__one.py and test__two.py", "a__b c__d"],
+    )
+    def test_intraword_double_underscores_not_detected(self, text: str) -> None:
+        """Intraword ``__`` runs cannot open or close bold, so they are not markdown."""
+        assert not has_markdown(text)
+
     def test_empty_string(self) -> None:
         assert not has_markdown("")
 
@@ -131,6 +141,136 @@ class TestMarkdownReferenceScanner:
     ) -> None:
         assert has_markdown(text) is detected
         assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Press [Enter] (the big key on the right) to continue.",
+            "Choose [yes] (or no) now.",
+            "Press [Enter](the big key) now.",
+            "Item [1] (see above).",
+            "![chart] (shown below)",
+            '[Docs](https://example.test "title" extra)',
+            "[Enter]\n(Return)",
+            "[Enter]\r\n(Return)",
+            "[Enter]\v(Return)",
+            "[Enter]\f(Return)",
+            "[Enter]\x85(Return)",
+            "[Enter]\u2028(Return)",
+            "[Enter]\u2029(Return)",
+            "[a](<b\u2028c>)",
+        ],
+    )
+    def test_bracketed_prose_before_parenthetical_is_kept_verbatim(self, text: str) -> None:
+        """A parenthetical that is not a valid link destination is prose.
+
+        The scanner used to treat any ``[x] (...)`` as a link and keep only the
+        first word inside the parentheses as its "URL", so ``Press [Enter]
+        (the big key on the right)`` was spoken as ``Press Enter the``. A line
+        break between ``]`` and ``(`` also made one.
+        """
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[Enter] (Return)", "Enter Return"),
+            ("[Docs](https://example.test 'title')", "Docs https://example.test"),
+            ("[Docs](https://example.test (title))", "Docs https://example.test"),
+            ('[Docs](https://example.test "a \\" b")', "Docs https://example.test"),
+            ("[Docs](<https://example.test/a b> 'title')", "Docs https://example.test/a b"),
+            ("[Docs]( https://example.test )", "Docs https://example.test"),
+            ("[Docs]()", "Docs"),
+            ("![alt](img.png 'caption')", "alt"),
+            ("[x](not a url) then [ok](url)", "[x](not a url) then ok url"),
+            ("[x]([ok](url) more)", "[x](ok url more)"),
+            ("[x](foo\\ 'title')", "x foo\\"),
+        ],
+    )
+    def test_valid_destinations_with_titles_still_render(self, text: str, expected: str) -> None:
+        assert has_markdown(text) is True
+        assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[x](<foo\\>bar>)", "x foo\\>bar"),
+            ("[x](<foo\\>bar> 'title')", "x foo\\>bar"),
+        ],
+    )
+    def test_escaped_angle_close_stays_inside_destination(self, text: str, expected: str) -> None:
+        """A backslash-escaped ``>`` does not close an ``<...>`` destination,
+        and the rendered URL runs to the unescaped closing ``>``."""
+        assert has_markdown(text) is True
+        assert strip_markdown(text) == expected
+
+    def test_backslash_does_not_escape_whitespace_in_destination(self) -> None:
+        """CommonMark only escapes ASCII punctuation: ``foo\\ bar`` is two
+        tokens, so the parenthetical is not a destination and stays prose."""
+        text = "Use [x](foo\\ bar) here."
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda n: "[a](" * n + "x y" + ")" * n,
+            lambda n: "[a](<" * n + "x y" + ")" * n,
+        ],
+        ids=["nested_tokens", "nested_angle"],
+    )
+    def test_nested_invalid_destinations_are_left_verbatim(
+        self, build: Callable[[int], str]
+    ) -> None:
+        text = build(2000)
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("prefix", "inner"),
+        [
+            ("[a](", 'x "{title}"'),
+            ("[a](<", 'x> "{title}"'),
+            ("[a](", "x ({title})"),
+        ],
+        ids=["double_quoted", "angle_double_quoted", "parenthesized"],
+    )
+    def test_nested_candidates_sharing_one_title_scan_it_once(
+        self, monkeypatch: pytest.MonkeyPatch, prefix: str, inner: str
+    ) -> None:
+        """Every nesting level resolves to the same title start; only the
+        innermost level's destination ends with the title, so it alone is a
+        link. Each title start must be matched once, not once per level, or
+        the scan turns quadratic in the nesting depth times the title length.
+        """
+        import easycat.strip_markdown as module
+
+        title_pattern = module._LINK_TITLE_RE
+        title_starts: list[int] = []
+
+        class _CountingPattern:
+            def match(self, text: str, pos: int = 0) -> re.Match[str] | None:
+                title_starts.append(pos)
+                return title_pattern.match(text, pos)
+
+            def fullmatch(self, text: str, pos: int = 0, endpos: int = sys.maxsize) -> object:
+                title_starts.append(pos)
+                return title_pattern.fullmatch(text, pos, endpos)
+
+        monkeypatch.setattr(module, "_LINK_TITLE_RE", _CountingPattern())
+        n = 2000
+        text = prefix * n + inner.format(title="t" * n) + ")" * n
+        expected = prefix * (n - 1) + "a x" + ")" * (n - 1)
+
+        assert has_markdown(text) is True
+        assert title_starts
+        assert len(title_starts) == len(set(title_starts))
+
+        title_starts.clear()
+        assert strip_markdown(text) == expected
+        assert title_starts
+        assert len(title_starts) == len(set(title_starts))
 
     def test_scanner_yields_consecutive_typed_references(self) -> None:
         references = list(
@@ -349,6 +489,55 @@ class TestStripMarkdown:
         """Underscores inside words (snake_case) should not be stripped."""
         text = "Set my_variable to 5"
         assert strip_markdown(text) == "Set my_variable to 5"
+
+    @pytest.mark.parametrize(
+        "text",
+        ["foo__bar__baz", "Files test__one.py and test__two.py", "a__b c__d", "a__b\nc__d"],
+    )
+    def test_intraword_double_underscores_preserved(self, text: str) -> None:
+        """Intraword ``__`` runs are literal text, not bold delimiters.
+
+        The bold-underscore pass previously had no word-boundary guards, so any
+        two intraword ``__`` runs were deleted (``foo__bar__baz`` -> ``foobarbaz``).
+        """
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("Run my__script and __real bold__ ok", "Run my__script and real bold ok"),
+            ("(__bold__)", "(bold)"),
+            ("__bold__.", "bold."),
+            ("__init__", "init"),
+            ("call obj.__init__() now", "call obj.init() now"),
+            ("a**b**c", "abc"),
+        ],
+    )
+    def test_word_bounded_bold_still_stripped(self, text: str, expected: str) -> None:
+        """Bold delimiters at word boundaries (and intraword ``**``) still strip."""
+        assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("**left**__right__", "leftright"),
+            ("__left__**right**", "leftright"),
+            ("**__x__**", "x"),
+            ("__**x**__", "x"),
+            ("**__init__**", "init"),
+            ("[__x__](u)", "x u"),
+        ],
+    )
+    def test_bold_underscore_beside_other_markup_still_stripped(
+        self, text: str, expected: str
+    ) -> None:
+        """``__`` touching ``**`` is judged by the ``*`` CommonMark sees there.
+
+        Stripping ``**`` first exposed the word character inside it to the
+        intraword guard, so ``**left**__right__`` kept ``__right__`` for TTS.
+        """
+        assert strip_markdown(text) == expected
+        assert strip_markdown(text, trim=False) == expected
 
     def test_multiple_formatting_combined(self) -> None:
         text = "# Welcome\n\nThis is **bold** and *italic* with a [link](http://x.com)."
@@ -647,3 +836,98 @@ def test_strip_markdown_fenced_code_wins_over_wrapped_inline_span() -> None:
     text = "```py\nx = `a\nb`\n```"
 
     assert strip_markdown(text) == "x = `a\nb`"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("[docs](https://example.com/_next_/static)", "docs https://example.com/_next_/static"),
+        ("[docs](https://example.com/_foo_)", "docs https://example.com/_foo_"),
+        ("[docs](https://example.com/__init__/x)", "docs https://example.com/__init__/x"),
+        ("[docs](https://x/*a*/b)", "docs https://x/*a*/b"),
+        ("[docs](https://x/**a**/b)", "docs https://x/**a**/b"),
+        ("[docs](https://x/~~u~~)", "docs https://x/~~u~~"),
+        ("[docs](<https://x/_a_>)", "docs https://x/_a_"),
+        ('[docs](https://x/_a_ "a _title_")', "docs https://x/_a_"),
+        # An escaped marker in the destination still reads as the bare character.
+        ("[docs](https://x/\\_a\\_)", "docs https://x/_a_"),
+    ],
+)
+def test_strip_markdown_link_destination_is_not_treated_as_emphasis(
+    text: str, expected: str
+) -> None:
+    """Link rendering promises ``label URL``; the URL must survive verbatim.
+
+    The URL used to be spliced into the text before the emphasis passes ran,
+    so ``/_foo_`` (underscores after a non-word ``/``) was read as italic and
+    the spoken URL lost its underscores (gh 1209).
+    """
+    assert strip_markdown(text) == expected
+    assert strip_markdown(text, trim=False) == expected
+    assert strip_markdown(text, normalize_code_spans=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Only the destination is protected: the label and alt text are prose.
+        ("[_foo_](https://x/_a_)", "foo https://x/_a_"),
+        ("[**bold** ~~old~~](https://x/_a_)", "bold old https://x/_a_"),
+        ("![_alt_](https://x/_a_.png)", "alt"),
+        # Emphasis wrapping a whole link still strips around the URL.
+        ("*see [docs](https://x/_a_)*", "see docs https://x/_a_"),
+        ("**[docs](https://x/_a_)**", "docs https://x/_a_"),
+        ("_see [docs](https://x/_a_)_ now", "see docs https://x/_a_ now"),
+        # Block-level markers around the link are still stripped.
+        ("# See [docs](https://x/_a_) #", "See docs https://x/_a_"),
+        (
+            "- [docs](https://x/_a_)\n- [more](https://x/*b*/c)",
+            "docs https://x/_a_\nmore https://x/*b*/c",
+        ),
+        ("1. [docs](https://x/_a_)", "docs https://x/_a_"),
+        ("> [docs](https://x/__a__)", "docs https://x/__a__"),
+        # Code spans and link URLs share one stash and restore in order.
+        ("`a_b` [docs](https://x/_a_) `*c*`", "a_b docs https://x/_a_ *c*"),
+        ("[`_x_`](https://x/_a_)", "_x_ https://x/_a_"),
+    ],
+)
+def test_strip_markdown_link_destination_protection_keeps_surrounding_markdown(
+    text: str, expected: str
+) -> None:
+    assert strip_markdown(text) == expected
+
+
+def test_strip_markdown_code_span_inside_link_destination_is_restored() -> None:
+    # A code span stashed before link rendering sits inside the URL; it must be
+    # expanded, not left as a placeholder, when the URL itself is stashed.
+    text = "[docs](https://x/`_a_`/b)"
+
+    assert strip_markdown(text) == "docs https://x/_a_/b"
+    assert (
+        strip_markdown(text, normalize_code_spans=True)
+        == "docs https://x/underscore a underscore/b"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("[https://x/_a_](https://x/_a_)", "https://x/_a_ https://x/_a_"),
+        (
+            "[https://x/__init__/*b*](https://x/__init__/*b*)",
+            ("https://x/__init__/*b* " * 2).strip(),
+        ),
+        ("[https://x/_a_](<https://x/_a_>)", "https://x/_a_ https://x/_a_"),
+        ("[https://x/\\_a\\_](https://x/\\_a\\_)", "https://x/_a_ https://x/_a_"),
+        # Only a label that repeats the destination is protected; any other
+        # label, even a URL-shaped one, stays prose.
+        ("[https://x/_a_](https://x/_b_)", "https://x/a https://x/_b_"),
+        ("[_docs_](https://x/_a_)", "docs https://x/_a_"),
+    ],
+)
+def test_strip_markdown_link_label_repeating_destination_is_kept_verbatim(
+    text: str, expected: str
+) -> None:
+    """LLMs often write ``[url](url)``; the label is then a URL, not prose."""
+    assert strip_markdown(text) == expected
+    assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected
