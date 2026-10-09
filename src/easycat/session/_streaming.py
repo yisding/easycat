@@ -31,6 +31,7 @@ from easycat.events import (
 from easycat.integrations.agents._text_stream import AgentTextStream, AgentTextUpdate
 from easycat.session.text import (
     _FIRST_PHRASE_TARGET_CHARS,
+    _SENTENCE_CLOSING_CHARS,
     _ends_with_held_initial_period,
     _split_first_phrase,
     markdown_open_state,
@@ -73,11 +74,16 @@ _FIRST_CLAUSE_TRIGGER_CHARS = frozenset(",;:")
 # break, a line ending, then a sentence end.
 _PARAGRAPH_BREAKS = ("\n\n", "\r\n\r\n")
 # A sentence end is one of the segmenter's terminators, then any closing
-# quotes or brackets (``."`` / ``.)`` / ``.”``), then the space the ASCII
-# terminators need to end a sentence mid-line; the CJK ones need none.
-_SENTENCE_CLOSERS = "\"'”’)]»"
-_CLOSER_RUN = f"[{re.escape(_SENTENCE_CLOSERS)}]*"
-_SENTENCE_END_RE = re.compile(f"[.!?]{_CLOSER_RUN} |[。！？．]{_CLOSER_RUN}")
+# quotes or brackets the segmenter keeps attached (``."`` / ``.)`` / ``.}``
+# / ``。」``), then the run of spaces or tabs after it: at least one for the
+# ASCII terminators, which need it to end a sentence mid-line, and any for the
+# CJK ones, which need none.  Consuming the whole blank run puts the cut at
+# the first non-blank character after the sentence end.
+_SENTENCE_BLANKS = " \t"
+_CLOSER_RUN = f"[{re.escape(_SENTENCE_CLOSING_CHARS)}]*"
+_SENTENCE_END_RE = re.compile(
+    f"[.!?]{_CLOSER_RUN}[{_SENTENCE_BLANKS}]+|[。！？．]{_CLOSER_RUN}[{_SENTENCE_BLANKS}]*"
+)
 # The ASCII non-letters a tail may start with (see ``_is_safe_tail_start``).
 _SAFE_ASCII_TAIL_STARTS = frozenset("\"'([")
 
@@ -135,7 +141,7 @@ def _is_safe_tail_start(ch: str, sentence_end: str) -> bool:
     if ch.isalpha():
         return True
     if ch.isascii():
-        if ch == "(" and sentence_end.rstrip(" ").endswith("]"):
+        if ch == "(" and sentence_end.rstrip(_SENTENCE_BLANKS).endswith("]"):
             return False
         return ch in _SAFE_ASCII_TAIL_STARTS
     return unicodedata.category(ch)[0] in "PS"

@@ -963,6 +963,9 @@ _NON_LETTER_SENTENCES = {
     "paren-closer": "Sentence {i} ends (see the note.) ",
     "emoji-start": "\U0001f600 Emoji sentence {i} ends here. ",
     "emoji-and-paren": "\U0001f600 Emoji sentence {i} ends (see the note.) ",
+    # Closers outside the old list and blank runs other than one space.
+    "brace-double-space": "Brace sentence {i} ends {{see the note.}}  ",
+    "cjk-space": "第{i}句话结束了。 ",
 }
 
 
@@ -1030,6 +1033,22 @@ def test_compaction_cuts_allow_quotes_closers_and_symbols() -> None:
     assert sentence_cuts(raw) == [raw.index("\U0001f600")]
     raw = "你好。“引号”"
     assert sentence_cuts(raw) == [raw.index("“")]
+    # Every closer the segmenter keeps attached, not just quotes and brackets.
+    raw = "One {aside.} Two"
+    assert sentence_cuts(raw) == [raw.index("Two")]
+    raw = "He said 「ok.」 Two"
+    assert sentence_cuts(raw) == [raw.index("Two")]
+    raw = "他说「好。」再见"
+    assert sentence_cuts(raw) == [raw.index("再")]
+    # Any run of spaces or tabs after the sentence end, ASCII or CJK.
+    raw = "One.  Two"
+    assert sentence_cuts(raw) == [raw.index("Two")]
+    raw = "One.\tTwo"
+    assert sentence_cuts(raw) == [raw.index("Two")]
+    raw = "你好。 再见"
+    assert sentence_cuts(raw) == [raw.index("再")]
+    raw = "One (aside.)  Two"
+    assert sentence_cuts(raw) == [raw.index("Two")]
 
 
 @pytest.mark.parametrize(
@@ -1070,6 +1089,10 @@ def test_compaction_cuts_reject_paren_after_closing_label() -> None:
     from easycat.session._streaming import _compaction_cuts
 
     raw = "See [label.] (https://x) now"
+    assert _compaction_cuts(raw, raw.index("(")) == []
+    raw = "See [Docs.]  (x) now"
+    assert _compaction_cuts(raw, raw.index("(")) == []
+    raw = "See [Docs.]\t (x) now"
     assert _compaction_cuts(raw, raw.index("(")) == []
     raw = "See (label.) (more) now"
     assert _compaction_cuts(raw, raw.index("(more")) == [raw.index("(more")]
