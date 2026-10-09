@@ -56,6 +56,7 @@ from easycat.integrations.agents.base import (
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
+from easycat.session._stt_committer import STTCommitter
 from easycat.session._turn_runner import TurnRunner, _StreamingTtsState
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActions
@@ -299,6 +300,21 @@ async def _wait_for_stt_timeout(errors: list[Error]) -> Error:
             if isinstance(event.exception, STTTimeoutError):
                 return event
         await asyncio.sleep(0)
+
+
+async def _await_provider_error_notification_parked(committer: STTCommitter) -> None:
+    """Join the Error-notification controller that parks a resistant handler.
+
+    The controller parks the handler only after its hard deadline plus a few
+    more loop iterations, so a fixed sleep past the deadline loses that race
+    when a CPU-starved loop fires both timers in the same iteration. A
+    controller that already finished has parked the handler and dropped out
+    of the scope, which leaves nothing to join.
+    """
+    controllers = committer._provider_error_runtime_scope.tasks(
+        f"{committer.PROVIDER_ERROR_TASK_NAME}_controller"
+    )
+    await asyncio.wait_for(asyncio.gather(*controllers), timeout=1)
 
 
 def _assert_segment_commit_timeout_handoff(
@@ -1084,7 +1100,7 @@ async def test_resistant_segment_timeout_notification_allows_rollback_and_force_
         assert session._turn is old_turn
         assert not scoped_commit.done()
         await asyncio.wait_for(error_handler_started.wait(), timeout=0.5)
-        await asyncio.sleep(0.02)
+        await _await_provider_error_notification_parked(session._stt_committer)
         assert session._stt_committer._provider_error_supervisor.survivor_count == 1
 
         # Force stop hits the same segment timeout again. The occupied
@@ -1736,7 +1752,7 @@ async def test_cancelled_start_cleanup_timeout_rolls_back_manager_and_keeps_surv
         assert session._runtime_supervisor.survivor_count == 1
 
         await asyncio.wait_for(error_handler_started.wait(), timeout=0.5)
-        await asyncio.sleep(0.02)
+        await _await_provider_error_notification_parked(session._stt_committer)
         assert session._stt_committer._provider_error_supervisor.survivor_count == 1
 
         # The resistant public notification is independently parked and can
