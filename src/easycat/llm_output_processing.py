@@ -33,6 +33,13 @@ _LOCAL_PHONE_CUES = (
     "reach me at",
     "reach us at",
     "number is",
+    "phone number",
+    "fax number",
+    "cell number",
+    "mobile number",
+    "text me at",
+    "text us at",
+    "contact",
 )
 # Python lookbehinds must be fixed width, so each cue/separator pair gets its own.
 _LOCAL_PHONE_CUE_LOOKBEHIND = "|".join(
@@ -48,7 +55,7 @@ _LOCAL_PHONE_CUE_LOOKBEHIND = "|".join(
 # starting or ending inside a word, decimal, path, time, or longer
 # dash/dot-joined number, so the tail of a longer token is never paced alone.
 _DEFAULT_PHONE_PATTERN = (
-    r"(?<![\w.+\-)/:])"
+    r"(?<![\w.+\-)/\\:])"
     r"(?:"
     # Optional country code, then a 10-digit NANP number: "(415) 555-2671",
     # "1(415)555-2671", "415-555-2671", "415 555 0142", "415.555.2671".
@@ -58,8 +65,9 @@ _DEFAULT_PHONE_PATTERN = (
     r"|(?:\+\d{1,3}[ .-]?|1[ .-])?(?:\d{3}[ .-]\d{3}[ .-]\d{4}|\d{10})"
     # 7-digit local number, only after a phone cue: "Call 555-0100".
     rf"|(?:{_LOCAL_PHONE_CUE_LOOKBEHIND})\d{{3}}-\d{{4}}"
-    # International numbers with a leading "+": "+44 20 7946 0958".
-    r"|\+\d{1,3}(?:[ .-]\d{1,4}){2,5}"
+    # International numbers with a leading "+": "+44 20 7946 0958". The
+    # lookahead caps the total at the E.164 maximum of 15 digits.
+    r"|\+(?=(?:\d[ .-]?){7,15}(?![ .-]?\d))\d{1,3}(?:[ .-]\d{1,4}){2,5}"
     r"|\+\d{7,15}"
     r")"
     # A number may touch an attached extension ("2671x22", "2671ext22"); any
