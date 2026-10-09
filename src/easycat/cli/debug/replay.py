@@ -85,7 +85,7 @@ def _render_replay_summary(
     stdout_console.print(table)
 
 
-@cli_command
+@cli_command("replay")
 def replay_bundle(
     bundle_path: Path = typer.Argument(
         ...,

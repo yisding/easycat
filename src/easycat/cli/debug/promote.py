@@ -188,7 +188,7 @@ def _publish_promoted_slice(tmp_path: Path, out: Path, *, force: bool) -> bool:
     return True
 
 
-@cli_command
+@cli_command("journal_promote")
 def promote_turn(
     bundle_path: Path = typer.Argument(
         ...,

@@ -294,7 +294,7 @@ def _write_context_pack(
     }
 
 
-@cli_command
+@cli_command("bundles_export")
 def export_bundle(
     bundle_path: Path = typer.Argument(
         ...,
