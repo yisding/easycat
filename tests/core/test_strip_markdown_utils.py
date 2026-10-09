@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import sys
 from collections.abc import Callable
 
 import pytest
@@ -88,6 +90,14 @@ class TestHasMarkdown:
         """Underscores in snake_case identifiers should not trigger detection."""
         assert not has_markdown("The variable my_variable_name is defined")
 
+    @pytest.mark.parametrize(
+        "text",
+        ["foo__bar__baz", "Files test__one.py and test__two.py", "a__b c__d"],
+    )
+    def test_intraword_double_underscores_not_detected(self, text: str) -> None:
+        """Intraword ``__`` runs cannot open or close bold, so they are not markdown."""
+        assert not has_markdown(text)
+
     def test_empty_string(self) -> None:
         assert not has_markdown("")
 
@@ -131,6 +141,136 @@ class TestMarkdownReferenceScanner:
     ) -> None:
         assert has_markdown(text) is detected
         assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Press [Enter] (the big key on the right) to continue.",
+            "Choose [yes] (or no) now.",
+            "Press [Enter](the big key) now.",
+            "Item [1] (see above).",
+            "![chart] (shown below)",
+            '[Docs](https://example.test "title" extra)',
+            "[Enter]\n(Return)",
+            "[Enter]\r\n(Return)",
+            "[Enter]\v(Return)",
+            "[Enter]\f(Return)",
+            "[Enter]\x85(Return)",
+            "[Enter]\u2028(Return)",
+            "[Enter]\u2029(Return)",
+            "[a](<b\u2028c>)",
+        ],
+    )
+    def test_bracketed_prose_before_parenthetical_is_kept_verbatim(self, text: str) -> None:
+        """A parenthetical that is not a valid link destination is prose.
+
+        The scanner used to treat any ``[x] (...)`` as a link and keep only the
+        first word inside the parentheses as its "URL", so ``Press [Enter]
+        (the big key on the right)`` was spoken as ``Press Enter the``. A line
+        break between ``]`` and ``(`` also made one.
+        """
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[Enter] (Return)", "Enter Return"),
+            ("[Docs](https://example.test 'title')", "Docs https://example.test"),
+            ("[Docs](https://example.test (title))", "Docs https://example.test"),
+            ('[Docs](https://example.test "a \\" b")', "Docs https://example.test"),
+            ("[Docs](<https://example.test/a b> 'title')", "Docs https://example.test/a b"),
+            ("[Docs]( https://example.test )", "Docs https://example.test"),
+            ("[Docs]()", "Docs"),
+            ("![alt](img.png 'caption')", "alt"),
+            ("[x](not a url) then [ok](url)", "[x](not a url) then ok url"),
+            ("[x]([ok](url) more)", "[x](ok url more)"),
+            ("[x](foo\\ 'title')", "x foo\\"),
+        ],
+    )
+    def test_valid_destinations_with_titles_still_render(self, text: str, expected: str) -> None:
+        assert has_markdown(text) is True
+        assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[x](<foo\\>bar>)", "x foo\\>bar"),
+            ("[x](<foo\\>bar> 'title')", "x foo\\>bar"),
+        ],
+    )
+    def test_escaped_angle_close_stays_inside_destination(self, text: str, expected: str) -> None:
+        """A backslash-escaped ``>`` does not close an ``<...>`` destination,
+        and the rendered URL runs to the unescaped closing ``>``."""
+        assert has_markdown(text) is True
+        assert strip_markdown(text) == expected
+
+    def test_backslash_does_not_escape_whitespace_in_destination(self) -> None:
+        """CommonMark only escapes ASCII punctuation: ``foo\\ bar`` is two
+        tokens, so the parenthetical is not a destination and stays prose."""
+        text = "Use [x](foo\\ bar) here."
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda n: "[a](" * n + "x y" + ")" * n,
+            lambda n: "[a](<" * n + "x y" + ")" * n,
+        ],
+        ids=["nested_tokens", "nested_angle"],
+    )
+    def test_nested_invalid_destinations_are_left_verbatim(
+        self, build: Callable[[int], str]
+    ) -> None:
+        text = build(2000)
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("prefix", "inner"),
+        [
+            ("[a](", 'x "{title}"'),
+            ("[a](<", 'x> "{title}"'),
+            ("[a](", "x ({title})"),
+        ],
+        ids=["double_quoted", "angle_double_quoted", "parenthesized"],
+    )
+    def test_nested_candidates_sharing_one_title_scan_it_once(
+        self, monkeypatch: pytest.MonkeyPatch, prefix: str, inner: str
+    ) -> None:
+        """Every nesting level resolves to the same title start; only the
+        innermost level's destination ends with the title, so it alone is a
+        link. Each title start must be matched once, not once per level, or
+        the scan turns quadratic in the nesting depth times the title length.
+        """
+        import easycat.strip_markdown as module
+
+        title_pattern = module._LINK_TITLE_RE
+        title_starts: list[int] = []
+
+        class _CountingPattern:
+            def match(self, text: str, pos: int = 0) -> re.Match[str] | None:
+                title_starts.append(pos)
+                return title_pattern.match(text, pos)
+
+            def fullmatch(self, text: str, pos: int = 0, endpos: int = sys.maxsize) -> object:
+                title_starts.append(pos)
+                return title_pattern.fullmatch(text, pos, endpos)
+
+        monkeypatch.setattr(module, "_LINK_TITLE_RE", _CountingPattern())
+        n = 2000
+        text = prefix * n + inner.format(title="t" * n) + ")" * n
+        expected = prefix * (n - 1) + "a x" + ")" * (n - 1)
+
+        assert has_markdown(text) is True
+        assert title_starts
+        assert len(title_starts) == len(set(title_starts))
+
+        title_starts.clear()
+        assert strip_markdown(text) == expected
+        assert title_starts
+        assert len(title_starts) == len(set(title_starts))
 
     def test_scanner_yields_consecutive_typed_references(self) -> None:
         references = list(
@@ -267,6 +407,54 @@ class TestStripMarkdown:
         assert strip_markdown(text) == "Diagram: plot."
 
     @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            (
+                "[![build](https://img.shields.io/b.svg)](https://ci.example.com)",
+                "build https://ci.example.com",
+            ),
+            ("See [![logo](a.png)](https://x.com) here", "See logo https://x.com here"),
+            ("[![moon](moon.jpg)](/uri)", "moon /uri"),
+            ("[a ![b](c) d](e)", "a b d e"),
+        ],
+        ids=["badge", "badge-in-sentence", "commonmark-moon", "image-mid-label"],
+    )
+    def test_image_nested_in_link_label_renders_as_alt_text(
+        self, text: str, expected: str
+    ) -> None:
+        """A badge-style ``[![alt](img)](url)`` speaks the alt text and link URL.
+
+        The scanner resumed after the outer destination without rendering the
+        label, so the inner image markup and its URL reached TTS verbatim.
+        """
+        assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[a [b](c) d](e)", "a b c d e"),
+            ("![alt [x](y)](img.png)", "alt x y"),
+            ("[outer [inner]](url)", "outer [inner] url"),
+        ],
+        ids=["link-in-link-label", "link-in-image-alt", "bare-brackets-in-label"],
+    )
+    def test_nested_references_in_labels_are_rendered(self, text: str, expected: str) -> None:
+        """Links nested in labels render too; bracket pairs without a destination stay."""
+        assert strip_markdown(text) == expected
+
+    def test_deeply_nested_link_labels_do_not_exhaust_the_stack(self) -> None:
+        """Adversarial ``[[[...x](u)](u)`` nesting must not raise RecursionError.
+
+        Label rendering recurses once per nesting level, so it is depth-capped:
+        the outer levels render and the deepest label is left literal.
+        """
+        depth = 2000
+        payload = "[" * depth + "x" + "](u)" * depth
+        result = strip_markdown(payload)
+        assert result.endswith(")](u) u u u u u")
+        assert result.count("u") == depth
+
+    @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
     )
     def test_adversarial_brackets_left_intact(self, build: Callable[[int], str]) -> None:
@@ -349,6 +537,55 @@ class TestStripMarkdown:
         """Underscores inside words (snake_case) should not be stripped."""
         text = "Set my_variable to 5"
         assert strip_markdown(text) == "Set my_variable to 5"
+
+    @pytest.mark.parametrize(
+        "text",
+        ["foo__bar__baz", "Files test__one.py and test__two.py", "a__b c__d", "a__b\nc__d"],
+    )
+    def test_intraword_double_underscores_preserved(self, text: str) -> None:
+        """Intraword ``__`` runs are literal text, not bold delimiters.
+
+        The bold-underscore pass previously had no word-boundary guards, so any
+        two intraword ``__`` runs were deleted (``foo__bar__baz`` -> ``foobarbaz``).
+        """
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("Run my__script and __real bold__ ok", "Run my__script and real bold ok"),
+            ("(__bold__)", "(bold)"),
+            ("__bold__.", "bold."),
+            ("__init__", "init"),
+            ("call obj.__init__() now", "call obj.init() now"),
+            ("a**b**c", "abc"),
+        ],
+    )
+    def test_word_bounded_bold_still_stripped(self, text: str, expected: str) -> None:
+        """Bold delimiters at word boundaries (and intraword ``**``) still strip."""
+        assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("**left**__right__", "leftright"),
+            ("__left__**right**", "leftright"),
+            ("**__x__**", "x"),
+            ("__**x**__", "x"),
+            ("**__init__**", "init"),
+            ("[__x__](u)", "x u"),
+        ],
+    )
+    def test_bold_underscore_beside_other_markup_still_stripped(
+        self, text: str, expected: str
+    ) -> None:
+        """``__`` touching ``**`` is judged by the ``*`` CommonMark sees there.
+
+        Stripping ``**`` first exposed the word character inside it to the
+        intraword guard, so ``**left**__right__`` kept ``__right__`` for TTS.
+        """
+        assert strip_markdown(text) == expected
+        assert strip_markdown(text, trim=False) == expected
 
     def test_multiple_formatting_combined(self) -> None:
         text = "# Welcome\n\nThis is **bold** and *italic* with a [link](http://x.com)."
@@ -693,5 +930,34 @@ def test_strip_markdown_link_label_repeating_destination_is_kept_verbatim(
     text: str, expected: str
 ) -> None:
     """LLMs often write ``[url](url)``; the label is then a URL, not prose."""
+    assert strip_markdown(text) == expected
+    assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "[![build](https://img.shields.io/b.svg)](https://ci.example.com/_a_)",
+            "build https://ci.example.com/_a_",
+        ),
+        ("[[docs](https://x/_a_)](https://y/_b_)", "docs https://x/_a_ https://y/_b_"),
+        (
+            "[see [docs](https://x/__a__) _now_](https://y/*b*)",
+            "see docs https://x/__a__ now https://y/*b*",
+        ),
+        # Nested image alt text is prose even when its image URL has underscores.
+        ("[![_alt_](https://i/_x_.png)](https://y/_b_)", "alt https://y/_b_"),
+    ],
+    ids=["badge", "link-in-link-label", "link-and-emphasis-in-label", "image-alt-is-prose"],
+)
+def test_strip_markdown_nested_link_destinations_are_kept_verbatim(
+    text: str, expected: str
+) -> None:
+    """URLs of links nested in a label are stashed like the outer destination.
+
+    Label rendering recurses into nested links (gh 1209 follow-up); the inner
+    URL must get the same protection or its ``_`` / ``*`` read as emphasis.
+    """
     assert strip_markdown(text) == expected
     assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected

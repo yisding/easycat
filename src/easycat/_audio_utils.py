@@ -169,7 +169,7 @@ def _resample_soxr_impl(data: bytes, from_rate: int, to_rate: int) -> bytes:
 
     samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
     resampled = soxr.resample(samples, from_rate, to_rate)
-    out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+    out = np.clip(np.rint(resampled * 32768.0), -32768, 32767).astype(np.int16)
     return out.tobytes()
 
 
@@ -198,7 +198,7 @@ def _resample_scipy_impl(data: bytes, from_rate: int, to_rate: int) -> bytes:
     up = to_rate // g
     down = from_rate // g
     resampled = resample_poly(samples, up, down)
-    out = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
+    out = np.clip(np.rint(resampled * 32768.0), -32768, 32767).astype(np.int16)
     return out.tobytes()
 
 
@@ -237,14 +237,15 @@ def _resample_linear(data: bytes, from_rate: int, to_rate: int) -> bytes:
     if to_rate < from_rate:
         samples = _low_pass_for_downsampling(samples, from_rate, to_rate)
 
-    ratio = from_rate / to_rate
-    out_len = int(num_samples / ratio)
+    # Integer arithmetic keeps the length and source positions exact. A float
+    # ratio such as 48000 / 44100 is not representable, so dividing by it can
+    # land just below an exact integer and drop a sample per call.
+    out_len = (num_samples * to_rate) // from_rate
 
     out_samples: list[int] = []
     for i in range(out_len):
-        src_pos = i * ratio
-        idx = int(src_pos)
-        frac = src_pos - idx
+        idx, rem = divmod(i * from_rate, to_rate)
+        frac = rem / to_rate
 
         if idx + 1 < num_samples:
             value = samples[idx] * (1 - frac) + samples[idx + 1] * frac
@@ -327,7 +328,7 @@ class _StreamingLinearState:
         self._received += len(filtered)
 
         output: list[int] = []
-        target_output_count = int(self._received * self._to_rate / self._from_rate)
+        target_output_count = (self._received * self._to_rate) // self._from_rate
         while self._output_count < target_output_count:
             index, fraction_numerator = divmod(self._next_position, self._to_rate)
             if index >= self._received:
@@ -356,7 +357,7 @@ class _StreamingLinearState:
     @property
     def pending_output_bytes(self) -> int:
         """PCM16 bytes retained until the current segment is finished."""
-        final_output_count = int(self._received * self._to_rate / self._from_rate)
+        final_output_count = (self._received * self._to_rate) // self._from_rate
         return max(0, final_output_count - self._output_count) * 2
 
     def _filter(self, samples: tuple[int, ...]) -> list[float]:
@@ -479,7 +480,7 @@ class _StreamingScipyState:
         start = self._expanded_count
         stop = start + len(filtered)
         self._expanded_count = stop
-        target_count = int(self._received * self._to_rate / self._from_rate)
+        target_count = (self._received * self._to_rate) // self._from_rate
         output: list[float] = []
         while self._next_output_index < stop and (not final or self._output_count < target_count):
             if self._next_output_index >= start:
@@ -496,7 +497,7 @@ class _StreamingScipyState:
 
     @property
     def pending_output_bytes(self) -> int:
-        target_count = int(self._received * self._to_rate / self._from_rate)
+        target_count = (self._received * self._to_rate) // self._from_rate
         return max(0, target_count - self._output_count) * 2
 
 
