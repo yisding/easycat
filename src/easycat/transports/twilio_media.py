@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import time
+import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from http import HTTPStatus
@@ -1264,10 +1265,14 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, TelephonyConnectionTranspo
 # ── TwiML helpers ─────────────────────────────────────────────────
 
 
+# Pre-fix values that are not Twilio track tokens; normalized to inbound_track.
+_LEGACY_CONNECT_STREAM_TRACKS = frozenset({"both", "inbound"})
+
+
 def twiml_connect_stream(
     websocket_url: str,
     *,
-    track: str = "both",
+    track: str | None = "inbound_track",
     status_callback_url: str | None = None,
     parameters: dict[str, str] | None = None,
     stream_token: str | None = None,
@@ -1280,7 +1285,14 @@ def twiml_connect_stream(
     websocket_url:
         The ``wss://`` URL of the EasyCat Twilio transport server.
     track:
-        Which audio tracks to stream (``inbound``, ``outbound``, or ``both``).
+        Twilio ``track`` attribute.  Bidirectional ``<Connect><Stream>`` only
+        supports ``inbound_track`` (the default); ``outbound_track`` and
+        ``both_tracks`` are valid only for ``<Start><Stream>`` (see
+        :func:`twiml_stream`) and raise :class:`ValueError` here.  Pass
+        ``None`` to omit the attribute (Twilio then uses ``inbound_track``).
+        The legacy values ``"both"`` and ``"inbound"`` are not Twilio tokens;
+        they are normalized to ``inbound_track`` with a
+        :class:`DeprecationWarning`.
     status_callback_url:
         Optional URL for Twilio to POST call status updates.
     parameters:
@@ -1299,6 +1311,23 @@ def twiml_connect_stream(
         no placeholder values are generated.
     """
     from xml.sax.saxutils import quoteattr
+
+    if track in _LEGACY_CONNECT_STREAM_TRACKS:
+        warnings.warn(
+            f"twiml_connect_stream(track={track!r}) is not a Twilio track value; "
+            "using 'inbound_track', the only track bidirectional <Connect><Stream> "
+            "supports.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        track = "inbound_track"
+    if track is not None and track != "inbound_track":
+        raise ValueError(
+            f"Unsupported track {track!r} for <Connect><Stream>; bidirectional "
+            "Twilio streams only support 'inbound_track' (or None to omit it). "
+            "Use twiml_stream() for <Start><Stream> with outbound_track or both_tracks."
+        )
+    track_attr = "" if track is None else f" track={quoteattr(track)}"
 
     status_attr = ""
     if status_callback_url:
@@ -1336,17 +1365,14 @@ def twiml_connect_stream(
             )
 
     if not merged:
-        stream = (
-            f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)}{status_attr} />"
-        )
+        stream = f"    <Stream url={quoteattr(websocket_url)}{track_attr}{status_attr} />"
     else:
         param_lines = "\n".join(
             f"      <Parameter name={quoteattr(str(name))} value={quoteattr(str(value))}/>"
             for name, value in merged.items()
         )
         stream = (
-            f"    <Stream url={quoteattr(websocket_url)} "
-            f"track={quoteattr(track)}{status_attr}>\n"
+            f"    <Stream url={quoteattr(websocket_url)}{track_attr}{status_attr}>\n"
             f"{param_lines}\n"
             "    </Stream>"
         )
@@ -1375,7 +1401,8 @@ def twiml_stream(
     websocket_url:
         The ``wss://`` URL of the EasyCat Twilio transport server.
     track:
-        Which track to stream (``inbound_track`` or ``outbound_track``).
+        Which track to stream (``inbound_track``, ``outbound_track``, or
+        ``both_tracks``).
     parameters:
         Extra ``<Parameter>`` children to attach to the stream.
     stream_token:

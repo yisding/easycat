@@ -2473,7 +2473,7 @@ class TestTwiML:
         assert '<?xml version="1.0"' in xml
         assert "<Connect>" in xml
         assert '<Stream url="wss://example.com/stream"' in xml
-        assert 'track="both"' in xml
+        assert 'track="inbound_track"' in xml
         assert "</Response>" in xml
         assert "<Parameter" not in xml
 
@@ -2485,8 +2485,39 @@ class TestTwiML:
         assert 'statusCallback="https://example.com/status"' in xml
 
     def test_twiml_connect_stream_custom_track(self):
-        xml = twiml_connect_stream("wss://example.com/stream", track="inbound")
-        assert 'track="inbound"' in xml
+        xml = twiml_connect_stream("wss://example.com/stream", track="inbound_track")
+        assert 'track="inbound_track"' in xml
+
+    def test_twiml_connect_stream_emits_only_twilio_inbound_track(self):
+        """Regression: the default used to emit ``track="both"``.
+
+        ``both`` is not a Twilio track token, and bidirectional
+        ``<Connect><Stream>`` only supports ``inbound_track``.
+        """
+        for kwargs in ({}, {"stream_token": "token-1"}):
+            xml = twiml_connect_stream("wss://example.com/stream", **kwargs)
+            assert 'track="inbound_track"' in xml
+            assert 'track="both"' not in xml
+
+    def test_twiml_connect_stream_track_none_omits_attribute(self):
+        for kwargs in ({}, {"parameters": {"From": "+15551234567"}}):
+            xml = twiml_connect_stream("wss://example.com/stream", track=None, **kwargs)
+            assert "track=" not in xml
+            assert '<Stream url="wss://example.com/stream"' in xml
+
+    @pytest.mark.parametrize("legacy", ["both", "inbound"])
+    def test_twiml_connect_stream_legacy_track_normalized(self, legacy: str):
+        with pytest.warns(DeprecationWarning, match="not a Twilio track value"):
+            xml = twiml_connect_stream("wss://example.com/stream", track=legacy)
+        assert 'track="inbound_track"' in xml
+        assert f'track="{legacy}"' not in xml
+
+    @pytest.mark.parametrize(
+        "track", ["outbound_track", "both_tracks", "outbound", "", "INBOUND_TRACK"]
+    )
+    def test_twiml_connect_stream_rejects_unsupported_track(self, track: str):
+        with pytest.raises(ValueError, match="Connect><Stream>"):
+            twiml_connect_stream("wss://example.com/stream", track=track)
 
     def test_twiml_connect_stream_disable_caller_id(self):
         xml = twiml_connect_stream(
