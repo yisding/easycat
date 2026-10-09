@@ -46,7 +46,7 @@ def has_markdown(text: str) -> bool:
 
 def _extract_fenced_code(match: re.Match[str]) -> str:
     """Extract the body of a fenced code block, discarding the fence markers."""
-    body = match.group(1)
+    body = match.group(2)
     # Strip the optional language identifier on the first line
     lines = body.split("\n", 1)
     if len(lines) == 2:
@@ -54,8 +54,12 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
     return body.strip()
 
 
-_FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
-_INLINE_CODE_RE = re.compile(r"`(.+?)`")
+# Both code passes also match a backslash escape (``\\`` or ``\` ``) as an
+# alternative, so the left-to-right scan consumes escapes and code spans in
+# document order: an escaped backtick cannot open a span, while a backslash
+# inside a span stays literal and never escapes its closing backtick.
+_FENCED_CODE_RE = re.compile(r"(\\[\\`])|```([\s\S]*?)```")
+_INLINE_CODE_RE = re.compile(r"(\\[\\`])|`(.+?)`")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
 _BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)([\s\S]+?)(?<=\S)__")
 _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
@@ -82,19 +86,24 @@ _DUNDER_NAME_RE = re.compile(r"^__([A-Za-z][A-Za-z0-9_]*)__$")
 _CODE_TOKEN_OPEN = "\ue002"
 _CODE_TOKEN_CLOSE = "\ue003"
 _CODE_TOKEN_RE = re.compile(rf"{_CODE_TOKEN_OPEN}(\d+){_CODE_TOKEN_CLOSE}")
-# Backslash-escaped emphasis markers (``\*`` / ``\_``) are literal text, not
-# delimiters.  They are swapped for private-use stand-ins before the emphasis
-# passes run and restored as the bare character afterwards, so ``\*x\*``
-# reads as ``*x*`` instead of the italic regex eating the ``*`` and leaving a
-# spoken "backslash".  A ``\\`` pair is consumed as a unit so the character
-# after an escaped backslash is still treated as markdown.
+# Backslash-escaped emphasis markers (``\*`` / ``\_``) and backticks (``\` ``)
+# are literal text, not delimiters.  They are swapped for private-use stand-ins
+# before the emphasis (or inline code) passes run and restored as the bare
+# character afterwards, so ``\*x\*`` reads as ``*x*`` instead of the italic
+# regex eating the ``*`` and leaving a spoken "backslash".  A ``\\`` pair is
+# consumed as a unit so the character after an escaped backslash is still
+# treated as markdown.
 _ESCAPED_STAR = "\ue004"
 _ESCAPED_UNDERSCORE = "\ue005"
+_ESCAPED_BACKTICK = "\ue006"
 _ESCAPED_EMPHASIS_RE = re.compile(r"\\([\\*_])")
 _ESCAPED_EMPHASIS_STANDINS = {"*": _ESCAPED_STAR, "_": _ESCAPED_UNDERSCORE}
-_RESTORE_ESCAPED_EMPHASIS = str.maketrans({_ESCAPED_STAR: "*", _ESCAPED_UNDERSCORE: "_"})
+_RESTORE_ESCAPED_EMPHASIS = str.maketrans(
+    {_ESCAPED_STAR: "*", _ESCAPED_UNDERSCORE: "_", _ESCAPED_BACKTICK: "`"}
+)
 _SENTINEL_CHARS_RE = re.compile(
-    f"[{_CODE_TOKEN_OPEN}{_CODE_TOKEN_CLOSE}{_ESCAPED_STAR}{_ESCAPED_UNDERSCORE}]"
+    f"[{_CODE_TOKEN_OPEN}{_CODE_TOKEN_CLOSE}{_ESCAPED_STAR}{_ESCAPED_UNDERSCORE}"
+    f"{_ESCAPED_BACKTICK}]"
 )
 
 _SHORT_CODE_MAX_CHARS = 24
@@ -144,6 +153,11 @@ def _stash_code_span(
     """Protect code text from markdown passes, restoring it at the end."""
 
     def _replace(match: re.Match[str]) -> str:
+        escape = match.group(1)
+        if escape is not None:
+            # A backslash escape outside a code span; the inline pass turns an
+            # escaped backtick into its literal stand-in.
+            return escape
         code_spans.append(extractor(match))
         return f"{_CODE_TOKEN_OPEN}{len(code_spans) - 1}{_CODE_TOKEN_CLOSE}"
 
@@ -151,7 +165,21 @@ def _stash_code_span(
 
 
 def _extract_inline_code(match: re.Match[str]) -> str:
-    return match.group(1)
+    return match.group(2)
+
+
+def _stash_inline_code_span(
+    code_spans: list[str], extractor: Callable[[re.Match[str]], str]
+) -> Callable[[re.Match[str]], str]:
+    """Stash inline code spans and swap escaped backticks for their stand-in."""
+    stash = _stash_code_span(code_spans, extractor)
+
+    def _replace(match: re.Match[str]) -> str:
+        if match.group(1) == "\\`":
+            return _ESCAPED_BACKTICK
+        return stash(match)
+
+    return _replace
 
 
 def _protect_escaped_emphasis(match: re.Match[str]) -> str:
@@ -483,7 +511,7 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
         fenced_extractor = _extract_fenced_code_for_tts
         inline_extractor = _extract_inline_code_for_tts
     result = _FENCED_CODE_RE.sub(_stash_code_span(code_spans, fenced_extractor), result)
-    result = _INLINE_CODE_RE.sub(_stash_code_span(code_spans, inline_extractor), result)
+    result = _INLINE_CODE_RE.sub(_stash_inline_code_span(code_spans, inline_extractor), result)
 
     # 2a. Backslash-escaped emphasis markers are literal text: hide them from
     # the bold/italic/list/rule passes (code spans keep their escapes).
@@ -524,8 +552,8 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # (e.g. ``> ---``).
     result = _HR_RE.sub("", result)
 
-    # 13. Restore escaped emphasis markers as literal characters, then the
-    # protected code spans in one substitution pass.
+    # 13. Restore escaped emphasis markers and backticks as literal characters,
+    # then the protected code spans in one substitution pass.
     result = result.translate(_RESTORE_ESCAPED_EMPHASIS)
     result = _restore_code_spans(result, code_spans)
 
