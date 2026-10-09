@@ -195,6 +195,57 @@ async def test_serve_websocket_sessions_accepts_bearer_token(
 
 @pytest.mark.asyncio
 @pytest.mark.integration_socket
+async def test_serve_websocket_sessions_rejects_duplicate_authorization_with_401(
+    monkeypatch: pytest.MonkeyPatch,
+    unused_tcp_port_factory: Callable[[], int],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two ``Authorization`` headers must get a clean 401, never an HTTP 500.
+
+    ``Headers.get`` raised ``MultipleValuesError`` inside ``process_request``,
+    so websockets logged "opening handshake failed" and answered 500.
+    """
+    port = unused_tcp_port_factory()
+    stop_event = asyncio.Event()
+    sessions: list[_FakeSession] = []
+
+    def session_factory(_ws) -> _FakeSession:
+        session = _FakeSession()
+        sessions.append(session)
+        return session
+
+    server_started = _patch_serve_started(monkeypatch)
+    task = asyncio.create_task(
+        serve_websocket_sessions(
+            session_factory,
+            WebSocketSessionServerConfig(port=port, auth_token="secret-token"),
+            stop_event=stop_event,
+            runtime_feedback=False,
+            announce=False,
+        )
+    )
+    try:
+        await asyncio.wait_for(server_started.wait(), timeout=1)
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
+            async with websockets.connect(
+                f"ws://127.0.0.1:{port}",
+                additional_headers=[
+                    ("Authorization", "Bearer secret-token"),
+                    ("Authorization", "Bearer other"),
+                ],
+            ):
+                pass
+
+        assert exc_info.value.response.status_code == HTTPStatus.UNAUTHORIZED
+        assert sessions == []
+        assert "opening handshake failed" not in caplog.text
+    finally:
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration_socket
 async def test_serve_websocket_sessions_accepts_query_token_when_opted_in(
     monkeypatch: pytest.MonkeyPatch,
     unused_tcp_port_factory: Callable[[], int],

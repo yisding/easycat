@@ -107,14 +107,46 @@ def _query_token_from_path(path: str) -> str | None:
     return parse_qs(query).get("token", [None])[0]
 
 
+# Stand-in ``Authorization`` value for a header that could not be read. The
+# non-ASCII credential can never match a token (``constant_time_strings_equal``
+# denies non-ASCII), so :class:`BearerTokenAuth` reports it as ``"invalid"``.
+_UNREADABLE_AUTHORIZATION = "Bearer \ufffd"
+
+
+def _websocket_authorization(headers: Any) -> str | None:
+    """Read ``Authorization`` from websocket headers without ever raising.
+
+    ``websockets`` ``Headers.get`` raises ``MultipleValuesError`` (a
+    ``LookupError``, not a ``KeyError``) when the header repeats, so read every
+    value via ``get_all`` instead. Exactly one value is used as-is; repeated
+    values are combined RFC 9110-style (``", "``), which never matches a single
+    bearer token, so an ambiguous credential fails closed even when one copy is
+    correct. Any ``LookupError`` from a partial mapping is treated as invalid.
+    """
+    if headers is None:
+        return None
+    try:
+        get_all = getattr(headers, "get_all", None)
+        if get_all is None:
+            single: str | None = headers.get("Authorization")
+            return single
+        values: list[str] = list(get_all("Authorization"))
+    except LookupError:
+        return _UNREADABLE_AUTHORIZATION
+    if not values:
+        return None
+    return ", ".join(values)
+
+
 def from_websocket(headers: Any, path: str) -> _Request:
     """Adapt a raw-websocket request (``Headers`` + handshake ``path``).
 
     Used by the WebSocket ``process_request`` hook, which receives a
     ``websockets`` ``Headers`` mapping and the handshake ``path`` carrying the
-    query string (e.g. ``/voice?token=...``).
+    query string (e.g. ``/voice?token=...``). A repeated ``Authorization``
+    header never raises: it yields a credential that is rejected as invalid.
     """
-    auth = headers.get("Authorization") if headers is not None else None
+    auth = _websocket_authorization(headers)
     return _Request(
         authorization_header=auth,
         query_token=_query_token_from_path(path),

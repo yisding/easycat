@@ -480,6 +480,39 @@ async def test_bearer_auth_rejects_unauthenticated_ws_and_accepts_bearer() -> No
 
 
 @pytest.mark.integration_socket
+async def test_bearer_auth_rejects_duplicate_authorization_ws_with_1008(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two ``Authorization`` headers must close 1008 and count as a rejection.
+
+    ``Headers.get`` raised ``MultipleValuesError`` out of the auth check, so the
+    handler crashed (close 1011, "connection handler failed") and the rejection
+    was never recorded in ``sessions_rejected_total``.
+    """
+    config = VoiceServerConfig(
+        host="127.0.0.1", port=0, max_sessions=4, auth=BearerTokenAuth(token="sekrit")
+    )
+    server, sessions = await _running_server(config)
+    try:
+        assert server.metrics_payload()["sessions_rejected_total"] == 0
+        async with websockets.connect(
+            _ws_url(server),
+            additional_headers=[
+                ("Authorization", "Bearer sekrit"),
+                ("Authorization", "Bearer other"),
+            ],
+        ) as client:
+            await asyncio.wait_for(client.wait_closed(), timeout=2)
+            assert client.close_code == 1008
+            assert client.close_reason == "Missing or invalid bearer token"
+        assert sessions == []
+        assert server.metrics_payload()["sessions_rejected_total"] == 1
+        assert "connection handler failed" not in caplog.text
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
 async def test_bearer_auth_query_token_rejected_by_default() -> None:
     config = VoiceServerConfig(
         host="127.0.0.1", port=0, max_sessions=4, auth=BearerTokenAuth(token="sekrit")
