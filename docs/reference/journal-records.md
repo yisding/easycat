@@ -60,7 +60,7 @@ reader may inspect.
 | `replace_last_assistant_text` | `EVENT` | `stage: str`, `text: str` | - |
 | `stage_complete` | `EVENT` | `stage: str` | `state_before: str`, `state_after: str`, `elapsed_ms: number`, `response: str`, `audio_bytes: int`, audio-format keys, `delivered: bool`, `events: list`, `prediction: Any`, `probability: number`, `frame_count: int`, `total_bytes: int` |
 | `stage_error` | `EVENT` | `stage: str`, `error: str`, `elapsed_ms: number` | `state_before: str`, `input_sequence: int`, `input_record_ref: str` |
-| `stage_start` | `EVENT` | `stage: str` | `state_before: str`, `input: Any`, `audio_bytes: int`, `sample_rate: int`, `channels: int`, `sample_width: int`, `encoding: str` |
+| `stage_start` | `EVENT` | `stage: str` | `state_before: str`, `input: Any`, `input_format: str`, `audio_bytes: int`, `sample_rate: int`, `channels: int`, `sample_width: int`, `encoding: str` |
 | `stt_segment_commit_requested` | `EVENT` | `segment_index: int`, `transcript_text: str`, `pending_commit_bytes: int or null` | - |
 | `stt_segment_commit_result` | `EVENT` | `segment_index: int`, `committed: bool`, `transcript_text: str` | - |
 | `stt_segment_final` | `EVENT` | `segment_index: int`, `text: str`, `track: str or null`, `transcript_text: str` | `confidence: number`, `word_timestamps: list` |

@@ -41,6 +41,7 @@ from easycat.stages import (
     VADStage,
 )
 from easycat.stages.base import journal_append_event, put_artifact, put_artifact_async
+from easycat.tts.input import TTSInput
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -1183,6 +1184,135 @@ class TestStageExecuteRecording:
         )
         stage = TransportStage(_StubTransport())
         assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), cassette) == b"outbound"
+
+    @staticmethod
+    async def _record_tts_cassette(*payloads, journal_detail: str = "full"):
+        """Run a streaming TTSStage over each payload and return one replay cassette.
+
+        Several payloads mimic a session synthesizing one turn sentence by
+        sentence: each is a separate ``execute`` call into the same journal.
+        """
+        from easycat.runtime.replay import ReplayCassette
+
+        class _AudioEvent:
+            audio = AudioChunk(data=b"\x01\x02", format=PCM16_MONO_16K)
+
+        class _StreamingTTS:
+            async def synthesize(self, text):
+                _ = text
+                yield _AudioEvent()
+
+        artifact_store = InMemoryArtifactStore()
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(
+            journal=journal,
+            artifact_store=artifact_store,
+            journal_detail=journal_detail,
+        )
+        stage = TTSStage(_StreamingTTS(), journal=journal)
+        turn = _make_turn()
+        for payload in payloads:
+            stream = await stage.execute(payload, ctx, turn)
+            assert [event async for event in stream]
+        records = tuple(
+            {
+                "sequence": r.sequence,
+                "name": r.name,
+                "data": r.data,
+                "input_ref": r.input_ref,
+                "output_ref": r.output_ref,
+            }
+            for r in journal.read()
+        )
+        cassette = ReplayCassette(stage_name="tts", records=records, _resolver=artifact_store.get)
+        return stage, records, cassette
+
+    @pytest.mark.parametrize(
+        ("payload", "expected_format"),
+        [
+            ("Hello world", None),
+            (TTSInput(text="Hello world"), "plain"),
+            (TTSInput(text="<speak>Hello world</speak>", format="ssml"), "ssml"),
+        ],
+    )
+    async def test_tts_live_replay_returns_text_recorded_by_execute(
+        self, payload, expected_format
+    ):
+        """LIVE replay returns the text that ``execute`` synthesized.
+
+        ``execute`` used to write ``stage_start`` without ``data["input"]``,
+        so ``live_replay_input(source="data_input")`` always returned None
+        for a real recording and a LIVE ``stage_replayer`` had nothing to
+        re-synthesize.  A ``TTSInput`` records its text (not the dataclass
+        repr) plus its format, and SSML comes back as a ``TTSInput`` so the
+        format survives the replay boundary.
+        """
+        from easycat.runtime.replay import ReplayFidelity
+
+        stage, records, cassette = await self._record_tts_cassette(payload)
+        expected_text = payload if isinstance(payload, str) else payload.text
+        expected_live = payload if expected_format == "ssml" else expected_text
+
+        start = next(r for r in records if r["name"] == "stage_start")
+        assert start["data"]["input"] == expected_text
+        assert start["data"].get("input_format") == expected_format
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), cassette) == expected_live
+        # ARTIFACT replay still concatenates the captured tts_frame bytes.
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.ARTIFACT), cassette) == b"\x01\x02"
+
+    async def test_tts_live_replay_joins_every_chunk_of_a_turn(self):
+        """LIVE replay returns the whole turn, not just the last chunk.
+
+        A session calls ``execute`` once per sentence, so one turn's
+        cassette holds one ``stage_start`` per chunk.  Reading only the
+        last one dropped every earlier sentence while ARTIFACT replay still
+        returned every chunk's audio.
+        """
+        from easycat.runtime.replay import ReplayFidelity
+
+        stage, records, cassette = await self._record_tts_cassette(
+            "Hello world. ",
+            TTSInput(text="This is the second sentence. "),
+            "And a third.",
+        )
+
+        assert [r["name"] for r in records].count("stage_start") == 3
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), cassette) == (
+            "Hello world. This is the second sentence. And a third."
+        )
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.ARTIFACT), cassette) == (
+            b"\x01\x02" * 3
+        )
+
+    async def test_tts_live_replay_keeps_ssml_chunks_separate(self):
+        """SSML documents cannot be joined, so each chunk keeps its format."""
+        from easycat.runtime.replay import ReplayFidelity
+
+        first = TTSInput(text="<speak>Hello.</speak>", format="ssml")
+        second = TTSInput(text="Plain tail.")
+        stage, _records, cassette = await self._record_tts_cassette(first, second)
+
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), cassette) == (
+            first,
+            second,
+        )
+
+    async def test_tts_live_replay_override_wins_over_recorded_text(self):
+        from easycat.runtime.replay import ReplayFidelity
+
+        stage, _records, cassette = await self._record_tts_cassette("Hello world")
+        spec = ReplaySpec(fidelity=ReplayFidelity.LIVE, overrides={"input": "override"})
+
+        assert stage.replay(spec, cassette) == "override"
+
+    @pytest.mark.parametrize("journal_detail", ["off", "light"])
+    async def test_tts_stage_records_no_input_without_capture(self, journal_detail):
+        """Without full capture the TTS text is never journaled."""
+        _stage, records, _cassette = await self._record_tts_cassette(
+            "Hello world", journal_detail=journal_detail
+        )
+
+        assert records == ()
 
 
 # ── VAD event serialization + Turn dataclass recording ───────────
