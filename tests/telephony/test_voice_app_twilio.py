@@ -44,6 +44,8 @@ def _clear_twilio_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("TRUST_PROXY_HEADERS", raising=False)
     monkeypatch.delenv("TWILIO_START_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("TWILIO_DRAIN_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("TWILIO_FORCE_SHUTDOWN_TIMEOUT_S", raising=False)
     monkeypatch.delenv("TWILIO_PUBLIC_TWIML_URL", raising=False)
 
 
@@ -1083,6 +1085,62 @@ def test_twilio_server_config_reads_auth_token_and_trust_proxy_from_env(
     assert config.twilio_auth_token == "env-twilio-secret"
     assert config.trust_proxy_headers is True
     assert config.public_twiml_url == "https://voice.example.com/prefix/twiml"
+
+
+_TWILIO_TIMEOUT_ENV = {
+    "start_timeout_s": "TWILIO_START_TIMEOUT_S",
+    "drain_timeout_s": "TWILIO_DRAIN_TIMEOUT_S",
+    "force_shutdown_timeout_s": "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
+}
+
+
+@pytest.mark.parametrize("env_value", ["soon", "", "   "])
+@pytest.mark.parametrize(("field", "env_name"), sorted(_TWILIO_TIMEOUT_ENV.items()))
+def test_twilio_explicit_timeout_kwarg_ignores_malformed_env(
+    monkeypatch: pytest.MonkeyPatch, field: str, env_name: str, env_value: str
+) -> None:
+    """An explicit timeout kwarg wins without parsing the env fallback.
+
+    The env var used to be parsed eagerly as the ``kwargs.pop`` default, so a
+    blank or malformed value raised ``ValueError`` even when the caller passed
+    the kwarg explicitly.
+    """
+    monkeypatch.setenv(env_name, env_value)
+    config = VoiceApp(agent="a")._twilio_server_config(
+        stream_url="wss://example/media", **{field: 3.5}
+    )
+    assert getattr(config, field) == 3.5
+
+
+@pytest.mark.parametrize("env_value", ["", "   "])
+@pytest.mark.parametrize(("field", "env_name"), sorted(_TWILIO_TIMEOUT_ENV.items()))
+def test_twilio_blank_timeout_env_uses_server_config_default(
+    monkeypatch: pytest.MonkeyPatch, field: str, env_name: str, env_value: str
+) -> None:
+    """A blank timeout env var (e.g. ``X=`` in ``.env``) means "unset"."""
+    monkeypatch.setenv(env_name, env_value)
+    config = VoiceApp(agent="a")._twilio_server_config(stream_url="wss://example/media")
+    assert getattr(config, field) == getattr(TwilioVoiceServerConfig, field)
+
+
+@pytest.mark.parametrize(("field", "env_name"), sorted(_TWILIO_TIMEOUT_ENV.items()))
+def test_twilio_timeout_env_used_when_kwarg_absent(
+    monkeypatch: pytest.MonkeyPatch, field: str, env_name: str
+) -> None:
+    """A valid timeout env var feeds the config when no kwarg is given."""
+    monkeypatch.setenv(env_name, " 7.25 ")
+    config = VoiceApp(agent="a")._twilio_server_config(stream_url="wss://example/media")
+    assert getattr(config, field) == 7.25
+
+
+@pytest.mark.parametrize(("field", "env_name"), sorted(_TWILIO_TIMEOUT_ENV.items()))
+def test_twilio_malformed_timeout_env_error_names_variable(
+    monkeypatch: pytest.MonkeyPatch, field: str, env_name: str
+) -> None:
+    """A malformed timeout env var (no kwarg) raises an error naming the var."""
+    monkeypatch.setenv(env_name, "soon")
+    with pytest.raises(ValueError, match=f"{env_name} must be a number, got 'soon'"):
+        VoiceApp(agent="a")._twilio_server_config(stream_url="wss://example/media")
 
 
 # ── Media lifecycle (fake ServerConnection + stubbed session) ─────────
