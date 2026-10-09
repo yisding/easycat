@@ -464,10 +464,11 @@ def _resolve_named_provider_config(
 ) -> Any:
     """Resolve a named wrapper to its concrete config without creating a client.
 
-    Credential precedence matches ``ProviderCatalog.create_provider``: a usable
-    top-level ``config.api_key`` wins, then a usable ``params["api_key"]``.
-    Ambient credentials (``api_key_overrides`` or the provider's env var) are
-    only a fallback when neither explicit key is supplied.
+    Credential precedence: a usable top-level ``config.api_key`` wins, then a
+    usable ``params["api_key"]``. Ambient credentials (``api_key_overrides`` or
+    the provider's env var) are only a fallback when neither explicit key is
+    usable. This keeps an explicit params key, as ``ProviderCatalog.create_provider``
+    does; unlike that path, a blank top-level ``api_key`` does not displace it.
     """
     if kind == "STT":
         from easycat.stt.factory import _CATALOG as catalog
