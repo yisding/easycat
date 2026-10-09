@@ -580,8 +580,11 @@ class SqliteJournal(_SqlJournalBase):
         # Recover sequence counter from any existing records.  Both the
         # crash-recovery and clean-reuse paths truncate the journal table
         # above, so for a reused session_id this leaves ``_seq`` at 0 and the
-        # first real append starts at sequence=1.
-        row = self._conn.execute("SELECT MAX(sequence) FROM journal").fetchone()
+        # first real append starts at sequence=1. The out-of-band degraded
+        # marker (sequence -1) is excluded so it can never seed the counter.
+        row = self._conn.execute(
+            "SELECT MAX(sequence) FROM journal WHERE sequence >= 0"
+        ).fetchone()
         if row and row[0] is not None:
             self._seq = row[0]
 
@@ -1539,8 +1542,13 @@ class LibsqlJournal(_SqlJournalBase):
         # here (post-truncation) for stage/tag queries to see them.
         _ensure_index_backfill(self._conn)
 
-        # Recover sequence counter from any remaining records.
-        row = self._conn.execute("SELECT MAX(sequence) FROM journal").fetchone()
+        # Recover sequence counter from any remaining records. A retained
+        # ``JournalDegraded`` marker sits at sequence -1; excluding it keeps
+        # ``latest_sequence`` at 0 for a marker-only journal so the first real
+        # append still starts at 1.
+        row = self._conn.execute(
+            "SELECT MAX(sequence) FROM journal WHERE sequence >= 0"
+        ).fetchone()
         self._seq = row[0] if row and row[0] is not None else 0
         self._restore_live_owner_marker()
         self._conn.commit()

@@ -94,8 +94,10 @@ class ReadonlySqliteJournal:
 
     @property
     def latest_sequence(self) -> int:
+        # Exclude the out-of-band degraded marker (sequence -1) so the
+        # postmortem view matches the live journal's "0 when empty".
         with self._connect() as conn:
-            row = conn.execute("SELECT MAX(sequence) FROM journal").fetchone()
+            row = conn.execute("SELECT MAX(sequence) FROM journal WHERE sequence >= 0").fetchone()
         return row[0] if row and row[0] is not None else 0
 
     @property
