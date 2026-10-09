@@ -321,6 +321,10 @@ _LINK_TITLE_RE = re.compile(
     re.DOTALL,
 )
 
+# Characters ``str.splitlines`` treats as line breaks. A link destination never
+# crosses one: not between ``]`` and ``(``, and not inside ``<...>``.
+_LINE_BREAKS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+
 
 @dataclass(frozen=True, slots=True)
 class _MarkdownReference:
@@ -344,6 +348,9 @@ class _MarkdownReferenceScanner:
         self._next_space: list[int] | None = None
         self._next_non_space: list[int] = []
         self._next_angle_stop: list[int] = []
+        # End of the title match starting at each position (-1 when none),
+        # so nested candidates sharing one long title scan it only once.
+        self._title_ends: dict[int, int] = {}
 
     def __iter__(self) -> Iterator[_MarkdownReference]:
         index = 0
@@ -421,7 +428,7 @@ class _MarkdownReferenceScanner:
         # Spaces between ``]`` and ``(`` are tolerated, but never a line
         # break: a parenthetical on the next line is prose, not a destination.
         while index < self._length and self._text[index].isspace():
-            if self._text[index] in "\r\n":
+            if self._text[index] in _LINE_BREAKS:
                 return None
             index += 1
         if index >= self._length or self._text[index] != "(":
@@ -460,8 +467,23 @@ class _MarkdownReferenceScanner:
             return True
         if not text[token_end].isspace():
             return False
-        title_start = self._next_non_space[token_end]
-        return _LINK_TITLE_RE.fullmatch(text, title_start, end) is not None
+        return self._title_end(self._next_non_space[token_end]) == end
+
+    def _title_end(self, title_start: int) -> int:
+        """Return where the title starting at ``title_start`` ends, or -1.
+
+        The title pattern cannot extend past its first unescaped closing
+        delimiter, so the unbounded match end is the only ``end`` for which a
+        bounded full match can succeed. Caching it per start keeps nested
+        candidates that share one title linear instead of rescanning it at
+        every nesting level.
+        """
+        title_end = self._title_ends.get(title_start)
+        if title_end is None:
+            match = _LINK_TITLE_RE.match(self._text, title_start)
+            title_end = match.end() if match is not None else -1
+            self._title_ends[title_start] = title_end
+        return title_end
 
     def _build_destination_index(self) -> list[int]:
         """Index the next unescaped whitespace, the next non-whitespace and the
@@ -480,7 +502,8 @@ class _MarkdownReferenceScanner:
             is_space = ch.isspace()
             next_space[i] = i if is_space and not escaped[i] else next_space[i + 1]
             next_non_space[i] = next_non_space[i + 1] if is_space else i
-            next_angle_stop[i] = i if ch in ">\r\n" else next_angle_stop[i + 1]
+            stop = ch == ">" or ch in _LINE_BREAKS
+            next_angle_stop[i] = i if stop else next_angle_stop[i + 1]
 
         self._next_space = next_space
         self._next_non_space = next_non_space

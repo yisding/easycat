@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import sys
 from collections.abc import Callable
 
 import pytest
@@ -143,6 +145,12 @@ class TestMarkdownReferenceScanner:
             '[Docs](https://example.test "title" extra)',
             "[Enter]\n(Return)",
             "[Enter]\r\n(Return)",
+            "[Enter]\v(Return)",
+            "[Enter]\f(Return)",
+            "[Enter]\x85(Return)",
+            "[Enter]\u2028(Return)",
+            "[Enter]\u2029(Return)",
+            "[a](<b\u2028c>)",
         ],
     )
     def test_bracketed_prose_before_parenthetical_is_kept_verbatim(self, text: str) -> None:
@@ -189,6 +197,51 @@ class TestMarkdownReferenceScanner:
         text = build(2000)
         assert has_markdown(text) is False
         assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("prefix", "inner"),
+        [
+            ("[a](", 'x "{title}"'),
+            ("[a](<", 'x> "{title}"'),
+            ("[a](", "x ({title})"),
+        ],
+        ids=["double_quoted", "angle_double_quoted", "parenthesized"],
+    )
+    def test_nested_candidates_sharing_one_title_scan_it_once(
+        self, monkeypatch: pytest.MonkeyPatch, prefix: str, inner: str
+    ) -> None:
+        """Every nesting level resolves to the same title start; only the
+        innermost level's destination ends with the title, so it alone is a
+        link. Each title start must be matched once, not once per level, or
+        the scan turns quadratic in the nesting depth times the title length.
+        """
+        import easycat.strip_markdown as module
+
+        title_pattern = module._LINK_TITLE_RE
+        title_starts: list[int] = []
+
+        class _CountingPattern:
+            def match(self, text: str, pos: int = 0) -> re.Match[str] | None:
+                title_starts.append(pos)
+                return title_pattern.match(text, pos)
+
+            def fullmatch(self, text: str, pos: int = 0, endpos: int = sys.maxsize) -> object:
+                title_starts.append(pos)
+                return title_pattern.fullmatch(text, pos, endpos)
+
+        monkeypatch.setattr(module, "_LINK_TITLE_RE", _CountingPattern())
+        n = 2000
+        text = prefix * n + inner.format(title="t" * n) + ")" * n
+        expected = prefix * (n - 1) + "a x" + ")" * (n - 1)
+
+        assert has_markdown(text) is True
+        assert title_starts
+        assert len(title_starts) == len(set(title_starts))
+
+        title_starts.clear()
+        assert strip_markdown(text) == expected
+        assert title_starts
+        assert len(title_starts) == len(set(title_starts))
 
     def test_scanner_yields_consecutive_typed_references(self) -> None:
         references = list(
