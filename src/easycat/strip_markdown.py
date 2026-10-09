@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from functools import partial
 
 # ── Detection patterns ─────────────────────────────────────────────
 
@@ -55,7 +56,15 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
 
 
 _FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
-_INLINE_CODE_RE = re.compile(r"`(.+?)`")
+# Inline code span (CommonMark): a run of N backticks closed by the next run of
+# exactly N backticks, so a double-backtick span can carry a literal backtick.
+# The lookarounds pin both delimiter runs to their full length; an opener with
+# no matching closer is left as literal text.  A span may wrap across line
+# endings but not across a blank line: a blank line ends the paragraph, and
+# pairing stray backticks from different paragraphs would swallow the prose
+# between them.
+_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)((?:[^\n]|\n(?![ \t]*\r?\n))+?)(?<!`)\1(?!`)")
+_CODE_SPAN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
 # Underscore runs inside a word never open or close emphasis (CommonMark), so
 # ``foo__bar__baz`` and ``test__one.py`` keep their underscores.
@@ -64,6 +73,11 @@ _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 _STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~")
 _HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+# A whole ATX heading line, split into its opener and the rest of the line, so
+# the optional closing ``#`` run (``# Title #``) can be dropped before the
+# opener pass.  The closer is located with ``str.rstrip`` in the callback
+# rather than a backtracking pattern, keeping the pass linear on long lines.
+_HEADING_LINE_RE = re.compile(r"^(#{1,6}[ \t])([^\r\n]*)", re.MULTILINE)
 _BLOCKQUOTE_RE = re.compile(r"^(?:>[ \t]*)+", re.MULTILINE)
 _UNORDERED_LIST_RE = re.compile(r"^(\s*)[-*+]\s+", re.MULTILINE)
 # Ordered lists: cap to 1–3 digits (mirrors the detect pattern) to avoid
@@ -153,7 +167,37 @@ def _stash_code_span(
 
 
 def _extract_inline_code(match: re.Match[str]) -> str:
-    return match.group(1)
+    # CommonMark turns each line ending inside a code span into a space before
+    # the padding rule below, so a wrapped span reads as one line.
+    code = _CODE_SPAN_LINE_ENDING_RE.sub(" ", match.group(2))
+    # CommonMark strips one space from each side when both are present and the
+    # span is not all spaces; the padding lets a span start or end with a
+    # backtick (a double-backtick span around " `a` " reads as "`a`").
+    if code.startswith(" ") and code.endswith(" ") and code.strip(" "):
+        return code[1:-1]
+    return code
+
+
+def _strip_heading_closing_sequence(match: re.Match[str], *, allow_at_text_end: bool) -> str:
+    """Drop the optional closing ``#`` run of an ATX heading line.
+
+    The run only counts as a closer when it is preceded by a space or tab and
+    followed by nothing but spaces/tabs to the end of the line, so
+    ``# I love C#``, ``# Title#`` and an escaped ``\\#`` keep their ``#``.
+    When *allow_at_text_end* is ``False`` (streaming windows), a line that
+    runs to the end of the text may still be continued by the next chunk, so
+    it is left alone until its newline arrives.
+    """
+    if not allow_at_text_end and match.end() == len(match.string):
+        return match.group(0)
+    opener, rest = match.group(1), match.group(2)
+    body = rest.rstrip(" \t")
+    content = body.rstrip("#")
+    if len(content) == len(body) or (content and content[-1] not in " \t"):
+        return match.group(0)
+    content = content.rstrip(" \t")
+    # ``# #`` is an empty heading: nothing in it is speakable.
+    return f"{opener}{content}" if content else ""
 
 
 def _protect_escaped_emphasis(match: re.Match[str]) -> str:
@@ -496,6 +540,13 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # and leave stray characters for TTS to speak.
     result = _HR_RE.sub("", result)
 
+    # 2c. ATX heading closers (``# Title #``) while the heading line is still
+    # intact: a ``#`` that only ends the line once emphasis, strikethrough or
+    # link markup has been stripped (``# **C #**``) is content, not a closer.
+    result = _HEADING_LINE_RE.sub(
+        partial(_strip_heading_closing_sequence, allow_at_text_end=trim), result
+    )
+
     # 3/4. Links/images with balanced destination parsing.
     result = _replace_markdown_links_and_images(result)
 
@@ -510,7 +561,7 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # 7. Strikethrough
     result = _STRIKETHROUGH_RE.sub(r"\1", result)
 
-    # 8. Headings
+    # 8. Headings: the opener (the closing ``#`` run went in step 2c).
     result = _HEADING_RE.sub("", result)
 
     # 9. Blockquotes
