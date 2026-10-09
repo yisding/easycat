@@ -160,7 +160,10 @@ def _adapt_llama_workflow(agent: Any, _model: str | None) -> _AdaptedAgent | Non
     return _AdaptedAgent(LlamaAgentsBridge(workflow=agent))
 
 
-_BRIDGE_SUPPLIED_WORKFLOW_KWARGS = frozenset({"recorder", "cancel_token"})
+# GenericWorkflowBridge picks deep mode when ``on_user_turn`` declares
+# ``recorder``; only deep mode passes ``cancel_token``. Shallow mode passes
+# just ``text``.
+_DEEP_MODE_WORKFLOW_KWARGS = frozenset({"recorder", "cancel_token"})
 
 
 def _adapt_generic_workflow(agent: Any, _model: str | None) -> _AdaptedAgent | None:
@@ -176,9 +179,13 @@ def _adapt_generic_workflow(agent: Any, _model: str | None) -> _AdaptedAgent | N
 
 def _workflow_signature_is_supported(on_user_turn: Callable[..., Any]) -> bool:
     try:
-        parameters = inspect.signature(on_user_turn).parameters.values()
+        signature_parameters = inspect.signature(on_user_turn).parameters
     except (ValueError, TypeError):
         return True
+
+    parameters = signature_parameters.values()
+    deep_mode = "recorder" in signature_parameters
+    bridge_supplied = _DEEP_MODE_WORKFLOW_KWARGS if deep_mode else frozenset()
 
     positional = [
         parameter
@@ -194,15 +201,20 @@ def _workflow_signature_is_supported(on_user_turn: Callable[..., Any]) -> bool:
         and parameter.default is inspect.Parameter.empty
     ]
     unsupplied_keyword_only = [
-        parameter
-        for parameter in required_keyword_only
-        if parameter.name not in _BRIDGE_SUPPLIED_WORKFLOW_KWARGS
+        parameter for parameter in required_keyword_only if parameter.name not in bridge_supplied
     ]
     if len(positional) > 1:
         raise BridgeInputError(
             f"on_user_turn() has {len(positional)} required positional "
             "parameters but GenericWorkflowBridge only passes (text). "
             "Remove extra required parameters or construct the bridge explicitly."
+        )
+    if any(parameter.name == "cancel_token" for parameter in unsupplied_keyword_only):
+        raise BridgeInputError(
+            "on_user_turn() requires keyword-only parameter cancel_token, but "
+            "GenericWorkflowBridge supplies cancel_token only in deep mode. "
+            "Add a recorder parameter to opt into deep mode or give cancel_token "
+            "a default."
         )
     if unsupplied_keyword_only:
         names = ", ".join(parameter.name for parameter in unsupplied_keyword_only)

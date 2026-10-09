@@ -91,6 +91,21 @@ class GenericWorkflowBridge(BridgeTemplate):
         sig = inspect.signature(fn)
         self._deep_mode = "recorder" in sig.parameters
         self._accepts_cancel_token = "cancel_token" in sig.parameters
+        cancel_param = sig.parameters.get("cancel_token")
+        if (
+            not self._deep_mode
+            and cancel_param is not None
+            and cancel_param.kind is inspect.Parameter.KEYWORD_ONLY
+            and cancel_param.default is inspect.Parameter.empty
+        ):
+            # Shallow mode calls on_user_turn(text) only, so a required
+            # cancel_token would fail every turn with TypeError.
+            raise BridgeInputError(
+                "on_user_turn() requires keyword-only parameter cancel_token, but "
+                "GenericWorkflowBridge supplies cancel_token only in deep mode. "
+                "Add a recorder parameter to opt into deep mode or give cancel_token "
+                "a default."
+            )
         self._mcp_warning_emitted = False
 
     @property
