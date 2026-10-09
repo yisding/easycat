@@ -272,10 +272,274 @@ def test_split_first_clause_keeps_sentence_final_domains_and_emails_whole(
 
 def test_split_first_clause_splits_after_wrapped_sentence_final_domain() -> None:
     # The sentence-ending "." inside "(example.com.)" is trailing punctuation,
-    # not part of the domain, so it is still a clause boundary.
+    # not part of the domain, so it is still a clause boundary, and the
+    # closing ")" stays with the clause it closes.
     ready, remaining = split_first_clause("Please visit (example.com.) Then continue, thanks")
-    assert ready == "Please visit (example.com."
-    assert remaining == ") Then continue, thanks"
+    assert ready == "Please visit (example.com.) "
+    assert remaining == "Then continue, thanks"
+
+
+@pytest.mark.parametrize(
+    ("text", "ready", "remaining"),
+    [
+        (
+            '"Hello there my friend." More text here.',
+            '"Hello there my friend." ',
+            "More text here.",
+        ),
+        (
+            "Please (see the docs here.) Next thing.",
+            "Please (see the docs here.) ",
+            "Next thing.",
+        ),
+        (
+            "\u201cThat sounds great to me,\u201d she said.",
+            "\u201cThat sounds great to me,\u201d ",
+            "she said.",
+        ),
+    ],
+)
+def test_split_first_clause_keeps_closing_punctuation_with_clause(
+    text: str, ready: str, remaining: str
+) -> None:
+    """Closing quotes/brackets after a boundary ship with the first clause.
+
+    Regression: the first payload ended at the terminator and the next one
+    started with the detached closer (``'"Hello."'`` / ``'" More'``).
+    """
+    assert split_first_clause(text) == (ready, remaining)
+
+
+def test_split_at_sentence_boundaries_keeps_detached_closer_with_sentence() -> None:
+    # The segmenter can hold a closing quote with the uncertain tail; it
+    # belongs to the sentence before it, as in ``split_first_clause``.
+    assert split_at_sentence_boundaries('Hi." Then') == ('Hi." ', "Then")
+    assert split_at_sentence_boundaries('First one. "Second one." More') == (
+        'First one. "Second one." ',
+        "More",
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "ready", "remaining"),
+    [
+        (
+            "This is a known fact.[1] Next sentence.",
+            "This is a known fact.[1] ",
+            "Next sentence.",
+        ),
+        (
+            "This is a known fact.[12] Next sentence.",
+            "This is a known fact.[12] ",
+            "Next sentence.",
+        ),
+        (
+            "This is a known fact.[^1] Next sentence.",
+            "This is a known fact.[^1] ",
+            "Next sentence.",
+        ),
+        ("This is a known fact.[1]", "This is a known fact.[1]", ""),
+    ],
+)
+def test_split_first_clause_keeps_attached_citation_with_sentence(
+    text: str, ready: str, remaining: str
+) -> None:
+    """A citation glued to a sentence end does not delay or detach.
+
+    Regression: the segmenter keeps ``[1]`` in the sentence, so the
+    terminator was rejected and the first payload waited for the next
+    sentence end; ``[^1]`` was instead split off into the next payload.
+    """
+    assert split_first_clause(text) == (ready, remaining)
+
+
+def test_split_at_sentence_boundaries_keeps_attached_citation_with_sentence() -> None:
+    assert split_at_sentence_boundaries("First one. Second fact.[^1] Next") == (
+        "First one. Second fact.[^1] ",
+        "Next",
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I spoke with Dr. Smith about your results today.",
+        "We stock many tools e.g. hammers and saws.",
+        "The economy of the U.S. is growing quickly now.",
+        "Meet me tomorrow at 10 a.m. in the main lobby.",
+        "Please call Mrs. Johnson back tomorrow morning.",
+    ],
+)
+def test_split_first_clause_does_not_split_inside_abbreviation(text: str) -> None:
+    """Abbreviation periods are not first-clause boundaries.
+
+    Regression: every ``.`` past the minimum length was treated as a clause
+    terminator, so the first TTS payload was cut mid-abbreviation
+    ("I spoke with Dr. " / "We stock many tools e."), unlike
+    ``split_at_sentence_boundaries`` which keeps these sentences whole.
+    """
+    assert split_first_clause(text) == (text, "")
+
+
+def test_split_first_clause_still_splits_at_real_sentence_end() -> None:
+    ready, remaining = split_first_clause("Your appointment is confirmed. See you then.")
+    assert ready == "Your appointment is confirmed. "
+    assert remaining == "See you then."
+
+    ready, remaining = split_first_clause("Call me at 5 p.m. Then we talk.")
+    assert ready == "Call me at 5 p.m. "
+    assert remaining == "Then we talk."
+
+
+def test_split_first_clause_ships_complete_sentence_without_lookahead() -> None:
+    # A genuine sentence end at the end of the buffer still ships at once,
+    # so time-to-first-audio does not wait for the next delta.
+    text = "I spoke with you about it today."
+    assert split_first_clause(text) == (text, "")
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["I spoke with Dr.", "I spoke with Dr. ", "We stock many tools e.g."],
+)
+def test_split_first_clause_holds_trailing_abbreviation_for_lookahead(text: str) -> None:
+    """A buffer ending in an abbreviation waits for the next delta."""
+    assert split_first_clause(text) == ("", text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["We stock many tools e.", "We stock many tools e. ", "Meet me tomorrow at 10 a."],
+)
+def test_split_first_clause_holds_trailing_single_letter_period(text: str) -> None:
+    """A buffer ending in "<letter>." may be mid-abbreviation ("e." + "g.").
+
+    The segmenter reports a finished sentence there, so the hold is ours: wait
+    for the next delta (or the end-of-stream flush) before shipping it.
+    """
+    assert split_first_clause(text) == ("", text)
+
+
+def test_split_first_clause_releases_single_letter_period_once_text_follows() -> None:
+    # Once a later character arrives the segmenter decides as usual, so a real
+    # sentence ending in a one-letter word still ships at that boundary.
+    assert split_first_clause("I chose option a. Then") == ("I chose option a. ", "Then")
+
+
+def test_split_at_sentence_boundaries_holds_trailing_single_letter_period() -> None:
+    text = "Hello there. We stock many tools e."
+    assert split_at_sentence_boundaries(text) == ("Hello there. ", "We stock many tools e.")
+    assert split_at_sentence_boundaries("We stock many tools e.") == ("", "We stock many tools e.")
+
+
+def test_split_first_clause_still_splits_at_comma_before_abbreviation() -> None:
+    ready, remaining = split_first_clause("Hello there, Mrs. Jones.")
+    assert ready == "Hello there, "
+    assert remaining == "Mrs. Jones."
+
+
+def _stream_buffer(strip_md: bool):
+    import asyncio
+
+    from easycat.session._streaming import _SentenceStreamBuffer
+
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    buffer = _SentenceStreamBuffer(
+        tts_queue=tts_queue,
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=strip_md,
+    )
+    return buffer, tts_queue
+
+
+def _drain(tts_queue) -> list[str]:
+    payloads = []
+    while not tts_queue.empty():
+        item = tts_queue.get_nowait()
+        assert item is not None
+        payloads.append(item.text)
+    return payloads
+
+
+@pytest.mark.parametrize("strip_md", [False, True])
+@pytest.mark.parametrize(
+    ("deltas", "queued_after_each"),
+    [
+        (
+            # Whole sentence: it completes, and ships, on the last delta.
+            ["We stock many tools", " e.g.", " hammers", " and saws."],
+            [[], [], [], ["We stock many tools e.g. hammers and saws."]],
+        ),
+        (
+            # The comma after the abbreviation is the first-clause boundary,
+            # so the first payload ships while the sentence is incomplete.
+            ["We stock many tools", " e.g.", " hammers,", " and saws."],
+            [[], [], ["We stock many tools e.g. hammers,"], [" and saws."]],
+        ),
+    ],
+)
+async def test_streaming_first_payload_does_not_split_inside_abbreviation(
+    strip_md: bool, deltas: list[str], queued_after_each: list[list[str]]
+) -> None:
+    """Streaming "e.g." must not ship "e." and "g. " as separate payloads.
+
+    The queue is checked after every delta, not only after ``flush()``, so a
+    buffer that held everything until the final flush would fail.
+    """
+    buffer, tts_queue = _stream_buffer(strip_md)
+    for delta, expected in zip(deltas, queued_after_each, strict=True):
+        await buffer.add_delta(delta)
+        assert _drain(tts_queue) == expected, delta
+    await buffer.flush()
+    assert _drain(tts_queue) == []
+
+
+@pytest.mark.parametrize("strip_md", [False, True])
+async def test_streaming_holds_period_ending_at_abbreviation_start(strip_md: bool) -> None:
+    """A delta ending at "e." must not ship "tools e." before "g." arrives."""
+    buffer, tts_queue = _stream_buffer(strip_md)
+    await buffer.add_delta("We stock many tools e.")
+    assert _drain(tts_queue) == []
+    await buffer.add_delta("g. hammers")
+    assert _drain(tts_queue) == []
+    await buffer.add_delta(" and saws.")
+    assert _drain(tts_queue) == ["We stock many tools e.g. hammers and saws."]
+    await buffer.flush()
+    assert _drain(tts_queue) == []
+
+
+@pytest.mark.parametrize("strip_md", [False, True])
+async def test_streaming_releases_single_letter_sentence_end_on_next_delta(
+    strip_md: bool,
+) -> None:
+    """The lone-letter hold lasts only until the next delta arrives.
+
+    The follow-up delta carries no punctuation, so markdown mode must recheck
+    because the previous buffer ended in a held period.
+    """
+    buffer, tts_queue = _stream_buffer(strip_md)
+    await buffer.add_delta("I chose option a.")
+    assert _drain(tts_queue) == []
+    await buffer.add_delta(" Then more")
+    assert _drain(tts_queue) == ["I chose option a. "]
+    await buffer.flush()
+    assert _drain(tts_queue) == ["Then more"]
+
+
+@pytest.mark.parametrize("strip_md", [False, True])
+async def test_streaming_plan_b_sentence_ships_once_next_delta_arrives(strip_md: bool) -> None:
+    """A sentence ending in an uppercase initial ("Plan B.") is not lost.
+
+    It waits for the next delta like any trailing initial; the segmenter then
+    reads "B. Then" as an initial inside one sentence, so both ship together.
+    """
+    buffer, tts_queue = _stream_buffer(strip_md)
+    await buffer.add_delta("I chose plan B.")
+    assert _drain(tts_queue) == []
+    await buffer.add_delta(" Then more.")
+    assert _drain(tts_queue) == ["I chose plan B. Then more."]
+    await buffer.flush()
+    assert _drain(tts_queue) == []
 
 
 def test_split_first_phrase_bounds_punctuation_free_opener() -> None:

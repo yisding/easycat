@@ -336,6 +336,19 @@ def test_batched_spectrogram_matches_per_frame_reference() -> None:
     np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
 
+class _SpyFeatureExtractor:
+    """Feature-extractor stand-in that records the waveform it receives."""
+
+    n_samples = 8 * 16000
+
+    def __init__(self) -> None:
+        self.received: list[Any] = []
+
+    def __call__(self, audio: Any, **_kwargs: Any) -> str:
+        self.received.append(audio)
+        return "features"
+
+
 def _make_provider_with_probability(probability: float, threshold: float) -> SmartTurnONNX:
     """Build a SmartTurnONNX whose inference returns a fixed probability."""
 
@@ -344,7 +357,7 @@ def _make_provider_with_probability(probability: float, threshold: float) -> Sma
     # of length >= max_samples skips padding entirely.
     fake_np = SimpleNamespace(pad=lambda *a, **k: a[0])
     provider._np = fake_np
-    provider._feature_extractor = lambda *a, **k: "features"
+    provider._feature_extractor = _SpyFeatureExtractor()
 
     fake_output = SimpleNamespace(item=lambda: probability)
     provider._session = SimpleNamespace(run=lambda *a, **k: [[fake_output]])
@@ -576,6 +589,63 @@ def test_predict_above_threshold_is_complete() -> None:
     result = provider._predict_sync(audio)
 
     assert result.prediction == 1
+
+
+def _make_numpy_spy_provider(max_audio_seconds: float = 8.0) -> tuple[Any, SmartTurnONNX, Any]:
+    np = pytest.importorskip("numpy")
+    provider = SmartTurnONNX(model_path="unused.onnx", max_audio_seconds=max_audio_seconds)
+    provider._np = np
+    spy = _SpyFeatureExtractor()
+    provider._feature_extractor = spy
+    fake_output = SimpleNamespace(item=lambda: 0.25)
+    provider._session = SimpleNamespace(run=lambda *a, **k: [[fake_output]])
+    return np, provider, spy
+
+
+def test_predict_left_pads_short_turns_so_speech_ends_the_window() -> None:
+    """Short turns must be zero-padded at the front, not the back.
+
+    Smart-turn classifies the trailing 8 s window.  Right-padding put seconds of
+    digital silence after the speech, so every turn under 8 s scored as complete
+    (p~0.987, even for pure silence) and ended at the first VAD pause.
+    """
+
+    np, provider, spy = _make_numpy_spy_provider()
+    speech = np.full(16000, 0.3, dtype=np.float32)
+
+    provider._predict_sync(speech)
+
+    (received,) = spy.received
+    assert received.shape == (8 * 16000,)
+    np.testing.assert_array_equal(received[-speech.size :], speech)
+    assert received[-1] != 0.0
+    assert not received[: -speech.size].any()
+
+
+def test_predict_short_window_config_still_ends_at_extractor_window() -> None:
+    """A ``max_audio_seconds`` below 8 s keeps speech at the end of the model window."""
+
+    np, provider, spy = _make_numpy_spy_provider(max_audio_seconds=2.0)
+    speech = np.arange(1, 3 * 16000 + 1, dtype=np.float32)
+
+    provider._predict_sync(speech)
+
+    (received,) = spy.received
+    assert received.shape == (8 * 16000,)
+    np.testing.assert_array_equal(received[-2 * 16000 :], speech[-2 * 16000 :])
+    assert not received[: -2 * 16000].any()
+
+
+def test_predict_long_turns_keep_trailing_window_unpadded() -> None:
+    """Turns of 8 s or longer pass the most recent 8 s through without padding."""
+
+    np, provider, spy = _make_numpy_spy_provider()
+    speech = np.arange(1, 10 * 16000 + 1, dtype=np.float32)
+
+    provider._predict_sync(speech)
+
+    (received,) = spy.received
+    np.testing.assert_array_equal(received, speech[-8 * 16000 :])
 
 
 @pytest.mark.parametrize("value", [-0.1, 1.1, True, "strict"])
