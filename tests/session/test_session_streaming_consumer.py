@@ -812,6 +812,62 @@ async def test_markdown_buffer_compacts_spoken_paragraphs():
     ]
 
 
+async def test_markdown_streaming_fallback_does_not_restrip_carried_text():
+    """The fallback keeps the unspoken stripped text instead of stripping it again.
+
+    The late ``**`` pairs with a ``**`` already spoken literally, so the
+    stripped turn no longer starts with the spoken text.  The rebuilt
+    remainder used to be stripped a second time, turning ``/_a_`` into
+    ``/a``.
+    """
+    built = await _run_streaming_payloads(
+        ["Rate it a ** b **c. More text [d](https://x/_a_) and", " d** end."], strip_md=True
+    )
+
+    assert [text for text, _ in built] == [
+        "Rate it a ** b **c. ",
+        "More text d https://x/_a_ and d** end.",
+    ]
+
+
+@pytest.mark.parametrize("separator", [" ", "\n", "\r\n", "\r\n\r\n", "\n\n"])
+async def test_markdown_buffer_stays_bounded_on_long_turns(separator: str) -> None:
+    """A long turn is compacted at paragraph, line or sentence ends as it is spoken.
+
+    Without compaction every recheck strips the whole turn from the start,
+    which made long single-paragraph turns quadratic.
+    """
+    from easycat.session._streaming import _SentenceStreamBuffer
+    from easycat.strip_markdown import strip_markdown
+
+    text = "".join(
+        f"Sentence {i} has a [link](https://x/_a_/{i}) and **bold {i}** text.{separator}"
+        for i in range(125)
+    )
+    assert len(text) > 8000
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    buffer = _SentenceStreamBuffer(
+        tts_queue=tts_queue,
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=True,
+    )
+
+    longest_raw = 0
+    for start in range(0, len(text), 5):
+        await buffer.add_delta(text[start : start + 5])
+        longest_raw = max(longest_raw, len(buffer._text))
+    await buffer.flush()
+
+    # A few sentences' worth, not the whole turn.
+    assert longest_raw < 400
+    spoken = []
+    while not tts_queue.empty():
+        payload = tts_queue.get_nowait()
+        assert payload is not None
+        spoken.append(payload.text)
+    assert "".join(spoken).split() == strip_markdown(text, normalize_code_spans=True).split()
+
+
 async def test_markdown_buffer_commits_remainder_before_first_payload_handoff():
     """Cancellation after queueing must not leave emitted text pending."""
     from easycat.session._streaming import _SentenceStreamBuffer

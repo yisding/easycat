@@ -65,10 +65,50 @@ _MARKDOWN_RECHECK_CHARS = frozenset("`*_~])")
 # also warrants a markdown-mode recheck.
 _FIRST_CLAUSE_TRIGGER_CHARS = frozenset(",;:")
 
-# A paragraph break in the raw markdown of a turn: the only place the
-# markdown buffer tries to drop already-spoken raw text (see
-# ``_SentenceStreamBuffer._compact``).
-_PARAGRAPH_BREAK = "\n\n"
+# Places where the markdown buffer may drop already-spoken raw text (see
+# ``_SentenceStreamBuffer._compact``), most preferred first: a paragraph
+# break, a line ending, then a sentence end (the segmenter's terminators,
+# with the trailing space the ASCII ones need to end a sentence mid-line).
+_PARAGRAPH_BREAKS = ("\n\n", "\r\n\r\n")
+_SENTENCE_ENDS = (". ", "! ", "? ", "。", "！", "？", "．")
+
+
+def _compaction_cuts(raw: str, bound: int) -> list[int]:
+    """Return up to three raw offsets to try compacting at, most preferred first.
+
+    Only separators wholly inside ``raw[:bound]`` count.  A paragraph break
+    or line ending leaves the tail at a real line start.  A sentence end does
+    not, so it is offered only when the tail already starts with a letter
+    (no later delta can turn it into a heading, list, quote or rule marker)
+    and its line is not an ATX heading (whose closer, still to come, depends
+    on the opener in the head).
+    """
+    cuts: list[int] = []
+    paragraph = max(
+        (raw.rfind(sep, 0, bound) + len(sep) for sep in _PARAGRAPH_BREAKS if sep in raw),
+        default=0,
+    )
+    line = raw.rfind("\n", 0, bound) + 1
+    for cut in (paragraph, line, _last_sentence_cut(raw, bound)):
+        if cut > 0 and cut not in cuts:
+            cuts.append(cut)
+    return cuts
+
+
+def _last_sentence_cut(raw: str, bound: int) -> int:
+    """Return the offset after the last eligible sentence end before *bound*, or 0."""
+    best = 0
+    for sep in _SENTENCE_ENDS:
+        end = bound
+        while (found := raw.rfind(sep, best, end)) >= 0:
+            cut = found + len(sep)
+            if raw[cut : cut + 1].isalpha() and not raw.startswith(
+                "#", raw.rfind("\n", 0, cut) + 1
+            ):
+                best = cut
+                break
+            end = found + len(sep) - 1
+    return best
 
 
 def _spoken_prefix_end(stripped: str, spoken: str) -> int | None:
@@ -195,13 +235,16 @@ class _SentenceStreamBuffer:
         self._prepare = prepare_tts_payload
         self._strip_md = strip_md
         # Plain mode: text not yet queued.  Markdown mode: the raw markdown
-        # of the turn (minus any compacted, already-spoken paragraphs).
+        # of the turn, minus any already-spoken text ``_compact`` dropped.
         self._text = ""
-        # Markdown mode only.  ``_spoken`` is the stripped text already split
-        # off for TTS, a prefix of the stripped form of ``_text``.  The
+        # Markdown mode only.  The stripped turn is ``_carry`` (already
+        # stripped text, empty except after the fallback in
+        # ``_unspoken_window``) followed by the stripped form of ``_text``;
+        # ``_spoken`` is the prefix of it already split off for TTS.  The
         # snapshot records the last strip that lined up with ``_spoken``: raw
-        # length and stripped text (which starts with ``_spoken``), so the
-        # fallback in ``_unspoken_window`` can rebuild what is left to speak.
+        # length and stripped turn (which starts with ``_spoken``), so the
+        # fallback can rebuild what is left to speak.
+        self._carry = ""
         self._spoken = ""
         self._snapshot_raw_len = 0
         self._snapshot_stripped = ""
@@ -235,6 +278,7 @@ class _SentenceStreamBuffer:
         """
         if not self._suppressed:
             self._text = text
+            self._carry = ""
             self._snapshot_raw_len = 0
             self._snapshot_stripped = self._spoken
 
@@ -322,6 +366,12 @@ class _SentenceStreamBuffer:
         # not leave the queued prefix outside ``_spoken`` for a later flush to
         # duplicate.
         self._spoken += ready
+        if self._carry and self._spoken.startswith(self._carry):
+            # The carried text is all spoken: fold it away.
+            carried = len(self._carry)
+            self._carry = ""
+            self._spoken = self._spoken[carried:]
+            self._snapshot_stripped = self._snapshot_stripped[carried:]
         self._compact()
         queued = False
         if ready:
@@ -350,37 +400,54 @@ class _SentenceStreamBuffer:
 
     def _reset_text(self) -> None:
         self._text = ""
+        self._carry = ""
         self._spoken = ""
         self._snapshot_raw_len = 0
         self._snapshot_stripped = ""
+
+    def _strip_turn(self, *, final: bool) -> str:
+        """Return the stripped turn: ``_carry`` plus ``_text`` stripped once.
+
+        The final strip is complete and trimmed, as ``strip_markdown``'s
+        default (``trim=True`` also drops a heading closer on the last line);
+        the raw text's leading whitespace is kept where it meets the carry.
+        """
+        if not final:
+            return self._carry + strip_markdown(self._text, trim=False, normalize_code_spans=True)
+        stripped = strip_markdown(self._text, trim=True, normalize_code_spans=True)
+        if self._carry:
+            lead = self._text[: len(self._text) - len(self._text.lstrip())]
+            stripped = f"{self._carry}{lead}{stripped}".lstrip()
+        return stripped
 
     def _unspoken_window(self, *, final: bool = False) -> str:
         """Strip the raw markdown once and return the part not yet spoken.
 
         Stripping is prefix-stable once markdown is closed, so the stripped
-        text almost always starts with ``_spoken``.  Two exceptions are
+        turn almost always starts with ``_spoken``.  Two exceptions are
         handled without ever speaking a spoken prefix twice:
 
         - Only ``_spoken``'s trailing whitespace changed (a heading closer
           arriving after ``# Title. `` was split off drops the space before
           it): line up on the spoken content and skip the whitespace.
         - Anything else (a delimiter pairing across the spoken boundary in a
-          way ``markdown_open_state`` did not foresee): rebuild the buffer as
-          the stripped text left unspoken at the last consistent strip plus
-          the raw text that arrived since, and speak that.  That is the old
-          re-stripping behaviour, confined to this rare path: nothing is
-          repeated or lost, though the rebuilt remainder is stripped again.
+          way ``markdown_open_state`` did not foresee, e.g. a later ``**``
+          closing one that was spoken literally): move the stripped text
+          left unspoken at the last consistent strip into ``_carry`` and keep
+          only the raw text that arrived since in ``_text``.  The carry is
+          never stripped again, so a URL or escaped marker in it survives;
+          the price is that markdown in the new raw text can no longer pair
+          with anything before the snapshot, so it may be spoken literally.
         """
-        stripped = strip_markdown(self._text, trim=final, normalize_code_spans=True)
+        stripped = self._strip_turn(final=final)
         # The final strip is trimmed, so line up on the spoken text without
         # its leading whitespace.
         start = _spoken_prefix_end(stripped, self._spoken.lstrip() if final else self._spoken)
         if start is None:
-            self._text = (
-                self._snapshot_stripped[len(self._spoken) :] + self._text[self._snapshot_raw_len :]
-            )
+            self._carry = self._snapshot_stripped[len(self._spoken) :]
+            self._text = self._text[self._snapshot_raw_len :]
             self._spoken = ""
-            stripped = strip_markdown(self._text, trim=final, normalize_code_spans=True)
+            stripped = self._strip_turn(final=final)
             start = 0
         self._spoken = stripped[:start]
         self._snapshot_raw_len = len(self._text)
@@ -388,29 +455,35 @@ class _SentenceStreamBuffer:
         return stripped[start:]
 
     def _compact(self) -> None:
-        """Drop raw paragraphs that are fully spoken, bounding re-strip cost.
+        """Drop fully spoken raw text, bounding the per-recheck strip cost.
 
-        Each recheck strips the whole raw text, so a long turn would cost
-        O(n^2).  Cut at the last paragraph break only when that is provably
+        Each recheck strips the whole raw text, so without this a long turn
+        costs O(n^2).  Up to three candidate cuts are tried (see
+        ``_compaction_cuts``), and one is taken only when it is provably
         invisible: the stripped head is wholly inside ``_spoken`` and
-        stripping head and tail apart gives exactly the current stripped text
-        (so no markdown construct pairs across the cut).
+        stripping head and tail apart gives exactly the current stripped
+        turn, so no markdown construct pairs across the cut.
         """
-        cut = self._text.rfind(_PARAGRAPH_BREAK)
-        if cut < 0 or not self._spoken:
+        if self._carry or not self._spoken:
             return
-        cut += len(_PARAGRAPH_BREAK)
-        head = strip_markdown(self._text[:cut], trim=False, normalize_code_spans=True)
-        if not self._spoken.startswith(head):
+        raw = self._text
+        # Markdown usually makes raw text longer than its stripped form, so
+        # the unspoken stripped tail maps to at least that many raw
+        # characters; searching only before it is a hint, the checks are exact.
+        bound = len(raw) - (len(self._snapshot_stripped) - len(self._spoken))
+        for cut in _compaction_cuts(raw, bound):
+            head = strip_markdown(raw[:cut], trim=False, normalize_code_spans=True)
+            if not self._spoken.startswith(head):
+                continue
+            tail = raw[cut:]
+            tail_stripped = strip_markdown(tail, trim=False, normalize_code_spans=True)
+            if head + tail_stripped != self._snapshot_stripped:
+                continue
+            self._text = tail
+            self._spoken = self._spoken[len(head) :]
+            self._snapshot_raw_len = len(tail)
+            self._snapshot_stripped = tail_stripped
             return
-        tail = self._text[cut:]
-        tail_stripped = strip_markdown(tail, trim=False, normalize_code_spans=True)
-        if head + tail_stripped != self._snapshot_stripped:
-            return
-        self._text = tail
-        self._spoken = self._spoken[len(head) :]
-        self._snapshot_raw_len = len(tail)
-        self._snapshot_stripped = self._snapshot_stripped[len(head) :]
 
     def _split_pending(self, text: str) -> tuple[str, str]:
         """Split *text* for emission, honouring the first-payload window.
