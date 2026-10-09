@@ -21,7 +21,7 @@ from functools import partial
 
 _MD_DETECT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\*\*(?=\S).+?(?<=\S)\*\*"),  # bold **text**
-    re.compile(r"__(?=\S).+?(?<=\S)__"),  # bold __text__
+    re.compile(r"(?<!\w)__(?=\S).+?(?<=\S)__(?!\w)"),  # bold __text__ (not intraword)
     re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)"),  # italic *text*
     re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)"),  # italic _text_
     re.compile(r"~~.+?~~"),  # strikethrough
@@ -66,7 +66,9 @@ _FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
 _INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)((?:[^\n]|\n(?![ \t]*\r?\n))+?)(?<!`)\1(?!`)")
 _CODE_SPAN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
-_BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)([\s\S]+?)(?<=\S)__")
+# Underscore runs inside a word never open or close emphasis (CommonMark), so
+# ``foo__bar__baz`` and ``test__one.py`` keep their underscores.
+_BOLD_UNDERSCORE_RE = re.compile(r"(?<!\w)__(?=\S)([\s\S]+?)(?<=\S)__(?!\w)")
 _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 _STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~")
@@ -586,9 +588,12 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # Labels and image alt text stay in the text: they are prose.
     result = _replace_markdown_links_and_images(result, _stash_link_destination(code_spans))
 
-    # 5. Bold (before italic so ** is matched before *)
-    result = _BOLD_ASTERISK_RE.sub(r"\1", result)
+    # 5. Bold (before italic so ** is matched before *).  ``__`` goes first:
+    # its intraword guard reads the character beside the run, and stripping
+    # ``**`` first would turn the punctuation CommonMark sees there into a
+    # word character (``**left**__right__`` would keep ``__right__``).
     result = _BOLD_UNDERSCORE_RE.sub(r"\1", result)
+    result = _BOLD_ASTERISK_RE.sub(r"\1", result)
 
     # 6. Italic
     result = _ITALIC_ASTERISK_RE.sub(r"\1", result)
