@@ -88,6 +88,14 @@ class TestHasMarkdown:
         """Underscores in snake_case identifiers should not trigger detection."""
         assert not has_markdown("The variable my_variable_name is defined")
 
+    @pytest.mark.parametrize(
+        "text",
+        ["foo__bar__baz", "Files test__one.py and test__two.py", "a__b c__d"],
+    )
+    def test_intraword_double_underscores_not_detected(self, text: str) -> None:
+        """Intraword ``__`` runs cannot open or close bold, so they are not markdown."""
+        assert not has_markdown(text)
+
     def test_empty_string(self) -> None:
         assert not has_markdown("")
 
@@ -349,6 +357,33 @@ class TestStripMarkdown:
         """Underscores inside words (snake_case) should not be stripped."""
         text = "Set my_variable to 5"
         assert strip_markdown(text) == "Set my_variable to 5"
+
+    @pytest.mark.parametrize(
+        "text",
+        ["foo__bar__baz", "Files test__one.py and test__two.py", "a__b c__d", "a__b\nc__d"],
+    )
+    def test_intraword_double_underscores_preserved(self, text: str) -> None:
+        """Intraword ``__`` runs are literal text, not bold delimiters.
+
+        The bold-underscore pass previously had no word-boundary guards, so any
+        two intraword ``__`` runs were deleted (``foo__bar__baz`` -> ``foobarbaz``).
+        """
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("Run my__script and __real bold__ ok", "Run my__script and real bold ok"),
+            ("(__bold__)", "(bold)"),
+            ("__bold__.", "bold."),
+            ("__init__", "init"),
+            ("call obj.__init__() now", "call obj.init() now"),
+            ("a**b**c", "abc"),
+        ],
+    )
+    def test_word_bounded_bold_still_stripped(self, text: str, expected: str) -> None:
+        """Bold delimiters at word boundaries (and intraword ``**``) still strip."""
+        assert strip_markdown(text) == expected
 
     def test_multiple_formatting_combined(self) -> None:
         text = "# Welcome\n\nThis is **bold** and *italic* with a [link](http://x.com)."

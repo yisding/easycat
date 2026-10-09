@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 _MD_DETECT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\*\*(?=\S).+?(?<=\S)\*\*"),  # bold **text**
-    re.compile(r"__(?=\S).+?(?<=\S)__"),  # bold __text__
+    re.compile(r"(?<!\w)__(?=\S).+?(?<=\S)__(?!\w)"),  # bold __text__ (not intraword)
     re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)"),  # italic *text*
     re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)"),  # italic _text_
     re.compile(r"~~.+?~~"),  # strikethrough
@@ -57,7 +57,9 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
 _FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
 _INLINE_CODE_RE = re.compile(r"`(.+?)`")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
-_BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)([\s\S]+?)(?<=\S)__")
+# Underscore runs inside a word never open or close emphasis (CommonMark), so
+# ``foo__bar__baz`` and ``test__one.py`` keep their underscores.
+_BOLD_UNDERSCORE_RE = re.compile(r"(?<!\w)__(?=\S)([\s\S]+?)(?<=\S)__(?!\w)")
 _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 _STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~")
