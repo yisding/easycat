@@ -1660,6 +1660,98 @@ async def test_turn_control_from_bot_speaking_handler_settles(
     assert not session.is_running
 
 
+async def _handler_graceful_stop(session: Session) -> None:
+    await session.stop()
+
+
+async def _handler_reset_state(session: Session) -> None:
+    await session.reset_state()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "speaking_event",
+    [BotStoppedSpeaking, BotStartedSpeaking],
+    ids=["stopped", "started"],
+)
+@pytest.mark.parametrize(
+    ("action", "stops_session"),
+    [
+        (_handler_force_stop, True),
+        (_handler_graceful_stop, True),
+        (_handler_cancel_turn, False),
+        (_handler_reset_state, False),
+    ],
+    ids=["force_stop", "graceful_stop", "cancel_turn", "reset_state"],
+)
+async def test_turn_control_from_spoken_prompt_handler_settles(
+    speaking_event: type[BotStartedSpeaking | BotStoppedSpeaking],
+    action: Callable[[Session], Awaitable[None]],
+    stops_session: bool,
+) -> None:
+    """Turn control from a handler inside a spoken ``prompt_agent`` must not cancel it.
+
+    In a spoken application prompt the bot-speaking handlers run inside the
+    streaming TTS consumer, an adopted child of the application-prompt task
+    rather than of ``active_turn_task``. ``stop()`` and
+    ``cancel_application_prompt()`` only recognized the prompt task itself as
+    the caller, so force stop, ``cancel_turn()`` and ``reset_state()``
+    cancelled the handler's own enclosing prompt (``CancelledError`` inside
+    the handler, session left half-stopped), and graceful stop waited on that
+    prompt until the 5s prompt bound expired.
+    """
+    session = Session(
+        SessionConfig(
+            transport=_HeldOpenTransport(chunks=[]),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="hello"),
+            agent=FastDoneAgent(),
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+    handler_done = asyncio.Event()
+    handler_calls = 0
+    handler_errors: list[BaseException] = []
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, errors.append)
+
+    async def _handler(_event: object) -> None:
+        nonlocal handler_calls
+        handler_calls += 1
+        if handler_calls > 1:
+            return
+        try:
+            await action(session)
+        except BaseException as exc:
+            handler_errors.append(exc)
+            raise
+        finally:
+            handler_done.set()
+
+    session.event_bus.subscribe(speaking_event, _handler)
+
+    await session.start()
+    prompt = asyncio.create_task(session.prompt_agent("Say hi.", speak=True))
+    try:
+        # Well under the 5s graceful prompt bound: the handler's stop must not
+        # wait on its own enclosing prompt task.
+        await asyncio.wait_for(handler_done.wait(), timeout=2.0)
+        assert await asyncio.wait_for(prompt, timeout=2.0) == "Quick reply."
+        assert session._turn_manager.state is TurnManagerState.IDLE
+        assert session._turn_runner.active_application_prompt is None
+    finally:
+        if not prompt.done():
+            prompt.cancel()
+        await asyncio.wait_for(session.stop(force=True), timeout=2.0)
+
+    assert handler_errors == []
+    assert errors == []
+    if stops_session:
+        assert session._closed
+
+
 @pytest.mark.asyncio
 async def test_session_reset_clears_agent_history():
     runner = AgentRunner(StreamingUpperAgent())

@@ -1674,8 +1674,14 @@ class Session:
                 self._finalize_debug_backends()
                 return
 
+            # A caller inside a streaming turn helper (a bot-speaking handler,
+            # agent stream code) runs under the turn or application-prompt
+            # task that awaits it: cancelling or awaiting that enclosing task
+            # from here is a circular cancel/await, so treat the whole
+            # adopted chain like ``current_task``.
+            enclosing_tasks = self._tts_scheduler.enclosing_turn_tasks()
             prompt_task = self._turn_runner.active_application_prompt
-            prompt_is_current = prompt_task is current_task
+            prompt_is_current = prompt_task is not None and prompt_task in enclosing_tasks
             if (
                 not force
                 and prompt_task is not None
@@ -1744,11 +1750,6 @@ class Session:
                 # (it cancels the consumer task, ends the stream, and drains
                 # scoped commit/pause tasks) — matching 92f8ebf's move away
                 # from an ad-hoc stt_task cancel here.
-                # A caller inside a streaming turn helper (a bot-speaking
-                # handler, agent stream code) runs under ``active_turn_task``:
-                # cancelling and awaiting that enclosing task from here is a
-                # circular cancel/await, so exclude the whole chain.
-                enclosing_tasks = self._tts_scheduler.enclosing_turn_tasks()
                 current_tts_task = self._tts_scheduler.active_turn_task
                 if (
                     current_tts_task
@@ -1989,6 +1990,11 @@ class Session:
             self._turn_runner.cancel_application_prompt(),
             name="application_prompt_cancel_cleanup",
         )
+        # The cleanup runs on behalf of this caller. Adopting it keeps a
+        # caller inside a spoken application prompt (a bot-speaking handler)
+        # visible to ``cancel_application_prompt``, which then leaves the
+        # caller's own enclosing prompt task to wind down cooperatively.
+        self._tts_scheduler.adopt_turn_child_task(prompt_cleanup)
         # Let the cleanup task request cancellation and the prompt task observe
         # it before returning from the cutoff path, without waiting for
         # cancellation-resistant teardown. Both handoffs are event-loop turns;

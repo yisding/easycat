@@ -1767,7 +1767,11 @@ class TurnRunner:
             return True
         if self._application_prompt_cancel_token is not None:
             self._application_prompt_cancel_token.cancel()
-        if previous is asyncio.current_task():
+        # A caller inside the prompt (directly, or from a bot-speaking handler
+        # or agent stream code running in one of its adopted streaming
+        # helpers) must not cancel or await its own enclosing prompt task.
+        # The cancelled token winds the prompt down once the caller returns.
+        if previous in self._tts.enclosing_turn_tasks():
             return False
         previous.cancel()
         done, _ = await asyncio.wait({previous}, timeout=drain_timeout_s)
