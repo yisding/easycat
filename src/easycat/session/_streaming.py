@@ -84,6 +84,10 @@ _CLOSER_RUN = f"[{re.escape(_SENTENCE_CLOSING_CHARS)}]*"
 _SENTENCE_END_RE = re.compile(
     f"[.!?]{_CLOSER_RUN}[{_SENTENCE_BLANKS}]+|[。！？．]{_CLOSER_RUN}[{_SENTENCE_BLANKS}]*"
 )
+# An ATX heading opener at a line start, mirroring ``strip_markdown``'s
+# ``_HEADING_RE`` (``^#{1,6}\s+``): one to six ``#`` then whitespace, which
+# includes a newline for an empty heading.  ``#123`` or seven ``#`` is text.
+_ATX_HEADING_START_RE = re.compile(r"#{1,6}\s")
 # The ASCII non-letters a tail may start with (see ``_is_safe_tail_start``).
 _SAFE_ASCII_TAIL_STARTS = frozenset("\"'([")
 
@@ -157,7 +161,7 @@ def _last_sentence_cut(raw: str, bound: int) -> int:
         if not _is_safe_tail_start(raw[cut : cut + 1], match.group()):
             continue
         line_start = raw.rfind("\n", 0, cut) + 1
-        if raw.startswith("#", line_start):
+        if _ATX_HEADING_START_RE.match(raw, line_start):
             # Every earlier sentence end on this line is in the heading too.
             heading_line_start = line_start
             continue

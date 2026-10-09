@@ -966,6 +966,7 @@ _NON_LETTER_SENTENCES = {
     # Closers outside the old list and blank runs other than one space.
     "brace-double-space": "Brace sentence {i} ends {{see the note.}}  ",
     "cjk-space": "第{i}句话结束了。 ",
+    "hash-start": "Issue {i} is fixed. ",
 }
 
 
@@ -981,7 +982,9 @@ async def test_markdown_buffer_stays_bounded_on_non_letter_sentences(kind: str) 
     from easycat.strip_markdown import strip_markdown
 
     sentence = _NON_LETTER_SENTENCES[kind]
-    text, count = "", 0
+    # A line that merely starts with ``#`` (not ``#`` then a blank) is no
+    # ATX heading, so its sentence ends are still cuts.
+    text, count = ("#123 " if kind == "hash-start" else ""), 0
     while len(text) <= 8000:
         text += sentence.format(i=count)
         count += 1
@@ -1103,6 +1106,16 @@ def test_compaction_cuts_skip_sentence_ends_in_headings() -> None:
 
     raw = '# Title. "Quoted." (Aside.) more'
     assert _compaction_cuts(raw, len(raw)) == []
+    for raw in ("# Title. More", "###### H6. More", "##\tTabbed. More"):
+        assert _compaction_cuts(raw, len(raw)) == [], raw
     # The line cut, then a sentence cut on the line before the heading.
     raw = 'Intro. "Lead." Next\n# Title. "Quoted." more'
     assert _compaction_cuts(raw, len(raw)) == [raw.index("\n") + 1, raw.index("Next")]
+
+
+def test_compaction_cuts_allow_sentence_ends_on_non_heading_hash_lines() -> None:
+    """Only ``#`` to ``######`` then a blank opens an ATX heading."""
+    from easycat.session._streaming import _compaction_cuts
+
+    for raw in ("#123 is fixed. Next", "####### seven. Next", "#hashtag day. Next"):
+        assert _compaction_cuts(raw, len(raw)) == [raw.index("Next")], raw
