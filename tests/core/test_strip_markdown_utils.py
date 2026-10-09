@@ -743,3 +743,32 @@ def test_strip_markdown_link_label_repeating_destination_is_kept_verbatim(
     """LLMs often write ``[url](url)``; the label is then a URL, not prose."""
     assert strip_markdown(text) == expected
     assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "[![build](https://img.shields.io/b.svg)](https://ci.example.com/_a_)",
+            "build https://ci.example.com/_a_",
+        ),
+        ("[[docs](https://x/_a_)](https://y/_b_)", "docs https://x/_a_ https://y/_b_"),
+        (
+            "[see [docs](https://x/__a__) _now_](https://y/*b*)",
+            "see docs https://x/__a__ now https://y/*b*",
+        ),
+        # Nested image alt text is prose even when its image URL has underscores.
+        ("[![_alt_](https://i/_x_.png)](https://y/_b_)", "alt https://y/_b_"),
+    ],
+    ids=["badge", "link-in-link-label", "link-and-emphasis-in-label", "image-alt-is-prose"],
+)
+def test_strip_markdown_nested_link_destinations_are_kept_verbatim(
+    text: str, expected: str
+) -> None:
+    """URLs of links nested in a label are stashed like the outer destination.
+
+    Label rendering recurses into nested links (gh 1209 follow-up); the inner
+    URL must get the same protection or its ``_`` / ``*`` read as emphasis.
+    """
+    assert strip_markdown(text) == expected
+    assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected
