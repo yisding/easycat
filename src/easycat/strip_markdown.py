@@ -550,9 +550,12 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # 3/4. Links/images with balanced destination parsing.
     result = _replace_markdown_links_and_images(result)
 
-    # 5. Bold (before italic so ** is matched before *)
-    result = _BOLD_ASTERISK_RE.sub(r"\1", result)
+    # 5. Bold (before italic so ** is matched before *).  ``__`` goes first:
+    # its intraword guard reads the character beside the run, and stripping
+    # ``**`` first would turn the punctuation CommonMark sees there into a
+    # word character (``**left**__right__`` would keep ``__right__``).
     result = _BOLD_UNDERSCORE_RE.sub(r"\1", result)
+    result = _BOLD_ASTERISK_RE.sub(r"\1", result)
 
     # 6. Italic
     result = _ITALIC_ASTERISK_RE.sub(r"\1", result)

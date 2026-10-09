@@ -385,6 +385,28 @@ class TestStripMarkdown:
         """Bold delimiters at word boundaries (and intraword ``**``) still strip."""
         assert strip_markdown(text) == expected
 
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("**left**__right__", "leftright"),
+            ("__left__**right**", "leftright"),
+            ("**__x__**", "x"),
+            ("__**x**__", "x"),
+            ("**__init__**", "init"),
+            ("[__x__](u)", "x u"),
+        ],
+    )
+    def test_bold_underscore_beside_other_markup_still_stripped(
+        self, text: str, expected: str
+    ) -> None:
+        """``__`` touching ``**`` is judged by the ``*`` CommonMark sees there.
+
+        Stripping ``**`` first exposed the word character inside it to the
+        intraword guard, so ``**left**__right__`` kept ``__right__`` for TTS.
+        """
+        assert strip_markdown(text) == expected
+        assert strip_markdown(text, trim=False) == expected
+
     def test_multiple_formatting_combined(self) -> None:
         text = "# Welcome\n\nThis is **bold** and *italic* with a [link](http://x.com)."
         result = strip_markdown(text)
