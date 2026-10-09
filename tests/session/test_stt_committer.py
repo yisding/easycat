@@ -999,6 +999,48 @@ async def test_non_endpoint_final_does_not_end_native_endpoint_turn() -> None:
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_reconnect_on_silent_fresh_socket_still_ends_native_turn() -> None:
+    """Regression: a socket drop after the user stopped talking hung the turn.
+
+    In native-endpointing mode the committer ends the turn only on an
+    endpoint-bearing FINAL. The fresh ElevenLabs socket receives only silence,
+    so its server VAD never commits; the provider's bounded reconnect fallback
+    must still deliver the cut-off transcript and end the turn.
+    """
+    from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
+
+    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", final_transcript_timeout_s=0.05))
+    stt._running = True
+    stt._audio_pending_commit = True
+    stt._audio_epoch = 1
+    stt._partial_text = "what time is it"
+    committer, _stt, emitted, _no_turn, tm = _make_committer(
+        stt=stt,  # type: ignore[arg-type]
+        auto_turn=True,
+    )
+    committer.mark_active()
+    turn = _new_turn()
+    ended = asyncio.Event()
+
+    async def record_end_turn() -> None:
+        ended.set()
+
+    tm.end_turn = record_end_turn  # type: ignore[method-assign]
+    committer.start_event_loop(turn)
+
+    try:
+        await stt._on_reconnect()
+        await asyncio.sleep(0)
+        assert not ended.is_set()
+
+        await asyncio.wait_for(ended.wait(), timeout=1)
+        assert turn.stt_segments == ["what time is it"]
+        assert [e.text for e in emitted if isinstance(e, STTFinal)] == ["what time is it"]
+    finally:
+        await committer.cancel(turn)
+
+
+@pytest.mark.asyncio
 async def test_final_transcript_notifies_turn_manager_endpoint_hint() -> None:
     class _PunctuatedSTT(_RecordingSTT):
         async def commit_segment(self) -> bool:
