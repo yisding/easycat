@@ -58,8 +58,12 @@ _FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
 # Inline code span (CommonMark): a run of N backticks closed by the next run of
 # exactly N backticks, so a double-backtick span can carry a literal backtick.
 # The lookarounds pin both delimiter runs to their full length; an opener with
-# no matching closer is left as literal text.
-_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
+# no matching closer is left as literal text.  A span may wrap across line
+# endings but not across a blank line: a blank line ends the paragraph, and
+# pairing stray backticks from different paragraphs would swallow the prose
+# between them.
+_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)((?:[^\n]|\n(?![ \t]*\r?\n))+?)(?<!`)\1(?!`)")
+_CODE_SPAN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
 _BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)([\s\S]+?)(?<=\S)__")
 _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
@@ -155,7 +159,9 @@ def _stash_code_span(
 
 
 def _extract_inline_code(match: re.Match[str]) -> str:
-    code = match.group(2)
+    # CommonMark turns each line ending inside a code span into a space before
+    # the padding rule below, so a wrapped span reads as one line.
+    code = _CODE_SPAN_LINE_ENDING_RE.sub(" ", match.group(2))
     # CommonMark strips one space from each side when both are present and the
     # span is not all spaces; the padding lets a span start or end with a
     # backtick (a double-backtick span around " `a` " reads as "`a`").
