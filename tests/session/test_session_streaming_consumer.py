@@ -695,6 +695,16 @@ async def test_markdown_double_backtick_span_across_deltas_leaves_no_backticks()
     assert "".join(texts) == "First one. Use obj dot method open paren close paren now. Done."
 
 
+async def test_markdown_link_destination_keeps_underscores_across_deltas():
+    """The streamed (``trim=False``) path speaks a link URL verbatim (gh 1209)."""
+    deltas = ["Assets live at [docs](https://example.com/_next_/", "static). And *more* here."]
+    built = await _run_streaming_payloads(deltas, strip_md=True)
+
+    assert "".join(text for text, _ in built) == (
+        "Assets live at docs https://example.com/_next_/static. And more here."
+    )
+
+
 async def test_markdown_buffer_commits_remainder_before_first_payload_handoff():
     """Cancellation after queueing must not leave emitted text pending."""
     from easycat.session._streaming import _SentenceStreamBuffer
