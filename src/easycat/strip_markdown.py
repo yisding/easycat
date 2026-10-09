@@ -13,6 +13,7 @@ content.
 from __future__ import annotations
 
 import re
+import string
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
@@ -336,6 +337,30 @@ class _DelimiterScanner:
         return self._next_closes.get(start)
 
 
+# CommonMark backslash escapes apply only to ASCII punctuation: ``\ `` is a
+# literal backslash followed by a (still significant) space.
+_ESCAPABLE = frozenset(string.punctuation)
+
+
+def _escapes_next(text: str, idx: int) -> bool:
+    """Return True when ``text[idx]`` is a backslash escaping the next char."""
+    return text[idx] == "\\" and idx + 1 < len(text) and text[idx + 1] in _ESCAPABLE
+
+
+def _find_unescaped(text: str, start: int, stop: Callable[[str], bool]) -> int:
+    """Return the first index from *start* whose char satisfies *stop*,
+    skipping backslash-escaped characters, or ``len(text)`` when none does."""
+    i = start
+    while i < len(text):
+        if _escapes_next(text, i):
+            i += 2
+            continue
+        if stop(text[i]):
+            return i
+        i += 1
+    return len(text)
+
+
 def _extract_markdown_destination_url(destination: str) -> str:
     """Extract URL token from markdown destination, dropping optional titles."""
     token = destination.strip()
@@ -343,20 +368,24 @@ def _extract_markdown_destination_url(destination: str) -> str:
         return ""
 
     if token.startswith("<"):
-        end = token.find(">")
-        if end > 1:
+        end = _find_unescaped(token, 1, lambda ch: ch == ">")
+        if 1 < end < len(token):
             return token[1:end].strip()
 
-    i = 0
-    while i < len(token):
-        ch = token[i]
-        if ch == "\\":
-            i += 2
-            continue
-        if ch.isspace():
-            break
-        i += 1
-    return token[:i].strip()
+    return token[: _find_unescaped(token, 0, str.isspace)].strip()
+
+
+# A link title after the destination: one ``"..."``, ``'...'`` or ``(...)``
+# group (backslash escapes allowed) that must run to the end of the
+# destination text.
+_LINK_TITLE_RE = re.compile(
+    r'"(?:[^"\\]|\\.)*+"' r"|'(?:[^'\\]|\\.)*+'" r"|\((?:[^()\\]|\\.)*+\)",
+    re.DOTALL,
+)
+
+# Characters ``str.splitlines`` treats as line breaks. A link destination never
+# crosses one: not between ``]`` and ``(``, and not inside ``<...>``.
+_LINE_BREAKS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +405,14 @@ class _MarkdownReferenceScanner:
         self._length = len(text)
         self._labels = _DelimiterScanner(text, "[", "]")
         self._destinations = _DelimiterScanner(text, "(", ")", track_recovery=True)
+        # Lookup tables for destination validation, built on first use by
+        # ``_build_destination_index``.
+        self._next_space: list[int] | None = None
+        self._next_non_space: list[int] = []
+        self._next_angle_stop: list[int] = []
+        # End of the title match starting at each position (-1 when none),
+        # so nested candidates sharing one long title scan it only once.
+        self._title_ends: dict[int, int] = {}
 
     def __iter__(self) -> Iterator[_MarkdownReference]:
         index = 0
@@ -430,6 +467,12 @@ class _MarkdownReferenceScanner:
             recovery_close = self._destinations.find_next_close(destination_start)
             return None, recovery_close + 1 if recovery_close is not None else None
 
+        if not self._is_destination(destination_start + 1, destination_end):
+            # Bracketed prose followed by a parenthetical, such as
+            # ``[Enter] (the big key on the right)``, is not a link. Leave it
+            # intact rather than keeping only its first word as a "URL".
+            return None, start + 1
+
         label = self._text[label_start + 1 : label_end].strip()
         destination = self._text[destination_start + 1 : destination_end]
         return (
@@ -444,11 +487,93 @@ class _MarkdownReferenceScanner:
         )
 
     def _destination_start(self, index: int) -> int | None:
+        # Spaces between ``]`` and ``(`` are tolerated, but never a line
+        # break: a parenthetical on the next line is prose, not a destination.
         while index < self._length and self._text[index].isspace():
+            if self._text[index] in _LINE_BREAKS:
+                return None
             index += 1
         if index >= self._length or self._text[index] != "(":
             return None
         return index
+
+    def _is_destination(self, start: int, end: int) -> bool:
+        """Return True when ``text[start:end]`` is a link destination.
+
+        Valid destinations (after trimming whitespace) are empty, ``<...>``
+        without a line break, or one token without whitespace, each
+        optionally followed by whitespace and a single title (see
+        ``_LINK_TITLE_RE``) that runs to the end. Anything else is prose. The
+        lookup tables keep each check cheap, so nested invalid candidates such
+        as ``[a]([a]([a](x y)))`` still scan in linear time overall.
+        """
+        text = self._text
+        while start < end and text[start].isspace():
+            start += 1
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        if start == end:
+            return True
+
+        next_space = self._next_space
+        if next_space is None:
+            next_space = self._build_destination_index()
+        token_end = -1
+        if text[start] == "<":
+            angle = self._next_angle_stop[start + 1]
+            if start + 1 < angle < end and text[angle] == ">":
+                token_end = angle + 1
+        if token_end < 0:
+            token_end = min(next_space[start], end)
+        if token_end == end:
+            return True
+        if not text[token_end].isspace():
+            return False
+        return self._title_end(self._next_non_space[token_end]) == end
+
+    def _title_end(self, title_start: int) -> int:
+        """Return where the title starting at ``title_start`` ends, or -1.
+
+        The title pattern cannot extend past its first unescaped closing
+        delimiter, so the unbounded match end is the only ``end`` for which a
+        bounded full match can succeed. Caching it per start keeps nested
+        candidates that share one title linear instead of rescanning it at
+        every nesting level.
+        """
+        title_end = self._title_ends.get(title_start)
+        if title_end is None:
+            match = _LINK_TITLE_RE.match(self._text, title_start)
+            title_end = match.end() if match is not None else -1
+            self._title_ends[title_start] = title_end
+        return title_end
+
+    def _build_destination_index(self) -> list[int]:
+        """Index the next whitespace, the next non-whitespace and the next
+        unescaped ``>`` or line break for every position, in linear time."""
+        text = self._text
+        length = self._length
+        # ``escaped[i]``: ``text[i]`` is ASCII punctuation escaped by an
+        # unescaped backslash. Whitespace is never escapable, so a backslash
+        # before it does not stop it ending the destination token.
+        escaped = [False] * length
+        for i in range(1, length):
+            escaped[i] = text[i - 1] == "\\" and not escaped[i - 1] and text[i] in _ESCAPABLE
+
+        next_space = [length] * (length + 1)
+        next_non_space = [length] * (length + 1)
+        next_angle_stop = [length] * (length + 1)
+        for i in range(length - 1, -1, -1):
+            ch = text[i]
+            is_space = ch.isspace()
+            next_space[i] = i if is_space else next_space[i + 1]
+            next_non_space[i] = next_non_space[i + 1] if is_space else i
+            stop = (ch == ">" and not escaped[i]) or ch in _LINE_BREAKS
+            next_angle_stop[i] = i if stop else next_angle_stop[i + 1]
+
+        self._next_space = next_space
+        self._next_non_space = next_non_space
+        self._next_angle_stop = next_angle_stop
+        return next_space
 
 
 def _replace_markdown_links_and_images(

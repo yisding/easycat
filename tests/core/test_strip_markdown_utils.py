@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import sys
 from collections.abc import Callable
 
 import pytest
@@ -139,6 +141,136 @@ class TestMarkdownReferenceScanner:
     ) -> None:
         assert has_markdown(text) is detected
         assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Press [Enter] (the big key on the right) to continue.",
+            "Choose [yes] (or no) now.",
+            "Press [Enter](the big key) now.",
+            "Item [1] (see above).",
+            "![chart] (shown below)",
+            '[Docs](https://example.test "title" extra)',
+            "[Enter]\n(Return)",
+            "[Enter]\r\n(Return)",
+            "[Enter]\v(Return)",
+            "[Enter]\f(Return)",
+            "[Enter]\x85(Return)",
+            "[Enter]\u2028(Return)",
+            "[Enter]\u2029(Return)",
+            "[a](<b\u2028c>)",
+        ],
+    )
+    def test_bracketed_prose_before_parenthetical_is_kept_verbatim(self, text: str) -> None:
+        """A parenthetical that is not a valid link destination is prose.
+
+        The scanner used to treat any ``[x] (...)`` as a link and keep only the
+        first word inside the parentheses as its "URL", so ``Press [Enter]
+        (the big key on the right)`` was spoken as ``Press Enter the``. A line
+        break between ``]`` and ``(`` also made one.
+        """
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[Enter] (Return)", "Enter Return"),
+            ("[Docs](https://example.test 'title')", "Docs https://example.test"),
+            ("[Docs](https://example.test (title))", "Docs https://example.test"),
+            ('[Docs](https://example.test "a \\" b")', "Docs https://example.test"),
+            ("[Docs](<https://example.test/a b> 'title')", "Docs https://example.test/a b"),
+            ("[Docs]( https://example.test )", "Docs https://example.test"),
+            ("[Docs]()", "Docs"),
+            ("![alt](img.png 'caption')", "alt"),
+            ("[x](not a url) then [ok](url)", "[x](not a url) then ok url"),
+            ("[x]([ok](url) more)", "[x](ok url more)"),
+            ("[x](foo\\ 'title')", "x foo\\"),
+        ],
+    )
+    def test_valid_destinations_with_titles_still_render(self, text: str, expected: str) -> None:
+        assert has_markdown(text) is True
+        assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[x](<foo\\>bar>)", "x foo\\>bar"),
+            ("[x](<foo\\>bar> 'title')", "x foo\\>bar"),
+        ],
+    )
+    def test_escaped_angle_close_stays_inside_destination(self, text: str, expected: str) -> None:
+        """A backslash-escaped ``>`` does not close an ``<...>`` destination,
+        and the rendered URL runs to the unescaped closing ``>``."""
+        assert has_markdown(text) is True
+        assert strip_markdown(text) == expected
+
+    def test_backslash_does_not_escape_whitespace_in_destination(self) -> None:
+        """CommonMark only escapes ASCII punctuation: ``foo\\ bar`` is two
+        tokens, so the parenthetical is not a destination and stays prose."""
+        text = "Use [x](foo\\ bar) here."
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda n: "[a](" * n + "x y" + ")" * n,
+            lambda n: "[a](<" * n + "x y" + ")" * n,
+        ],
+        ids=["nested_tokens", "nested_angle"],
+    )
+    def test_nested_invalid_destinations_are_left_verbatim(
+        self, build: Callable[[int], str]
+    ) -> None:
+        text = build(2000)
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("prefix", "inner"),
+        [
+            ("[a](", 'x "{title}"'),
+            ("[a](<", 'x> "{title}"'),
+            ("[a](", "x ({title})"),
+        ],
+        ids=["double_quoted", "angle_double_quoted", "parenthesized"],
+    )
+    def test_nested_candidates_sharing_one_title_scan_it_once(
+        self, monkeypatch: pytest.MonkeyPatch, prefix: str, inner: str
+    ) -> None:
+        """Every nesting level resolves to the same title start; only the
+        innermost level's destination ends with the title, so it alone is a
+        link. Each title start must be matched once, not once per level, or
+        the scan turns quadratic in the nesting depth times the title length.
+        """
+        import easycat.strip_markdown as module
+
+        title_pattern = module._LINK_TITLE_RE
+        title_starts: list[int] = []
+
+        class _CountingPattern:
+            def match(self, text: str, pos: int = 0) -> re.Match[str] | None:
+                title_starts.append(pos)
+                return title_pattern.match(text, pos)
+
+            def fullmatch(self, text: str, pos: int = 0, endpos: int = sys.maxsize) -> object:
+                title_starts.append(pos)
+                return title_pattern.fullmatch(text, pos, endpos)
+
+        monkeypatch.setattr(module, "_LINK_TITLE_RE", _CountingPattern())
+        n = 2000
+        text = prefix * n + inner.format(title="t" * n) + ")" * n
+        expected = prefix * (n - 1) + "a x" + ")" * (n - 1)
+
+        assert has_markdown(text) is True
+        assert title_starts
+        assert len(title_starts) == len(set(title_starts))
+
+        title_starts.clear()
+        assert strip_markdown(text) == expected
+        assert title_starts
+        assert len(title_starts) == len(set(title_starts))
 
     def test_scanner_yields_consecutive_typed_references(self) -> None:
         references = list(
