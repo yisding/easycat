@@ -323,9 +323,16 @@ class SmartTurnONNX:
 
         if len(audio_array) > max_samples:
             audio_array = audio_array[-max_samples:]
-        elif len(audio_array) < max_samples:
-            padding = max_samples - len(audio_array)
-            audio_array = np.pad(audio_array, (0, padding), mode="constant", constant_values=0)
+        # Smart-turn classifies the *trailing* model window, so short turns are
+        # zero-padded at the front: the most recent sample must sit at index -1.
+        # Right-padding would append seconds of digital silence after the
+        # speech, which the model reads as a finished turn whatever was said.
+        # Pad to at least the extractor's fixed window so a ``max_audio_seconds``
+        # below it does not fall back to the extractor's internal right-padding.
+        window_samples = max(max_samples, self._feature_extractor.n_samples)
+        if len(audio_array) < window_samples:
+            padding = window_samples - len(audio_array)
+            audio_array = np.pad(audio_array, (padding, 0), mode="constant", constant_values=0)
 
         input_features = self._feature_extractor(
             audio_array,
