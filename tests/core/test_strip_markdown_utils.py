@@ -132,6 +132,64 @@ class TestMarkdownReferenceScanner:
         assert has_markdown(text) is detected
         assert strip_markdown(text) == expected
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Press [Enter] (the big key on the right) to continue.",
+            "Choose [yes] (or no) now.",
+            "Press [Enter](the big key) now.",
+            "Item [1] (see above).",
+            "![chart] (shown below)",
+            '[Docs](https://example.test "title" extra)',
+            "[Enter]\n(Return)",
+            "[Enter]\r\n(Return)",
+        ],
+    )
+    def test_bracketed_prose_before_parenthetical_is_kept_verbatim(self, text: str) -> None:
+        """A parenthetical that is not a valid link destination is prose.
+
+        The scanner used to treat any ``[x] (...)`` as a link and keep only the
+        first word inside the parentheses as its "URL", so ``Press [Enter]
+        (the big key on the right)`` was spoken as ``Press Enter the``. A line
+        break between ``]`` and ``(`` also made one.
+        """
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("[Enter] (Return)", "Enter Return"),
+            ("[Docs](https://example.test 'title')", "Docs https://example.test"),
+            ("[Docs](https://example.test (title))", "Docs https://example.test"),
+            ('[Docs](https://example.test "a \\" b")', "Docs https://example.test"),
+            ("[Docs](<https://example.test/a b> 'title')", "Docs https://example.test/a b"),
+            ("[Docs]( https://example.test )", "Docs https://example.test"),
+            ("[Docs]()", "Docs"),
+            ("![alt](img.png 'caption')", "alt"),
+            ("[x](not a url) then [ok](url)", "[x](not a url) then ok url"),
+            ("[x]([ok](url) more)", "[x](ok url more)"),
+        ],
+    )
+    def test_valid_destinations_with_titles_still_render(self, text: str, expected: str) -> None:
+        assert has_markdown(text) is True
+        assert strip_markdown(text) == expected
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda n: "[a](" * n + "x y" + ")" * n,
+            lambda n: "[a](<" * n + "x y" + ")" * n,
+        ],
+        ids=["nested_tokens", "nested_angle"],
+    )
+    def test_nested_invalid_destinations_are_left_verbatim(
+        self, build: Callable[[int], str]
+    ) -> None:
+        text = build(2000)
+        assert has_markdown(text) is False
+        assert strip_markdown(text) == text
+
     def test_scanner_yields_consecutive_typed_references(self) -> None:
         references = list(
             _MarkdownReferenceScanner('![diagram](image.png) [Docs](https://example.test "title")')
