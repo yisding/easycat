@@ -898,6 +898,9 @@ async def test_elevenlabs_reconnect_promotes_uncommitted_partial_at_socket_bound
     event = stt._event_queue.get_nowait()
     assert event.type is STTEventType.FINAL
     assert event.text == "before reconnect"
+    # A socket drop is a transport boundary, not an endpoint: the promoted
+    # FINAL must not end a native-endpointing (realtime + VAD) turn.
+    assert event.ends_turn is False
     assert stt._partial_text == ""
     assert not stt._audio_pending_commit
     assert stt._committed_through_epoch == 1
@@ -919,7 +922,47 @@ async def test_elevenlabs_reconnect_promotes_partial_for_lost_manual_commit():
     event = stt._event_queue.get_nowait()
     assert event.type is STTEventType.FINAL
     assert event.text == "manual segment"
+    assert event.ends_turn is False
     assert stt._partial_text == ""
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_reconnect_without_partial_emits_no_final():
+    """A reconnect with uncommitted audio but no partial has nothing to promote."""
+    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))
+    stt._audio_pending_commit = True
+    stt._audio_epoch = 1
+
+    await stt._on_reconnect()
+
+    assert stt._event_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_reconnect_final_does_not_end_native_endpoint_turn():
+    """Regression: a reconnect-boundary FINAL ended the user's turn mid-utterance.
+
+    The default realtime + VAD config resolves to native endpointing, so the
+    committer auto-ends the turn on every FINAL with ``ends_turn=True``. The
+    FINAL promoted only because the socket dropped used to carry the default
+    ``True`` and truncated the user's utterance; it must carry ``False``.
+    """
+    from easycat.stt.factory import _CATALOG
+
+    config = ElevenLabsSTTConfig(api_key="k")
+    assert "native_endpointing" in _CATALOG.capabilities_for_config(config)
+
+    stt = ElevenLabsSTT(config)
+    stt._audio_pending_commit = True
+    stt._audio_epoch = 1
+    stt._partial_text = "I would like to"
+
+    await stt._on_reconnect()
+
+    event = stt._event_queue.get_nowait()
+    assert event.type is STTEventType.FINAL
+    assert event.text == "I would like to"
+    assert event.ends_turn is False
 
 
 @pytest.mark.asyncio
@@ -943,6 +986,8 @@ async def test_elevenlabs_realtime_promotes_partial_on_commit_timeout(monkeypatc
     finals = [e for e in events if e.type == STTEventType.FINAL]
     assert len(finals) == 1
     assert finals[0].text == "hello wor"
+    # The end-of-turn commit-timeout promotion is the real end of the turn.
+    assert finals[0].ends_turn is True
 
 
 @pytest.mark.asyncio

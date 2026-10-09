@@ -416,7 +416,9 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 "ElevenLabs reconnected with uncommitted audio; containing the "
                 "prior socket epoch before continuing"
             )
-            self._promote_partial_to_final()
+            # A dropped socket is a transport boundary, not an endpoint: the
+            # promoted FINAL must not end a native-endpointing turn.
+            self._promote_partial_to_final(ends_turn=False)
 
     async def _send_realtime(self, chunk: AudioChunk) -> None:
         payload_audio = self._audio_resampler.process(
@@ -568,8 +570,13 @@ class ElevenLabsSTT(WebSocketSTTBase):
             )
         )
 
-    def _promote_partial_to_final(self) -> bool:
-        """Emit and clear the latest partial when its socket epoch cannot finish."""
+    def _promote_partial_to_final(self, *, ends_turn: bool = True) -> bool:
+        """Emit and clear the latest partial when its socket epoch cannot finish.
+
+        ``ends_turn=False`` marks a transport-boundary FINAL (socket reconnect)
+        that must not end a native-endpointing turn; the end-of-turn commit
+        timeout promotion keeps the default ``True``.
+        """
         if not self._partial_text:
             return False
         self._emit_event(
@@ -577,6 +584,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 type=STTEventType.FINAL,
                 text=self._partial_text,
                 language=self._config.language,
+                ends_turn=ends_turn,
             )
         )
         self._partial_text = ""
