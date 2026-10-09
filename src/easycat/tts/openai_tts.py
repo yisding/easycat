@@ -102,6 +102,9 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
             timeout=httpx.Timeout(30.0, connect=10.0),
         )
         self._response: httpx.Response | None = None
+        # Set by stop() before it closes the live response so the resulting
+        # read error is treated as a graceful end of stream; reset per call.
+        self._stopping = False
         self._init_emit_tasks()
 
     async def warmup(self) -> None:
@@ -130,9 +133,9 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
 
     async def _iter_response_audio(self, response: httpx.Response) -> AsyncIterator[TTSEvent]:
         async for chunk in _iter_low_latency_pcm_chunks(
-            response.aiter_bytes(), should_stop=lambda: self._cancelled
+            response.aiter_bytes(), should_stop=lambda: self._cancelled or self._stopping
         ):
-            if self._cancelled:
+            if self._cancelled or self._stopping:
                 break
             if not chunk:
                 continue
@@ -149,6 +152,7 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
         The default input policy makes the scheduler deliver plain text here.
         """
         self._start_synthesis()
+        self._stopping = False
 
         text = coerce_tts_input(payload).text
 
@@ -188,25 +192,31 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
             )
             raise
         except httpx.StreamError as exc:
-            if not self._cancelled:
+            if not (self._cancelled or self._stopping):
                 raise
-            logger.debug("OpenAI TTS stream closed after cancel: %s", exc)
+            logger.debug("OpenAI TTS stream closed after cancel/stop: %s", exc)
         except httpx.HTTPError as exc:
-            if not self._cancelled:
+            if not (self._cancelled or self._stopping):
                 logger.error("OpenAI TTS HTTP error: %s", exc)
                 self._emit_provider_error(exc)
                 raise
-            # A connection error that races a barge-in cancel is expected; log
-            # at debug so the masked failure is still recoverable from a bundle.
-            logger.debug("OpenAI TTS HTTP error after cancel: %s", exc)
+            # A connection error that races a barge-in cancel or a graceful
+            # stop() closing the response is expected; log at debug so the
+            # masked failure is still recoverable from a bundle.
+            logger.debug("OpenAI TTS HTTP error after cancel/stop: %s", exc)
         finally:
             self._response = None
             self._end_synthesis()
 
     async def stop(self) -> None:
-        """Gracefully stop synthesis."""
+        """Gracefully stop synthesis.
+
+        Closes any active response; the in-flight ``synthesize()`` then ends
+        quietly instead of surfacing the self-inflicted read error.
+        """
         await super().stop()
         if self._response is not None:
+            self._stopping = True
             await self._response.aclose()
 
     async def cancel(self) -> None:
