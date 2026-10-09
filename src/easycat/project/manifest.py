@@ -73,9 +73,13 @@ def _resolve_python_agent(reference: str) -> Any:
         )
     try:
         module = import_module(module_path)
-    except ImportError as exc:
+    except Exception as exc:
+        # Not just ImportError: a SyntaxError or any exception the module raises
+        # at import time is equally "could not import". BaseException (SystemExit,
+        # KeyboardInterrupt) still propagates.
         raise EASYCAT_E605(
-            reference=reference, detail=f"could not import {module_path!r}: {exc}"
+            reference=reference,
+            detail=f"could not import {module_path!r}: {type(exc).__name__}: {exc}",
         ) from exc
     target: Any = module
     for part in attribute_path.split("."):
