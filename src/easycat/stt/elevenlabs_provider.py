@@ -79,7 +79,10 @@ class ElevenLabsSTTConfig:
     realtime_commit_strategy: str = "vad"  # "vad" or "manual"
     # Bounded wait (seconds) for ElevenLabs' ``committed_transcript`` after an
     # end-of-turn commit before promoting the most recent partial to FINAL.
-    # Defaults to ``_FINAL_TRANSCRIPT_TIMEOUT_S`` (read at construction time)
+    # Also bounds how long a native-endpointing (VAD) turn waits for speech on
+    # a reconnected socket before the transcript the drop cut off ends the
+    # turn (the fresh socket has nothing to VAD-commit if the user had already
+    # stopped talking). Defaults to ``_FINAL_TRANSCRIPT_TIMEOUT_S`` (read at construction time)
     # so the provider tests can still monkeypatch that module constant.
     final_transcript_timeout_s: float = field(default_factory=lambda: _FINAL_TRANSCRIPT_TIMEOUT_S)
     realtime_include_timestamps: bool = False
@@ -242,6 +245,15 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # Causes the first subsequent ``committed_transcript`` to be
         # dropped instead of emitting a second FINAL for the same turn.
         self._dropping_pending_final: bool = False
+        # Native endpointing (realtime + server VAD) only: the partial a
+        # socket reconnect cut off, held until we learn whether the user kept
+        # talking. Speech on the fresh socket releases it as a mid-turn FINAL
+        # (``ends_turn=False``); if the fresh socket stays silent, the server
+        # has no audio to VAD-commit, so ``_reconnect_endpoint_timer`` releases
+        # it as the turn's endpoint (``ends_turn=True``) instead of leaving the
+        # turn open until the user happens to speak again.
+        self._reconnect_held_text: str = ""
+        self._reconnect_endpoint_timer: asyncio.TimerHandle | None = None
         self._audio_resampler = PCM16StreamResampler(config.realtime_sample_rate)
 
     def _resolve_event_bus(self) -> Any | None:
@@ -365,6 +377,8 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._audio_pending_commit = False
         self._partial_text = ""
         self._dropping_pending_final = False
+        self._cancel_reconnect_endpoint_timer()
+        self._reconnect_held_text = ""
         self._audio_epoch = 0
         self._committed_through_epoch = 0
         self._transcribed_through_epoch = 0
@@ -395,6 +409,14 @@ class ElevenLabsSTT(WebSocketSTTBase):
             or bool(self._pending_manual_commits)
             or self._manual_commit_inflight > 0
         )
+        # Only the server's VAD can end a native-endpointing turn. With no
+        # manual commit in flight, nothing else is driving this turn's
+        # endpoint, so the cut-off partial must be held for the fallback.
+        server_vad_owns_endpoint = (
+            self._config.realtime_commit_strategy == "vad"
+            and not self._pending_manual_commits
+            and self._manual_commit_inflight == 0
+        )
         self._audio_resampler.reset()
         self._audio_pending_commit = False
         # Fresh socket: nothing is buffered server-side and any manual commit
@@ -416,9 +438,76 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 "ElevenLabs reconnected with uncommitted audio; containing the "
                 "prior socket epoch before continuing"
             )
-            # A dropped socket is a transport boundary, not an endpoint: the
-            # promoted FINAL must not end a native-endpointing turn.
-            self._promote_partial_to_final(ends_turn=False)
+            if server_vad_owns_endpoint:
+                self._hold_partial_at_reconnect()
+            else:
+                # A dropped socket is a transport boundary, not an endpoint:
+                # the promoted FINAL must not end a native-endpointing turn.
+                self._promote_partial_to_final(ends_turn=False)
+
+    def _hold_partial_at_reconnect(self) -> None:
+        """Hold the cut-off partial until the fresh socket shows what follows.
+
+        A socket drop is a transport boundary, not an endpoint, so the partial
+        must not end the turn while the user may still be talking. But the
+        fresh socket starts with an empty server-side buffer: if the user had
+        already stopped, it only ever receives silence, ElevenLabs' VAD has
+        nothing to commit, and no endpoint-bearing FINAL would ever arrive.
+        Hold the text and arm a bounded fallback (``final_transcript_timeout_s``,
+        the same bound used for a stalled end-of-turn commit) that releases it
+        as the turn's endpoint unless speech on the fresh socket releases it
+        first as a mid-turn segment.
+        """
+        if not self._partial_text:
+            return
+        # Any newer speech would already have released an older hold, so this
+        # only matters if two drops land without a partial in between.
+        self._release_reconnect_held_final(ends_turn=False)
+        self._reconnect_held_text = self._partial_text
+        self._partial_text = ""
+        timer: asyncio.TimerHandle | None = None
+
+        def _fire() -> None:
+            if timer is not self._reconnect_endpoint_timer:
+                return
+            self._reconnect_endpoint_timer = None
+            if not self._running:
+                # end_stream() owns the release from here; never emit after it.
+                return
+            logger.warning(
+                "No speech from ElevenLabs within %.1fs of reconnecting; ending the "
+                "turn with the %d-char transcript cut off by the dropped socket",
+                self._config.final_transcript_timeout_s,
+                len(self._reconnect_held_text),
+            )
+            self._release_reconnect_held_final(ends_turn=True)
+
+        timer = asyncio.get_running_loop().call_later(
+            self._config.final_transcript_timeout_s, _fire
+        )
+        self._reconnect_endpoint_timer = timer
+
+    def _cancel_reconnect_endpoint_timer(self) -> None:
+        timer = self._reconnect_endpoint_timer
+        self._reconnect_endpoint_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _release_reconnect_held_final(self, *, ends_turn: bool) -> None:
+        """Emit the transcript held at a reconnect boundary, once."""
+        self._cancel_reconnect_endpoint_timer()
+        text = self._reconnect_held_text
+        if not text:
+            return
+        self._reconnect_held_text = ""
+        self._emit_event(
+            STTEvent(
+                type=STTEventType.FINAL,
+                text=text,
+                language=self._config.language,
+                ends_turn=ends_turn,
+            )
+        )
 
     async def _send_realtime(self, chunk: AudioChunk) -> None:
         payload_audio = self._audio_resampler.process(
@@ -446,9 +535,14 @@ class ElevenLabsSTT(WebSocketSTTBase):
         await self._append_realtime_audio(self._audio_resampler.finish())
 
     async def _on_commit_segment(self) -> bool:
+        # EasyCat is driving the endpoint: the held text precedes this segment.
+        self._release_reconnect_held_final(ends_turn=False)
         return await self._send_commit(wait_for_final=False)
 
     async def _end_realtime(self) -> None:
+        # The stream is ending: deliver any held reconnect-boundary text ahead
+        # of the final commit's transcript, and disarm its fallback timer.
+        self._release_reconnect_held_final(ends_turn=True)
         if self._ws is not None and self._audio_pending_commit:
             await self._send_commit(wait_for_final=True)
 
@@ -551,6 +645,9 @@ class ElevenLabsSTT(WebSocketSTTBase):
         text = msg.get("text", "")
         if not text:
             return
+        # Speech resumed on the fresh socket: the reconnect-held text is a
+        # mid-turn segment, and the server's VAD will endpoint the turn.
+        self._release_reconnect_held_final(ends_turn=False)
         self._partial_text = text
         # A partial means the server is transcribing audio it has not yet
         # committed, so there is genuinely uncommitted audio. Re-arm the
@@ -675,6 +772,9 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # Keep the control-boundary reconciliation above and release the waiter
         # below, but do not expose an empty FINAL to downstream consumers.
         if text:
+            # A silence-only (empty) commit is not speech, so it leaves a
+            # reconnect hold armed; a real transcript follows the held text.
+            self._release_reconnect_held_final(ends_turn=False)
             self._emit_event(
                 STTEvent(
                     type=STTEventType.FINAL,
@@ -689,6 +789,12 @@ class ElevenLabsSTT(WebSocketSTTBase):
             pending_commit.final_received.set()
         elif self._final_received is not None:
             self._final_received.set()
+
+    def _on_receive_loop_end(self) -> None:
+        # The socket is gone for good (or deliberately closed after
+        # _end_realtime already released): never strand held text behind the
+        # stream's terminal sentinel.
+        self._release_reconnect_held_final(ends_turn=True)
 
     def _pending_manual_commit_is_active(self, pending_commit: _PendingManualCommit) -> bool:
         return any(commit is pending_commit for commit in self._pending_manual_commits)
