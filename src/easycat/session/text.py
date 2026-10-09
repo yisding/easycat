@@ -24,8 +24,10 @@ Naming convention for this module:
 
 from __future__ import annotations
 
+import functools
 import re
 import struct
+from collections.abc import Callable
 
 import sentencesplit
 
@@ -136,7 +138,8 @@ def split_first_clause(text: str) -> tuple[str, str]:
     if not text.strip():
         return "", text
 
-    sentence_ends: frozenset[int] | None = None
+    # Run the segmenter at most once, and only if a terminator needs it.
+    sentence_ends = functools.cache(functools.partial(_stable_sentence_ends, text))
     for i, ch in enumerate(text):
         if ch not in _FIRST_CLAUSE_BOUNDARY_CHARS:
             continue
@@ -153,16 +156,27 @@ def split_first_clause(text: str) -> tuple[str, str]:
         if len(ready.strip()) < _FIRST_CLAUSE_MIN_CHARS:
             # Too short to ship on its own; keep scanning for a later boundary.
             continue
-        if ch in _FIRST_CLAUSE_SENTENCE_TERMINATORS:
-            if sentence_ends is None:
-                sentence_ends = _stable_sentence_ends(text)
-            if not _ends_sentence(text, i, sentence_ends):
-                # Abbreviation period ("Dr.", "e.g.") or a trailing boundary
-                # that could still shift once more text arrives.
-                continue
+        if ch in _FIRST_CLAUSE_SENTENCE_TERMINATORS and not _is_sentence_terminal_boundary(
+            text, i, sentence_ends
+        ):
+            continue
         return ready, text[end:]
 
     return "", text
+
+
+def _is_sentence_terminal_boundary(
+    text: str, index: int, sentence_ends: Callable[[], frozenset[int]]
+) -> bool:
+    """Whether the sentence terminator at *index* may end the first clause.
+
+    A terminator only counts when the segmenter also ends a stable sentence
+    there, so an abbreviation period (``"Dr."``, ``"e.g."``, ``"a.m."``) or a
+    trailing terminator that could still shift once more text arrives is not
+    a boundary.  *sentence_ends* lazily returns the
+    :func:`_stable_sentence_ends` offsets for *text*.
+    """
+    return _ends_sentence(text, index, sentence_ends())
 
 
 def _stable_sentence_ends(text: str) -> frozenset[int]:
