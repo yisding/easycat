@@ -138,6 +138,40 @@ class TestEscapedBacktickPairing:
         assert markdown_open_state(text) == (True, False)
 
 
+class TestFenceRunsInsideInlineSpans:
+    """Fences and inline spans share ``strip_markdown``'s left-to-right scan.
+
+    A triple-backtick run inside an already-open inline span is span content,
+    so the span's closer, not the inner run, decides whether it is closed.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "``a ```b``` c``",
+            "`a ```b``` c` done.",
+            "`x` ```py\ncode\n``` done.",
+            "`x ```y` z ``k``",
+        ],
+    )
+    def test_closed(self, text: str) -> None:
+        assert markdown_open_state(text) == (False, False)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "``a ```b",
+            "``a ```b``` c",
+            "`x` ```py\ncode",
+            # The span closes before the trailing ```, which a later ``` could
+            # still turn into a fence.
+            "`x ```y` z```",
+        ],
+    )
+    def test_open(self, text: str) -> None:
+        assert markdown_open_state(text) == (True, False)
+
+
 class TestEscapedBacktickFences:
     """An escaped backtick never opens or closes a fence, as in ``strip_markdown``.
 
@@ -160,6 +194,9 @@ class TestEscapedBacktickFences:
             r"Hello there. See \```x`` now.",
             # The fence after the escaped tick closes and the `` run pairs.
             r"\```x```. Next ``` ``",
+            # The `` run pairs and the ``` inside it is span content: the scan
+            # reaches the span first, so a later ``` cannot reopen it as a fence.
+            r"\```x```. Next ``",
         ],
     )
     def test_closed(self, text: str) -> None:
@@ -172,9 +209,6 @@ class TestEscapedBacktickFences:
             # strip_markdown leaves an unpaired `` run (and a lone ```) here,
             # so a later delta could still rewrite the text after it.
             r"\```x```.",
-            # The `` run pairs, but the lone ``` inside it could still open a
-            # fence with a later ```, which strip_markdown matches first.
-            r"\```x```. Next ``",
             # No fence here: what is left after the escape is an unpaired ``.
             "Hello there.\n\\```x",
             r"See \``` here.",

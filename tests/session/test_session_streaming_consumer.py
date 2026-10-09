@@ -746,6 +746,11 @@ _SPLIT_SWEEP_TEXTS = [
         "Intro sentence here.\n\n## Part two ##\nRead [https://x/_a_](https://x/_a_) now. "
         "**Bold** end.\n\nLast _para_ here."
     ),
+    # A triple-backtick run inside a double-backtick span is span content, and a
+    # fenced block after a closed span is still a block (no placeholder leaks).
+    "Use ``a ```b``` c`` here. Then `x` ```py\nprint(1)\n``` ran. Done.",
+    "Say `x ```y` z``` now. Then ``k`` ok. Done.",
+    "Not \\`code\\` here. Use ``a ```b``` c`` now. Done.",
 ]
 
 

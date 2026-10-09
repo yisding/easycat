@@ -48,7 +48,7 @@ def has_markdown(text: str) -> bool:
 
 def _extract_fenced_code(match: re.Match[str]) -> str:
     """Extract the body of a fenced code block, discarding the fence markers."""
-    body = match.group("code")
+    body = match.group("fence")
     # Strip the optional language identifier on the first line
     lines = body.split("\n", 1)
     if len(lines) == 2:
@@ -56,22 +56,36 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
     return body.strip()
 
 
-# Both code passes also match a backslash escape (``\\`` or ``\` ``) as an
-# alternative, so the left-to-right scan consumes escapes and code spans in
-# document order: an escaped backtick can neither open nor close a span, while
-# a backslash inside a span stays literal and never escapes its closing
-# backtick.  Only the ``code`` group is set for a real span.
-_FENCED_CODE_RE = re.compile(r"(?P<escape>\\[\\`])|```(?P<code>[\s\S]*?)```")
-# Inline code span (CommonMark): a run of N backticks closed by the next run of
-# exactly N backticks, so a double-backtick span can carry a literal backtick.
-# A run with no matching closer is consumed whole by the last alternative and
-# left as literal text, so the scan never restarts in the middle of a run.  A
-# span may wrap across line endings but not across a blank line: a blank line
-# ends the paragraph, and pairing stray backticks from different paragraphs
-# would swallow the prose between them.
-_INLINE_CODE_RE = re.compile(
+# Fenced blocks, inline code spans and backslash escapes are found in one
+# left-to-right scan, so whichever construct opens first owns the backticks
+# after it, as in CommonMark:
+#
+# - A backslash escape (``\\`` or ``\` ``) is consumed whole, so an escaped
+#   backtick can neither open nor close a span, while a backslash inside a span
+#   stays literal and never escapes its closing backtick.
+# - A fence (``fence`` group) is tried before an inline span at the same offset.
+#   Its closer takes the whole backtick run it starts in, so no match ends
+#   partway through a run: a leftover tick there could not pair with anything
+#   and its failed span search would rescan the rest of the paragraph.
+# - An inline span (``code`` group) is a run of N backticks closed by the next
+#   run of exactly N, so a double-backtick span can carry a literal backtick,
+#   and a triple-backtick run inside it is content rather than a nested fence.
+#   It may wrap across line endings but not across a blank line or a code
+#   fence line (up to three spaces, three or more backticks, no backtick
+#   after them): both end the paragraph, and pairing stray backticks across
+#   them would swallow the prose or the fenced block between them.
+# - A run with no matching closer is consumed whole by the last alternative
+#   and left as literal text, so the scan never restarts in the middle of it.
+#
+# Separate fence and inline passes stashed a fence first and then wrapped its
+# placeholder inside a surrounding inline span, where the restore pass never
+# expanded it and the stash index leaked into the spoken text.
+_CODE_SPAN_RE = re.compile(
     r"(?P<escape>\\[\\`])"
-    r"|(?P<run>`+)(?!`)(?P<code>(?:[^\n]|\n(?![ \t]*\r?\n))+?)(?<!`)(?P=run)(?!`)"
+    r"|```(?P<fence>[\s\S]*?)`{3,}"
+    r"|(?P<run>`+)(?!`)"
+    r"(?P<code>(?:[^\n]|\n(?![ \t]*\r?\n)(?! {0,3}```[^`\r\n]*(?:\r?\n|$)))+?)"
+    r"(?<!`)(?P=run)(?!`)"
     r"|`+"
 )
 _CODE_SPAN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
@@ -169,16 +183,26 @@ _SINGLE_CHAR_CODE_SPEECH: dict[str, str] = {
 _CODE_SPEECH_CHARACTERS = frozenset(_SINGLE_CHAR_CODE_SPEECH)
 
 
-def _stash_code_span(
-    code_spans: list[str], extractor: Callable[[re.Match[str]], str]
+def _stash_code_spans(
+    code_spans: list[str],
+    fenced_extractor: Callable[[re.Match[str]], str],
+    inline_extractor: Callable[[re.Match[str]], str],
 ) -> Callable[[re.Match[str]], str]:
-    """Protect code text from markdown passes, restoring it at the end."""
+    """Protect code text from markdown passes, restoring it at the end.
+
+    Each ``_CODE_SPAN_RE`` match is stashed with the extractor for its kind.
+    An escaped backtick becomes its literal stand-in; any other escape or an
+    unpaired backtick run outside a code span is left as text.
+    """
 
     def _replace(match: re.Match[str]) -> str:
-        if match.group("code") is None:
-            # A backslash escape or an unpaired backtick run outside any code
-            # span: leave it as text (the inline pass turns an escaped backtick
-            # into its literal stand-in).
+        if match.group("fence") is not None:
+            extractor = fenced_extractor
+        elif match.group("code") is not None:
+            extractor = inline_extractor
+        elif match.group("escape") == "\\`":
+            return _ESCAPED_BACKTICK
+        else:
             return match.group(0)
         code_spans.append(extractor(match))
         return f"{_CODE_TOKEN_OPEN}{len(code_spans) - 1}{_CODE_TOKEN_CLOSE}"
@@ -196,20 +220,6 @@ def _extract_inline_code(match: re.Match[str]) -> str:
     if code.startswith(" ") and code.endswith(" ") and code.strip(" "):
         return code[1:-1]
     return code
-
-
-def _stash_inline_code_span(
-    code_spans: list[str], extractor: Callable[[re.Match[str]], str]
-) -> Callable[[re.Match[str]], str]:
-    """Stash inline code spans and swap escaped backticks for their stand-in."""
-    stash = _stash_code_span(code_spans, extractor)
-
-    def _replace(match: re.Match[str]) -> str:
-        if match.group("escape") == "\\`":
-            return _ESCAPED_BACKTICK
-        return stash(match)
-
-    return _replace
 
 
 def _strip_heading_closing_sequence(match: re.Match[str], *, allow_at_text_end: bool) -> str:
@@ -742,8 +752,9 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     if normalize_code_spans:
         fenced_extractor = _extract_fenced_code_for_tts
         inline_extractor = _extract_inline_code_for_tts
-    result = _FENCED_CODE_RE.sub(_stash_code_span(code_spans, fenced_extractor), result)
-    result = _INLINE_CODE_RE.sub(_stash_inline_code_span(code_spans, inline_extractor), result)
+    result = _CODE_SPAN_RE.sub(
+        _stash_code_spans(code_spans, fenced_extractor, inline_extractor), result
+    )
 
     # 2a. Backslash-escaped emphasis markers are literal text: hide them from
     # the bold/italic/list/rule passes (code spans keep their escapes).
