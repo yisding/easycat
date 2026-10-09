@@ -261,6 +261,9 @@ class _OutboundHelperBuilder:
                 from_number=self._config.from_number,
                 enable_realtime_transcription=self._config.enable_realtime_transcription,
                 client=client,
+                # The manager speaks Twilio-shaped AMD kwargs; the Telnyx client
+                # translates them to ``answering_machine_detection`` at dial time.
+                **self._config.voicemail_detection.to_twilio_params(),
             )
             manager.dnc_list = self._dnc_list
             self._helpers.append(manager)
