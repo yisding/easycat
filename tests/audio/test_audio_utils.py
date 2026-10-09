@@ -201,6 +201,25 @@ RATE_PAIRS = [
     (48000, 8000),
     (48000, 16000),
     (48000, 24000),
+    (24000, 44100),
+    (44100, 16000),
+    (44100, 48000),
+    (48000, 44100),
+    (24000, 22050),
+    (48000, 22050),
+]
+
+# 44.1 kHz-family pairs whose float ratio is not exactly representable. The
+# linear fallback used to divide by that rounded ratio and drop one sample.
+FRACTIONAL_RATE_PAIRS = [
+    (48000, 44100),
+    (24000, 44100),
+    (24000, 22050),
+    (48000, 22050),
+    (24000, 11025),
+    (48000, 11025),
+    (44100, 48000),
+    (44100, 16000),
 ]
 
 
@@ -213,6 +232,40 @@ def test_resample_rate_pairs_sample_count(from_rate: int, to_rate: int):
     n_output = len(result) // 2
     expected = int(n_input * to_rate / from_rate)
     assert n_output == expected
+
+
+@pytest.mark.parametrize("n_input", [240, 480, 960])
+@pytest.mark.parametrize(
+    "from_rate,to_rate", list(dict.fromkeys(RATE_PAIRS + FRACTIONAL_RATE_PAIRS))
+)
+def test_linear_resample_sample_count_is_exact_for_fractional_ratios(
+    monkeypatch: pytest.MonkeyPatch, from_rate: int, to_rate: int, n_input: int
+) -> None:
+    """The linear fallback must emit floor(n * to_rate / from_rate) samples.
+
+    It used to compute ``int(n / (from_rate / to_rate))``. For 48 kHz -> 44.1 kHz
+    the rounded float ratio made 480 / ratio land at 440.999..., so every
+    10 ms frame that fell back to linear was one sample short.
+    """
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    data = struct.pack(f"<{n_input}h", *([500] * n_input))
+    n_output = len(au.resample(data, from_rate, to_rate)) // 2
+    assert n_output == (n_input * to_rate) // from_rate
+
+
+def test_linear_resample_48k_to_44k1_10ms_frame_yields_441_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 10 ms 48 kHz frame (480 samples) is exactly 441 samples at 44.1 kHz."""
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    data = struct.pack("<480h", *([500] * 480))
+    assert len(au._resample_linear(data, 48000, 44100)) // 2 == 441
+    data = struct.pack("<240h", *([500] * 240))
+    assert len(au._resample_linear(data, 24000, 44100)) // 2 == 441
 
 
 @pytest.mark.parametrize("from_rate,to_rate", RATE_PAIRS)
@@ -544,8 +597,11 @@ def test_stream_resampler_carries_split_sample_byte() -> None:
     assert stream.finish() == b""
 
 
-@pytest.mark.parametrize(("from_rate", "to_rate"), [(48_000, 16_000), (16_000, 24_000)])
-@pytest.mark.parametrize("sample_count", range(1, 12))
+@pytest.mark.parametrize(
+    ("from_rate", "to_rate"),
+    [(48_000, 16_000), (16_000, 24_000), *FRACTIONAL_RATE_PAIRS],
+)
+@pytest.mark.parametrize("sample_count", [*range(1, 12), 240, 480, 960])
 def test_linear_stream_resampler_short_input_count_matches_batch(
     monkeypatch: pytest.MonkeyPatch,
     from_rate: int,
@@ -564,6 +620,30 @@ def test_linear_stream_resampler_short_input_count_matches_batch(
     output += stream.finish()
 
     assert len(output) == len(au._resample_linear(data, from_rate, to_rate))
+
+
+@pytest.mark.parametrize(("from_rate", "to_rate"), [(24_000, 44_100), (44_100, 48_000)])
+@pytest.mark.parametrize("sample_count", [240, 480, 960])
+def test_linear_upsample_stream_matches_batch_for_fractional_ratios(
+    monkeypatch: pytest.MonkeyPatch,
+    from_rate: int,
+    to_rate: int,
+    sample_count: int,
+) -> None:
+    """Batch and streaming linear upsampling interpolate at identical positions.
+
+    Both compute each source position as ``divmod(i * from_rate, to_rate)``,
+    so with no anti-alias filter in play the output bytes must be equal.
+    """
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    data = struct.pack(f"<{sample_count}h", *range(sample_count))
+    stream = PCM16StreamResampler(to_rate)
+
+    output = stream.process(data, from_rate) + stream.finish()
+
+    assert output == au._resample_linear(data, from_rate, to_rate)
 
 
 def test_stream_resampler_reports_output_retained_until_finish() -> None:
