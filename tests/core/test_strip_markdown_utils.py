@@ -418,3 +418,64 @@ def test_strip_markdown_keeps_paragraph_break_inside_multi_paragraph_blockquote(
     marker and run the two quoted paragraphs together.
     """
     assert strip_markdown("> Quote one.\n>\n> Quote two.") == "Quote one.\n\nQuote two."
+
+
+# ── ATX heading closing sequences ──────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("# Title #", "Title"),
+        ("## Overview ##\n\nBody text.", "Overview\n\nBody text."),
+        ("### Steps ###   ", "Steps"),
+        ("#  Spaced  ##  ", "Spaced"),
+        ("# Title # #", "Title #"),
+        ("# **Bold** title #", "Bold title"),
+        ("# Title #\r\nBody", "Title\r\nBody"),
+        ("Intro.\n\n## Next ##\nMore.", "Intro.\n\nNext\nMore."),
+        ("# #", ""),
+    ],
+)
+def test_strip_markdown_removes_atx_heading_closing_sequence(text: str, expected: str) -> None:
+    """``# Title #`` is an ATX heading whose trailing ``#`` run is only decoration.
+
+    ``_HEADING_RE`` strips the opening marker but used to leave the closing
+    sequence, so TTS spoke a stray "hash"/"pound" after the heading text.
+    """
+    assert strip_markdown(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("# I love C#", "I love C#"),
+        ("# Title#", "Title#"),
+        ("# Title #x", "Title #x"),
+        ("Issue #5 #", "Issue #5 #"),
+        ("Issue #5 #\nNext", "Issue #5 #\nNext"),
+        ("## Foo \\#", "Foo \\#"),
+        ("####### Seven #", "####### Seven #"),
+        ("# Use `x #` here", "Use x # here"),
+        ("# **C #**", "C #"),
+        ("# *x #*", "x #"),
+        ("# ~~value #~~", "value #"),
+        ("# Title **#**", "Title #"),
+    ],
+)
+def test_strip_markdown_keeps_hash_that_is_not_a_heading_closer(text: str, expected: str) -> None:
+    """Only a whitespace-preceded ``#`` run ending a heading line is a closer."""
+    assert strip_markdown(text) == expected
+
+
+def test_strip_markdown_streaming_strips_heading_closer_only_at_end_of_line() -> None:
+    """A ``trim=False`` window may end mid-line, so the closer needs its newline."""
+    assert strip_markdown("## Overview ##\nBody", trim=False) == "Overview\nBody"
+    assert strip_markdown("# Title #", trim=False) == "Title #"
+
+
+def test_strip_markdown_heading_closer_scan_handles_long_lines() -> None:
+    """Closer detection stays linear on a long heading line full of ``#`` runs."""
+    body = " a #" * 20_000
+    assert strip_markdown(f"#{body}") == body.strip().removesuffix(" #")
+    assert strip_markdown(f"#{body}x") == f"{body}x".strip()
