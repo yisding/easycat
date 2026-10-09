@@ -705,6 +705,113 @@ async def test_markdown_link_destination_keeps_underscores_across_deltas():
     )
 
 
+@pytest.mark.parametrize(
+    ("deltas", "expected"),
+    [
+        # A URL that ends up in the unspoken remainder keeps its underscores.
+        (["Hello, [docs](https://x/_a_)", "."], ["Hello, docs https://x/_a_."]),
+        (
+            ["Hi. See [docs](https://x/_a_) and", " more text. Done."],
+            ["Hi. ", "See docs https://x/_a_ and more text. ", "Done."],
+        ),
+        # ... including a remainder spoken by the final flush.
+        (["Hello. A [d](https://x/_a_) b", " c"], ["Hello. ", "A d https://x/_a_ b c"]),
+        # Escaped emphasis is unescaped once, never read as italic afterwards.
+        (["Hello, a \\_b\\_ x", "."], ["Hello, a _b_ x."]),
+        # A heading closer arriving after its opener was stripped is dropped.
+        (["# Hello, world", " #\n"], ["Hello, world"]),
+        (["# Hi. #", "\nMore."], ["Hi. ", "More."]),
+    ],
+)
+async def test_markdown_streaming_strips_raw_text_once(
+    deltas: list[str], expected: list[str]
+) -> None:
+    """The buffer strips the raw markdown, never an already-stripped remainder.
+
+    It used to store the stripped remainder and strip it again on the next
+    recheck, so a URL's ``_a_`` became italic, ``\\_b\\_`` lost its
+    underscores and a lone heading closer ``#`` was spoken.
+    """
+    built = await _run_streaming_payloads(deltas, strip_md=True)
+
+    assert [text for text, _ in built] == expected
+
+
+_SPLIT_SWEEP_TEXTS = [
+    "Hi there. See [docs](https://x/_next_/a.b) now. Done.",
+    "Hello there, a \\_b\\_ x. And \\*c\\* too. Done.",
+    "# Hello, world #\nThen more text. Done.",
+    "First line here. Use `snake_case` and `a*b` please. Done.",
+    (
+        "Intro sentence here.\n\n## Part two ##\nRead [https://x/_a_](https://x/_a_) now. "
+        "**Bold** end.\n\nLast _para_ here."
+    ),
+]
+
+
+@pytest.mark.parametrize("text", _SPLIT_SWEEP_TEXTS)
+async def test_markdown_streaming_matches_one_shot_strip_at_every_split(text: str) -> None:
+    """Wherever the stream splits the text, the spoken text is ``strip_markdown`` of it."""
+    from easycat.strip_markdown import strip_markdown
+
+    expected = strip_markdown(text, normalize_code_spans=True)
+    mismatches = []
+    for split in range(len(text) + 1):
+        built = await _run_streaming_payloads([text[:split], text[split:]], strip_md=True)
+        spoken = "".join(payload for payload, _ in built)
+        if spoken != expected:
+            mismatches.append((split, spoken))
+
+    assert mismatches == []
+
+
+async def test_markdown_streaming_reinterpreted_spoken_prefix_is_not_repeated():
+    """Later text that rewrites an already-spoken prefix never re-speaks it.
+
+    ``!`` is spoken as the end of the first clause; the next delta turns it
+    into an image opener, so stripping the whole turn no longer starts with
+    the spoken text.  The fallback speaks only what is new, never the prefix
+    again and never dropping the link.
+    """
+    built = await _run_streaming_payloads(
+        ["That works really well!", "[chart](https://x/_c_) shows it."], strip_md=True
+    )
+
+    assert [text for text, _ in built] == [
+        "That works really well!",
+        "chart https://x/_c_ shows it.",
+    ]
+
+
+async def test_markdown_buffer_compacts_spoken_paragraphs():
+    """Fully spoken raw paragraphs are dropped so rechecks stay cheap."""
+    from easycat.session._streaming import _SentenceStreamBuffer
+
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    buffer = _SentenceStreamBuffer(
+        tts_queue=tts_queue,
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=True,
+    )
+
+    await buffer.add_delta("First **paragraph** is here, and done.\n\n")
+    await buffer.add_delta("Second [link](https://x/_a_) here. ")
+    await buffer.add_delta("Third _part_ ends")
+    assert "First" not in buffer._text
+    await buffer.flush()
+
+    spoken = []
+    while not tts_queue.empty():
+        payload = tts_queue.get_nowait()
+        assert payload is not None
+        spoken.append(payload.text)
+    assert spoken == [
+        "First paragraph is here, ",
+        "and done.\n\nSecond link https://x/_a_ here. ",
+        "Third part ends",
+    ]
+
+
 async def test_markdown_buffer_commits_remainder_before_first_payload_handoff():
     """Cancellation after queueing must not leave emitted text pending."""
     from easycat.session._streaming import _SentenceStreamBuffer
