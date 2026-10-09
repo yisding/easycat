@@ -56,7 +56,15 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
 
 
 _FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
-_INLINE_CODE_RE = re.compile(r"`(.+?)`")
+# Inline code span (CommonMark): a run of N backticks closed by the next run of
+# exactly N backticks, so a double-backtick span can carry a literal backtick.
+# The lookarounds pin both delimiter runs to their full length; an opener with
+# no matching closer is left as literal text.  A span may wrap across line
+# endings but not across a blank line: a blank line ends the paragraph, and
+# pairing stray backticks from different paragraphs would swallow the prose
+# between them.
+_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)((?:[^\n]|\n(?![ \t]*\r?\n))+?)(?<!`)\1(?!`)")
+_CODE_SPAN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
 _BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)([\s\S]+?)(?<=\S)__")
 _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
@@ -157,7 +165,15 @@ def _stash_code_span(
 
 
 def _extract_inline_code(match: re.Match[str]) -> str:
-    return match.group(1)
+    # CommonMark turns each line ending inside a code span into a space before
+    # the padding rule below, so a wrapped span reads as one line.
+    code = _CODE_SPAN_LINE_ENDING_RE.sub(" ", match.group(2))
+    # CommonMark strips one space from each side when both are present and the
+    # span is not all spaces; the padding lets a span start or end with a
+    # backtick (a double-backtick span around " `a` " reads as "`a`").
+    if code.startswith(" ") and code.endswith(" ") and code.strip(" "):
+        return code[1:-1]
+    return code
 
 
 def _strip_heading_closing_sequence(match: re.Match[str], *, allow_at_text_end: bool) -> str:
@@ -433,8 +449,15 @@ class _MarkdownReferenceScanner:
         return index
 
 
-def _replace_markdown_links_and_images(text: str) -> str:
-    """Render links as label+URL and images as alt text for voice output."""
+def _replace_markdown_links_and_images(
+    text: str, protect_destination: Callable[[str], str] | None = None
+) -> str:
+    """Render links as label+URL and images as alt text for voice output.
+
+    *protect_destination*, when given, maps a rendered link URL to the text
+    spliced in its place, so ``strip_markdown`` can stash the URL behind a
+    placeholder and keep the later emphasis passes away from it.
+    """
     if "[" not in text:
         return text
 
@@ -443,7 +466,7 @@ def _replace_markdown_links_and_images(text: str) -> str:
     changed = False
     for reference in _MarkdownReferenceScanner(text):
         out.append(text[cursor : reference.start])
-        out.append(_render_markdown_reference(reference))
+        out.append(_render_markdown_reference(reference, protect_destination))
         cursor = reference.end
         changed = True
     if not changed:
@@ -452,10 +475,38 @@ def _replace_markdown_links_and_images(text: str) -> str:
     return "".join(out)
 
 
-def _render_markdown_reference(reference: _MarkdownReference) -> str:
+def _render_markdown_reference(
+    reference: _MarkdownReference, protect_destination: Callable[[str], str] | None = None
+) -> str:
     if reference.is_image:
         return reference.label
-    return " ".join(part for part in (reference.label, reference.destination_url) if part)
+    label, url = reference.label, reference.destination_url
+    if url and protect_destination is not None:
+        # A label that repeats the destination (``[https://x/_a_](https://x/_a_)``,
+        # common in LLM output) is a URL too, so it gets the same protection;
+        # every other label stays prose.
+        if label == url:
+            label = protect_destination(label)
+        url = protect_destination(url)
+    return " ".join(part for part in (label, url) if part)
+
+
+def _stash_link_destination(code_spans: list[str]) -> Callable[[str], str]:
+    """Protect a rendered link URL from markdown passes, restoring it at the end.
+
+    The URL is spoken verbatim, so ``_`` / ``*`` / ``~~`` inside it (Next.js
+    ``/_next_/`` paths) must not be read as emphasis.  It shares the code-span
+    stash; because the final restore is a single pass, the URL is resolved to
+    its final text here: escaped-emphasis stand-ins become their characters
+    and any code-span placeholder already inside it is expanded.
+    """
+
+    def _replace(url: str) -> str:
+        url = _restore_code_spans(url.translate(_RESTORE_ESCAPED_EMPHASIS), code_spans)
+        code_spans.append(url)
+        return f"{_CODE_TOKEN_OPEN}{len(code_spans) - 1}{_CODE_TOKEN_CLOSE}"
+
+    return _replace
 
 
 def _has_markdown_link_or_image(text: str) -> bool:
@@ -529,8 +580,11 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
         partial(_strip_heading_closing_sequence, allow_at_text_end=trim), result
     )
 
-    # 3/4. Links/images with balanced destination parsing.
-    result = _replace_markdown_links_and_images(result)
+    # 3/4. Links/images with balanced destination parsing.  A rendered link
+    # URL is stashed like a code span so the emphasis, strikethrough, heading
+    # and list passes below never rewrite it (``/_next_/`` keeps its ``_``).
+    # Labels and image alt text stay in the text: they are prose.
+    result = _replace_markdown_links_and_images(result, _stash_link_destination(code_spans))
 
     # 5. Bold (before italic so ** is matched before *)
     result = _BOLD_ASTERISK_RE.sub(r"\1", result)
@@ -560,7 +614,7 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     result = _HR_RE.sub("", result)
 
     # 13. Restore escaped emphasis markers as literal characters, then the
-    # protected code spans in one substitution pass.
+    # protected code spans and link URLs in one substitution pass.
     result = result.translate(_RESTORE_ESCAPED_EMPHASIS)
     result = _restore_code_spans(result, code_spans)
 
