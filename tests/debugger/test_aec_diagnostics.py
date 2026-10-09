@@ -674,3 +674,152 @@ def test_aec_diagnostics_late_interruption_not_clamped_into_prefix(monkeypatch):
     assert out["interruption_frames"] == [20]
     # The self-echo spike in the analyzed tail is reported, not suppressed.
     assert [hit["frame"] for hit in out["self_echo"]] == [4]
+
+
+# ── flat (SQLite / crash-dump) journal records ───────────────────
+
+
+def _flat_journal_bundle(tmp_path, rows, blobs):
+    """Write ``rows`` into a crash-dump SQLite journal and load it flat."""
+    import hashlib
+    import json
+    import sqlite3
+
+    from easycat.debug.bundle import RunBundle
+
+    artifacts = tmp_path / "artifacts"
+    refs = {}
+    for key, blob in blobs.items():
+        digest = hashlib.sha256(blob).hexdigest()
+        (artifacts / digest[:2]).mkdir(parents=True, exist_ok=True)
+        (artifacts / digest[:2] / f"{digest}.bin").write_bytes(blob)
+        refs[key] = digest
+    db = tmp_path / "journal.sqlite"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE journal (sequence INTEGER, session_id TEXT, kind TEXT, name TEXT, "
+        "wall_ns INTEGER, mono_ns INTEGER, turn_id TEXT, data TEXT, error_type TEXT, "
+        "error_msg TEXT, input_ref TEXT, output_ref TEXT, tags TEXT)"
+    )
+    for seq, name, mono_ns, data, output_key in rows:
+        conn.execute(
+            "INSERT INTO journal VALUES (?,'s','event',?,?,?,'t1',?,NULL,NULL,NULL,?,NULL)",
+            (seq, name, mono_ns, mono_ns, json.dumps(data), refs.get(output_key)),
+        )
+    conn.commit()
+    conn.close()
+    return RunBundle.from_partial_journal(db, artifacts)
+
+
+def test_aec_diagnostics_reads_flat_mono_ns_from_sqlite_journal(tmp_path):
+    """A barge-in in a flat SQLite journal must not be reported as self-echo.
+
+    Regression: crash-dump journals loaded via ``RunBundle.from_partial_journal``
+    carry ``mono_ns`` at the top level (no ``timing`` key). The AEC path only
+    read ``timing.mono_ns``, so every interruption record was skipped
+    (``interruption_frames == []``) and the genuine barge-in energy spike was
+    misreported as the bot hearing itself.
+    """
+    from easycat.debugger._aec_routes import _aec_diagnostics_for_turn
+    from easycat.debugger._sources import _run_bundle_source
+
+    base = 1_000_000_000
+    bundle = _flat_journal_bundle(
+        tmp_path,
+        [
+            (1, "stage_complete", base, {"stage": "audio"}, "post"),
+            (2, "assistant_interruption_notified", base + 1_000_000, {}, None),
+        ],
+        {"post": _tone_pcm(8000, 320)},
+    )
+    record = next(iter(bundle.records()))
+    assert "timing" not in record and isinstance(record["mono_ns"], int)
+
+    out = _aec_diagnostics_for_turn(_run_bundle_source(bundle, label="j.sqlite"), "t1")
+
+    assert out["interruption_frames"] == [0]
+    assert out["self_echo"] == []
+
+
+def test_aec_diagnostics_flat_records_match_nested_timing_records():
+    """Flat and nested record shapes yield identical interruption/self-echo output."""
+    from easycat.debugger._aec_routes import _aec_diagnostics_for_turn
+
+    post_pcm = _tone_pcm(0, 320 * 4) + _tone_pcm(8000, 320) + _tone_pcm(0, 320 * 10)
+    post_pcm += _tone_pcm(8000, 320) + _tone_pcm(0, 320 * 4)
+    fmt = {"stage": "audio", "sample_rate": 16000, "channels": 1, "sample_width": 2}
+
+    def build(shape):
+        def ts(mono_ns):
+            return {"timing": {"mono_ns": mono_ns}} if shape == "nested" else {"mono_ns": mono_ns}
+
+        return [
+            {
+                "sequence": 1,
+                "name": "stage_complete",
+                "turn_id": "t1",
+                "output_ref": "post",
+                "data": fmt,
+                **ts(5_000),
+            },
+            {
+                "sequence": 2,
+                "name": "turn_state_changed",
+                "turn_id": "t1",
+                "data": {"to": "user_speaking"},
+                **ts(5_000 + 15 * 20_000_000),
+            },
+        ]
+
+    nested = _aec_diagnostics_for_turn(_DictSource(build("nested"), {"post": post_pcm}), "t1")
+    flat = _aec_diagnostics_for_turn(_DictSource(build("flat"), {"post": post_pcm}), "t1")
+
+    assert nested["interruption_frames"] == [15]
+    assert flat["interruption_frames"] == nested["interruption_frames"]
+    assert flat["self_echo"] == nested["self_echo"]
+    assert [hit["frame"] for hit in flat["self_echo"]] == [4]
+
+
+def test_align_tracks_orders_flat_records_by_top_level_mono_ns():
+    """Flat records sort by real ``mono_ns``, not by their sequence number."""
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_complete",
+            "turn_id": "t1",
+            "output_ref": "late",
+            "data": {"stage": "audio"},
+            "mono_ns": 900,
+        },
+        {
+            "sequence": 2,
+            "name": "stage_complete",
+            "turn_id": "t1",
+            "output_ref": "early",
+            "data": {"stage": "audio"},
+            "mono_ns": 100,
+        },
+    ]
+    tracks = align_tracks(
+        records, source=_DictSource(records, {"late": b"\x01", "early": b"\x02"}), turn_id="t1"
+    )
+
+    assert [(e["ref"], e["mono_ns"]) for e in tracks["post_aec"]] == [
+        ("early", 100),
+        ("late", 900),
+    ]
+
+
+def test_record_mono_ns_reads_both_shapes_and_rejects_bools():
+    from easycat.debug._turn_timeline import record_mono_ns
+
+    assert record_mono_ns({"timing": {"mono_ns": 7}}) == 7
+    assert record_mono_ns({"mono_ns": 9}) == 9
+    # Nested timing wins when both shapes are present.
+    assert record_mono_ns({"timing": {"mono_ns": 7}, "mono_ns": 9}) == 7
+    # A malformed nested value falls back to the flat one.
+    assert record_mono_ns({"timing": {"mono_ns": True}, "mono_ns": 9}) == 9
+    assert record_mono_ns({"mono_ns": True}) is None
+    assert record_mono_ns({"mono_ns": "5"}) is None
+    assert record_mono_ns({"timing": "bad"}) is None
+    assert record_mono_ns({}) is None

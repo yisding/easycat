@@ -119,6 +119,24 @@ def record_wall_ns(record: Mapping[str, Any]) -> int | None:
     return wall if isinstance(wall, int) else None
 
 
+def record_mono_ns(record: Mapping[str, Any]) -> int | None:
+    """Read a record's monotonic timestamp in nanoseconds.
+
+    Same two record shapes as :func:`record_wall_ns`: nested
+    ``timing.mono_ns`` (exported bundles) wins over a top-level ``mono_ns``
+    (crash-dump SQLite journals).  Bools are rejected.
+    """
+    timing = record.get("timing")
+    if isinstance(timing, dict):
+        mono = timing.get("mono_ns")
+        if isinstance(mono, int) and not isinstance(mono, bool):
+            return mono
+    mono = record.get("mono_ns")
+    if isinstance(mono, int) and not isinstance(mono, bool):
+        return mono
+    return None
+
+
 def safe_turn_id(value: Any) -> str | None:
     """Return a valid journal turn id or ``None`` for malformed input.
 
