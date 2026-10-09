@@ -19,6 +19,7 @@ from easycat.runtime.scope import RuntimeScope, RuntimeSupervisor
 from easycat.session._session import Session
 from easycat.supervisor import (
     SessionAudioBroadcaster,
+    _format_timeout_seconds,
     serve_supervisor_websocket,
     supervisor_audio_frame_to_json,
     supervisor_auth_token_from_env,
@@ -607,3 +608,98 @@ async def test_serve_supervisor_websocket_rejects_bad_token() -> None:
     assert ws.close_code == 4401
     assert ws.close_reason == "Unauthorized"
     assert broadcaster.listener_count == 0
+
+
+@pytest.mark.asyncio
+async def test_hello_auth_required_matches_enforced_token() -> None:
+    # A token is configured, so supervisor_message_authorized() enforces it regardless of
+    # allow_unauthenticated. The hello must say so, because the browser client uses
+    # auth_required to decide whether to prompt for a token.
+    ws = _FakeSupervisorWebSocket([json.dumps({"type": "subscribe", "session_id": "s"})])
+
+    await serve_supervisor_websocket(ws, {}, expected_token="secret", allow_unauthenticated=True)
+
+    hello = json.loads(ws.sent[0])
+    assert hello["type"] == "hello"
+    assert ws.close_code == 4401  # the tokenless subscribe is rejected: the token is enforced
+    assert hello["auth_required"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("expected_token", "allow_unauthenticated", "subscribe", "auth_required", "close_code"),
+    [
+        # Token configured: enforced whatever allow_unauthenticated says.
+        ("secret", False, {}, True, 4401),
+        ("secret", True, {}, True, 4401),
+        ("secret", True, {"token": "wrong"}, True, 4401),
+        # A matching token passes auth and reaches the session lookup.
+        ("secret", False, {"token": "secret"}, True, 4404),
+        ("secret", True, {"token": "secret"}, True, 4404),
+        # No token with the explicit opt-in: a tokenless subscribe passes auth.
+        (None, True, {}, False, 4404),
+        (None, True, {"token": "anything"}, False, 4404),
+    ],
+)
+async def test_hello_auth_required_agrees_with_subscribe_authorization(
+    expected_token: str | None,
+    allow_unauthenticated: bool,
+    subscribe: dict[str, object],
+    auth_required: bool,
+    close_code: int,
+) -> None:
+    ws = _FakeSupervisorWebSocket(
+        [json.dumps({"type": "subscribe", "session_id": "missing", **subscribe})]
+    )
+
+    await serve_supervisor_websocket(
+        ws,
+        {},
+        expected_token=expected_token,
+        allow_unauthenticated=allow_unauthenticated,
+    )
+
+    hello = json.loads(ws.sent[0])
+    assert hello["type"] == "hello"
+    assert hello["auth_required"] is auth_required
+    # 4401 means auth rejected the subscribe; 4404 means auth passed and the
+    # unknown session was reported instead.
+    assert ws.close_code == close_code
+
+
+@pytest.mark.asyncio
+async def test_serve_supervisor_websocket_without_token_closes_before_hello() -> None:
+    ws = _FakeSupervisorWebSocket([json.dumps({"type": "subscribe", "session_id": "session-a"})])
+
+    await serve_supervisor_websocket(ws, {}, expected_token=None, allow_unauthenticated=False)
+
+    assert [json.loads(raw)["type"] for raw in ws.sent] == ["error"]
+    assert ws.close_code == 4401
+
+
+@pytest.mark.asyncio
+async def test_subscribe_timeout_error_reports_configured_timeout() -> None:
+    ws = _FakeSupervisorWebSocket()
+
+    await serve_supervisor_websocket(ws, {}, expected_token="secret", subscribe_timeout_s=0.05)
+
+    error = await _wait_for_sent_type(ws, "error")
+    assert error["message"] == "Expected subscribe message with session_id within 0.05 seconds."
+    assert ws.close_code == 4408
+    assert ws.close_reason == "Subscribe timed out"
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (10.0, "10 seconds"),
+        (10, "10 seconds"),
+        (2.5, "2.5 seconds"),
+        (0.25, "0.25 seconds"),
+        (1.0, "1 second"),
+        (1, "1 second"),
+        (30.0, "30 seconds"),
+    ],
+)
+def test_format_timeout_seconds(seconds: float, expected: str) -> None:
+    assert _format_timeout_seconds(seconds) == expected
