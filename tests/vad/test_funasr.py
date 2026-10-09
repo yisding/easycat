@@ -425,3 +425,60 @@ def test_resolve_funasr_model_dir_uses_bundled_assets(
 
     resolved = vad_funasr_module._resolve_funasr_model_dir(vad_funasr_module._FUNASR_DEFAULT_MODEL)
     assert resolved == str(bundled)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lead_chunks", range(8))
+async def test_funasr_vad_default_start_debounce_is_independent_of_lead_in(
+    monkeypatch: pytest.MonkeyPatch, lead_chunks: int
+):
+    """Default 50 ms chunks / 250 ms debounce always confirm speech 300 ms after onset.
+
+    Float accumulation of the consumed-audio clock used to delay the start
+    event to 350 ms when 50-250 ms of silence preceded the speech.
+    """
+
+    class _FakeWaveform:
+        def astype(self, _dtype: object) -> _FakeWaveform:
+            return self
+
+        def __truediv__(self, _value: float) -> _FakeWaveform:
+            return self
+
+    class _FakeNumpy:
+        int16 = "int16"
+        float32 = "float32"
+
+        @staticmethod
+        def frombuffer(_data: bytes, dtype: object) -> _FakeWaveform:
+            return _FakeWaveform()
+
+    class _FakeModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self, audio_in: object, param_dict: dict[str, object]) -> list[list[int]]:
+            self.calls += 1
+            if self.calls == lead_chunks + 1:
+                return [[self.calls * 50, -1]]
+            return []
+
+    def _initialize(self: FunASROnnxVAD) -> None:
+        self._numpy = _FakeNumpy()
+        self._model = _FakeModel()
+        self._param_dict = {"in_cache": []}
+
+    monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
+
+    vad = FunASROnnxVAD()
+    vad.configure()
+    chunks = 0
+    while True:
+        chunks += 1
+        events = [event async for event in vad.process(_make_chunk(0, n_samples=800))]
+        if events:
+            assert [type(event) for event in events] == [VADStartSpeaking]
+            break
+        assert chunks < 50
+
+    assert (chunks - lead_chunks) * 50 == 300

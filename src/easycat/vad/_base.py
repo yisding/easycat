@@ -45,6 +45,26 @@ def _validate_positive_int(name: str, value: int) -> None:
         raise ValueError(f"{name} must be a positive integer")
 
 
+_US_PER_S = 1_000_000
+
+
+def _seconds_to_us(seconds: float) -> int:
+    """Quantize a consumed-audio position to whole microseconds."""
+    return round(seconds * _US_PER_S)
+
+
+def _elapsed_meets(start_s: float, now_s: float, min_ms: float) -> bool:
+    """Return whether ``now_s - start_s`` reaches ``min_ms`` without float drift.
+
+    Positions are compared in whole microseconds so that N frames of a given
+    duration satisfy a threshold that is a multiple of the frame duration at
+    every stream offset, rather than only where float accumulation happens to
+    round up.
+    """
+    elapsed_us = _seconds_to_us(now_s) - _seconds_to_us(start_s)
+    return elapsed_us >= round(min_ms * 1000)
+
+
 # ── VAD base class ────────────────────────────────────────────────
 
 
@@ -69,6 +89,10 @@ class _VADBase:
         # wall-clock time. Buffered transports and replay can deliver many
         # frames in one event-loop tick; a monotonic clock would make those
         # frames appear to have zero duration and suppress speech/stop events.
+        # The position is accumulated exactly in integer microseconds; summing
+        # float frame durations drifts and makes debounce depend on how much
+        # audio preceded the speech. ``_audio_time_s`` mirrors it in seconds.
+        self._audio_time_us: int = 0
         self._audio_time_s: float = 0.0
 
     def configure(
@@ -90,7 +114,8 @@ class _VADBase:
 
     def _advance_audio_time(self, frame_duration_s: float) -> float:
         """Advance and return the deterministic position of consumed audio."""
-        self._audio_time_s += frame_duration_s
+        self._audio_time_us += _seconds_to_us(frame_duration_s)
+        self._audio_time_s = self._audio_time_us / _US_PER_S
         return self._audio_time_s
 
     def _evaluate_speech(self, speech_prob: float, audio_time_s: float) -> Iterator[Event]:
@@ -107,8 +132,9 @@ class _VADBase:
                 if (
                     self._speech_start_time is not None
                     and not self._speech_confirmed
-                    and (audio_time_s - self._speech_start_time) * 1000
-                    >= self._min_speech_duration_ms
+                    and _elapsed_meets(
+                        self._speech_start_time, audio_time_s, self._min_speech_duration_ms
+                    )
                 ):
                     self._is_speaking = True
                     self._speech_confirmed = True
@@ -123,10 +149,8 @@ class _VADBase:
                 # Mirror the speech-side structure: fall through to the elapsed
                 # check so that with min_silence_duration_ms=0 the stop event can
                 # fire on the first silent frame, matching the speech path.
-                if (
-                    self._silence_start_time is not None
-                    and (audio_time_s - self._silence_start_time) * 1000
-                    >= self._min_silence_duration_ms
+                if self._silence_start_time is not None and _elapsed_meets(
+                    self._silence_start_time, audio_time_s, self._min_silence_duration_ms
                 ):
                     self._is_speaking = False
                     self._silence_start_time = None
@@ -138,6 +162,7 @@ class _VADBase:
         self._speech_start_time = None
         self._silence_start_time = None
         self._speech_confirmed = False
+        self._audio_time_us = 0
         self._audio_time_s = 0.0
 
     def close(self) -> None:
