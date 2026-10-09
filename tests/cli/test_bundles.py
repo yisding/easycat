@@ -761,33 +761,72 @@ async def test_follow_with_retry_fails_fast_on_a_corrupt_file() -> None:
     assert exc_info.value.context["detail"] == "file is not a database"
 
 
+_FOLLOW_ARGVS = [
+    pytest.param(["tail"], id="tail"),
+    pytest.param(["journal", "follow"], id="follow"),
+]
+
+
+@pytest.mark.parametrize("argv", _FOLLOW_ARGVS)
 def test_journal_follow_on_a_schemaless_sqlite_file_exits_5(
-    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv: list[str]
 ) -> None:
     """End-to-end: `easycat tail empty.sqlite` reports instead of hanging."""
     monkeypatch.setattr("easycat.cli.debug.follow._SCHEMA_WAIT_S", 0.05)
     target = tmp_path / "empty.sqlite"
     target.touch()
 
-    result = cli.invoke(app, ["tail", str(target), "--json"])
+    result = cli.invoke(app, [*argv, str(target), "--json"])
 
     assert result.exit_code == 5
     payload = json.loads(result.stdout)
     assert payload["code"] == "EASYCAT_E404"
+    assert payload["command"] == "journal_follow"
     assert payload["context"]["detail"] == "no such table: journal"
 
 
-def test_journal_follow_on_a_corrupt_sqlite_file_exits_5(cli: CliRunner, tmp_path: Path) -> None:
+@pytest.mark.parametrize("argv", _FOLLOW_ARGVS)
+def test_journal_follow_on_a_corrupt_sqlite_file_exits_5(
+    cli: CliRunner, tmp_path: Path, argv: list[str]
+) -> None:
     """A garbage file used to escape as a raw ``sqlite3.DatabaseError`` traceback."""
     target = tmp_path / "notadb.sqlite"
     target.write_bytes(b"garbage")
 
-    result = cli.invoke(app, ["tail", str(target), "--json"])
+    result = cli.invoke(app, [*argv, str(target), "--json"])
 
     assert result.exit_code == 5
     payload = json.loads(result.stdout)
     assert payload["code"] == "EASYCAT_E404"
+    assert payload["command"] == "journal_follow"
     assert "not a database" in payload["context"]["detail"]
+
+
+@pytest.mark.parametrize("argv", _FOLLOW_ARGVS)
+def test_journal_follow_error_envelopes_share_one_command_name(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv: list[str]
+) -> None:
+    """An escaped E404 and the in-command not-found error name the same command.
+
+    ``cli_command`` used to label escaped ``EasyCatError`` envelopes with the
+    Python function name, so a non-journal SQLite file reported
+    ``"follow_journal"`` while a missing file reported ``"journal_follow"``.
+    """
+    monkeypatch.setattr("easycat.cli.debug.follow._SCHEMA_WAIT_S", 0.05)
+    other = tmp_path / "other.sqlite"
+    conn = sqlite3.connect(other)
+    conn.execute("create table t(x)")
+    conn.commit()
+    conn.close()
+
+    escaped = cli.invoke(app, [*argv, str(other), "--json"])
+    missing = cli.invoke(app, [*argv, str(tmp_path / "missing.sqlite"), "--json"])
+
+    escaped_payload = json.loads(escaped.stdout)
+    missing_payload = json.loads(missing.stdout)
+    assert escaped.exit_code == 5
+    assert escaped_payload["code"] == "EASYCAT_E404"
+    assert escaped_payload["command"] == missing_payload["command"] == "journal_follow"
 
 
 def test_journal_follow_on_zip_bundle_exits_2(cli: CliRunner, tmp_path: Path) -> None:

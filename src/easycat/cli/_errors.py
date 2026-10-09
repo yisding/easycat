@@ -17,7 +17,7 @@ from __future__ import annotations
 import functools
 import os
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, overload
 
 import typer
 
@@ -82,22 +82,41 @@ def handle_easycat_error(
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def cli_command(fn: F) -> F:
+@overload
+def cli_command(fn: F, /) -> F: ...
+
+
+@overload
+def cli_command(name: str, /) -> Callable[[F], F]: ...
+
+
+def cli_command(fn_or_name: F | str, /) -> F | Callable[[F], F]:
     """Wrap a CLI command so ``EasyCatError`` renders and exits cleanly.
 
     Converts any :class:`~easycat.errors.EasyCatError` raised inside
     the wrapped command into a :class:`typer.Exit` with the mapped
     exit code, after rendering the error (human or JSON based on the
     ``json_output`` kwarg).
-    """
 
+    Use the bare ``@cli_command`` form when the function name is already
+    the command's JSON envelope name (``plan``, ``doctor``, ...).  Pass
+    the envelope name explicitly, ``@cli_command("journal_follow")``,
+    when they differ, so an escaped error carries the same ``command``
+    value as the command's own success and error envelopes.
+    """
+    if isinstance(fn_or_name, str):
+        return functools.partial(_wrap_cli_command, command=fn_or_name)
+    return _wrap_cli_command(fn_or_name, command=fn_or_name.__name__)
+
+
+def _wrap_cli_command(fn: F, *, command: str) -> F:
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return fn(*args, **kwargs)
         except EasyCatError as err:
             json_mode = bool(kwargs.get("json_output"))
-            code = handle_easycat_error(err, json_mode=json_mode, command=fn.__name__)
+            code = handle_easycat_error(err, json_mode=json_mode, command=command)
             raise typer.Exit(code) from None
 
     return wrapper  # type: ignore[return-value]

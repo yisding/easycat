@@ -98,7 +98,7 @@ def _latency_percentile_table(stats: dict[str, LatencyPercentileStats]) -> Table
     return table
 
 
-@cli_command
+@cli_command("latency")
 def latency_command(
     bundle_path: Path = typer.Argument(
         ...,
