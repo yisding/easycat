@@ -605,14 +605,22 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
                     self._session_ready.set_result(None)
 
     async def aclose(self) -> None:
-        """Close a persistent Realtime socket during Session teardown."""
+        """End any logical stream, then close the persistent Realtime socket."""
         try:
-            await self._drain_scheduled_close()
-            await self._close_active_websocket(close_before_drain=True)
-            self._session_ready = None
-            self._reset_logical_turn_state()
+            # ``close_if_supported`` prefers ``aclose`` over ``close``.  Do
+            # not bypass STTBase.close(): doing so left an active logical
+            # stream marked running (and its pending audio uncommitted) after
+            # the socket had been torn down, making a later start_stream()
+            # fail as "already started".
+            await super().close()
         finally:
-            await self._close_owned_runtime_scope_if_idle()
+            try:
+                await self._drain_scheduled_close()
+                await self._close_active_websocket(close_before_drain=True)
+                self._session_ready = None
+                self._reset_logical_turn_state()
+            finally:
+                await self._close_owned_runtime_scope_if_idle()
 
     def version_info(self) -> dict[str, str]:
         return {

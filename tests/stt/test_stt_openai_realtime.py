@@ -1340,6 +1340,69 @@ async def _collect_events(stt: OpenAIRealtimeSTT) -> list[STTEvent]:
 
 
 @pytest.mark.asyncio
+async def test_openai_realtime_aclose_ends_active_stream_before_releasing_socket():
+    """aclose() must leave the provider reusable after active-stream teardown.
+
+    ``close_if_supported`` prefers ``aclose`` over ``close``; ``aclose`` used
+    to tear the socket down without ending the logical stream, so a later
+    ``start_stream()`` failed with "Stream already started".
+    """
+    first_socket = _PersistentMockWSConnection()
+    second_socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([first_socket, second_socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+    await stt.start_stream()
+
+    await stt.aclose()
+
+    assert stt._running is False
+    assert first_socket.close_code == 1000
+    assert first_socket.commit_count == 0
+
+    await stt.start_stream()
+    assert factory.call_count == 2
+    await stt.aclose()
+    assert second_socket.close_code == 1000
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_aclose_commits_pending_audio_before_closing_socket():
+    """aclose() during an active stream must not drop audio pending commit."""
+    socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+    await stt.start_stream()
+    collector = asyncio.create_task(_collect_events(stt))
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=100)):
+        await stt.send_audio(chunk)
+
+    await stt.aclose()
+    events = await asyncio.wait_for(collector, timeout=1.0)
+
+    assert socket.commit_count == 1
+    assert [(event.type, event.text) for event in events] == [(STTEventType.FINAL, "turn 1")]
+    assert socket.close_code == 1000
+    assert stt._running is False
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_aclose_without_active_stream_is_idempotent():
+    """aclose() with no active stream only releases the socket, never commits."""
+    socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+    await stt.warmup()
+
+    await stt.aclose()
+    await stt.aclose()
+
+    assert socket.close_code == 1000
+    assert socket.commit_count == 0
+    assert stt._ws is None
+    assert stt._running is False
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_reusable_across_streams():
     factory1 = _MockWSFactory([_make_transcription_completed("stream one")])
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory1)
