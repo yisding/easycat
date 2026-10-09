@@ -37,6 +37,7 @@ __all__ = [
 ]
 
 from easycat.audio_format import AudioChunk
+from easycat.strip_markdown import _INLINE_CODE_RE
 from easycat.tts.input import TTSInput, strip_ssml_tags
 
 # ── Sentence splitting ──────────────────────────────────────────────
@@ -423,6 +424,24 @@ def _has_unclosed_markdown_link_or_image(text: str) -> bool:
     return _scan_markdown_link_or_image(text)[0]
 
 
+# A blank line ends the paragraph, and an inline code span cannot cross it.
+_BLANK_LINE_RE = re.compile(r"\n[ \t]*\r?\n")
+
+
+def _has_open_inline_code_run(text: str) -> bool:
+    """Return True when an unpaired backtick run could still open a code span.
+
+    *text* has its closed code spans already removed, so every backtick left
+    is part of a run with no closing run of the same length yet.  A later
+    delta could still close such a run and turn the text after it into code,
+    unless a blank line follows it: a span cannot cross a paragraph break, so
+    that run is literal for good.  Only the last leftover run needs checking:
+    if a blank line follows it, one follows every earlier run too.
+    """
+    last_tick = text.rfind("`")
+    return last_tick >= 0 and _BLANK_LINE_RE.search(text, last_tick) is None
+
+
 def markdown_open_state(text: str) -> tuple[bool, bool]:
     """Best-effort markdown openness check for a rolling streaming buffer.
 
@@ -449,15 +468,14 @@ def markdown_open_state(text: str) -> tuple[bool, bool]:
     # Remove fenced blocks so inline delimiter counts are not distorted.
     normalized = re.sub(r"```[\s\S]*?```", "", text)
 
-    # Inline backticks only (exclude fenced markers already handled
-    # above).
-    inline_tick_count = normalized.count("`")
-    if inline_tick_count % 2 == 1:
-        return True, False
-
     # Remove closed inline-code spans so markdown chars inside code do
-    # not affect emphasis/link-state tracking.
-    normalized = re.sub(r"`[^`]*`", "", normalized)
+    # not affect emphasis/link-state tracking.  Spans pair the CommonMark
+    # way, with the same pattern ``strip_markdown`` uses: a run of N
+    # backticks closes at the next run of exactly N, so ``co`de`` is one
+    # closed span and the lone backtick inside it is content.
+    normalized = _INLINE_CODE_RE.sub("", normalized)
+    if _has_open_inline_code_run(normalized):
+        return True, False
 
     for delimiter in ("**", "__", "~~"):
         if normalized.count(delimiter) % 2 == 1:
