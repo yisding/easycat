@@ -648,3 +648,98 @@ def test_strip_markdown_fenced_code_wins_over_wrapped_inline_span() -> None:
     text = "```py\nx = `a\nb`\n```"
 
     assert strip_markdown(text) == "x = `a\nb`"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("[docs](https://example.com/_next_/static)", "docs https://example.com/_next_/static"),
+        ("[docs](https://example.com/_foo_)", "docs https://example.com/_foo_"),
+        ("[docs](https://example.com/__init__/x)", "docs https://example.com/__init__/x"),
+        ("[docs](https://x/*a*/b)", "docs https://x/*a*/b"),
+        ("[docs](https://x/**a**/b)", "docs https://x/**a**/b"),
+        ("[docs](https://x/~~u~~)", "docs https://x/~~u~~"),
+        ("[docs](<https://x/_a_>)", "docs https://x/_a_"),
+        ('[docs](https://x/_a_ "a _title_")', "docs https://x/_a_"),
+        # An escaped marker in the destination still reads as the bare character.
+        ("[docs](https://x/\\_a\\_)", "docs https://x/_a_"),
+    ],
+)
+def test_strip_markdown_link_destination_is_not_treated_as_emphasis(
+    text: str, expected: str
+) -> None:
+    """Link rendering promises ``label URL``; the URL must survive verbatim.
+
+    The URL used to be spliced into the text before the emphasis passes ran,
+    so ``/_foo_`` (underscores after a non-word ``/``) was read as italic and
+    the spoken URL lost its underscores (gh 1209).
+    """
+    assert strip_markdown(text) == expected
+    assert strip_markdown(text, trim=False) == expected
+    assert strip_markdown(text, normalize_code_spans=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Only the destination is protected: the label and alt text are prose.
+        ("[_foo_](https://x/_a_)", "foo https://x/_a_"),
+        ("[**bold** ~~old~~](https://x/_a_)", "bold old https://x/_a_"),
+        ("![_alt_](https://x/_a_.png)", "alt"),
+        # Emphasis wrapping a whole link still strips around the URL.
+        ("*see [docs](https://x/_a_)*", "see docs https://x/_a_"),
+        ("**[docs](https://x/_a_)**", "docs https://x/_a_"),
+        ("_see [docs](https://x/_a_)_ now", "see docs https://x/_a_ now"),
+        # Block-level markers around the link are still stripped.
+        ("# See [docs](https://x/_a_) #", "See docs https://x/_a_"),
+        (
+            "- [docs](https://x/_a_)\n- [more](https://x/*b*/c)",
+            "docs https://x/_a_\nmore https://x/*b*/c",
+        ),
+        ("1. [docs](https://x/_a_)", "docs https://x/_a_"),
+        ("> [docs](https://x/__a__)", "docs https://x/__a__"),
+        # Code spans and link URLs share one stash and restore in order.
+        ("`a_b` [docs](https://x/_a_) `*c*`", "a_b docs https://x/_a_ *c*"),
+        ("[`_x_`](https://x/_a_)", "_x_ https://x/_a_"),
+    ],
+)
+def test_strip_markdown_link_destination_protection_keeps_surrounding_markdown(
+    text: str, expected: str
+) -> None:
+    assert strip_markdown(text) == expected
+
+
+def test_strip_markdown_code_span_inside_link_destination_is_restored() -> None:
+    # A code span stashed before link rendering sits inside the URL; it must be
+    # expanded, not left as a placeholder, when the URL itself is stashed.
+    text = "[docs](https://x/`_a_`/b)"
+
+    assert strip_markdown(text) == "docs https://x/_a_/b"
+    assert (
+        strip_markdown(text, normalize_code_spans=True)
+        == "docs https://x/underscore a underscore/b"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("[https://x/_a_](https://x/_a_)", "https://x/_a_ https://x/_a_"),
+        (
+            "[https://x/__init__/*b*](https://x/__init__/*b*)",
+            ("https://x/__init__/*b* " * 2).strip(),
+        ),
+        ("[https://x/_a_](<https://x/_a_>)", "https://x/_a_ https://x/_a_"),
+        ("[https://x/\\_a\\_](https://x/\\_a\\_)", "https://x/_a_ https://x/_a_"),
+        # Only a label that repeats the destination is protected; any other
+        # label, even a URL-shaped one, stays prose.
+        ("[https://x/_a_](https://x/_b_)", "https://x/a https://x/_b_"),
+        ("[_docs_](https://x/_a_)", "docs https://x/_a_"),
+    ],
+)
+def test_strip_markdown_link_label_repeating_destination_is_kept_verbatim(
+    text: str, expected: str
+) -> None:
+    """LLMs often write ``[url](url)``; the label is then a URL, not prose."""
+    assert strip_markdown(text) == expected
+    assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected

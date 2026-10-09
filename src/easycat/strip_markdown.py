@@ -455,8 +455,18 @@ class _MarkdownReferenceScanner:
 _MAX_LABEL_NESTING = 4
 
 
-def _replace_markdown_links_and_images(text: str, *, depth: int = 0) -> str:
-    """Render links as label+URL and images as alt text for voice output."""
+def _replace_markdown_links_and_images(
+    text: str,
+    protect_destination: Callable[[str], str] | None = None,
+    *,
+    depth: int = 0,
+) -> str:
+    """Render links as label+URL and images as alt text for voice output.
+
+    *protect_destination*, when given, maps a rendered link URL to the text
+    spliced in its place, so ``strip_markdown`` can stash the URL behind a
+    placeholder and keep the later emphasis passes away from it.
+    """
     if "[" not in text:
         return text
 
@@ -465,7 +475,7 @@ def _replace_markdown_links_and_images(text: str, *, depth: int = 0) -> str:
     changed = False
     for reference in _MarkdownReferenceScanner(text):
         out.append(text[cursor : reference.start])
-        out.append(_render_markdown_reference(reference, depth=depth))
+        out.append(_render_markdown_reference(reference, protect_destination, depth=depth))
         cursor = reference.end
         changed = True
     if not changed:
@@ -474,17 +484,50 @@ def _replace_markdown_links_and_images(text: str, *, depth: int = 0) -> str:
     return "".join(out)
 
 
-def _render_markdown_reference(reference: _MarkdownReference, *, depth: int = 0) -> str:
+def _render_markdown_reference(
+    reference: _MarkdownReference,
+    protect_destination: Callable[[str], str] | None = None,
+    *,
+    depth: int = 0,
+) -> str:
     # The label may itself hold inline links/images (for example a README badge
     # ``[![build](img.svg)](https://ci)``). The scanner resumes after the outer
     # destination, so render the label here or the nested markup reaches TTS
-    # verbatim. Each call scans a strict substring of the label.
+    # verbatim. Each call scans a strict substring of the label. Nested link
+    # URLs go through *protect_destination* too; nested image alt text and the
+    # rest of the label stay prose.
     label = reference.label
     if depth < _MAX_LABEL_NESTING:
-        label = _replace_markdown_links_and_images(label, depth=depth + 1)
+        label = _replace_markdown_links_and_images(label, protect_destination, depth=depth + 1)
     if reference.is_image:
         return label
-    return " ".join(part for part in (label, reference.destination_url) if part)
+    url = reference.destination_url
+    if url and protect_destination is not None:
+        # A label that repeats the destination (``[https://x/_a_](https://x/_a_)``,
+        # common in LLM output) is a URL too, so it gets the same protection;
+        # every other label stays prose.
+        if reference.label == url:
+            label = protect_destination(url)
+        url = protect_destination(url)
+    return " ".join(part for part in (label, url) if part)
+
+
+def _stash_link_destination(code_spans: list[str]) -> Callable[[str], str]:
+    """Protect a rendered link URL from markdown passes, restoring it at the end.
+
+    The URL is spoken verbatim, so ``_`` / ``*`` / ``~~`` inside it (Next.js
+    ``/_next_/`` paths) must not be read as emphasis.  It shares the code-span
+    stash; because the final restore is a single pass, the URL is resolved to
+    its final text here: escaped-emphasis stand-ins become their characters
+    and any code-span placeholder already inside it is expanded.
+    """
+
+    def _replace(url: str) -> str:
+        url = _restore_code_spans(url.translate(_RESTORE_ESCAPED_EMPHASIS), code_spans)
+        code_spans.append(url)
+        return f"{_CODE_TOKEN_OPEN}{len(code_spans) - 1}{_CODE_TOKEN_CLOSE}"
+
+    return _replace
 
 
 def _has_markdown_link_or_image(text: str) -> bool:
@@ -558,8 +601,11 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
         partial(_strip_heading_closing_sequence, allow_at_text_end=trim), result
     )
 
-    # 3/4. Links/images with balanced destination parsing.
-    result = _replace_markdown_links_and_images(result)
+    # 3/4. Links/images with balanced destination parsing.  A rendered link
+    # URL is stashed like a code span so the emphasis, strikethrough, heading
+    # and list passes below never rewrite it (``/_next_/`` keeps its ``_``).
+    # Labels and image alt text stay in the text: they are prose.
+    result = _replace_markdown_links_and_images(result, _stash_link_destination(code_spans))
 
     # 5. Bold (before italic so ** is matched before *)
     result = _BOLD_ASTERISK_RE.sub(r"\1", result)
@@ -589,7 +635,7 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     result = _HR_RE.sub("", result)
 
     # 13. Restore escaped emphasis markers as literal characters, then the
-    # protected code spans in one substitution pass.
+    # protected code spans and link URLs in one substitution pass.
     result = result.translate(_RESTORE_ESCAPED_EMPHASIS)
     result = _restore_code_spans(result, code_spans)
 
