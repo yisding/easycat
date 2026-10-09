@@ -463,6 +463,88 @@ def test_doctor_unknown_provider_json_envelope(
     assert payload["exit_code"] == 2
     assert "Unknown --provider" in payload["message"]
     assert "openai" in payload["message"]
+    # The supported list names every credentialed provider, including ones
+    # that share a credential with another provider.
+    assert "openai-realtime" in payload["message"]
+
+
+_HOSTED_KEYS = ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY", "CARTESIA_API_KEY")
+
+
+def test_doctor_provider_accepts_credential_sharing_provider(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--provider openai-realtime`` is a valid scope, not a usage error.
+
+    Regression: scoping validated against the credential-deduplicated provider
+    map, where ``openai`` claims ``OPENAI_API_KEY`` and ``openai-realtime``
+    (the default STT provider) vanished, so doctor exited 2 with
+    "Unknown --provider 'openai-realtime'".
+    """
+    for var in _HOSTED_KEYS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-stub")
+    probed: list[str] = []
+
+    def fake_head(url: str, **_kwargs: object) -> object:
+        probed.append(url)
+        return type("Response", (), {"status_code": 200})()
+
+    monkeypatch.setattr("httpx.head", fake_head)
+
+    result = cli.invoke(app, ["doctor", "--provider", "openai-realtime", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    checks = {check["name"]: check for check in json.loads(result.stdout)["checks"]}
+    env_rows = [name for name in checks if name.startswith("env_")]
+    assert env_rows == ["env_openai-realtime"]
+    assert checks["env_openai-realtime"]["status"] == "ok"
+    assert checks["env_openai-realtime"]["requirement"] == "required"
+    reach_rows = [name for name in checks if name.startswith("reach_")]
+    assert reach_rows == ["reach_openai"]
+    assert checks["reach_openai"]["requirement"] == "required"
+    assert checks["reach_openai"]["field"] == "OPENAI_API_KEY"
+    assert probed == [doctor_module._PROVIDER_PROBE_URL["openai"]]
+
+
+def test_doctor_provider_credential_sharing_provider_fails_when_key_missing(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    no_network: None,
+) -> None:
+    """A scoped credential-sharing provider still fails E203 on a missing key."""
+    for var in _HOSTED_KEYS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-stub")
+
+    result = cli.invoke(app, ["doctor", "--provider", "openai-realtime", "--json"])
+
+    assert result.exit_code == 1
+    checks = {check["name"]: check for check in json.loads(result.stdout)["checks"]}
+    assert checks["env_openai-realtime"]["status"] == "fail"
+    assert checks["env_openai-realtime"]["code"] == "EASYCAT_E203"
+    assert checks["env_openai-realtime"]["field"] == "OPENAI_API_KEY"
+    assert not any(name.startswith("reach_") for name in checks)
+
+
+def test_doctor_scoped_checks_resolve_credential_sharing_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    no_network: None,
+) -> None:
+    """Scoped env and reachability checks never come back empty for a
+    registered provider that shares a credential, and placeholders fail."""
+    monkeypatch.setenv("OPENAI_API_KEY", "your-api-key-here")
+    env_rows = doctor_module.check_env_vars("openai-realtime")
+    assert [row.name for row in env_rows] == ["env_openai-realtime"]
+    assert env_rows[0].status == "fail"
+    assert env_rows[0].field == "OPENAI_API_KEY"
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    assert [row.status for row in doctor_module.check_env_vars("openai-realtime")] == ["ok"]
+    reach_rows = doctor_module.check_provider_reachability(only_provider="openai-realtime")
+    assert [(row.name, row.requirement) for row in reach_rows] == [("reach_openai", "required")]
 
 
 def test_doctor_reports_httpx_failure(cli: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
