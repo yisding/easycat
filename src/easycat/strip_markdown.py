@@ -21,7 +21,7 @@ from functools import partial
 
 _MD_DETECT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\*\*(?=\S).+?(?<=\S)\*\*"),  # bold **text**
-    re.compile(r"__(?=\S).+?(?<=\S)__"),  # bold __text__
+    re.compile(r"(?<!\w)__(?=\S).+?(?<=\S)__(?!\w)"),  # bold __text__ (not intraword)
     re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)"),  # italic *text*
     re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)"),  # italic _text_
     re.compile(r"~~.+?~~"),  # strikethrough
@@ -66,7 +66,9 @@ _FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
 _INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)((?:[^\n]|\n(?![ \t]*\r?\n))+?)(?<!`)\1(?!`)")
 _CODE_SPAN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
-_BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)([\s\S]+?)(?<=\S)__")
+# Underscore runs inside a word never open or close emphasis (CommonMark), so
+# ``foo__bar__baz`` and ``test__one.py`` keep their underscores.
+_BOLD_UNDERSCORE_RE = re.compile(r"(?<!\w)__(?=\S)([\s\S]+?)(?<=\S)__(?!\w)")
 _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 _STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~")
@@ -449,8 +451,15 @@ class _MarkdownReferenceScanner:
         return index
 
 
-def _replace_markdown_links_and_images(text: str) -> str:
-    """Render links as label+URL and images as alt text for voice output."""
+def _replace_markdown_links_and_images(
+    text: str, protect_destination: Callable[[str], str] | None = None
+) -> str:
+    """Render links as label+URL and images as alt text for voice output.
+
+    *protect_destination*, when given, maps a rendered link URL to the text
+    spliced in its place, so ``strip_markdown`` can stash the URL behind a
+    placeholder and keep the later emphasis passes away from it.
+    """
     if "[" not in text:
         return text
 
@@ -459,7 +468,7 @@ def _replace_markdown_links_and_images(text: str) -> str:
     changed = False
     for reference in _MarkdownReferenceScanner(text):
         out.append(text[cursor : reference.start])
-        out.append(_render_markdown_reference(reference))
+        out.append(_render_markdown_reference(reference, protect_destination))
         cursor = reference.end
         changed = True
     if not changed:
@@ -468,10 +477,38 @@ def _replace_markdown_links_and_images(text: str) -> str:
     return "".join(out)
 
 
-def _render_markdown_reference(reference: _MarkdownReference) -> str:
+def _render_markdown_reference(
+    reference: _MarkdownReference, protect_destination: Callable[[str], str] | None = None
+) -> str:
     if reference.is_image:
         return reference.label
-    return " ".join(part for part in (reference.label, reference.destination_url) if part)
+    label, url = reference.label, reference.destination_url
+    if url and protect_destination is not None:
+        # A label that repeats the destination (``[https://x/_a_](https://x/_a_)``,
+        # common in LLM output) is a URL too, so it gets the same protection;
+        # every other label stays prose.
+        if label == url:
+            label = protect_destination(label)
+        url = protect_destination(url)
+    return " ".join(part for part in (label, url) if part)
+
+
+def _stash_link_destination(code_spans: list[str]) -> Callable[[str], str]:
+    """Protect a rendered link URL from markdown passes, restoring it at the end.
+
+    The URL is spoken verbatim, so ``_`` / ``*`` / ``~~`` inside it (Next.js
+    ``/_next_/`` paths) must not be read as emphasis.  It shares the code-span
+    stash; because the final restore is a single pass, the URL is resolved to
+    its final text here: escaped-emphasis stand-ins become their characters
+    and any code-span placeholder already inside it is expanded.
+    """
+
+    def _replace(url: str) -> str:
+        url = _restore_code_spans(url.translate(_RESTORE_ESCAPED_EMPHASIS), code_spans)
+        code_spans.append(url)
+        return f"{_CODE_TOKEN_OPEN}{len(code_spans) - 1}{_CODE_TOKEN_CLOSE}"
+
+    return _replace
 
 
 def _has_markdown_link_or_image(text: str) -> bool:
@@ -545,12 +582,18 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
         partial(_strip_heading_closing_sequence, allow_at_text_end=trim), result
     )
 
-    # 3/4. Links/images with balanced destination parsing.
-    result = _replace_markdown_links_and_images(result)
+    # 3/4. Links/images with balanced destination parsing.  A rendered link
+    # URL is stashed like a code span so the emphasis, strikethrough, heading
+    # and list passes below never rewrite it (``/_next_/`` keeps its ``_``).
+    # Labels and image alt text stay in the text: they are prose.
+    result = _replace_markdown_links_and_images(result, _stash_link_destination(code_spans))
 
-    # 5. Bold (before italic so ** is matched before *)
-    result = _BOLD_ASTERISK_RE.sub(r"\1", result)
+    # 5. Bold (before italic so ** is matched before *).  ``__`` goes first:
+    # its intraword guard reads the character beside the run, and stripping
+    # ``**`` first would turn the punctuation CommonMark sees there into a
+    # word character (``**left**__right__`` would keep ``__right__``).
     result = _BOLD_UNDERSCORE_RE.sub(r"\1", result)
+    result = _BOLD_ASTERISK_RE.sub(r"\1", result)
 
     # 6. Italic
     result = _ITALIC_ASTERISK_RE.sub(r"\1", result)
@@ -576,7 +619,7 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     result = _HR_RE.sub("", result)
 
     # 13. Restore escaped emphasis markers as literal characters, then the
-    # protected code spans in one substitution pass.
+    # protected code spans and link URLs in one substitution pass.
     result = result.translate(_RESTORE_ESCAPED_EMPHASIS)
     result = _restore_code_spans(result, code_spans)
 
