@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any
 
 import pytest
 
@@ -714,9 +715,71 @@ async def test_cancel_from_adopted_grandchild_leaves_enclosing_turn_task_running
 
     await asyncio.wait_for(turn_task, timeout=1.0)
 
-    assert captured == [turn_task]
+    # The enclosing turn is neither cancelled nor handed back for draining.
+    assert captured == [None]
     assert not turn_task.cancelled()
     assert tts.cancelled == 1
+
+
+@pytest.mark.asyncio
+async def test_detached_finish_from_adopted_child_does_not_deadlock() -> None:
+    """A detached drain started inside the turn must not await the turn itself.
+
+    ``Session.cancel_turn()`` captures the turn via ``request_turn_cancel()``
+    and drains it from a fresh ``tts_turn_cancel_cleanup`` task. When the
+    caller is a handler inside the turn's own TTS consumer, that fresh task is
+    not adopted: had it received the enclosing turn task, it would wait on the
+    caller's own awaiter, which in turn waits on the caller.
+    """
+    tts = _RecordingTTS()
+    scheduler, _ = _build_scheduler(tts=tts)
+    captured: list[asyncio.Task[None] | None] = []
+
+    async def _child() -> None:
+        task = scheduler.request_turn_cancel()
+        captured.append(task)
+        cleanup = asyncio.create_task(scheduler.finish_turn_cancel(task))
+        await cleanup
+
+    async def _turn() -> None:
+        child = asyncio.create_task(_child())
+        scheduler.adopt_turn_child_task(child)
+        await asyncio.gather(child, return_exceptions=True)
+
+    turn_task = asyncio.create_task(_turn())
+    scheduler.active_turn_task = turn_task
+
+    done, _ = await asyncio.wait({turn_task}, timeout=1.0)
+
+    assert turn_task in done
+    assert not turn_task.cancelled()
+    assert captured == [None]
+    assert tts.cancelled == 1
+
+
+@pytest.mark.asyncio
+async def test_enclosing_turn_tasks_walks_adopted_chain() -> None:
+    """``enclosing_turn_tasks`` reports the caller and every adopting ancestor."""
+    scheduler, _ = _build_scheduler(tts=_RecordingTTS())
+    seen: list[set[asyncio.Task[Any]]] = []
+    tasks: dict[str, asyncio.Task[Any]] = {}
+
+    async def _child() -> None:
+        seen.append(scheduler.enclosing_turn_tasks())
+
+    async def _turn() -> None:
+        child = asyncio.create_task(_child())
+        tasks["child"] = child
+        scheduler.adopt_turn_child_task(child)
+        await child
+
+    turn_task = asyncio.create_task(_turn())
+    tasks["turn"] = turn_task
+    await asyncio.wait_for(turn_task, timeout=1.0)
+
+    assert seen == [{tasks["child"], tasks["turn"]}]
+    # Finished children are forgotten so the map does not grow.
+    assert scheduler._turn_child_parents == {}
 
 
 @pytest.mark.asyncio

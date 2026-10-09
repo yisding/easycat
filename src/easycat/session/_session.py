@@ -1744,10 +1744,15 @@ class Session:
                 # (it cancels the consumer task, ends the stream, and drains
                 # scoped commit/pause tasks) — matching 92f8ebf's move away
                 # from an ad-hoc stt_task cancel here.
+                # A caller inside a streaming turn helper (a bot-speaking
+                # handler, agent stream code) runs under ``active_turn_task``:
+                # cancelling and awaiting that enclosing task from here is a
+                # circular cancel/await, so exclude the whole chain.
+                enclosing_tasks = self._tts_scheduler.enclosing_turn_tasks()
                 current_tts_task = self._tts_scheduler.active_turn_task
                 if (
                     current_tts_task
-                    and current_tts_task is not current_task
+                    and current_tts_task not in enclosing_tasks
                     and not current_tts_task.done()
                 ):
                     current_tts_task.cancel()
@@ -1768,7 +1773,7 @@ class Session:
                     self._runtime_scope.signal_cohort(
                         cohort,
                         force=True,
-                        _exclude_tasks={current_task} if current_task is not None else None,
+                        _exclude_tasks=enclosing_tasks or None,
                     )
                     for cohort in self._runtime_scope.cohorts(force=True)
                 )

@@ -383,14 +383,24 @@ class TTSScheduler:
     def _forget_turn_child_task(self, child: asyncio.Task[Any]) -> None:
         self._turn_child_parents.pop(child, None)
 
+    def enclosing_turn_tasks(self) -> set[asyncio.Task[Any]]:
+        """The calling task plus every turn task it runs inside.
+
+        Walks the adopted-child chain upward, so a handler running in a
+        streaming turn's TTS consumer reports both the consumer and the
+        ``on_turn_ended`` task that awaits it. Teardown must neither cancel
+        nor await any of these from the caller.
+        """
+        enclosing: set[asyncio.Task[Any]] = set()
+        current = asyncio.current_task()
+        while current is not None and current not in enclosing:
+            enclosing.add(current)
+            current = self._turn_child_parents.get(current)
+        return enclosing
+
     def _caller_runs_inside(self, task: asyncio.Task[Any]) -> bool:
         """Whether the calling task is ``task`` or one of its adopted children."""
-        current = asyncio.current_task()
-        while current is not None:
-            if current is task:
-                return True
-            current = self._turn_child_parents.get(current)
-        return False
+        return task in self.enclosing_turn_tasks()
 
     def request_turn_cancel(self) -> asyncio.Task[None] | None:
         """Synchronously cancel and capture the active turn task.
@@ -399,11 +409,18 @@ class TTSScheduler:
         detached barge-in cleanup can later drain that captured task without
         accidentally cancelling a successor turn installed in the meantime.
         A caller running inside the turn task (directly or from one of its
-        adopted child tasks) never cancels its own enclosing turn.
+        adopted child tasks) never cancels its own enclosing turn, and gets
+        ``None`` back: the turn winds down cooperatively once the caller
+        returns, and handing the task to a detached drain (a fresh task that
+        is not adopted) would make that drain wait on the caller's own
+        awaiter.
         """
         task = self._current_tts_task
-        if task is not None and not task.done() and not self._caller_runs_inside(task):
-            task.cancel()
+        if task is None or task.done():
+            return task
+        if self._caller_runs_inside(task):
+            return None
+        task.cancel()
         return task
 
     async def finish_turn_cancel(self, task: asyncio.Task[None] | None) -> None:
