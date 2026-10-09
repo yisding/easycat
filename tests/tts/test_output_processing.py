@@ -105,10 +105,26 @@ def test_default_pronunciation_helper_phone_regex_behavior() -> None:
         "Call 555\n123\n4567 later.",
         "Part 555-123-4567-89 shipped.",
         "ID 12-555-1234 closed.",
+        "2024-01-15",
+        "12.5%",
+        "100-2000",
+        "Read pages 100-2000 first.",
+        "pages 555-1234",
+        "Valid range 555-1234 to 555-9999.",
+        "Serial 12345678901 shipped.",
+        "Path a/555-2671 moved.",
+        "At 10:555-2671 it stopped.",
+        "Token x)555-2671 expired.",
+        "Extension 415-555-2671/22 is busy.",
+        "He was recalled 555-0100 times.",
     ],
 )
 def test_default_phone_pauses_leave_non_phone_numbers_unchanged(text: str) -> None:
-    """Dates, decimals, and runs of short numbers are not phone numbers.
+    """Dates, decimals, ranges, and runs of short numbers are not phone numbers.
+
+    A bare dash-joined 3+4 digit pair is paced only after a phone cue such as
+    "call" or "tel:", and the tail of a longer token (after ``)``, ``/``, or
+    ``:``) is never paced on its own.
 
     The default pattern used to match any run of seven or more digits joined by
     spaces, dots, dashes, or parentheses (including across newlines), so an ISO
@@ -131,6 +147,19 @@ def test_default_phone_pauses_leave_non_phone_numbers_unchanged(text: str) -> No
         ("Call 415.555.2671.", "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1."),
         ("Call 415 555 0142.", "Call 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 0 ... 1 ... 4 ... 2."),
         ("Call 555-0100.", "Call 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0."),
+        ("call me at 555-0100", "call me at 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0"),
+        ("Tel: 555-0100", "Tel: 5 ... 5 ... 5 ... 0 ... 1 ... 0 ... 0"),
+        ("(415) 555-2671", "4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1"),
+        ("1(415)555-2671", "1 ... 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1"),
+        (
+            "Call 1(415)555-2671 now.",
+            "Call 1 ... 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1 now.",
+        ),
+        ("+1 415 555 2671", "1 ... 4 ... 1 ... 5 ... 5 ... 5 ... 5 ... 2 ... 6 ... 7 ... 1"),
+        (
+            "+44 20 7946 0958",
+            "4 ... 4 ... 2 ... 0 ... 7 ... 9 ... 4 ... 6 ... 0 ... 9 ... 5 ... 8",
+        ),
         (
             "Call +1 (555) 123-4567.",
             "Call 1 ... 5 ... 5 ... 5 ... 1 ... 2 ... 3 ... 4 ... 5 ... 6 ... 7.",
