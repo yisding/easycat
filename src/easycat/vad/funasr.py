@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterator
+from fractions import Fraction
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
@@ -192,8 +193,8 @@ class FunASROnnxVAD(_VADBase):
             except Exception as exc:
                 raise RuntimeError(f"FunASR ONNX VAD inference failed: {exc}") from exc
 
-            audio_time_s = self._advance_audio_time(self._chunk_size_ms / 1000.0)
-            yield_events = self._evaluate_funasr_segments(segments, audio_time_s)
+            audio_time = self._advance_audio_time(self._chunk_samples, _FUNASR_SAMPLE_RATE)
+            yield_events = self._evaluate_funasr_segments(segments, audio_time)
             for event in yield_events:
                 yield event
 
@@ -203,7 +204,7 @@ class FunASROnnxVAD(_VADBase):
             if len(self._buffer) >= frame_bytes:
                 await asyncio.sleep(0)
 
-    def _evaluate_funasr_segments(self, segments: Any, now: float) -> Iterator[Event]:
+    def _evaluate_funasr_segments(self, segments: Any, now: Fraction) -> Iterator[Event]:
         """Route FunASR boundary pairs through the shared VAD state machine."""
         saw_boundary = False
         for beg_ms, end_ms in _iter_funasr_segment_pairs(segments):
@@ -214,7 +215,7 @@ class FunASROnnxVAD(_VADBase):
                 yield from self._evaluate_speech(1.0, boundary_now)
             if end_ms >= 0:
                 if beg_ms >= 0 and end_ms >= beg_ms:
-                    boundary_now = now + (end_ms - beg_ms) / 1000
+                    boundary_now = now + Fraction(end_ms - beg_ms, 1000)
                 if self._funasr_active:
                     yield from self._evaluate_speech(1.0, boundary_now)
                 self._funasr_active = False

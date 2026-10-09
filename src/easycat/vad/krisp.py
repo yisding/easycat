@@ -65,9 +65,9 @@ class KrispVAD(_VADBase):
         speech_prob = self._krisp_audio.vad_process(
             self._session, chunk.data, chunk.format.sample_rate
         )
-        audio_time_s = self._advance_audio_time(chunk.duration_ms / 1000.0)
+        audio_time = self._advance_audio_time(chunk.num_samples, chunk.format.sample_rate)
 
-        for event in self._evaluate_speech(speech_prob, audio_time_s):
+        for event in self._evaluate_speech(speech_prob, audio_time):
             yield event
 
     def reset(self) -> None:

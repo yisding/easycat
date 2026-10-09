@@ -289,10 +289,10 @@ class SileroVAD(_VADBase):
                             np.frombuffer(frame_data, dtype="<i2").astype(np.float32) / 32768.0
                         )
                         speech_prob = self._model.predict(float_samples, _SILERO_DEFAULT_RATE)
-                        audio_time_s = self._advance_audio_time(
-                            frame_samples_old / _SILERO_DEFAULT_RATE
+                        audio_time = self._advance_audio_time(
+                            frame_samples_old, _SILERO_DEFAULT_RATE
                         )
-                        for event in self._evaluate_speech(speech_prob, audio_time_s):
+                        for event in self._evaluate_speech(speech_prob, audio_time):
                             yield event
                         if len(self._buffer) >= frame_bytes_old:
                             await asyncio.sleep(0)
@@ -327,9 +327,9 @@ class SileroVAD(_VADBase):
             # so the ~40us thread-hop dispatch adds latency and a context
             # switch per frame without meaningfully freeing the event loop.
             speech_prob = self._model.predict(float_samples, target_rate)
-            audio_time_s = self._advance_audio_time(frame_samples / target_rate)
+            audio_time = self._advance_audio_time(frame_samples, target_rate)
 
-            for event in self._evaluate_speech(speech_prob, audio_time_s):
+            for event in self._evaluate_speech(speech_prob, audio_time):
                 yield event
 
             # A transport may deliver many frames in one chunk (e.g. a buffered
