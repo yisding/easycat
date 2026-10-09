@@ -115,12 +115,25 @@ _SECRET_VALUE = (
     r"""(?!""|''|\\"\\")"""
     r"""(?:(?P<quote>\\?["'])(?:\\.|(?!(?P=quote))[^\\\n])+(?P=quote)|"""
 )
+# Authorization schemes other than ``Bearer`` whose credential follows the
+# scheme word (``Authorization: Basic <base64(user:pass)>``). The scheme word is
+# kept so the redacted header stays readable; ``Bearer`` keeps its historical
+# behavior of being redacted together with its token. Only a known scheme word
+# is skipped: a generic "first word" rule would leak bare tokens followed by
+# trailing text (``Authorization: <token> (from env)``).
+_AUTH_SCHEME = (
+    r"(?P<scheme>(?:basic|token|digest|negotiate|ntlm|hoba|mutual|dpop|gnap|"
+    r"concealed|privatetoken|vapid|scram-sha-1|scram-sha-256|apikey|api-key|oauth)"
+    r"[ \t]+)"
+)
 _HEADER_SECRET_RE = re.compile(
     r"(?i)((?:authorization|x-api-key|xi-api-key|openai-organization|openai-project)"
     + _KEY_CLOSING_QUOTE
     + r"[:=]\s*)"
     + _SECRET_VALUE
-    + r"(?:bearer\s+)?[^\s;,]+)"
+    + r"(?:bearer\s+|"
+    + _AUTH_SCHEME
+    + r")?[^\s;,]+)"
 )
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s;,]+")
 _KEY_VALUE_SECRET_RE = re.compile(
@@ -144,8 +157,10 @@ _HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
 
 
 def _secret_after_prefix(match: re.Match[str]) -> str:
-    quote = match.groupdict().get("quote") or ""
-    return f"{match.group(1)}{quote}{REDACTED_SECRET}{quote}"
+    groups = match.groupdict()
+    quote = groups.get("quote") or ""
+    scheme = groups.get("scheme") or ""
+    return f"{match.group(1)}{quote}{scheme}{REDACTED_SECRET}{quote}"
 
 
 def _redacted_home_path(match: re.Match[str]) -> str:
