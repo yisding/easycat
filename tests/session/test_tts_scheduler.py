@@ -655,6 +655,108 @@ async def test_detached_cancel_drains_only_captured_turn_task() -> None:
         await successor_task
 
 
+@pytest.mark.asyncio
+async def test_cancel_from_adopted_child_leaves_enclosing_turn_task_running() -> None:
+    """A cancel issued inside the turn's own child task must not cancel its parent.
+
+    The streaming TTS consumer runs as a child of the ``on_turn_ended`` task
+    published as ``active_turn_task``. Cancelling that parent from the child
+    cancelled the child's own awaiter and then awaited it from inside the
+    child: a circular cancel/await that ended in ``RecursionError``.
+    """
+    tts = _RecordingTTS()
+    scheduler, _ = _build_scheduler(tts=tts)
+    child_done = asyncio.Event()
+
+    async def _child() -> None:
+        await scheduler.cancel()
+        child_done.set()
+
+    async def _turn() -> None:
+        child = asyncio.create_task(_child())
+        scheduler.adopt_turn_child_task(child)
+        await child
+
+    turn_task: asyncio.Task[None] = asyncio.create_task(_turn())
+    scheduler.active_turn_task = turn_task
+
+    await asyncio.wait_for(turn_task, timeout=1.0)
+
+    assert child_done.is_set()
+    assert not turn_task.cancelled()
+    assert tts.cancelled == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_from_adopted_grandchild_leaves_enclosing_turn_task_running() -> None:
+    """Adoption is transitive: speculative synthesis runs under the consumer."""
+    tts = _RecordingTTS()
+    scheduler, _ = _build_scheduler(tts=tts)
+    captured: list[asyncio.Task[None] | None] = []
+
+    async def _grandchild() -> None:
+        task = scheduler.request_turn_cancel()
+        await scheduler.finish_turn_cancel(task)
+        captured.append(task)
+
+    async def _child() -> None:
+        grandchild = asyncio.create_task(_grandchild())
+        scheduler.adopt_turn_child_task(grandchild)
+        await grandchild
+
+    async def _turn() -> None:
+        child = asyncio.create_task(_child())
+        scheduler.adopt_turn_child_task(child)
+        await child
+
+    turn_task = asyncio.create_task(_turn())
+    scheduler.active_turn_task = turn_task
+
+    await asyncio.wait_for(turn_task, timeout=1.0)
+
+    assert captured == [turn_task]
+    assert not turn_task.cancelled()
+    assert tts.cancelled == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_from_superseded_turn_child_still_cancels_successor() -> None:
+    """Adoption only exempts the caller's own ancestors, not every turn task."""
+    tts = _RecordingTTS()
+    scheduler, _ = _build_scheduler(tts=tts)
+    release_old = asyncio.Event()
+    old_child_ready = asyncio.Event()
+    cancel_from_old_child = asyncio.Event()
+
+    async def _old_child() -> None:
+        old_child_ready.set()
+        await cancel_from_old_child.wait()
+        await scheduler.cancel()
+
+    async def _old_turn() -> None:
+        child = asyncio.create_task(_old_child())
+        scheduler.adopt_turn_child_task(child)
+        await child
+        await release_old.wait()
+
+    old_turn = asyncio.create_task(_old_turn())
+    await old_child_ready.wait()
+
+    async def _successor_turn() -> None:
+        await asyncio.Event().wait()
+
+    successor = asyncio.create_task(_successor_turn())
+    scheduler.active_turn_task = successor
+
+    cancel_from_old_child.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(successor, timeout=1.0)
+    assert not old_turn.done()
+
+    release_old.set()
+    await asyncio.wait_for(old_turn, timeout=1.0)
+
+
 # ── Tests: turn finalization ────────────────────────────────
 
 

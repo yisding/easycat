@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat._tts_synthesizer import TTSSynthesizer, TTSSynthResult
@@ -107,6 +107,11 @@ class TTSScheduler:
         )
 
         self._current_tts_task: asyncio.Task[None] | None = None
+        #: Child task -> the task that spawned it, for helper tasks that run
+        #: on behalf of a turn task (the streaming agent and TTS consumers and
+        #: their synthesis tasks). Lets cancellation recognize a caller that
+        #: runs *inside* the active turn task, not just as that task itself.
+        self._turn_child_parents: dict[asyncio.Task[Any], asyncio.Task[Any]] = {}
         self._playback_suppressed: bool = False
 
     # ── Properties ─────────────────────────────────────────────
@@ -305,6 +310,7 @@ class TTSScheduler:
                 start_barrier=barrier,
             )
         )
+        self.adopt_turn_child_task(task)
 
         try:
             # Give the provider task one loop turn to issue its network request
@@ -358,23 +364,52 @@ class TTSScheduler:
 
     # ── Cancellation ───────────────────────────────────────────
 
+    def adopt_turn_child_task(self, child: asyncio.Task[Any]) -> None:
+        """Record that ``child`` runs on behalf of the calling task.
+
+        The streaming turn spawns helper tasks (agent consumer, TTS consumer,
+        speculative synthesis) that the turn task awaits. Event handlers and
+        error paths run inside those helpers, so a cancel issued from one of
+        them must treat the enclosing turn task like ``asyncio.current_task()``:
+        cancelling it would cancel the caller's own awaiter, and awaiting it
+        from inside its own child is a circular wait.
+        """
+        parent = asyncio.current_task()
+        if parent is None or child.done():
+            return
+        self._turn_child_parents[child] = parent
+        child.add_done_callback(self._forget_turn_child_task)
+
+    def _forget_turn_child_task(self, child: asyncio.Task[Any]) -> None:
+        self._turn_child_parents.pop(child, None)
+
+    def _caller_runs_inside(self, task: asyncio.Task[Any]) -> bool:
+        """Whether the calling task is ``task`` or one of its adopted children."""
+        current = asyncio.current_task()
+        while current is not None:
+            if current is task:
+                return True
+            current = self._turn_child_parents.get(current)
+        return False
+
     def request_turn_cancel(self) -> asyncio.Task[None] | None:
         """Synchronously cancel and capture the active turn task.
 
         Returns the exact task that was active at the cutoff boundary.  A
         detached barge-in cleanup can later drain that captured task without
         accidentally cancelling a successor turn installed in the meantime.
+        A caller running inside the turn task (directly or from one of its
+        adopted child tasks) never cancels its own enclosing turn.
         """
         task = self._current_tts_task
-        current_task = asyncio.current_task()
-        if task is not None and task is not current_task and not task.done():
+        if task is not None and not task.done() and not self._caller_runs_inside(task):
             task.cancel()
         return task
 
     async def finish_turn_cancel(self, task: asyncio.Task[None] | None) -> None:
         """Cancel provider work and drain the task captured at cutoff."""
         await self._synth.cancel()
-        if task is None or task is asyncio.current_task() or task.done():
+        if task is None or task.done() or self._caller_runs_inside(task):
             return
         try:
             await task
