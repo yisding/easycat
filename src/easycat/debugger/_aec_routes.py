@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from easycat.debug._pcm import is_supported_width as _is_supported_width
+from easycat.debug._turn_timeline import record_mono_ns as _record_mono_ns
 from easycat.debugger._aec import _record_sequence
 from easycat.debugger._aec import align_tracks as _align_aec_tracks
 from easycat.debugger._aec import compute_erle as _compute_erle
@@ -89,9 +90,8 @@ def _aec_interruption_frames(
                 continue
         else:
             continue
-        timing = record.get("timing")
-        mono_ns = timing.get("mono_ns") if isinstance(timing, dict) else None
-        if not isinstance(mono_ns, int):
+        mono_ns = _record_mono_ns(record)
+        if mono_ns is None:
             continue
         frame = max(0, (mono_ns - base_ns) // frame_span_ns)
         frames.append(min(int(frame), max(0, total_frames - 1)))
