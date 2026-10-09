@@ -17,6 +17,64 @@ PauseStyle = Literal["ssml", "ellipsis", "emdash"]
 MAX_SSML_BREAK_MS = 5_000
 _PAUSE_STYLES: frozenset[str] = frozenset({"ssml", "ellipsis", "emdash"})
 
+# Words that make a bare 7-digit "555-0100" clearly a phone number. Without
+# one, a dash-joined 3+4 digit pair is more often a range ("pages 100-2000").
+_LOCAL_PHONE_CUES = (
+    "call",
+    "dial",
+    "phone",
+    "tel",
+    "fax",
+    "text",
+    "cell",
+    "mobile",
+    "call me at",
+    "call us at",
+    "reach me at",
+    "reach us at",
+    "number is",
+    "phone number",
+    "fax number",
+    "cell number",
+    "mobile number",
+    "text me at",
+    "text us at",
+    "contact",
+)
+# Python lookbehinds must be fixed width, so each cue/separator pair gets its own.
+_LOCAL_PHONE_CUE_LOOKBEHIND = "|".join(
+    rf"(?<=\b(?i:{re.escape(cue)}){re.escape(sep)})"
+    for cue in _LOCAL_PHONE_CUES
+    for sep in (" ", ": ", ". ")
+)
+
+# Phone-number shapes paced by ``default_pronunciation_processors``. Explicit
+# groupings keep ISO dates, decimals, version strings, numeric ranges, and runs
+# of short numbers out of the match; separators are a single space, dot, or
+# dash, so a match never crosses a newline. The boundaries stop a match from
+# starting or ending inside a word, decimal, path, time, or longer
+# dash/dot-joined number, so the tail of a longer token is never paced alone.
+_DEFAULT_PHONE_PATTERN = (
+    r"(?<![\w.+\-)/\\:])"
+    r"(?:"
+    # Optional country code, then a 10-digit NANP number: "(415) 555-2671",
+    # "1(415)555-2671", "415-555-2671", "415 555 0142", "415.555.2671".
+    # A bare "1" prefix may touch only the parenthesised area code, so an
+    # 11-digit ID such as "12345678901" is not read as 1 + a 10-digit number.
+    r"(?:\+\d{1,3}[ .-]?|1[ .-]?)?\(\d{3}\) ?\d{3}[ .-]?\d{4}"
+    r"|(?:\+\d{1,3}[ .-]?|1[ .-])?(?:\d{3}[ .-]\d{3}[ .-]\d{4}|\d{10})"
+    # 7-digit local number, only after a phone cue: "Call 555-0100".
+    rf"|(?:{_LOCAL_PHONE_CUE_LOOKBEHIND})\d{{3}}-\d{{4}}"
+    # International numbers with a leading "+": "+44 20 7946 0958". The
+    # lookahead caps the total at the E.164 maximum of 15 digits.
+    r"|\+(?=(?:\d[ .-]?){7,15}(?![ .-]?\d))\d{1,3}(?:[ .-]\d{1,4}){2,5}"
+    r"|\+\d{7,15}"
+    r")"
+    # A number may touch an attached extension ("2671x22", "2671ext22"); any
+    # other word character still marks a longer token.
+    r"(?!(?!(?i:x|ext\.?)\d)\w|[.\-/:]\d)"
+)
+
 
 @dataclass(frozen=True)
 class _SSMLBreak:
@@ -222,7 +280,7 @@ def default_pronunciation_processors(
         processors.append(PhoneticReplacementProcessor(name_pronunciations))
     processors.append(
         PauseProcessor(
-            pattern=r"\+?\d[\d\s().-]{5,}\d",
+            pattern=_DEFAULT_PHONE_PATTERN,
             pause_ms=phone_pause_ms,
             unit_pattern=r"\d",
             minimum_units=7,

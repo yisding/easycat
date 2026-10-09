@@ -17,8 +17,9 @@ from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder
 logger = logging.getLogger(__name__)
 
 _PendingTools = dict[str, str] | None
+_ToolItemAliases = dict[str, str] | None
 _SSETranslator = Callable[
-    [dict[str, Any], AgentRecorder, _PendingTools],
+    [dict[str, Any], AgentRecorder, _PendingTools, _ToolItemAliases],
     AgentBridgeEvent | None,
 ]
 _CALLER_HANDLED_EVENTS = frozenset(("response.completed", "response.failed"))
@@ -91,6 +92,7 @@ def _translate_text_delta(
     data: dict[str, Any],
     _recorder: AgentRecorder,
     _pending: _PendingTools,
+    _aliases: _ToolItemAliases,
 ) -> AgentBridgeEvent | None:
     delta = data.get("delta")
     return (
@@ -104,6 +106,7 @@ def _translate_output_item_added(
     data: dict[str, Any],
     recorder: AgentRecorder,
     pending: _PendingTools,
+    aliases: _ToolItemAliases,
 ) -> AgentBridgeEvent | None:
     item = _event_item(data)
     if item.get("type") != "function_call":
@@ -112,6 +115,12 @@ def _translate_output_item_added(
     call_id = _response_identifier(item, "call_id", "id")
     if pending is not None and call_id:
         pending[call_id] = name
+    # Spec-shaped argument deltas name the output item's ``id`` (``fc_...``)
+    # via ``item_id`` rather than its ``call_id`` (``call_...``), so remember
+    # which call each item id belongs to.
+    item_id = _response_identifier(item, "id")
+    if aliases is not None and call_id and item_id and item_id != call_id:
+        aliases[item_id] = call_id
     recorder.record_tool_call(phase="start", name=name, call_id=call_id)
     return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
 
@@ -120,11 +129,15 @@ def _translate_tool_delta(
     data: dict[str, Any],
     recorder: AgentRecorder,
     pending: _PendingTools,
+    aliases: _ToolItemAliases,
 ) -> AgentBridgeEvent | None:
     delta = data.get("delta")
     if not isinstance(delta, str) or not delta:
         return None
-    call_id = _response_identifier(data, "call_id", "item_id")
+    call_id = _response_identifier(data, "call_id")
+    if not call_id:
+        item_id = _response_identifier(data, "item_id")
+        call_id = aliases.get(item_id, item_id) if aliases is not None else item_id
     name = pending.get(call_id, "") if pending is not None else ""
     recorder.record_tool_call(phase="delta", name=name, call_id=call_id)
     return AgentBridgeEvent(kind="tool_delta", text=delta, call_id=call_id)
@@ -134,6 +147,7 @@ def _translate_output_item_done(
     data: dict[str, Any],
     recorder: AgentRecorder,
     pending: _PendingTools,
+    aliases: _ToolItemAliases,
 ) -> AgentBridgeEvent | None:
     item = _event_item(data)
     item_type = item.get("type")
@@ -143,6 +157,9 @@ def _translate_output_item_done(
     call_id = _response_identifier(item, "call_id", "id")
     result_str = str(item.get("output", ""))
     name = pending.pop(call_id, "") if pending is not None else ""
+    if aliases:
+        for item_id in [key for key, value in aliases.items() if value == call_id]:
+            del aliases[item_id]
     recorder.record_tool_call(phase="result", name=name, call_id=call_id)
     return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
 
@@ -160,6 +177,7 @@ def translate_sse_event(
     data: dict[str, Any],
     recorder: AgentRecorder,
     pending: dict[str, str] | None = None,
+    aliases: dict[str, str] | None = None,
 ) -> AgentBridgeEvent | None:
     """Map a Responses API SSE event to an :class:`AgentBridgeEvent`.
 
@@ -170,10 +188,17 @@ def translate_sse_event(
     caller so the tool name captured on ``output_item.added`` can be reused
     when recording ``delta`` and ``result`` phases.  When ``None``, tool
     name is omitted from those records.
+
+    *aliases* is an optional per-turn ``item id -> call_id`` map.  When
+    supplied, ``output_item.added`` records each function-call item's ``id``
+    so a spec-shaped ``function_call_arguments.delta`` (which carries only
+    ``item_id``) resolves to the canonical ``call_id``.  An explicit nonblank
+    ``call_id`` on the delta always wins; unknown item ids pass through
+    unchanged.  Entries are dropped when the matching tool result arrives.
     """
     translator = _SSE_TRANSLATORS.get(event_type)
     if translator is not None:
-        return translator(data, recorder, pending)
+        return translator(data, recorder, pending, aliases)
     if event_type in _CALLER_HANDLED_EVENTS:
         return None
 

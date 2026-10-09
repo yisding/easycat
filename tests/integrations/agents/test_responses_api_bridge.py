@@ -885,6 +885,91 @@ class TestGracefulDegradation:
         assert any(record.name == "framework_error" for record in journal.read())
         await bridge.aclose()
 
+    @pytest.mark.asyncio
+    async def test_spec_shaped_tool_delta_with_only_item_id_resolves_to_call_id(self) -> None:
+        """Argument deltas that name the item ``id`` map to the started ``call_id``.
+
+        The Responses API streams ``function_call_arguments.delta`` with only
+        ``item_id`` (the ``fc_...`` item id), never ``call_id``.  The bridge
+        used to treat that id as the call id, so the delta looked orphaned and
+        the whole turn failed with a protocol error.
+        """
+        events_in = [
+            {"type": "response.created", "response": {"id": "resp_1"}},
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": "",
+                },
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 0,
+                "delta": '{"city":"SF"}',
+            },
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city":"SF"}',
+                },
+            },
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call_output",
+                    "id": "fco_1",
+                    "call_id": "call_1",
+                    "output": "sunny",
+                },
+            },
+            {"type": "response.output_text.delta", "delta": "Sunny."},
+            {"type": "response.completed", "response": {"id": "resp_1", "output": []}},
+        ]
+        bridge = await _make_static_sse_bridge([f"data: {json.dumps(ev)}" for ev in events_in])
+        journal = InMemoryRingBuffer(capacity=1000)
+
+        events = [
+            event
+            async for event in bridge.invoke(
+                AgentTurnInput.from_text("weather?"),
+                _recorder(journal),
+            )
+        ]
+
+        assert [(event.kind, event.call_id) for event in events] == [
+            ("tool_started", "call_1"),
+            ("tool_delta", "call_1"),
+            ("tool_result", "call_1"),
+            ("text_delta", ""),
+            ("done", ""),
+        ]
+        assert events[1].text == '{"city":"SF"}'
+        assert events[2].result == "sunny"
+        assert events[-1].text == "Sunny."
+        assert bridge._last_completed_response_id == "resp_1"
+        records = journal.read()
+        assert not any(record.name == "framework_error" for record in records)
+        delta_records = [
+            record.data
+            for record in records
+            if record.name == "tool_phase_changed" and record.data.get("phase") == "delta"
+        ]
+        assert [(data["call_id"], data["tool_name"]) for data in delta_records] == [
+            ("call_1", "get_weather")
+        ]
+        await bridge.aclose()
+
     @pytest.mark.parametrize(
         ("lines", "message", "expected_event_kinds"),
         [
@@ -931,6 +1016,36 @@ class TestGracefulDegradation:
                     (
                         'data: {"type":"response.output_item.done","item":'
                         '{"type":"function_call_output","call_id":"","output":"ok"}}'
+                    ),
+                ],
+                "without a nonblank call_id",
+                ["tool_started"],
+            ),
+            (
+                [
+                    (
+                        'data: {"type":"response.output_item.added","item":'
+                        '{"type":"function_call","id":"fc_1","call_id":"call_1",'
+                        '"name":"lookup"}}'
+                    ),
+                    (
+                        'data: {"type":"response.function_call_arguments.delta",'
+                        '"item_id":"fc_unknown","output_index":0,"delta":"{}"}'
+                    ),
+                ],
+                "orphan tool_delta for call_id 'fc_unknown'",
+                ["tool_started"],
+            ),
+            (
+                [
+                    (
+                        'data: {"type":"response.output_item.added","item":'
+                        '{"type":"function_call","id":"fc_1","call_id":"call_1",'
+                        '"name":"lookup"}}'
+                    ),
+                    (
+                        'data: {"type":"response.function_call_arguments.delta",'
+                        '"item_id":["fc_1"],"output_index":0,"delta":"{}"}'
                     ),
                 ],
                 "without a nonblank call_id",
@@ -1559,6 +1674,111 @@ class TestSSETranslator:
         assert pending == {"safe": "get_weather"}
         tool_records = [r for r in journal.read() if r.name == "tool_phase_changed"]
         assert tool_records[-1].data["call_id"] == ""
+
+    def test_tool_delta_item_id_resolves_through_alias_map(self):
+        """A spec-shaped delta (``item_id`` only) maps to the item's ``call_id``."""
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+        pending: dict[str, str] = {}
+        aliases: dict[str, str] = {}
+
+        started = translate_sse_event(
+            "response.output_item.added",
+            {
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                }
+            },
+            rec,
+            pending,
+            aliases,
+        )
+        delta = translate_sse_event(
+            "response.function_call_arguments.delta",
+            {"item_id": "fc_1", "output_index": 0, "delta": '{"x":'},
+            rec,
+            pending,
+            aliases,
+        )
+
+        assert started is not None and started.call_id == "call_1"
+        assert aliases == {"fc_1": "call_1"}
+        assert delta is not None
+        assert delta.kind == "tool_delta"
+        assert delta.call_id == "call_1"
+        tool_records = [r for r in journal.read() if r.name == "tool_phase_changed"]
+        assert tool_records[-1].data["call_id"] == "call_1"
+        assert tool_records[-1].data["tool_name"] == "get_weather"
+
+        result = translate_sse_event(
+            "response.output_item.done",
+            {"item": {"type": "function_call_output", "call_id": "call_1", "output": "ok"}},
+            rec,
+            pending,
+            aliases,
+        )
+
+        assert result is not None and result.call_id == "call_1"
+        assert aliases == {}
+        assert pending == {}
+
+    def test_tool_delta_explicit_call_id_wins_over_item_alias(self):
+        rec = _recorder()
+
+        ev = translate_sse_event(
+            "response.function_call_arguments.delta",
+            {"call_id": "call_explicit", "item_id": "fc_1", "delta": "{}"},
+            rec,
+            {"call_explicit": "lookup"},
+            {"fc_1": "call_1"},
+        )
+
+        assert ev is not None
+        assert ev.call_id == "call_explicit"
+
+    @pytest.mark.parametrize("call_id", [None, "", ["malformed"]])
+    def test_tool_delta_unknown_item_id_passes_through(self, call_id: object):
+        rec = _recorder()
+
+        ev = translate_sse_event(
+            "response.function_call_arguments.delta",
+            {"call_id": call_id, "item_id": "fc_unknown", "delta": "{}"},
+            rec,
+            {},
+            {"fc_1": "call_1"},
+        )
+
+        assert ev is not None
+        assert ev.call_id == "fc_unknown"
+
+    def test_tool_delta_item_id_without_alias_map_is_unchanged(self):
+        rec = _recorder()
+
+        ev = translate_sse_event(
+            "response.function_call_arguments.delta",
+            {"item_id": "fc_1", "delta": "{}"},
+            rec,
+        )
+
+        assert ev is not None
+        assert ev.call_id == "fc_1"
+
+    def test_function_call_added_without_item_id_records_no_alias(self):
+        rec = _recorder()
+        aliases: dict[str, str] = {}
+
+        translate_sse_event(
+            "response.output_item.added",
+            {"item": {"type": "function_call", "call_id": "call_1", "name": "lookup"}},
+            rec,
+            {},
+            aliases,
+        )
+
+        assert aliases == {}
 
     def test_function_call_added(self):
         journal = InMemoryRingBuffer(capacity=1000)

@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
+import unicodedata
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -29,6 +31,8 @@ from easycat.events import (
 from easycat.integrations.agents._text_stream import AgentTextStream, AgentTextUpdate
 from easycat.session.text import (
     _FIRST_PHRASE_TARGET_CHARS,
+    _SENTENCE_CLOSING_CHARS,
+    _ends_with_held_initial_period,
     _split_first_phrase,
     markdown_open_state,
     split_at_sentence_boundaries,
@@ -67,10 +71,25 @@ _FIRST_CLAUSE_TRIGGER_CHARS = frozenset(",;:")
 
 # Places where the markdown buffer may drop already-spoken raw text (see
 # ``_SentenceStreamBuffer._compact``), most preferred first: a paragraph
-# break, a line ending, then a sentence end (the segmenter's terminators,
-# with the trailing space the ASCII ones need to end a sentence mid-line).
+# break, a line ending, then a sentence end.
 _PARAGRAPH_BREAKS = ("\n\n", "\r\n\r\n")
-_SENTENCE_ENDS = (". ", "! ", "? ", "。", "！", "？", "．")
+# A sentence end is one of the segmenter's terminators, then any closing
+# quotes or brackets the segmenter keeps attached (``."`` / ``.)`` / ``.}``
+# / ``。」``), then the run of spaces or tabs after it: at least one for the
+# ASCII terminators, which need it to end a sentence mid-line, and any for the
+# CJK ones, which need none.  Consuming the whole blank run puts the cut at
+# the first non-blank character after the sentence end.
+_SENTENCE_BLANKS = " \t"
+_CLOSER_RUN = f"[{re.escape(_SENTENCE_CLOSING_CHARS)}]*"
+_SENTENCE_END_RE = re.compile(
+    f"[.!?]{_CLOSER_RUN}[{_SENTENCE_BLANKS}]+|[。！？．]{_CLOSER_RUN}[{_SENTENCE_BLANKS}]*"
+)
+# An ATX heading opener at a line start, mirroring ``strip_markdown``'s
+# ``_HEADING_RE`` (``^#{1,6}\s+``): one to six ``#`` then whitespace, which
+# includes a newline for an empty heading.  ``#123`` or seven ``#`` is text.
+_ATX_HEADING_START_RE = re.compile(r"#{1,6}\s")
+# The ASCII non-letters a tail may start with (see ``_is_safe_tail_start``).
+_SAFE_ASCII_TAIL_STARTS = frozenset("\"'([")
 
 
 def _compaction_cuts(raw: str, bound: int) -> list[int]:
@@ -78,10 +97,10 @@ def _compaction_cuts(raw: str, bound: int) -> list[int]:
 
     Only separators wholly inside ``raw[:bound]`` count.  A paragraph break
     or line ending leaves the tail at a real line start.  A sentence end does
-    not, so it is offered only when the tail already starts with a letter
-    (no later delta can turn it into a heading, list, quote or rule marker)
-    and its line is not an ATX heading (whose closer, still to come, depends
-    on the opener in the head).
+    not, yet the tail is stripped as if it began a line, so a sentence cut is
+    offered only when no later delta can make the tail's start a block
+    construct (see ``_is_safe_tail_start``) and its line is not an ATX
+    heading (whose closer, still to come, depends on the opener in the head).
     """
     cuts: list[int] = []
     paragraph = 0
@@ -100,20 +119,54 @@ def _compaction_cuts(raw: str, bound: int) -> list[int]:
     return cuts
 
 
+def _is_safe_tail_start(ch: str, sentence_end: str) -> bool:
+    """Whether a tail starting with *ch* strips the same alone as in place.
+
+    ``strip_markdown`` anchors headings, blockquotes, lists, rules and code
+    fences at line starts, and the tail is stripped as if it began a line,
+    so it may only start with a character that cannot open one of those
+    once more text arrives:
+
+    - allowed: letters (any script), the quotes ``"`` and ``'``, the opening
+      brackets ``(`` and ``[`` (a link label is inline), and non-ASCII
+      punctuation and symbols (curly and guillemet quotes, dashes, emoji),
+      which no markdown pass matches;
+    - rejected: every other ASCII character, notably digits (``1.``
+      lists), ``-`` ``*`` ``+`` (lists, rules), ``_`` (rules), ``>``
+      (blockquotes), ``#`` (headings), backticks and ``~`` (fences), ``=``
+      (setext underlines), ``|``, ``<``, ``!`` (images), ``\\``; plus
+      whitespace (an indented marker), non-ASCII digits and other
+      characters such as the private-use code points ``strip_markdown``
+      deletes, which would expose what follows them.
+
+    A ``(`` straight after a ``]`` closer is rejected too: whitespace may
+    separate a link label from its destination, so the two could pair.
+    """
+    if ch.isalpha():
+        return True
+    if ch.isascii():
+        if ch == "(" and sentence_end.rstrip(_SENTENCE_BLANKS).endswith("]"):
+            return False
+        return ch in _SAFE_ASCII_TAIL_STARTS
+    return unicodedata.category(ch)[0] in "PS"
+
+
 def _last_sentence_cut(raw: str, bound: int) -> int:
     """Return the offset after the last eligible sentence end before *bound*, or 0."""
-    best = 0
-    for sep in _SENTENCE_ENDS:
-        end = bound
-        while (found := raw.rfind(sep, best, end)) >= 0:
-            cut = found + len(sep)
-            if raw[cut : cut + 1].isalpha() and not raw.startswith(
-                "#", raw.rfind("\n", 0, cut) + 1
-            ):
-                best = cut
-                break
-            end = found + len(sep) - 1
-    return best
+    heading_line_start = -1
+    for match in reversed(list(_SENTENCE_END_RE.finditer(raw, 0, bound))):
+        cut = match.end()
+        if match.start() >= heading_line_start >= 0:
+            continue
+        if not _is_safe_tail_start(raw[cut : cut + 1], match.group()):
+            continue
+        line_start = raw.rfind("\n", 0, cut) + 1
+        if _ATX_HEADING_START_RE.match(raw, line_start):
+            # Every earlier sentence end on this line is in the heading too.
+            heading_line_start = line_start
+            continue
+        return cut
+    return 0
 
 
 def _spoken_prefix_end(stripped: str, spoken: str) -> int | None:
@@ -317,7 +370,11 @@ class _SentenceStreamBuffer:
         return False
 
     async def _add_markdown_delta(self, delta: str) -> bool:
-        had_trailing_numeric_separator = self._has_trailing_numeric_separator(self._text)
+        # A trailing "3." / "1," or lone-letter period ("tools e.") was held
+        # for lookahead, so the next delta must recheck even without a
+        # trigger character of its own.
+        held_number = self._has_trailing_numeric_separator(self._text)
+        had_lookahead_hold = held_number or _ends_with_held_initial_period(self._text)
         self._text += delta
 
         # Markdown stripping is regex-heavy and sentence splitting scans the
@@ -354,7 +411,7 @@ class _SentenceStreamBuffer:
             )
             if (
                 not bounded_first_phrase_ready
-                and not had_trailing_numeric_separator
+                and not had_lookahead_hold
                 and not any(ch in delta for ch in triggers)
             ):
                 return False

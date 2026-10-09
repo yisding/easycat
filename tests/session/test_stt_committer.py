@@ -658,18 +658,28 @@ async def test_cancel_parks_cancellation_resistant_end_stream_until_it_finishes(
 
 @pytest.mark.asyncio
 async def test_repeated_parked_provider_end_attempts_prune_retired_owner_scopes() -> None:
-    class _EventuallySettlingEndStreamSTT(_RecordingSTT):
+    class _SettlesAfterParkingEndStreamSTT(_RecordingSTT):
+        """Ignore cancellation until the test releases the parked attempt.
+
+        A wall-clock settle time races ``cancel()``: on a CPU-starved loop the
+        timeout path can take longer than that window, so the provider finishes
+        before the attempt is parked and its owner scope is never retired.
+        """
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.release = asyncio.Event()
+
         async def end_stream(self) -> None:
             self.end_stream_calls += 1
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + 0.03
-            while loop.time() < deadline:
+            release = self.release
+            while not release.is_set():
                 try:
-                    await asyncio.sleep(deadline - loop.time())
+                    await release.wait()
                 except asyncio.CancelledError:
                     pass
 
-    stt = _EventuallySettlingEndStreamSTT()
+    stt = _SettlesAfterParkingEndStreamSTT()
     committer, _stt, _emitted, _no_turn, _tm = _make_committer(
         stt=stt,
         timeout_config=TimeoutConfig(stt_timeout=0.005),
@@ -677,20 +687,30 @@ async def test_repeated_parked_provider_end_attempts_prune_retired_owner_scopes(
     registry = committer._runtime_scope.survivor_registry
     assert registry is not None
 
-    for index in range(3):
-        committer.mark_active()
-        assert await committer.cancel(_new_turn(f"turn-{index}")) is False
-        [owned_end] = committer._runtime_scope.tasks(committer.PROVIDER_END_TASK_NAME)
+    try:
+        for index in range(3):
+            stt.release = asyncio.Event()
+            committer.mark_active()
+            assert await committer.cancel(_new_turn(f"turn-{index}")) is False
+            [owned_end] = committer._runtime_scope.tasks(committer.PROVIDER_END_TASK_NAME)
+            assert not owned_end.done()
+            assert registry.active_count == 1
 
-        await asyncio.wait_for(owned_end, timeout=1)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+            stt.release.set()
+            await asyncio.wait_for(owned_end, timeout=1)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
 
-        assert committer._runtime_scope.children() == ()
-        assert registry.active_count == 0
-        assert registry._owner_states == {}
+            assert committer._runtime_scope.children() == ()
+            assert registry.active_count == 0
+            assert registry._owner_states == {}
 
-    assert stt.end_stream_calls == 3
+        assert stt.end_stream_calls == 3
+    finally:
+        # A failed assertion must not leave a parked attempt that swallows
+        # cancellation, or loop teardown would hang instead of reporting it.
+        stt.release.set()
+        await committer._runtime_scope.drain(suppress_errors=True)
 
 
 @pytest.mark.asyncio
@@ -974,6 +994,48 @@ async def test_non_endpoint_final_does_not_end_native_endpoint_turn() -> None:
         await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="native endpoint"))
         await asyncio.wait_for(ended.wait(), timeout=1)
         assert end_calls == 1
+    finally:
+        await committer.cancel(turn)
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_reconnect_on_silent_fresh_socket_still_ends_native_turn() -> None:
+    """Regression: a socket drop after the user stopped talking hung the turn.
+
+    In native-endpointing mode the committer ends the turn only on an
+    endpoint-bearing FINAL. The fresh ElevenLabs socket receives only silence,
+    so its server VAD never commits; the provider's bounded reconnect fallback
+    must still deliver the cut-off transcript and end the turn.
+    """
+    from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
+
+    stt = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", final_transcript_timeout_s=0.05))
+    stt._running = True
+    stt._audio_pending_commit = True
+    stt._audio_epoch = 1
+    stt._partial_text = "what time is it"
+    committer, _stt, emitted, _no_turn, tm = _make_committer(
+        stt=stt,  # type: ignore[arg-type]
+        auto_turn=True,
+    )
+    committer.mark_active()
+    turn = _new_turn()
+    ended = asyncio.Event()
+
+    async def record_end_turn() -> None:
+        ended.set()
+
+    tm.end_turn = record_end_turn  # type: ignore[method-assign]
+    committer.start_event_loop(turn)
+
+    try:
+        await stt._on_reconnect()
+        await asyncio.sleep(0)
+        assert not ended.is_set()
+
+        await asyncio.wait_for(ended.wait(), timeout=1)
+        assert turn.stt_segments == ["what time is it"]
+        assert [e.text for e in emitted if isinstance(e, STTFinal)] == ["what time is it"]
     finally:
         await committer.cancel(turn)
 

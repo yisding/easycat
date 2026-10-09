@@ -182,9 +182,12 @@ class MockResponsesServer:
             }
             added_ev = {"type": "response.output_item.added", "item": added_item}
             events.append(f"data: {json.dumps(added_ev)}")
+            # Spec-shaped: argument deltas name the item ``id`` (``fc_...``)
+            # via ``item_id``; they carry no ``call_id``.
             arg_ev = {
                 "type": "response.function_call_arguments.delta",
-                "call_id": call_id,
+                "item_id": fc_item["id"],
+                "output_index": len(response_obj["output"]),
                 "delta": arguments,
             }
             events.append(f"data: {json.dumps(arg_ev)}")

@@ -76,6 +76,29 @@ class StreamClosedResponse(FakeStreamResponse):
         raise httpx.StreamClosed()
 
 
+class CloseRaisesReadErrorResponse(FakeStreamResponse):
+    """Yield one frame, then block until closed and fail the pending read.
+
+    Models real httpx: closing a live streaming response underneath an
+    in-flight ``aiter_bytes()`` makes the suspended read raise ``ReadError``.
+    """
+
+    def __init__(self, chunks: list[bytes], status_code: int = 200):
+        super().__init__(chunks, status_code)
+        self._closed_event = asyncio.Event()
+
+    async def aiter_bytes(self, chunk_size: int | None = None):
+        self.aiter_bytes_chunk_size = chunk_size
+        self.chunks_read += 1
+        yield _pcm16_bytes(480)
+        await self._closed_event.wait()
+        raise httpx.ReadError("")
+
+    async def aclose(self):
+        self.is_closed = True
+        self._closed_event.set()
+
+
 class ChunkedAsyncByteStream(httpx.AsyncByteStream):
     """Exercise the provider through httpx's real response byte iterator."""
 
@@ -265,6 +288,83 @@ class TestOpenAITTS:
             with pytest.raises(httpx.StreamClosed):
                 async for _event in provider.synthesize("long text"):
                     pass
+
+    async def test_stop_mid_stream_ends_quietly(self):
+        """A graceful stop() during synthesis must not surface a provider error.
+
+        stop() closes the live response, which makes the suspended read raise
+        httpx.ReadError. It used to escape synthesize() and emit a provider
+        Error because only cancel() marked the close as self-inflicted.
+        """
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+        provider = OpenAITTS(OpenAITTSConfig(api_key="k", event_bus=bus))
+        fake_response = CloseRaisesReadErrorResponse([])
+        first_audio = asyncio.Event()
+
+        async def consume() -> int:
+            count = 0
+            async for _event in provider.synthesize("long text"):
+                count += 1
+                first_audio.set()
+            return count
+
+        with patch.object(provider._client, "stream", return_value=fake_response):
+            task = asyncio.create_task(consume())
+            await asyncio.wait_for(first_audio.wait(), 1)
+            await provider.stop()
+            count = await asyncio.wait_for(task, 1)
+
+        await asyncio.sleep(0)
+        assert count == 1
+        assert errors == []
+        assert fake_response.is_closed
+        assert not provider.is_cancelled
+        assert not provider.is_active
+        await provider.close()
+
+    async def test_stop_while_idle_does_not_mask_next_stream_error(self):
+        """A stop() between syntheses must not suppress the next call's errors."""
+        provider = self._make_provider()
+        await provider.stop()
+        fake_response = StreamClosedResponse([])
+
+        with patch.object(provider._client, "stream", return_value=fake_response):  # noqa: SIM117 nested scopes clarify setup and cleanup
+            with pytest.raises(httpx.StreamClosed):
+                async for _event in provider.synthesize("long text"):
+                    pass
+
+    async def test_stop_then_new_synthesis_still_reports_read_error(self):
+        """The stop flag is per-synthesis: a later genuine ReadError propagates."""
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+        provider = OpenAITTS(OpenAITTSConfig(api_key="k", event_bus=bus))
+        stopped = CloseRaisesReadErrorResponse([])
+        first_audio = asyncio.Event()
+
+        async def consume() -> None:
+            async for _event in provider.synthesize("first"):
+                first_audio.set()
+
+        with patch.object(provider._client, "stream", return_value=stopped):
+            task = asyncio.create_task(consume())
+            await asyncio.wait_for(first_audio.wait(), 1)
+            await provider.stop()
+            await asyncio.wait_for(task, 1)
+
+        failing = CloseRaisesReadErrorResponse([])
+        with patch.object(provider._client, "stream", return_value=failing):
+            stream = provider.synthesize("second")
+            await anext(stream)
+            failing._closed_event.set()  # transport drop, not a stop()
+            with pytest.raises(httpx.ReadError):
+                await anext(stream)
+
+        await asyncio.sleep(0)
+        assert len(errors) == 1
+        await provider.close()
 
     async def test_stop_sets_inactive(self):
         provider = self._make_provider()
