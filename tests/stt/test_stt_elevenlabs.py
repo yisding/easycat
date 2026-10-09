@@ -1115,6 +1115,75 @@ async def test_elevenlabs_batch_no_event_on_empty():
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_batch_empty_transcript_emits_no_final():
+    """A silence-only clip transcribed as ``{"text": ""}`` emits no event.
+
+    Batch mode used to emit ``FINAL(text="")``, which downstream committed as
+    an empty segment. The realtime path already suppresses empty FINALs.
+    """
+    mock_client = _make_mock_http_client("")
+    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client)
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=200)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    mock_client.post.assert_called_once()
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_response_without_text_emits_no_final():
+    """A response body with no ``text`` key emits nothing instead of raising KeyError."""
+    mock_response = httpx.Response(
+        status_code=200,
+        json={"language_code": "eng"},
+        request=httpx.Request("POST", "https://api.elevenlabs.io/v1/speech-to-text"),
+    )
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.aclose = AsyncMock()
+    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client)
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=200)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    mock_client.post.assert_called_once()
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_cap_flush_with_empty_transcript_emits_no_final():
+    """A cap-forced mid-stream flush shares the empty-text guard and keeps buffering."""
+    mock_client = _make_mock_http_client("")
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="batch",
+        max_audio_chunk_bytes=10,
+        max_audio_buffer_bytes=8,
+        http_client=mock_client,
+    )
+    stt = ElevenLabsSTT(config)
+    emitted: list = []
+    original_emit = stt._emit_event
+
+    def _record(event):
+        emitted.append(event)
+        original_emit(event)
+
+    stt._emit_event = _record  # type: ignore[method-assign]
+
+    await stt.start_stream()
+    await stt.send_audio(AudioChunk(data=b"\x00" * 4, format=PCM16_MONO_16K))
+    await stt.send_audio(AudioChunk(data=b"\x00" * 6, format=PCM16_MONO_16K))
+
+    mock_client.post.assert_called_once()
+    assert emitted == []
+    assert len(stt._buffer) == 6
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_batch_rejects_mid_stream_format_change():
     from easycat.audio_format import AudioChunk, AudioFormat
 

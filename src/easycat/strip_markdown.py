@@ -13,6 +13,7 @@ content.
 from __future__ import annotations
 
 import re
+import string
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
@@ -21,7 +22,7 @@ from functools import partial
 
 _MD_DETECT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\*\*(?=\S).+?(?<=\S)\*\*"),  # bold **text**
-    re.compile(r"__(?=\S).+?(?<=\S)__"),  # bold __text__
+    re.compile(r"(?<!\w)__(?=\S).+?(?<=\S)__(?!\w)"),  # bold __text__ (not intraword)
     re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)"),  # italic *text*
     re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)"),  # italic _text_
     re.compile(r"~~.+?~~"),  # strikethrough
@@ -47,7 +48,7 @@ def has_markdown(text: str) -> bool:
 
 def _extract_fenced_code(match: re.Match[str]) -> str:
     """Extract the body of a fenced code block, discarding the fence markers."""
-    body = match.group(1)
+    body = match.group("code")
     # Strip the optional language identifier on the first line
     lines = body.split("\n", 1)
     if len(lines) == 2:
@@ -55,18 +56,29 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
     return body.strip()
 
 
-_FENCED_CODE_RE = re.compile(r"```([\s\S]*?)```")
+# Both code passes also match a backslash escape (``\\`` or ``\` ``) as an
+# alternative, so the left-to-right scan consumes escapes and code spans in
+# document order: an escaped backtick can neither open nor close a span, while
+# a backslash inside a span stays literal and never escapes its closing
+# backtick.  Only the ``code`` group is set for a real span.
+_FENCED_CODE_RE = re.compile(r"(?P<escape>\\[\\`])|```(?P<code>[\s\S]*?)```")
 # Inline code span (CommonMark): a run of N backticks closed by the next run of
 # exactly N backticks, so a double-backtick span can carry a literal backtick.
-# The lookarounds pin both delimiter runs to their full length; an opener with
-# no matching closer is left as literal text.  A span may wrap across line
-# endings but not across a blank line: a blank line ends the paragraph, and
-# pairing stray backticks from different paragraphs would swallow the prose
-# between them.
-_INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)((?:[^\n]|\n(?![ \t]*\r?\n))+?)(?<!`)\1(?!`)")
+# A run with no matching closer is consumed whole by the last alternative and
+# left as literal text, so the scan never restarts in the middle of a run.  A
+# span may wrap across line endings but not across a blank line: a blank line
+# ends the paragraph, and pairing stray backticks from different paragraphs
+# would swallow the prose between them.
+_INLINE_CODE_RE = re.compile(
+    r"(?P<escape>\\[\\`])"
+    r"|(?P<run>`+)(?!`)(?P<code>(?:[^\n]|\n(?![ \t]*\r?\n))+?)(?<!`)(?P=run)(?!`)"
+    r"|`+"
+)
 _CODE_SPAN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
-_BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)([\s\S]+?)(?<=\S)__")
+# Underscore runs inside a word never open or close emphasis (CommonMark), so
+# ``foo__bar__baz`` and ``test__one.py`` keep their underscores.
+_BOLD_UNDERSCORE_RE = re.compile(r"(?<!\w)__(?=\S)([\s\S]+?)(?<=\S)__(?!\w)")
 _ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 _STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~")
@@ -96,19 +108,24 @@ _DUNDER_NAME_RE = re.compile(r"^__([A-Za-z][A-Za-z0-9_]*)__$")
 _CODE_TOKEN_OPEN = "\ue002"
 _CODE_TOKEN_CLOSE = "\ue003"
 _CODE_TOKEN_RE = re.compile(rf"{_CODE_TOKEN_OPEN}(\d+){_CODE_TOKEN_CLOSE}")
-# Backslash-escaped emphasis markers (``\*`` / ``\_``) are literal text, not
-# delimiters.  They are swapped for private-use stand-ins before the emphasis
-# passes run and restored as the bare character afterwards, so ``\*x\*``
-# reads as ``*x*`` instead of the italic regex eating the ``*`` and leaving a
-# spoken "backslash".  A ``\\`` pair is consumed as a unit so the character
-# after an escaped backslash is still treated as markdown.
+# Backslash-escaped emphasis markers (``\*`` / ``\_``) and backticks (``\` ``)
+# are literal text, not delimiters.  They are swapped for private-use stand-ins
+# before the emphasis (or inline code) passes run and restored as the bare
+# character afterwards, so ``\*x\*`` reads as ``*x*`` instead of the italic
+# regex eating the ``*`` and leaving a spoken "backslash".  A ``\\`` pair is
+# consumed as a unit so the character after an escaped backslash is still
+# treated as markdown.
 _ESCAPED_STAR = "\ue004"
 _ESCAPED_UNDERSCORE = "\ue005"
+_ESCAPED_BACKTICK = "\ue006"
 _ESCAPED_EMPHASIS_RE = re.compile(r"\\([\\*_])")
 _ESCAPED_EMPHASIS_STANDINS = {"*": _ESCAPED_STAR, "_": _ESCAPED_UNDERSCORE}
-_RESTORE_ESCAPED_EMPHASIS = str.maketrans({_ESCAPED_STAR: "*", _ESCAPED_UNDERSCORE: "_"})
+_RESTORE_ESCAPED_EMPHASIS = str.maketrans(
+    {_ESCAPED_STAR: "*", _ESCAPED_UNDERSCORE: "_", _ESCAPED_BACKTICK: "`"}
+)
 _SENTINEL_CHARS_RE = re.compile(
-    f"[{_CODE_TOKEN_OPEN}{_CODE_TOKEN_CLOSE}{_ESCAPED_STAR}{_ESCAPED_UNDERSCORE}]"
+    f"[{_CODE_TOKEN_OPEN}{_CODE_TOKEN_CLOSE}{_ESCAPED_STAR}{_ESCAPED_UNDERSCORE}"
+    f"{_ESCAPED_BACKTICK}]"
 )
 
 _SHORT_CODE_MAX_CHARS = 24
@@ -158,6 +175,11 @@ def _stash_code_span(
     """Protect code text from markdown passes, restoring it at the end."""
 
     def _replace(match: re.Match[str]) -> str:
+        if match.group("code") is None:
+            # A backslash escape or an unpaired backtick run outside any code
+            # span: leave it as text (the inline pass turns an escaped backtick
+            # into its literal stand-in).
+            return match.group(0)
         code_spans.append(extractor(match))
         return f"{_CODE_TOKEN_OPEN}{len(code_spans) - 1}{_CODE_TOKEN_CLOSE}"
 
@@ -167,13 +189,27 @@ def _stash_code_span(
 def _extract_inline_code(match: re.Match[str]) -> str:
     # CommonMark turns each line ending inside a code span into a space before
     # the padding rule below, so a wrapped span reads as one line.
-    code = _CODE_SPAN_LINE_ENDING_RE.sub(" ", match.group(2))
+    code = _CODE_SPAN_LINE_ENDING_RE.sub(" ", match.group("code"))
     # CommonMark strips one space from each side when both are present and the
     # span is not all spaces; the padding lets a span start or end with a
     # backtick (a double-backtick span around " `a` " reads as "`a`").
     if code.startswith(" ") and code.endswith(" ") and code.strip(" "):
         return code[1:-1]
     return code
+
+
+def _stash_inline_code_span(
+    code_spans: list[str], extractor: Callable[[re.Match[str]], str]
+) -> Callable[[re.Match[str]], str]:
+    """Stash inline code spans and swap escaped backticks for their stand-in."""
+    stash = _stash_code_span(code_spans, extractor)
+
+    def _replace(match: re.Match[str]) -> str:
+        if match.group("escape") == "\\`":
+            return _ESCAPED_BACKTICK
+        return stash(match)
+
+    return _replace
 
 
 def _strip_heading_closing_sequence(match: re.Match[str], *, allow_at_text_end: bool) -> str:
@@ -334,6 +370,30 @@ class _DelimiterScanner:
         return self._next_closes.get(start)
 
 
+# CommonMark backslash escapes apply only to ASCII punctuation: ``\ `` is a
+# literal backslash followed by a (still significant) space.
+_ESCAPABLE = frozenset(string.punctuation)
+
+
+def _escapes_next(text: str, idx: int) -> bool:
+    """Return True when ``text[idx]`` is a backslash escaping the next char."""
+    return text[idx] == "\\" and idx + 1 < len(text) and text[idx + 1] in _ESCAPABLE
+
+
+def _find_unescaped(text: str, start: int, stop: Callable[[str], bool]) -> int:
+    """Return the first index from *start* whose char satisfies *stop*,
+    skipping backslash-escaped characters, or ``len(text)`` when none does."""
+    i = start
+    while i < len(text):
+        if _escapes_next(text, i):
+            i += 2
+            continue
+        if stop(text[i]):
+            return i
+        i += 1
+    return len(text)
+
+
 def _extract_markdown_destination_url(destination: str) -> str:
     """Extract URL token from markdown destination, dropping optional titles."""
     token = destination.strip()
@@ -341,20 +401,24 @@ def _extract_markdown_destination_url(destination: str) -> str:
         return ""
 
     if token.startswith("<"):
-        end = token.find(">")
-        if end > 1:
+        end = _find_unescaped(token, 1, lambda ch: ch == ">")
+        if 1 < end < len(token):
             return token[1:end].strip()
 
-    i = 0
-    while i < len(token):
-        ch = token[i]
-        if ch == "\\":
-            i += 2
-            continue
-        if ch.isspace():
-            break
-        i += 1
-    return token[:i].strip()
+    return token[: _find_unescaped(token, 0, str.isspace)].strip()
+
+
+# A link title after the destination: one ``"..."``, ``'...'`` or ``(...)``
+# group (backslash escapes allowed) that must run to the end of the
+# destination text.
+_LINK_TITLE_RE = re.compile(
+    r'"(?:[^"\\]|\\.)*+"' r"|'(?:[^'\\]|\\.)*+'" r"|\((?:[^()\\]|\\.)*+\)",
+    re.DOTALL,
+)
+
+# Characters ``str.splitlines`` treats as line breaks. A link destination never
+# crosses one: not between ``]`` and ``(``, and not inside ``<...>``.
+_LINE_BREAKS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,6 +438,14 @@ class _MarkdownReferenceScanner:
         self._length = len(text)
         self._labels = _DelimiterScanner(text, "[", "]")
         self._destinations = _DelimiterScanner(text, "(", ")", track_recovery=True)
+        # Lookup tables for destination validation, built on first use by
+        # ``_build_destination_index``.
+        self._next_space: list[int] | None = None
+        self._next_non_space: list[int] = []
+        self._next_angle_stop: list[int] = []
+        # End of the title match starting at each position (-1 when none),
+        # so nested candidates sharing one long title scan it only once.
+        self._title_ends: dict[int, int] = {}
 
     def __iter__(self) -> Iterator[_MarkdownReference]:
         index = 0
@@ -428,6 +500,12 @@ class _MarkdownReferenceScanner:
             recovery_close = self._destinations.find_next_close(destination_start)
             return None, recovery_close + 1 if recovery_close is not None else None
 
+        if not self._is_destination(destination_start + 1, destination_end):
+            # Bracketed prose followed by a parenthetical, such as
+            # ``[Enter] (the big key on the right)``, is not a link. Leave it
+            # intact rather than keeping only its first word as a "URL".
+            return None, start + 1
+
         label = self._text[label_start + 1 : label_end].strip()
         destination = self._text[destination_start + 1 : destination_end]
         return (
@@ -442,15 +520,113 @@ class _MarkdownReferenceScanner:
         )
 
     def _destination_start(self, index: int) -> int | None:
+        # Spaces between ``]`` and ``(`` are tolerated, but never a line
+        # break: a parenthetical on the next line is prose, not a destination.
         while index < self._length and self._text[index].isspace():
+            if self._text[index] in _LINE_BREAKS:
+                return None
             index += 1
         if index >= self._length or self._text[index] != "(":
             return None
         return index
 
+    def _is_destination(self, start: int, end: int) -> bool:
+        """Return True when ``text[start:end]`` is a link destination.
 
-def _replace_markdown_links_and_images(text: str) -> str:
-    """Render links as label+URL and images as alt text for voice output."""
+        Valid destinations (after trimming whitespace) are empty, ``<...>``
+        without a line break, or one token without whitespace, each
+        optionally followed by whitespace and a single title (see
+        ``_LINK_TITLE_RE``) that runs to the end. Anything else is prose. The
+        lookup tables keep each check cheap, so nested invalid candidates such
+        as ``[a]([a]([a](x y)))`` still scan in linear time overall.
+        """
+        text = self._text
+        while start < end and text[start].isspace():
+            start += 1
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        if start == end:
+            return True
+
+        next_space = self._next_space
+        if next_space is None:
+            next_space = self._build_destination_index()
+        token_end = -1
+        if text[start] == "<":
+            angle = self._next_angle_stop[start + 1]
+            if start + 1 < angle < end and text[angle] == ">":
+                token_end = angle + 1
+        if token_end < 0:
+            token_end = min(next_space[start], end)
+        if token_end == end:
+            return True
+        if not text[token_end].isspace():
+            return False
+        return self._title_end(self._next_non_space[token_end]) == end
+
+    def _title_end(self, title_start: int) -> int:
+        """Return where the title starting at ``title_start`` ends, or -1.
+
+        The title pattern cannot extend past its first unescaped closing
+        delimiter, so the unbounded match end is the only ``end`` for which a
+        bounded full match can succeed. Caching it per start keeps nested
+        candidates that share one title linear instead of rescanning it at
+        every nesting level.
+        """
+        title_end = self._title_ends.get(title_start)
+        if title_end is None:
+            match = _LINK_TITLE_RE.match(self._text, title_start)
+            title_end = match.end() if match is not None else -1
+            self._title_ends[title_start] = title_end
+        return title_end
+
+    def _build_destination_index(self) -> list[int]:
+        """Index the next whitespace, the next non-whitespace and the next
+        unescaped ``>`` or line break for every position, in linear time."""
+        text = self._text
+        length = self._length
+        # ``escaped[i]``: ``text[i]`` is ASCII punctuation escaped by an
+        # unescaped backslash. Whitespace is never escapable, so a backslash
+        # before it does not stop it ending the destination token.
+        escaped = [False] * length
+        for i in range(1, length):
+            escaped[i] = text[i - 1] == "\\" and not escaped[i - 1] and text[i] in _ESCAPABLE
+
+        next_space = [length] * (length + 1)
+        next_non_space = [length] * (length + 1)
+        next_angle_stop = [length] * (length + 1)
+        for i in range(length - 1, -1, -1):
+            ch = text[i]
+            is_space = ch.isspace()
+            next_space[i] = i if is_space else next_space[i + 1]
+            next_non_space[i] = next_non_space[i + 1] if is_space else i
+            stop = (ch == ">" and not escaped[i]) or ch in _LINE_BREAKS
+            next_angle_stop[i] = i if stop else next_angle_stop[i + 1]
+
+        self._next_space = next_space
+        self._next_non_space = next_non_space
+        self._next_angle_stop = next_angle_stop
+        return next_space
+
+
+# Deepest label nesting rendered recursively. Real Markdown nests a level or
+# two (a badge image inside a link); the cap keeps adversarial ``[[[...](u)](u)``
+# input from exhausting the stack or going quadratic. Deeper labels stay literal.
+_MAX_LABEL_NESTING = 4
+
+
+def _replace_markdown_links_and_images(
+    text: str,
+    protect_destination: Callable[[str], str] | None = None,
+    *,
+    depth: int = 0,
+) -> str:
+    """Render links as label+URL and images as alt text for voice output.
+
+    *protect_destination*, when given, maps a rendered link URL to the text
+    spliced in its place, so ``strip_markdown`` can stash the URL behind a
+    placeholder and keep the later emphasis passes away from it.
+    """
     if "[" not in text:
         return text
 
@@ -459,7 +635,7 @@ def _replace_markdown_links_and_images(text: str) -> str:
     changed = False
     for reference in _MarkdownReferenceScanner(text):
         out.append(text[cursor : reference.start])
-        out.append(_render_markdown_reference(reference))
+        out.append(_render_markdown_reference(reference, protect_destination, depth=depth))
         cursor = reference.end
         changed = True
     if not changed:
@@ -468,10 +644,50 @@ def _replace_markdown_links_and_images(text: str) -> str:
     return "".join(out)
 
 
-def _render_markdown_reference(reference: _MarkdownReference) -> str:
+def _render_markdown_reference(
+    reference: _MarkdownReference,
+    protect_destination: Callable[[str], str] | None = None,
+    *,
+    depth: int = 0,
+) -> str:
+    # The label may itself hold inline links/images (for example a README badge
+    # ``[![build](img.svg)](https://ci)``). The scanner resumes after the outer
+    # destination, so render the label here or the nested markup reaches TTS
+    # verbatim. Each call scans a strict substring of the label. Nested link
+    # URLs go through *protect_destination* too; nested image alt text and the
+    # rest of the label stay prose.
+    label = reference.label
+    if depth < _MAX_LABEL_NESTING:
+        label = _replace_markdown_links_and_images(label, protect_destination, depth=depth + 1)
     if reference.is_image:
-        return reference.label
-    return " ".join(part for part in (reference.label, reference.destination_url) if part)
+        return label
+    url = reference.destination_url
+    if url and protect_destination is not None:
+        # A label that repeats the destination (``[https://x/_a_](https://x/_a_)``,
+        # common in LLM output) is a URL too, so it gets the same protection;
+        # every other label stays prose.
+        if reference.label == url:
+            label = protect_destination(url)
+        url = protect_destination(url)
+    return " ".join(part for part in (label, url) if part)
+
+
+def _stash_link_destination(code_spans: list[str]) -> Callable[[str], str]:
+    """Protect a rendered link URL from markdown passes, restoring it at the end.
+
+    The URL is spoken verbatim, so ``_`` / ``*`` / ``~~`` inside it (Next.js
+    ``/_next_/`` paths) must not be read as emphasis.  It shares the code-span
+    stash; because the final restore is a single pass, the URL is resolved to
+    its final text here: escaped-emphasis stand-ins become their characters
+    and any code-span placeholder already inside it is expanded.
+    """
+
+    def _replace(url: str) -> str:
+        url = _restore_code_spans(url.translate(_RESTORE_ESCAPED_EMPHASIS), code_spans)
+        code_spans.append(url)
+        return f"{_CODE_TOKEN_OPEN}{len(code_spans) - 1}{_CODE_TOKEN_CLOSE}"
+
+    return _replace
 
 
 def _has_markdown_link_or_image(text: str) -> bool:
@@ -527,7 +743,7 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
         fenced_extractor = _extract_fenced_code_for_tts
         inline_extractor = _extract_inline_code_for_tts
     result = _FENCED_CODE_RE.sub(_stash_code_span(code_spans, fenced_extractor), result)
-    result = _INLINE_CODE_RE.sub(_stash_code_span(code_spans, inline_extractor), result)
+    result = _INLINE_CODE_RE.sub(_stash_inline_code_span(code_spans, inline_extractor), result)
 
     # 2a. Backslash-escaped emphasis markers are literal text: hide them from
     # the bold/italic/list/rule passes (code spans keep their escapes).
@@ -545,12 +761,18 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
         partial(_strip_heading_closing_sequence, allow_at_text_end=trim), result
     )
 
-    # 3/4. Links/images with balanced destination parsing.
-    result = _replace_markdown_links_and_images(result)
+    # 3/4. Links/images with balanced destination parsing.  A rendered link
+    # URL is stashed like a code span so the emphasis, strikethrough, heading
+    # and list passes below never rewrite it (``/_next_/`` keeps its ``_``).
+    # Labels and image alt text stay in the text: they are prose.
+    result = _replace_markdown_links_and_images(result, _stash_link_destination(code_spans))
 
-    # 5. Bold (before italic so ** is matched before *)
-    result = _BOLD_ASTERISK_RE.sub(r"\1", result)
+    # 5. Bold (before italic so ** is matched before *).  ``__`` goes first:
+    # its intraword guard reads the character beside the run, and stripping
+    # ``**`` first would turn the punctuation CommonMark sees there into a
+    # word character (``**left**__right__`` would keep ``__right__``).
     result = _BOLD_UNDERSCORE_RE.sub(r"\1", result)
+    result = _BOLD_ASTERISK_RE.sub(r"\1", result)
 
     # 6. Italic
     result = _ITALIC_ASTERISK_RE.sub(r"\1", result)
@@ -575,8 +797,8 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # (e.g. ``> ---``).
     result = _HR_RE.sub("", result)
 
-    # 13. Restore escaped emphasis markers as literal characters, then the
-    # protected code spans in one substitution pass.
+    # 13. Restore escaped emphasis markers and backticks as literal characters,
+    # then the protected code spans and link URLs in one substitution pass.
     result = result.translate(_RESTORE_ESCAPED_EMPHASIS)
     result = _restore_code_spans(result, code_spans)
 

@@ -390,6 +390,112 @@ def test_funasr_vad_configure_updates_model_silence(monkeypatch: pytest.MonkeyPa
     assert vad._model.max_end_sil == 320
 
 
+class _ScriptedFunASRRuntime:
+    """Fake in-tree runtime: start on call 1, segment end on call ``end_call``."""
+
+    def __init__(self, *, end_call: int = 10, **kwargs: object) -> None:
+        self.max_end_sil = kwargs["max_end_sil"]
+        self.calls = 0
+        self.end_call = end_call
+
+    def __call__(self, audio_in: object, param_dict: dict[str, object]) -> list[list[int]]:
+        self.calls += 1
+        if self.calls == 1:
+            return [[0, -1]]
+        if self.calls == self.end_call:
+            return [[-1, 450]]
+        return []
+
+
+def _install_scripted_funasr_runtime(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    import easycat.vad._funasr_runtime as runtime_pkg
+
+    seen_max_end_sil: list[object] = []
+
+    def _factory(**kwargs: object) -> _ScriptedFunASRRuntime:
+        seen_max_end_sil.append(kwargs["max_end_sil"])
+        return _ScriptedFunASRRuntime(**kwargs)
+
+    monkeypatch.setattr(runtime_pkg, "FunASROnlineRuntime", _factory)
+    return seen_max_end_sil
+
+
+async def _funasr_event_chunks(vad: FunASROnnxVAD, n_chunks: int) -> list[tuple[int, str]]:
+    observed: list[tuple[int, str]] = []
+    for index in range(1, n_chunks + 1):
+        chunk = _make_chunk(n_samples=vad._chunk_samples)
+        async for event in vad.process(chunk):
+            observed.append((index, type(event).__name__))
+    return observed
+
+
+@pytest.mark.asyncio
+async def test_funasr_vad_direct_construction_stops_on_model_end_frame(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A directly built FunASROnnxVAD must not wait for silence twice.
+
+    FunASR applies min_silence_duration_ms inside the model via max_end_sil,
+    but the shared state machine's silence gate used to be disabled only in
+    configure().  A FunASROnnxVAD() passed straight to a session therefore
+    delayed VADStopSpeaking by another 150 ms after the model's segment end.
+    """
+    _install_scripted_funasr_runtime(monkeypatch)
+
+    direct = FunASROnnxVAD()
+    direct._min_speech_duration_ms = 0
+    configured = FunASROnnxVAD()
+    configured.configure(min_speech_duration_ms=0, min_silence_duration_ms=150)
+
+    direct_events = await _funasr_event_chunks(direct, 19)
+    configured_events = await _funasr_event_chunks(configured, 19)
+
+    assert direct_events == [(1, "VADStartSpeaking"), (10, "VADStopSpeaking")]
+    assert direct_events == configured_events
+    assert direct._model.max_end_sil == 150
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("silence_ms", [150, 400])
+async def test_funasr_vad_reinitialize_after_close_keeps_configured_silence(
+    monkeypatch: pytest.MonkeyPatch, silence_ms: int
+):
+    """A runtime rebuilt after close() must keep the configured max_end_sil.
+
+    _initialize used to read max_end_sil from the shared silence gate, which
+    configure() zeroes, so the model re-created by process() after close()
+    was built with max_end_sil=0 instead of the configured duration.
+    """
+    seen_max_end_sil = _install_scripted_funasr_runtime(monkeypatch)
+
+    vad = FunASROnnxVAD()
+    vad.configure(min_speech_duration_ms=0, min_silence_duration_ms=silence_ms)
+    assert vad._model.max_end_sil == silence_ms
+    vad.close()
+    vad.reset()
+
+    events = await _funasr_event_chunks(vad, 12)
+
+    assert seen_max_end_sil == [150, silence_ms]
+    assert vad._model.max_end_sil == silence_ms
+    assert vad._min_silence_duration_ms == 0
+    assert events == [(1, "VADStartSpeaking"), (10, "VADStopSpeaking")]
+
+
+@pytest.mark.asyncio
+async def test_funasr_vad_default_reinitialize_after_close_uses_default_silence(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Without configure(), a runtime rebuilt after close() gets the 150 ms default."""
+    seen_max_end_sil = _install_scripted_funasr_runtime(monkeypatch)
+
+    vad = FunASROnnxVAD()
+    vad.close()
+    await _funasr_event_chunks(vad, 1)
+
+    assert seen_max_end_sil == [150, 150]
+
+
 def test_funasr_vad_reset_clears_streaming_state(monkeypatch: pytest.MonkeyPatch):
     """Reset should clear buffered audio and cached FunASR state."""
 

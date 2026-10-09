@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
+import unicodedata
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -29,6 +31,8 @@ from easycat.events import (
 from easycat.integrations.agents._text_stream import AgentTextStream, AgentTextUpdate
 from easycat.session.text import (
     _FIRST_PHRASE_TARGET_CHARS,
+    _SENTENCE_CLOSING_CHARS,
+    _ends_with_held_initial_period,
     _split_first_phrase,
     markdown_open_state,
     split_at_sentence_boundaries,
@@ -64,6 +68,124 @@ _MARKDOWN_RECHECK_CHARS = frozenset("`*_~])")
 # is unaffected; while a first clause is pending, a delta carrying one of these
 # also warrants a markdown-mode recheck.
 _FIRST_CLAUSE_TRIGGER_CHARS = frozenset(",;:")
+
+# Places where the markdown buffer may drop already-spoken raw text (see
+# ``_SentenceStreamBuffer._compact``), most preferred first: a paragraph
+# break, a line ending, then a sentence end.
+_PARAGRAPH_BREAKS = ("\n\n", "\r\n\r\n")
+# A sentence end is one of the segmenter's terminators, then any closing
+# quotes or brackets the segmenter keeps attached (``."`` / ``.)`` / ``.}``
+# / ``。」``), then the run of spaces or tabs after it: at least one for the
+# ASCII terminators, which need it to end a sentence mid-line, and any for the
+# CJK ones, which need none.  Consuming the whole blank run puts the cut at
+# the first non-blank character after the sentence end.
+_SENTENCE_BLANKS = " \t"
+_CLOSER_RUN = f"[{re.escape(_SENTENCE_CLOSING_CHARS)}]*"
+_SENTENCE_END_RE = re.compile(
+    f"[.!?]{_CLOSER_RUN}[{_SENTENCE_BLANKS}]+|[。！？．]{_CLOSER_RUN}[{_SENTENCE_BLANKS}]*"
+)
+# An ATX heading opener at a line start, mirroring ``strip_markdown``'s
+# ``_HEADING_RE`` (``^#{1,6}\s+``): one to six ``#`` then whitespace, which
+# includes a newline for an empty heading.  ``#123`` or seven ``#`` is text.
+_ATX_HEADING_START_RE = re.compile(r"#{1,6}\s")
+# The ASCII non-letters a tail may start with (see ``_is_safe_tail_start``).
+_SAFE_ASCII_TAIL_STARTS = frozenset("\"'([")
+
+
+def _compaction_cuts(raw: str, bound: int) -> list[int]:
+    """Return up to three raw offsets to try compacting at, most preferred first.
+
+    Only separators wholly inside ``raw[:bound]`` count.  A paragraph break
+    or line ending leaves the tail at a real line start.  A sentence end does
+    not, yet the tail is stripped as if it began a line, so a sentence cut is
+    offered only when no later delta can make the tail's start a block
+    construct (see ``_is_safe_tail_start``) and its line is not an ATX
+    heading (whose closer, still to come, depends on the opener in the head).
+    """
+    cuts: list[int] = []
+    paragraph = 0
+    for sep in _PARAGRAPH_BREAKS:
+        # A break that only occurs at or after ``bound`` must not count: an
+        # ``rfind`` miss (-1) plus the separator length would otherwise look
+        # like a tiny cut near the start, which ``_compact`` would take instead
+        # of a useful sentence cut further on.
+        found = raw.rfind(sep, 0, bound)
+        if found >= 0:
+            paragraph = max(paragraph, found + len(sep))
+    line = raw.rfind("\n", 0, bound) + 1
+    for cut in (paragraph, line, _last_sentence_cut(raw, bound)):
+        if cut > 0 and cut not in cuts:
+            cuts.append(cut)
+    return cuts
+
+
+def _is_safe_tail_start(ch: str, sentence_end: str) -> bool:
+    """Whether a tail starting with *ch* strips the same alone as in place.
+
+    ``strip_markdown`` anchors headings, blockquotes, lists, rules and code
+    fences at line starts, and the tail is stripped as if it began a line,
+    so it may only start with a character that cannot open one of those
+    once more text arrives:
+
+    - allowed: letters (any script), the quotes ``"`` and ``'``, the opening
+      brackets ``(`` and ``[`` (a link label is inline), and non-ASCII
+      punctuation and symbols (curly and guillemet quotes, dashes, emoji),
+      which no markdown pass matches;
+    - rejected: every other ASCII character, notably digits (``1.``
+      lists), ``-`` ``*`` ``+`` (lists, rules), ``_`` (rules), ``>``
+      (blockquotes), ``#`` (headings), backticks and ``~`` (fences), ``=``
+      (setext underlines), ``|``, ``<``, ``!`` (images), ``\\``; plus
+      whitespace (an indented marker), non-ASCII digits and other
+      characters such as the private-use code points ``strip_markdown``
+      deletes, which would expose what follows them.
+
+    A ``(`` straight after a ``]`` closer is rejected too: whitespace may
+    separate a link label from its destination, so the two could pair.
+    """
+    if ch.isalpha():
+        return True
+    if ch.isascii():
+        if ch == "(" and sentence_end.rstrip(_SENTENCE_BLANKS).endswith("]"):
+            return False
+        return ch in _SAFE_ASCII_TAIL_STARTS
+    return unicodedata.category(ch)[0] in "PS"
+
+
+def _last_sentence_cut(raw: str, bound: int) -> int:
+    """Return the offset after the last eligible sentence end before *bound*, or 0."""
+    heading_line_start = -1
+    for match in reversed(list(_SENTENCE_END_RE.finditer(raw, 0, bound))):
+        cut = match.end()
+        if match.start() >= heading_line_start >= 0:
+            continue
+        if not _is_safe_tail_start(raw[cut : cut + 1], match.group()):
+            continue
+        line_start = raw.rfind("\n", 0, cut) + 1
+        if _ATX_HEADING_START_RE.match(raw, line_start):
+            # Every earlier sentence end on this line is in the heading too.
+            heading_line_start = line_start
+            continue
+        return cut
+    return 0
+
+
+def _spoken_prefix_end(stripped: str, spoken: str) -> int | None:
+    """Return where *stripped* continues past the *spoken* prefix, or ``None``.
+
+    Tolerates a change confined to *spoken*'s trailing whitespace: a heading
+    closer that arrives after ``# Title. `` was split off removes the space
+    before it, so the match falls back to the spoken content and skips the
+    whitespace that follows it.
+    """
+    if stripped.startswith(spoken):
+        return len(spoken)
+    content = spoken.rstrip()
+    if not stripped.startswith(content):
+        return None
+    start = len(content)
+    while start < len(stripped) and stripped[start].isspace():
+        start += 1
+    return start
 
 
 @dataclass
@@ -151,6 +273,13 @@ class _SentenceStreamBuffer:
     - plain mode: split at sentence boundaries on every delta;
     - markdown mode: defer the regex-heavy strip/split work until a delta
       could plausibly complete a sentence or close a markdown span.
+
+    Markdown mode keeps the *raw* markdown of the turn in ``_text`` and the
+    stripped text already split off for TTS in ``_spoken``.  Every recheck
+    strips the raw text once and speaks only what follows ``_spoken``; it
+    never strips text that was already stripped.  Re-stripping a stripped
+    remainder (the old design) read a URL's ``_a_`` or an escaped ``\\_b\\_``
+    as emphasis and lost a heading opener before its closer arrived.
     """
 
     def __init__(
@@ -163,7 +292,20 @@ class _SentenceStreamBuffer:
         self._tts_queue = tts_queue
         self._prepare = prepare_tts_payload
         self._strip_md = strip_md
+        # Plain mode: text not yet queued.  Markdown mode: the raw markdown
+        # of the turn, minus any already-spoken text ``_compact`` dropped.
         self._text = ""
+        # Markdown mode only.  The stripped turn is ``_carry`` (already
+        # stripped text, empty except after the fallback in
+        # ``_unspoken_window``) followed by the stripped form of ``_text``;
+        # ``_spoken`` is the prefix of it already split off for TTS.  The
+        # snapshot records the last strip that lined up with ``_spoken``: raw
+        # length and stripped turn (which starts with ``_spoken``), so the
+        # fallback can rebuild what is left to speak.
+        self._carry = ""
+        self._spoken = ""
+        self._snapshot_raw_len = 0
+        self._snapshot_stripped = ""
         # The first payload of a turn is split at the first natural clause
         # boundary (comma/semicolon/colon) instead of a full sentence to cut
         # time-to-first-audio.  Cleared once the first payload is queued;
@@ -184,9 +326,19 @@ class _SentenceStreamBuffer:
         return self._payload_count > 0
 
     def replace(self, text: str) -> None:
-        """Replace the pending buffer wholesale (used by the ``done`` event)."""
+        """Replace the pending buffer wholesale (used by the ``done`` event).
+
+        The consumer only calls this when no text delta arrived, so nothing
+        has been spoken.  In markdown mode *text* is the turn's full raw
+        markdown: ``flush`` speaks whatever of it follows ``_spoken``, and if
+        it does not line up with ``_spoken`` the snapshot below makes the
+        fallback speak *text* whole, as this method always did.
+        """
         if not self._suppressed:
             self._text = text
+            self._carry = ""
+            self._snapshot_raw_len = 0
+            self._snapshot_stripped = self._spoken
 
     async def replace_pending(self, text: str) -> bool:
         """Replace all uncommitted text and re-run streaming segmentation."""
@@ -194,7 +346,7 @@ class _SentenceStreamBuffer:
             raise RuntimeError("cannot replace text after a TTS payload was admitted")
         if self._suppressed:
             return False
-        self._text = ""
+        self._reset_text()
         self._first_payload_pending = True
         self._markdown_window_open = False
         self._awaiting_link_dest = False
@@ -203,7 +355,7 @@ class _SentenceStreamBuffer:
     def suppress(self) -> None:
         """Drop pending text and prevent further payloads for this turn."""
         self._suppressed = True
-        self._text = ""
+        self._reset_text()
 
     async def add_delta(self, delta: str) -> bool:
         """Buffer *delta* and report whether it queued a TTS payload."""
@@ -218,7 +370,11 @@ class _SentenceStreamBuffer:
         return False
 
     async def _add_markdown_delta(self, delta: str) -> bool:
-        had_trailing_numeric_separator = self._has_trailing_numeric_separator(self._text)
+        # A trailing "3." / "1," or lone-letter period ("tools e.") was held
+        # for lookahead, so the next delta must recheck even without a
+        # trigger character of its own.
+        held_number = self._has_trailing_numeric_separator(self._text)
+        had_lookahead_hold = held_number or _ends_with_held_initial_period(self._text)
         self._text += delta
 
         # Markdown stripping is regex-heavy and sentence splitting scans the
@@ -244,6 +400,10 @@ class _SentenceStreamBuffer:
                 # The first payload may emit at a clause boundary, so a delta
                 # carrying ``,``/``;``/``:`` is also worth a recheck.
                 triggers = triggers | _FIRST_CLAUSE_TRIGGER_CHARS
+            # Before the first payload nothing is spoken, so ``_text`` is the
+            # whole raw turn.  This is only a cheap pre-filter: raw length
+            # approximates the stripped window, and the real split below
+            # runs on stripped text.
             bounded_first_phrase_ready = (
                 self._first_payload_pending
                 and len(self._text) >= _FIRST_PHRASE_TARGET_CHARS
@@ -251,22 +411,30 @@ class _SentenceStreamBuffer:
             )
             if (
                 not bounded_first_phrase_ready
-                and not had_trailing_numeric_separator
+                and not had_lookahead_hold
                 and not any(ch in delta for ch in triggers)
             ):
                 return False
 
+        # Openness is judged on the raw turn text.  Its spoken part was closed
+        # when it was split off, so only the unspoken tail can hold it open.
         self._markdown_window_open, self._awaiting_link_dest = markdown_open_state(self._text)
         if self._markdown_window_open:
             return False
 
-        stripped_window = strip_markdown(self._text, trim=False, normalize_code_spans=True)
-        ready, remaining = self._split_pending(stripped_window)
+        ready, _remaining = self._split_pending(self._unspoken_window())
         # Commit the split before queueing.  The first-payload handoff yields
         # after the payload is accepted, so cancellation in that window must
-        # not leave the already-emitted prefix in the pending buffer for a
-        # later flush to duplicate.
-        self._text = remaining
+        # not leave the queued prefix outside ``_spoken`` for a later flush to
+        # duplicate.
+        self._spoken += ready
+        if self._carry and self._spoken.startswith(self._carry):
+            # The carried text is all spoken: fold it away.
+            carried = len(self._carry)
+            self._carry = ""
+            self._spoken = self._spoken[carried:]
+            self._snapshot_stripped = self._snapshot_stripped[carried:]
+        self._compact()
         queued = False
         if ready:
             queued = await self._put_payload(ready, is_final=False)
@@ -275,21 +443,109 @@ class _SentenceStreamBuffer:
     async def flush(self) -> bool:
         """Queue remaining text and report whether it produced a payload."""
         if self._suppressed:
-            self._text = ""
+            self._reset_text()
             return False
-        queued = False
-        if self._text.strip():
-            text = self._text
-            if self._strip_md:
-                text = strip_markdown(text, normalize_code_spans=True)
-            # Commit the flush before queueing. The first-payload handoff
-            # yields after the payload is accepted, so cancellation in that
-            # window must not leave the already-queued final text pending for
-            # a later flush to duplicate.
-            self._text = ""
-            queued = await self._put_payload(text, is_final=True)
+        text = self._text if self._text.strip() else ""
+        if text and self._strip_md:
+            # Strip the raw turn once, as complete trimmed text (which also
+            # drops a heading closer on the last line), and speak what
+            # follows the spoken prefix.
+            text = self._unspoken_window(final=True).strip()
+        # Commit the flush before queueing. The first-payload handoff yields
+        # after the payload is accepted, so cancellation in that window must
+        # not leave the already-queued final text pending for a later flush to
+        # duplicate.
+        self._reset_text()
+        if not text:
+            return False
+        return await self._put_payload(text, is_final=True)
+
+    def _reset_text(self) -> None:
         self._text = ""
-        return queued
+        self._carry = ""
+        self._spoken = ""
+        self._snapshot_raw_len = 0
+        self._snapshot_stripped = ""
+
+    def _strip_turn(self, *, final: bool) -> str:
+        """Return the stripped turn: ``_carry`` plus ``_text`` stripped once.
+
+        The final strip is complete and trimmed, as ``strip_markdown``'s
+        default (``trim=True`` also drops a heading closer on the last line);
+        the raw text's leading whitespace is kept where it meets the carry.
+        """
+        if not final:
+            return self._carry + strip_markdown(self._text, trim=False, normalize_code_spans=True)
+        stripped = strip_markdown(self._text, trim=True, normalize_code_spans=True)
+        if self._carry:
+            lead = self._text[: len(self._text) - len(self._text.lstrip())]
+            stripped = f"{self._carry}{lead}{stripped}".lstrip()
+        return stripped
+
+    def _unspoken_window(self, *, final: bool = False) -> str:
+        """Strip the raw markdown once and return the part not yet spoken.
+
+        Stripping is prefix-stable once markdown is closed, so the stripped
+        turn almost always starts with ``_spoken``.  Two exceptions are
+        handled without ever speaking a spoken prefix twice:
+
+        - Only ``_spoken``'s trailing whitespace changed (a heading closer
+          arriving after ``# Title. `` was split off drops the space before
+          it): line up on the spoken content and skip the whitespace.
+        - Anything else (a delimiter pairing across the spoken boundary in a
+          way ``markdown_open_state`` did not foresee, e.g. a later ``**``
+          closing one that was spoken literally): move the stripped text
+          left unspoken at the last consistent strip into ``_carry`` and keep
+          only the raw text that arrived since in ``_text``.  The carry is
+          never stripped again, so a URL or escaped marker in it survives;
+          the price is that markdown in the new raw text can no longer pair
+          with anything before the snapshot, so it may be spoken literally.
+        """
+        stripped = self._strip_turn(final=final)
+        # The final strip is trimmed, so line up on the spoken text without
+        # its leading whitespace.
+        start = _spoken_prefix_end(stripped, self._spoken.lstrip() if final else self._spoken)
+        if start is None:
+            self._carry = self._snapshot_stripped[len(self._spoken) :]
+            self._text = self._text[self._snapshot_raw_len :]
+            self._spoken = ""
+            stripped = self._strip_turn(final=final)
+            start = 0
+        self._spoken = stripped[:start]
+        self._snapshot_raw_len = len(self._text)
+        self._snapshot_stripped = stripped
+        return stripped[start:]
+
+    def _compact(self) -> None:
+        """Drop fully spoken raw text, bounding the per-recheck strip cost.
+
+        Each recheck strips the whole raw text, so without this a long turn
+        costs O(n^2).  Up to three candidate cuts are tried (see
+        ``_compaction_cuts``), and one is taken only when it is provably
+        invisible: the stripped head is wholly inside ``_spoken`` and
+        stripping head and tail apart gives exactly the current stripped
+        turn, so no markdown construct pairs across the cut.
+        """
+        if self._carry or not self._spoken:
+            return
+        raw = self._text
+        # Markdown usually makes raw text longer than its stripped form, so
+        # the unspoken stripped tail maps to at least that many raw
+        # characters; searching only before it is a hint, the checks are exact.
+        bound = len(raw) - (len(self._snapshot_stripped) - len(self._spoken))
+        for cut in _compaction_cuts(raw, bound):
+            head = strip_markdown(raw[:cut], trim=False, normalize_code_spans=True)
+            if not self._spoken.startswith(head):
+                continue
+            tail = raw[cut:]
+            tail_stripped = strip_markdown(tail, trim=False, normalize_code_spans=True)
+            if head + tail_stripped != self._snapshot_stripped:
+                continue
+            self._text = tail
+            self._spoken = self._spoken[len(head) :]
+            self._snapshot_raw_len = len(tail)
+            self._snapshot_stripped = tail_stripped
+            return
 
     def _split_pending(self, text: str) -> tuple[str, str]:
         """Split *text* for emission, honouring the first-payload window.
