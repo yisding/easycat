@@ -284,6 +284,60 @@ def test_resample_rate_pairs_dc_preservation(from_rate: int, to_rate: int):
         assert abs(s - value) <= 1
 
 
+def _dc_body(samples: tuple[int, ...]) -> tuple[int, ...]:
+    trim = (len(samples) * 15) // 100
+    return samples[trim : len(samples) - trim]
+
+
+@pytest.mark.parametrize("value", [1000, -1000, 12345, -12345, 32767, -32768])
+@pytest.mark.parametrize("from_rate,to_rate", [(16000, 48000), (48000, 16000), (24000, 16000)])
+def test_batch_soxr_resample_rounds_dc_exactly(value: int, from_rate: int, to_rate: int):
+    """Batch soxr must round float output to nearest, not truncate toward zero.
+
+    Truncating via ``astype(np.int16)`` turned a filter output of 999.9999
+    into 999, so a DC 1000 came back as 999 in ~40% of steady-state samples
+    (and -1000 as -999): a sign-dependent bias toward zero. The streaming
+    soxr path rounds, so the batch path must match it exactly.
+    """
+    import easycat._audio_utils as au
+
+    assert au.resample_backend() == "soxr"
+    n_input = 1600
+    data = struct.pack(f"<{n_input}h", *([value] * n_input))
+    result = resample(data, from_rate, to_rate)
+    body = _dc_body(struct.unpack(f"<{len(result) // 2}h", result))
+    assert body
+    assert set(body) == {value}
+
+
+@pytest.mark.parametrize("from_rate,to_rate", [(16000, 48000), (48000, 16000), (24000, 16000)])
+def test_batch_scipy_resample_rounds_to_nearest(from_rate: int, to_rate: int):
+    """Batch scipy must round float output to nearest, like the soxr paths.
+
+    ``resample_poly`` does not reproduce DC exactly for every ratio, so compare
+    against its own float output: rounding stays within 0.5 LSB, whereas the
+    old truncation toward zero was off by up to 1 LSB on both signs.
+    """
+    pytest.importorskip("scipy.signal")
+    np = pytest.importorskip("numpy")
+    from scipy.signal import resample_poly
+
+    import easycat._audio_utils as au
+
+    n_input = 1600
+    source = [
+        int(12000 * math.sin(2 * math.pi * 440 * index / from_rate)) for index in range(n_input)
+    ]
+    data = struct.pack(f"<{n_input}h", *source)
+    result = au._resample_scipy_impl(data, from_rate, to_rate)
+    out = np.frombuffer(result, dtype=np.int16).astype(np.float64)
+    g = math.gcd(from_rate, to_rate)
+    samples = np.asarray(source, dtype=np.float32) / 32768.0
+    expected = resample_poly(samples, to_rate // g, from_rate // g) * 32768.0
+    assert out.shape == expected.shape
+    assert float(np.max(np.abs(out - expected))) <= 0.5 + 1e-6
+
+
 # ── Odd-length chunk handling (split 16-bit sample) ───────────────
 
 
