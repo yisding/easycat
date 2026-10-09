@@ -325,17 +325,38 @@ def test_split_first_clause_holds_trailing_abbreviation_for_lookahead(text: str)
     assert split_first_clause(text) == ("", text)
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["We stock many tools e.", "We stock many tools e. ", "Meet me tomorrow at 10 a."],
+)
+def test_split_first_clause_holds_trailing_single_letter_period(text: str) -> None:
+    """A buffer ending in "<letter>." may be mid-abbreviation ("e." + "g.").
+
+    The segmenter reports a finished sentence there, so the hold is ours: wait
+    for the next delta (or the end-of-stream flush) before shipping it.
+    """
+    assert split_first_clause(text) == ("", text)
+
+
+def test_split_first_clause_releases_single_letter_period_once_text_follows() -> None:
+    # Once a later character arrives the segmenter decides as usual, so a real
+    # sentence ending in a one-letter word still ships at that boundary.
+    assert split_first_clause("I chose option a. Then") == ("I chose option a. ", "Then")
+
+
+def test_split_at_sentence_boundaries_holds_trailing_single_letter_period() -> None:
+    text = "Hello there. We stock many tools e."
+    assert split_at_sentence_boundaries(text) == ("Hello there. ", "We stock many tools e.")
+    assert split_at_sentence_boundaries("We stock many tools e.") == ("", "We stock many tools e.")
+
+
 def test_split_first_clause_still_splits_at_comma_before_abbreviation() -> None:
     ready, remaining = split_first_clause("Hello there, Mrs. Jones.")
     assert ready == "Hello there, "
     assert remaining == "Mrs. Jones."
 
 
-@pytest.mark.parametrize("strip_md", [False, True])
-async def test_streaming_first_payload_does_not_split_inside_abbreviation(
-    strip_md: bool,
-) -> None:
-    """Streaming "e.g." must not ship "e." and "g. " as separate payloads."""
+def _stream_buffer(strip_md: bool):
     import asyncio
 
     from easycat.session._streaming import _SentenceStreamBuffer
@@ -346,16 +367,97 @@ async def test_streaming_first_payload_does_not_split_inside_abbreviation(
         prepare_tts_payload=lambda text, **_: TTSInput(text=text),
         strip_md=strip_md,
     )
-    for delta in ["We stock many tools", " e.g.", " hammers", " and saws."]:
-        await buffer.add_delta(delta)
-    await buffer.flush()
+    return buffer, tts_queue
 
+
+def _drain(tts_queue) -> list[str]:
     payloads = []
     while not tts_queue.empty():
         item = tts_queue.get_nowait()
         assert item is not None
         payloads.append(item.text)
-    assert payloads == ["We stock many tools e.g. hammers and saws."]
+    return payloads
+
+
+@pytest.mark.parametrize("strip_md", [False, True])
+@pytest.mark.parametrize(
+    ("deltas", "queued_after_each"),
+    [
+        (
+            # Whole sentence: it completes, and ships, on the last delta.
+            ["We stock many tools", " e.g.", " hammers", " and saws."],
+            [[], [], [], ["We stock many tools e.g. hammers and saws."]],
+        ),
+        (
+            # The comma after the abbreviation is the first-clause boundary,
+            # so the first payload ships while the sentence is incomplete.
+            ["We stock many tools", " e.g.", " hammers,", " and saws."],
+            [[], [], ["We stock many tools e.g. hammers,"], [" and saws."]],
+        ),
+    ],
+)
+async def test_streaming_first_payload_does_not_split_inside_abbreviation(
+    strip_md: bool, deltas: list[str], queued_after_each: list[list[str]]
+) -> None:
+    """Streaming "e.g." must not ship "e." and "g. " as separate payloads.
+
+    The queue is checked after every delta, not only after ``flush()``, so a
+    buffer that held everything until the final flush would fail.
+    """
+    buffer, tts_queue = _stream_buffer(strip_md)
+    for delta, expected in zip(deltas, queued_after_each, strict=True):
+        await buffer.add_delta(delta)
+        assert _drain(tts_queue) == expected, delta
+    await buffer.flush()
+    assert _drain(tts_queue) == []
+
+
+@pytest.mark.parametrize("strip_md", [False, True])
+async def test_streaming_holds_period_ending_at_abbreviation_start(strip_md: bool) -> None:
+    """A delta ending at "e." must not ship "tools e." before "g." arrives."""
+    buffer, tts_queue = _stream_buffer(strip_md)
+    await buffer.add_delta("We stock many tools e.")
+    assert _drain(tts_queue) == []
+    await buffer.add_delta("g. hammers")
+    assert _drain(tts_queue) == []
+    await buffer.add_delta(" and saws.")
+    assert _drain(tts_queue) == ["We stock many tools e.g. hammers and saws."]
+    await buffer.flush()
+    assert _drain(tts_queue) == []
+
+
+@pytest.mark.parametrize("strip_md", [False, True])
+async def test_streaming_releases_single_letter_sentence_end_on_next_delta(
+    strip_md: bool,
+) -> None:
+    """The lone-letter hold lasts only until the next delta arrives.
+
+    The follow-up delta carries no punctuation, so markdown mode must recheck
+    because the previous buffer ended in a held period.
+    """
+    buffer, tts_queue = _stream_buffer(strip_md)
+    await buffer.add_delta("I chose option a.")
+    assert _drain(tts_queue) == []
+    await buffer.add_delta(" Then more")
+    assert _drain(tts_queue) == ["I chose option a. "]
+    await buffer.flush()
+    assert _drain(tts_queue) == ["Then more"]
+
+
+@pytest.mark.parametrize("strip_md", [False, True])
+async def test_streaming_plan_b_sentence_ships_once_next_delta_arrives(strip_md: bool) -> None:
+    """A sentence ending in an uppercase initial ("Plan B.") is not lost.
+
+    It waits for the next delta like any trailing initial; the segmenter then
+    reads "B. Then" as an initial inside one sentence, so both ship together.
+    """
+    buffer, tts_queue = _stream_buffer(strip_md)
+    await buffer.add_delta("I chose plan B.")
+    assert _drain(tts_queue) == []
+    await buffer.add_delta(" Then more.")
+    assert _drain(tts_queue) == ["I chose plan B. Then more."]
+    await buffer.flush()
+    assert _drain(tts_queue) == []
 
 
 def test_split_first_phrase_bounds_punctuation_free_opener() -> None:

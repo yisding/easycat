@@ -67,7 +67,7 @@ def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     result = _SENTENCE_SEGMENTER.segment_with_lookahead(text)
     if not result.segments:
         return "", text
-    if not result.should_wait_for_more:
+    if not result.should_wait_for_more and not _ends_with_held_initial_period(text):
         return text, ""
     if len(result.segments) == 1:
         return "", text
@@ -176,7 +176,35 @@ def _is_sentence_terminal_boundary(
     a boundary.  *sentence_ends* lazily returns the
     :func:`_stable_sentence_ends` offsets for *text*.
     """
+    if _is_held_initial_period(text, index):
+        return False
     return _ends_sentence(text, index, sentence_ends())
+
+
+def _is_held_initial_period(text: str, index: int) -> bool:
+    """Whether the ``.`` at *index* ends the buffer right after a lone letter.
+
+    A streamed delta can stop exactly at the first period of a dotted
+    abbreviation or initial (``"tools e."`` before ``"g. hammers"`` arrives,
+    ``"10 a."`` before ``"m."``), and the segmenter then reports a finished
+    sentence.  Hold such a period until a later non-space character arrives;
+    from then on the segmenter decides as usual.  The trade-off is that a
+    genuine sentence ending in a one-letter word (``"I chose option a."``)
+    also waits for the next delta, or for the end-of-stream flush.
+    """
+    return (
+        text[index] == "."
+        and not text[index + 1 :].strip()
+        and index >= 1
+        and text[index - 1].isalpha()
+        and (index == 1 or not _is_word_char(text[index - 2]))
+    )
+
+
+def _ends_with_held_initial_period(text: str) -> bool:
+    """Whether *text* ends (ignoring whitespace) in a held initial period."""
+    stripped = text.rstrip()
+    return bool(stripped) and _is_held_initial_period(stripped, len(stripped) - 1)
 
 
 def _stable_sentence_ends(text: str) -> frozenset[int]:
