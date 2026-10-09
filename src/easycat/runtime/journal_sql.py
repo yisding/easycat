@@ -1442,6 +1442,11 @@ class LibsqlJournal(_SqlJournalBase):
         self._closed = False
         self._connection_closed = False
         self._finalize_requested = False
+        # True while the durable file holds a committed ``clean_close`` marker
+        # written by this instance. The next successful append clears it in
+        # the same transaction (mirroring ``SqliteJournal``), so a crash after
+        # a post-finalize write is not mistaken for a clean close on reuse.
+        self._clean_close_marked = False
         self._finalize_thread: threading.Thread | None = None
         self._close_thread: threading.Thread | None = None
 
@@ -1655,6 +1660,7 @@ class LibsqlJournal(_SqlJournalBase):
                     "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
                 )
                 self._conn.commit()
+                self._clean_close_marked = True
                 harden_sqlite_files(self._db_path)
             except Exception:
                 logger.debug("libsql clean_close marker write failed", exc_info=True)
@@ -1713,6 +1719,7 @@ class LibsqlJournal(_SqlJournalBase):
                             "(key, value) VALUES ('clean_close', '1')"
                         )
                         self._conn.commit()
+                        self._clean_close_marked = True
                     except Exception:
                         logger.debug("libsql clean_close marker write failed", exc_info=True)
                 try:
@@ -1793,10 +1800,18 @@ class LibsqlJournal(_SqlJournalBase):
         with self._lock:
             if self._closed or self._degraded:
                 return -1
+            clear_clean_close = self._clean_close_marked
             previous_seq = self._seq
             self._seq = previous_seq + 1
             seq = self._seq
             try:
+                if clear_clean_close:
+                    # A durable post-finalize write reopens the journal: drop
+                    # the clean_close marker in the same transaction as the
+                    # row so a crash before close() reads as unclean reuse
+                    # (prior rows retained) instead of clean-reuse truncation.
+                    # A failed append rolls this deletion back with the row.
+                    self._conn.execute("DELETE FROM session_state WHERE key = 'clean_close'")
                 record = _journal_record_for_append(
                     sequence=seq,
                     session_id=session_id,
@@ -1839,6 +1854,8 @@ class LibsqlJournal(_SqlJournalBase):
                 except Exception:
                     logger.debug("libsql append rollback failed", exc_info=True)
                 raise
+            if clear_clean_close:
+                self._clean_close_marked = False
             # NB: file-permission hardening is intentionally NOT done here.  It
             # is a stat+chmod over the DB and its WAL/SHM sidecars, so running
             # it on every append wastes syscalls on the hot path.  Hardening
