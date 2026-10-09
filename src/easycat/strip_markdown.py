@@ -576,8 +576,17 @@ class _MarkdownReferenceScanner:
         return next_space
 
 
+# Deepest label nesting rendered recursively. Real Markdown nests a level or
+# two (a badge image inside a link); the cap keeps adversarial ``[[[...](u)](u)``
+# input from exhausting the stack or going quadratic. Deeper labels stay literal.
+_MAX_LABEL_NESTING = 4
+
+
 def _replace_markdown_links_and_images(
-    text: str, protect_destination: Callable[[str], str] | None = None
+    text: str,
+    protect_destination: Callable[[str], str] | None = None,
+    *,
+    depth: int = 0,
 ) -> str:
     """Render links as label+URL and images as alt text for voice output.
 
@@ -593,7 +602,7 @@ def _replace_markdown_links_and_images(
     changed = False
     for reference in _MarkdownReferenceScanner(text):
         out.append(text[cursor : reference.start])
-        out.append(_render_markdown_reference(reference, protect_destination))
+        out.append(_render_markdown_reference(reference, protect_destination, depth=depth))
         cursor = reference.end
         changed = True
     if not changed:
@@ -603,17 +612,29 @@ def _replace_markdown_links_and_images(
 
 
 def _render_markdown_reference(
-    reference: _MarkdownReference, protect_destination: Callable[[str], str] | None = None
+    reference: _MarkdownReference,
+    protect_destination: Callable[[str], str] | None = None,
+    *,
+    depth: int = 0,
 ) -> str:
+    # The label may itself hold inline links/images (for example a README badge
+    # ``[![build](img.svg)](https://ci)``). The scanner resumes after the outer
+    # destination, so render the label here or the nested markup reaches TTS
+    # verbatim. Each call scans a strict substring of the label. Nested link
+    # URLs go through *protect_destination* too; nested image alt text and the
+    # rest of the label stay prose.
+    label = reference.label
+    if depth < _MAX_LABEL_NESTING:
+        label = _replace_markdown_links_and_images(label, protect_destination, depth=depth + 1)
     if reference.is_image:
-        return reference.label
-    label, url = reference.label, reference.destination_url
+        return label
+    url = reference.destination_url
     if url and protect_destination is not None:
         # A label that repeats the destination (``[https://x/_a_](https://x/_a_)``,
         # common in LLM output) is a URL too, so it gets the same protection;
         # every other label stays prose.
-        if label == url:
-            label = protect_destination(label)
+        if reference.label == url:
+            label = protect_destination(url)
         url = protect_destination(url)
     return " ".join(part for part in (label, url) if part)
 
