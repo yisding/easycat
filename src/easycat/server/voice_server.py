@@ -142,7 +142,6 @@ class VoiceServer:
         # readiness checks (the ``from_manifest`` path sets these; a factory-only
         # server leaves them ``None`` and reports an empty plan / skipped checks).
         self._manifest: Any = None
-        self._manifest_load_error: str | None = None
 
         # Bare session registry only: add/remove/stop_all/connection. Capacity
         # and draining are NOT attributed to it (it has neither).
@@ -1188,9 +1187,8 @@ class VoiceServer:
 
         Returns ``(None, None)`` for a factory-only server (no manifest/profile)
         so :class:`VoiceServerHealth` keeps the M4 ``skipped`` placeholders.
-        Otherwise returns ``(manifest_loaded, plan_blocking_errors)``: a manifest
-        that failed to load is ``(False, None)``; a loaded manifest returns its
-        plan's blocking-error reasons (empty tuple when the plan is clean).
+        Otherwise returns ``(True, plan_blocking_errors)``: the loaded manifest's
+        plan blocking-error reasons (empty tuple when the plan is clean).
 
         The planner is imported LAZILY here so ``import easycat.server`` never
         pulls it (the M4/M6b boundary). This is the parity-gated wiring: it only
@@ -1198,9 +1196,6 @@ class VoiceServer:
         parity test is green.
         """
         if self._manifest is None:
-            if self._manifest_load_error is not None:
-                # A manifest was configured but failed to load.
-                return False, None
             return None, None
         # The manifest loaded; the plan may still be unbuildable (e.g. an unknown
         # provider/backend shortcut such as ``stt = "opnai"`` or ``vad =
@@ -1259,7 +1254,8 @@ class VoiceServer:
         the other two through :func:`_empty_plan_gaps`. ``issues`` is the additive,
         role-attributed coded array (``code``/``reason``/``severity`` plus any of
         ``field``/``role``/``detail``/``fix``) every branch carries;
-        ``manifest_loaded`` is server-only.
+        ``manifest_loaded`` is server-only: ``False`` for a factory-only server
+        (matching ``/manifest``'s ``"loaded": False``), ``True`` otherwise.
         """
         if self._manifest is None:
             return {
@@ -1268,7 +1264,8 @@ class VoiceServer:
                 **_empty_plan_gaps(),
                 "blocking_errors": [],
                 "has_blocking_errors": False,
-                "manifest_loaded": self._manifest_load_error is None,
+                # No manifest: agrees with ``/manifest``'s ``"loaded": False``.
+                "manifest_loaded": False,
                 "issues": [],
             }
         from easycat.planning import plan_to_dict

@@ -118,6 +118,21 @@ def test_plan_payload_factory_only_server_is_empty() -> None:
     assert payload["missing_backends"] == []
 
 
+def test_plan_payload_factory_only_server_reports_no_manifest_loaded() -> None:
+    """A factory-only server has no manifest, so ``/plan`` must not claim one loaded.
+
+    ``plan_payload`` used to report ``manifest_loaded=True`` here while ``/manifest``
+    said ``"loaded": False`` and ``/health`` reported the manifest check as skipped.
+    """
+    server = VoiceServer(
+        VoiceServerConfig(host="127.0.0.1", port=0),
+        session_factory=lambda _t: _FakeSession(),
+    )
+    payload = server.plan_payload()
+    assert payload["manifest_loaded"] is False
+    assert payload["manifest_loaded"] is server.manifest_payload()["loaded"]
+
+
 def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
@@ -207,6 +222,7 @@ async def test_plan_route_factory_only_returns_empty(
             assert resp.status == 200
             body = await resp.json()
         assert body["selected"] == {}
+        assert body["manifest_loaded"] is False
     finally:
         await server.stop()
 
