@@ -647,6 +647,53 @@ def test_strip_markdown_does_not_treat_escaped_asterisks_as_emphasis(
     assert strip_markdown(text) in acceptable
 
 
+@pytest.mark.parametrize("normalize_code_spans", [False, True])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (r"Type \`ls\` to list.", "Type `ls` to list."),
+        (r"\`x\`", "`x`"),
+        (r"Use \`a\` and `b`.", "Use `a` and b."),
+        (r"a \` b", "a ` b"),
+        # CommonMark: the escaped backtick is literal and ``x``` has no
+        # closing run of exactly two, so every backtick stays as text.
+        (r"\```x```", "```x```"),
+        (r"\```code``", "`code"),
+    ],
+)
+def test_strip_markdown_does_not_treat_escaped_backticks_as_code_spans(
+    text: str, expected: str, normalize_code_spans: bool
+) -> None:
+    """``\\`x\\``` is literal text in Markdown, not an inline code span.
+
+    The inline-code regex used to open a span at the escaped backtick and take
+    the closing backslash into the code body, so ``\\`ls\\``` became
+    ``\\ls\\`` and TTS spoke "backslash" twice. The escaping backslash must be
+    dropped and the backtick kept, exactly as ``\\*`` becomes ``*``.
+    """
+    assert strip_markdown(text, normalize_code_spans=normalize_code_spans) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "normalize_code_spans", "expected"),
+    [
+        # An escaped backslash does not escape the backtick after it.
+        (r"\\`code`", False, r"\\code"),
+        (r"\\`code`", True, r"\\code"),
+        # Backslashes inside a code span are literal and do not escape its close.
+        (r"`a\`b`", False, r"a\b`"),
+        (r"`foo\`bar`", True, "foo backslashbar`"),
+        (r"`\*x\*`", False, r"\*x\*"),
+        ("```\n\\`\n```", False, r"\`"),
+    ],
+)
+def test_strip_markdown_keeps_code_span_backslashes_literal(
+    text: str, normalize_code_spans: bool, expected: str
+) -> None:
+    """Escape handling applies outside code spans only, never to their contents."""
+    assert strip_markdown(text, normalize_code_spans=normalize_code_spans) == expected
+
+
 def test_strip_markdown_keeps_paragraph_break_inside_multi_paragraph_blockquote() -> None:
     """A bare ``>`` line separates quoted paragraphs and must stay a paragraph break.
 

@@ -39,7 +39,7 @@ __all__ = [
 ]
 
 from easycat.audio_format import AudioChunk
-from easycat.strip_markdown import _INLINE_CODE_RE
+from easycat.strip_markdown import _FENCED_CODE_RE, _INLINE_CODE_RE
 from easycat.tts.input import TTSInput, strip_ssml_tags
 
 # ── Sentence splitting ──────────────────────────────────────────────
@@ -573,6 +573,44 @@ def _has_open_inline_code_run(text: str) -> bool:
     return last_tick >= 0 and _BLANK_LINE_RE.search(text, last_tick) is None
 
 
+def _drop_inline_code_and_escaped_backticks(match: re.Match[str]) -> str:
+    """Remove a closed code span or an escaped backtick; keep anything else.
+
+    ``_INLINE_CODE_RE`` also matches ``\\\\`` escapes and unpaired backtick
+    runs so its scan stays in document order; those are left in place.
+    """
+    if match.group("code") is not None or match.group("escape") == "\\`":
+        return ""
+    return match.group(0)
+
+
+# A fence-length backtick run outside a backslash escape.  Escapes are matched
+# first, in document order, so an escaped backtick never starts a run.
+_UNESCAPED_FENCE_RUN_RE = re.compile(r"\\[\\`]|(?P<fence>```)")
+
+
+def _drop_closed_fences(text: str) -> tuple[str, bool]:
+    """Remove closed fenced blocks; report whether a fence is still open.
+
+    Scans with ``strip_markdown``'s own ``_FENCED_CODE_RE``, which consumes
+    ``\\` `` and ``\\\\`` escapes in document order, so an escaped backtick
+    can neither open nor close a fence and the run after it is judged on its
+    own.  Escapes are kept for the inline-code pass.  Any unescaped triple
+    backtick left after the scan has no closer yet: a later delta could still
+    close it and turn the text after it into code, so the fence is open.
+    """
+    normalized = _FENCED_CODE_RE.sub(_drop_closed_code_span, text)
+    fence_open = any(
+        match.group("fence") for match in _UNESCAPED_FENCE_RUN_RE.finditer(normalized)
+    )
+    return normalized, fence_open
+
+
+def _drop_closed_code_span(match: re.Match[str]) -> str:
+    """Remove a closed fenced block; keep escapes and anything else."""
+    return "" if match.group("code") is not None else match.group(0)
+
+
 def markdown_open_state(text: str) -> tuple[bool, bool]:
     """Best-effort markdown openness check for a rolling streaming buffer.
 
@@ -592,19 +630,18 @@ def markdown_open_state(text: str) -> tuple[bool, bool]:
     The streaming path defers sentence emission while markdown delimiters
     are still open so later deltas cannot rewrite already-emitted text.
     """
-    fenced_count = text.count("```")
-    if fenced_count % 2 == 1:
+    normalized, fence_open = _drop_closed_fences(text)
+    if fence_open:
         return True, False
-
-    # Remove fenced blocks so inline delimiter counts are not distorted.
-    normalized = re.sub(r"```[\s\S]*?```", "", text)
 
     # Remove closed inline-code spans so markdown chars inside code do
     # not affect emphasis/link-state tracking.  Spans pair the CommonMark
     # way, with the same pattern ``strip_markdown`` uses: a run of N
     # backticks closes at the next run of exactly N, so ``co`de`` is one
-    # closed span and the lone backtick inside it is content.
-    normalized = _INLINE_CODE_RE.sub("", normalized)
+    # closed span and the lone backtick inside it is content.  An escaped
+    # backtick (``\` ``) is literal text: it is dropped too, so it neither
+    # pairs with a run nor counts as an open one.
+    normalized = _INLINE_CODE_RE.sub(_drop_inline_code_and_escaped_backticks, normalized)
     if _has_open_inline_code_run(normalized):
         return True, False
 
