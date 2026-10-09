@@ -352,6 +352,7 @@ class RemoteResponsesAPIBridge:
         pending_tool_calls: set[str] = set()
         seen_tool_call_ids: set[str] = set()
         pending_tool_names: dict[str, str] = {}
+        tool_item_aliases: dict[str, str] = {}
         interrupted = False
         completed = False
         response_id: str | None = None
@@ -436,6 +437,7 @@ class RemoteResponsesAPIBridge:
                                         data,
                                         recorder,
                                         pending_tool_names,
+                                        tool_item_aliases,
                                     )
                                     if bridge_ev is not None:
                                         _update_tool_lifecycle(
@@ -473,6 +475,7 @@ class RemoteResponsesAPIBridge:
                                 data,
                                 recorder,
                                 pending_tool_names,
+                                tool_item_aliases,
                             )
                             if bridge_ev is not None:
                                 _update_tool_lifecycle(
