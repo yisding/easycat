@@ -64,16 +64,24 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
 #   backtick can neither open nor close a span, while a backslash inside a span
 #   stays literal and never escapes its closing backtick.
 # - A fence (``fence`` group) is tried before an inline span at the same offset.
-#   Its closer takes the whole backtick run it starts in, so no match ends
-#   partway through a run: a leftover tick there could not pair with anything
-#   and its failed span search would rescan the rest of the paragraph.
+#   Its closer starts at the next run of three or more backticks.  It takes
+#   the whole run when the run ends the line, so a four-backtick fence closes
+#   on its four-backtick line.  A run with text after it on the line takes
+#   exactly three backticks when three or more would be left, which open the
+#   next block (six backticks then ``js`` close one block and open another),
+#   and otherwise the whole run, leaving no stray tick that could pair with a
+#   later one.
 # - An inline span (``code`` group) is a run of N backticks closed by the next
 #   run of exactly N, so a double-backtick span can carry a literal backtick,
 #   and a triple-backtick run inside it is content rather than a nested fence.
 #   It may wrap across line endings but not across a blank line or a code
-#   fence line (up to three spaces, three or more backticks, no backtick
-#   after them): both end the paragraph, and pairing stray backticks across
-#   them would swallow the prose or the fenced block between them.
+#   fence line (up to three spaces, then a run of three or more backticks with
+#   no backtick after it on the line): both end the paragraph, and pairing
+#   stray backticks across them would swallow the prose or the fenced block
+#   between them.  Only runs of one or two backticks open a span: a longer
+#   run reaches this alternative only when its fence found no closer, so no
+#   run of three or more follows it to close a span either, and trying would
+#   rescan the rest of the paragraph for nothing.
 # - A run with no matching closer is consumed whole by the last alternative
 #   and left as literal text, so the scan never restarts in the middle of it.
 #
@@ -82,9 +90,9 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
 # expanded it and the stash index leaked into the spoken text.
 _CODE_SPAN_RE = re.compile(
     r"(?P<escape>\\[\\`])"
-    r"|```(?P<fence>[\s\S]*?)`{3,}"
-    r"|(?P<run>`+)(?!`)"
-    r"(?P<code>(?:[^\n]|\n(?![ \t]*\r?\n)(?! {0,3}```[^`\r\n]*(?:\r?\n|$)))+?)"
+    r"|```(?P<fence>[\s\S]*?)```(?:`*(?=[ \t]*(?:\r?\n|$))|(?=```)|`*)"
+    r"|(?P<run>``?)(?!`)"
+    r"(?P<code>(?:[^\n]|\n(?![ \t]*\r?\n)(?! {0,3}`{3,}[^`\r\n]*(?:\r?\n|$)))+?)"
     r"(?<!`)(?P=run)(?!`)"
     r"|`+"
 )

@@ -923,6 +923,54 @@ def test_strip_markdown_fence_closer_takes_whole_backtick_run() -> None:
     """A longer closing run is all delimiter, never a stray spoken backtick."""
     assert strip_markdown("````\ncode\n````") == "code"
     assert strip_markdown("```a````") == "a"
+    assert strip_markdown("```a```` b `c`") == "a b c"
+    # A run that ends its line is all closer, however long.
+    assert strip_markdown("```py\nx\n``````\nafter") == "x\nafter"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("```py\nx\n``````js\ny\n```", "xy"),
+        ("b cDone. ```z``````z```", "b cDone. zz"),
+    ],
+)
+@pytest.mark.parametrize("normalize_code_spans", [False, True])
+def test_strip_markdown_fence_closer_leaves_the_next_fence_opener(
+    text: str, expected: str, normalize_code_spans: bool
+) -> None:
+    """A closer run with text after it on the line keeps a following opener.
+
+    Taking the whole run as the closer swallowed the next block's opening
+    backticks, so its info string and code were spoken with the fence after
+    them (``xjs y ```...``) and the streaming window stayed open.
+    """
+    assert strip_markdown(text, normalize_code_spans=normalize_code_spans) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("`a\n````\ncode with `tick\n````", "`a\ncode with `tick"),
+        ("`a\n````py\ncode `x`\n````\nb`", "`a\ncode `x`\nb`"),
+        ("`a\n  `````\ncode\n`````\nb`", "`a\n  code\nb`"),
+        # A double-backtick span cannot cross the fence line either.  The fence
+        # it opens has no closer, so the whole text stays literal, as it does
+        # with a three-backtick line.
+        ("``a\n````\nb``", "``a\n````\nb``"),
+        ("``a\n```\nb``", "``a\n```\nb``"),
+    ],
+)
+def test_strip_markdown_stray_tick_never_pairs_across_long_fence_line(
+    text: str, expected: str
+) -> None:
+    """A fence line of four or more backticks ends the paragraph too.
+
+    Only exactly-three-backtick lines stopped an inline span, so a stray tick
+    before a ```` ```` ```` fence paired with a tick after the block, read the
+    block as one wrapped span and spoke its fence markers.
+    """
+    assert strip_markdown(text) == expected
 
 
 def test_strip_markdown_code_scan_stays_fast_on_fence_runs_after_ticks() -> None:
