@@ -1234,10 +1234,10 @@ def init(
         extra = f" ({agent_lines} lines)" if rel.name == "agent.py" else ""
         success(f"{rel}{extra}")
     if source.local_path is not None:
-        info(f"easycat resolved from local checkout: {escape(str(source.local_path))}")
+        info(f"easycat resolved from local checkout: {source.local_path}")
     elif source.git_url is not None:
         revision = f" at {source.git_rev}" if source.git_rev else ""
-        info(f"easycat resolved from portable Git source: {escape(source.git_url + revision)}")
+        info(f"easycat resolved from portable Git source: {source.git_url}{revision}")
     if git_ok:
         success("git init")
     elif not no_git:
