@@ -520,6 +520,87 @@ async def test_drain_session_actions_emits_failure_when_unsupported() -> None:
     assert "No session action executor" in failures[0].error
 
 
+class _NamedExecutor(SessionActionExecutor):
+    """Claims every action and records which executor handled it."""
+
+    def __init__(self, name: str, handled_by: list[str]) -> None:
+        self.name = name
+        self._handled_by = handled_by
+
+    def supports(self, action: SessionAction) -> bool:
+        return True
+
+    async def execute(self, session: Session, action: SessionAction) -> SessionActionResult:
+        self._handled_by.append(self.name)
+        return SessionActionResult()
+
+
+def _executor_names(session: Session) -> list[str]:
+    return [getattr(e, "name", type(e).__name__) for e in session._action_executors]
+
+
+@pytest.mark.asyncio
+async def test_registered_action_executors_dispatch_in_registration_order() -> None:
+    """The first-registered executor wins, as ``register_action_executor`` documents.
+
+    Registration used to insert each executor at index 0, so the most recently
+    registered executor handled the action instead of the first one.
+    """
+    actions = SessionActions()
+    handled_by: list[str] = []
+    session = Session(_config(session_actions=actions))
+    first = _NamedExecutor("first", handled_by)
+    session.register_action_executor(first)
+    session.register_action_executor(_NamedExecutor("second", handled_by))
+
+    assert _executor_names(session) == ["first", "second", "CoreSessionActionExecutor"]
+    actions.request("ping")
+    assert session._find_action_executor(CustomAction(name="ping")) is first
+
+    await session._drain_session_actions()
+
+    assert handled_by == ["first"]
+
+
+@pytest.mark.asyncio
+async def test_config_action_executors_take_precedence_over_registered_ones() -> None:
+    """Config-supplied executors come first, then runtime registrations, then core."""
+    actions = SessionActions()
+    handled_by: list[str] = []
+    config_executor = _NamedExecutor("config", handled_by)
+    session = Session(_config(session_actions=actions, action_executors=[config_executor]))
+    session.register_action_executor(_NamedExecutor("first", handled_by))
+    session.register_action_executor(_NamedExecutor("second", handled_by))
+
+    assert _executor_names(session) == [
+        "config",
+        "first",
+        "second",
+        "CoreSessionActionExecutor",
+    ]
+    actions.request("ping")
+    assert session._find_action_executor(CustomAction(name="ping")) is config_executor
+
+    await session._drain_session_actions()
+
+    assert handled_by == ["config"]
+
+
+@pytest.mark.asyncio
+async def test_core_action_executor_only_handles_unclaimed_actions() -> None:
+    """A registered executor that claims a core action wins over the built-in fallback."""
+    handled_by: list[str] = []
+    session = Session(_config())
+    core_executor = session._find_action_executor(AddToDNCAction(number="+15551234567"))
+    assert type(core_executor).__name__ == "CoreSessionActionExecutor"
+
+    override = _NamedExecutor("override", handled_by)
+    session.register_action_executor(override)
+
+    assert session._find_action_executor(AddToDNCAction(number="+15551234567")) is override
+    assert type(session._action_executors[-1]).__name__ == "CoreSessionActionExecutor"
+
+
 @pytest.mark.asyncio
 async def test_streaming_agent_path_stops_session_after_end_call_action() -> None:
     actions = SessionActions()

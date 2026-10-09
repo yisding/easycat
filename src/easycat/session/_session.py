@@ -2230,8 +2230,12 @@ class Session:
 
         Executors are tried in the order they were registered. The first
         executor whose ``supports(...)`` method returns true handles the action.
+        Executors supplied through ``SessionConfig.action_executors`` come first,
+        then runtime registrations, and the built-in core executor is always the
+        final fallback.
         """
-        self._action_executors.insert(0, executor)
+        # The core executor appended in ``__init__`` stays last as the fallback.
+        self._action_executors.insert(len(self._action_executors) - 1, executor)
 
     async def _drain_session_actions(self) -> bool:
         """Execute any session actions queued by agent tools during this turn.
