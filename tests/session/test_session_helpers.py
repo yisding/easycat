@@ -5,6 +5,9 @@ Tests for has_unclosed_markdown_delimiters.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator
+
 import pytest
 
 from easycat.session.text import has_unclosed_markdown_delimiters, markdown_open_state
@@ -23,7 +26,11 @@ class TestMarkdownDelimiters:
         assert has_unclosed_markdown_delimiters("Hello `world")
 
     def test_closed_backtick(self) -> None:
-        assert not has_unclosed_markdown_delimiters("Hello `world`")
+        assert not has_unclosed_markdown_delimiters("Hello `world` now")
+
+    def test_closing_backtick_at_text_end_is_open(self) -> None:
+        # The closing run may still grow into a run that no longer closes it.
+        assert has_unclosed_markdown_delimiters("Hello `world`")
 
     def test_unclosed_triple_backtick(self) -> None:
         assert has_unclosed_markdown_delimiters("```python\nprint('hi')")
@@ -83,7 +90,7 @@ class TestInlineCodeRunPairing:
         "text",
         [
             "Use ``obj.`method()``.",
-            "``co`de``",
+            "``co`de`` here",
             "`a` and ``b`` and ```c```",
             "Use `wrapped\ncode` here.",
             # A blank line ends the paragraph, so the opener is literal for
@@ -115,9 +122,9 @@ class TestEscapedBacktickPairing:
             r"Type \`ls\` to list.",
             r"x \`*a*",
             # The backslash is code content, so its backtick closes the span.
-            r"Type `ls\`",
+            r"Type `ls\` now",
             # An escaped backslash leaves the following backtick unescaped.
-            r"\\`code`",
+            r"\\`code` here",
         ],
     )
     def test_closed(self, text: str) -> None:
@@ -148,10 +155,10 @@ class TestFenceRunsInsideInlineSpans:
     @pytest.mark.parametrize(
         "text",
         [
-            "``a ```b``` c``",
+            "``a ```b``` c`` here",
             "`a ```b``` c` done.",
             "`x` ```py\ncode\n``` done.",
-            "`x ```y` z ``k``",
+            "`x ```y` z ``k`` ok",
         ],
     )
     def test_closed(self, text: str) -> None:
@@ -170,6 +177,94 @@ class TestFenceRunsInsideInlineSpans:
     )
     def test_open(self, text: str) -> None:
         assert markdown_open_state(text) == (True, False)
+
+
+class TestBackToBackAndLongFences:
+    """Fence openers and four-backtick fence lines judge openness like ``strip_markdown``."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # The six-backtick run closes the first block and opens the second.
+            "```py\nx\n``````js\ny\n```",
+            "```py\nx\n``````js\ny\n``` done.",
+            # The stray tick cannot pair across the four-backtick block.
+            "`a\n````\ncode with `tick\n````\n\nNext.",
+        ],
+    )
+    def test_closed(self, text: str) -> None:
+        assert markdown_open_state(text) == (False, False)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "```py\nx\n``````js\ny",
+            "`a\n````\ncode with `tick",
+            # The ```` line opens a fence with no closer yet, so a later
+            # ```` could still close it.  The span cannot cross that line, so
+            # the text stays literal once complete (as with a ``` line).
+            "``a\n````\nb``",
+        ],
+    )
+    def test_open(self, text: str) -> None:
+        assert markdown_open_state(text) == (True, False)
+
+
+class TestInlineSpanClosingRunAtTextEnd:
+    """A span whose closing run ends the text stays open: the run may still grow.
+
+    ``It`s ... ```f()` `` read as one span until the next delta made the
+    trailing tick a ```` ``` ```` that closes ```` ```f()``` ```` as a fence,
+    so the sentence already split off inside the span was rewritten.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Hello `world`",
+            "Sure thing. It`s simple. First call ```f()`",
+            "Start here. Wrap ``a. b Call ```f()``",
+            "`x` and `y`",
+        ],
+    )
+    def test_open(self, text: str) -> None:
+        assert markdown_open_state(text) == (True, False)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Hello `world` now",
+            "Sure thing. It`s simple. First call ```f()` and wait.",
+            # A fence closer at the end is settled: growing it keeps the block.
+            "First call ```f()```",
+        ],
+    )
+    def test_closed(self, text: str) -> None:
+        assert markdown_open_state(text) == (False, False)
+
+
+def test_unclosed_fence_stops_the_code_scan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unpaired fence opener ends the scan, so a streaming block rechecks cheaply.
+
+    Nothing after it can change the answer, yet every inline span in the code
+    after it used to be matched on each recheck of the growing block.
+    """
+    from easycat.session import text as session_text
+
+    real = session_text._CODE_SPAN_RE
+    matches: list[str] = []
+
+    class _CountingPattern:
+        def finditer(self, string: str) -> Iterator[re.Match[str]]:
+            for match in real.finditer(string):
+                matches.append(match.group(0))
+                yield match
+
+    monkeypatch.setattr(session_text, "_CODE_SPAN_RE", _CountingPattern())
+    block = "Here.\n```js\n" + "const s = `hello ${a}`;\n" * 500
+
+    assert markdown_open_state(block) == (True, False)
+    assert matches == ["```"]
 
 
 class TestEscapedBacktickFences:
@@ -193,10 +288,10 @@ class TestEscapedBacktickFences:
             r"See \``` here``.",
             r"Hello there. See \```x`` now.",
             # The fence after the escaped tick closes and the `` run pairs.
-            r"\```x```. Next ``` ``",
+            r"\```x```. Next ``` `` ok",
             # The `` run pairs and the ``` inside it is span content: the scan
             # reaches the span first, so a later ``` cannot reopen it as a fence.
-            r"\```x```. Next ``",
+            r"\```x```. Next `` ok",
         ],
     )
     def test_closed(self, text: str) -> None:

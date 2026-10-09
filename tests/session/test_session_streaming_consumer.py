@@ -695,6 +695,69 @@ async def test_markdown_double_backtick_span_across_deltas_leaves_no_backticks()
     assert "".join(texts) == "First one. Use obj dot method open paren close paren now. Done."
 
 
+@pytest.mark.parametrize(
+    ("deltas", "expected"),
+    [
+        (
+            ["Sure thing. It`s simple. First call ```f()`", "`` and wait. Then check. Done."],
+            [
+                (
+                    "Sure thing. It`s simple. First call f open paren close paren and wait. "
+                    "Then check. Done."
+                )
+            ],
+        ),
+        (
+            ["Start here. Wrap ``a. b Call ```f()``", "` here. Done now."],
+            ["Start here. Wrap ``a. b Call f open paren close paren here. Done now."],
+        ),
+    ],
+)
+async def test_markdown_holds_span_whose_closing_run_may_still_grow(
+    deltas: list[str], expected: list[str]
+) -> None:
+    """A span closed by the buffer's last backticks is not settled yet.
+
+    The first delta reads as one inline span from the stray tick to the end,
+    and the sentence inside it was spoken (``Its simple.``).  The next delta
+    grows the closing run into a fence closer, the span no longer closes, and
+    the spoken text was rewritten: its tick came back and the fence markers
+    were spoken.
+    """
+    built = await _run_streaming_payloads(deltas, strip_md=True)
+
+    assert [text for text, _ in built] == expected
+
+
+async def test_markdown_trailing_span_closer_rechecks_on_any_next_delta():
+    """The hold on a trailing closing run lifts on the next delta, whatever it carries.
+
+    The delta has no markdown closer character, which alone never rechecks an
+    open window, so emission would stall until the final flush.
+    """
+    from easycat.session._streaming import _SentenceStreamBuffer
+
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    buffer = _SentenceStreamBuffer(
+        tts_queue=tts_queue,
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=True,
+    )
+
+    assert not await buffer.add_delta("Hello there, use `x`")
+    assert await buffer.add_delta(" now and then go on. ")
+    assert await buffer.add_delta("Next sentence here. ")
+    assert not await buffer.flush()
+
+    spoken = []
+    while not tts_queue.empty():
+        payload = tts_queue.get_nowait()
+        assert payload is not None
+        spoken.append(payload.text)
+    # The first clause ships as soon as the second delta arrives.
+    assert spoken == ["Hello there, ", "use x now and then go on. Next sentence here. "]
+
+
 async def test_markdown_link_destination_keeps_underscores_across_deltas():
     """The streamed (``trim=False``) path speaks a link URL verbatim (gh 1209)."""
     deltas = ["Assets live at [docs](https://example.com/_next_/", "static). And *more* here."]
@@ -751,6 +814,8 @@ _SPLIT_SWEEP_TEXTS = [
     "Use ``a ```b``` c`` here. Then `x` ```py\nprint(1)\n``` ran. Done.",
     "Say `x ```y` z``` now. Then ``k`` ok. Done.",
     "Not \\`code\\` here. Use ``a ```b``` c`` now. Done.",
+    # A closing run split across deltas may grow into a fence closer.
+    "Sure thing, it`s simple. First call ```f()``` and wait. Then check. Done.",
     (
         '"Stop now." \U0001f600 Smile here. (Aside one.) "Quote" - not a list. '
         "1. Not a list. [Docs.] (x) and **bold** text. “Curly end.” > Not quoted. Done."
