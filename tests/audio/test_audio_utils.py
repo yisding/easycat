@@ -201,6 +201,25 @@ RATE_PAIRS = [
     (48000, 8000),
     (48000, 16000),
     (48000, 24000),
+    (24000, 44100),
+    (44100, 16000),
+    (44100, 48000),
+    (48000, 44100),
+    (24000, 22050),
+    (48000, 22050),
+]
+
+# 44.1 kHz-family pairs whose float ratio is not exactly representable. The
+# linear fallback used to divide by that rounded ratio and drop one sample.
+FRACTIONAL_RATE_PAIRS = [
+    (48000, 44100),
+    (24000, 44100),
+    (24000, 22050),
+    (48000, 22050),
+    (24000, 11025),
+    (48000, 11025),
+    (44100, 48000),
+    (44100, 16000),
 ]
 
 
@@ -213,6 +232,40 @@ def test_resample_rate_pairs_sample_count(from_rate: int, to_rate: int):
     n_output = len(result) // 2
     expected = int(n_input * to_rate / from_rate)
     assert n_output == expected
+
+
+@pytest.mark.parametrize("n_input", [240, 480, 960])
+@pytest.mark.parametrize(
+    "from_rate,to_rate", list(dict.fromkeys(RATE_PAIRS + FRACTIONAL_RATE_PAIRS))
+)
+def test_linear_resample_sample_count_is_exact_for_fractional_ratios(
+    monkeypatch: pytest.MonkeyPatch, from_rate: int, to_rate: int, n_input: int
+) -> None:
+    """The linear fallback must emit floor(n * to_rate / from_rate) samples.
+
+    It used to compute ``int(n / (from_rate / to_rate))``. For 48 kHz -> 44.1 kHz
+    the rounded float ratio made 480 / ratio land at 440.999..., so every
+    10 ms frame that fell back to linear was one sample short.
+    """
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    data = struct.pack(f"<{n_input}h", *([500] * n_input))
+    n_output = len(au.resample(data, from_rate, to_rate)) // 2
+    assert n_output == (n_input * to_rate) // from_rate
+
+
+def test_linear_resample_48k_to_44k1_10ms_frame_yields_441_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 10 ms 48 kHz frame (480 samples) is exactly 441 samples at 44.1 kHz."""
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    data = struct.pack("<480h", *([500] * 480))
+    assert len(au._resample_linear(data, 48000, 44100)) // 2 == 441
+    data = struct.pack("<240h", *([500] * 240))
+    assert len(au._resample_linear(data, 24000, 44100)) // 2 == 441
 
 
 @pytest.mark.parametrize("from_rate,to_rate", RATE_PAIRS)
@@ -229,6 +282,60 @@ def test_resample_rate_pairs_dc_preservation(from_rate: int, to_rate: int):
     body = samples[trim : len(samples) - trim]
     for s in body:
         assert abs(s - value) <= 1
+
+
+def _dc_body(samples: tuple[int, ...]) -> tuple[int, ...]:
+    trim = (len(samples) * 15) // 100
+    return samples[trim : len(samples) - trim]
+
+
+@pytest.mark.parametrize("value", [1000, -1000, 12345, -12345, 32767, -32768])
+@pytest.mark.parametrize("from_rate,to_rate", [(16000, 48000), (48000, 16000), (24000, 16000)])
+def test_batch_soxr_resample_rounds_dc_exactly(value: int, from_rate: int, to_rate: int):
+    """Batch soxr must round float output to nearest, not truncate toward zero.
+
+    Truncating via ``astype(np.int16)`` turned a filter output of 999.9999
+    into 999, so a DC 1000 came back as 999 in ~40% of steady-state samples
+    (and -1000 as -999): a sign-dependent bias toward zero. The streaming
+    soxr path rounds, so the batch path must match it exactly.
+    """
+    import easycat._audio_utils as au
+
+    assert au.resample_backend() == "soxr"
+    n_input = 1600
+    data = struct.pack(f"<{n_input}h", *([value] * n_input))
+    result = resample(data, from_rate, to_rate)
+    body = _dc_body(struct.unpack(f"<{len(result) // 2}h", result))
+    assert body
+    assert set(body) == {value}
+
+
+@pytest.mark.parametrize("from_rate,to_rate", [(16000, 48000), (48000, 16000), (24000, 16000)])
+def test_batch_scipy_resample_rounds_to_nearest(from_rate: int, to_rate: int):
+    """Batch scipy must round float output to nearest, like the soxr paths.
+
+    ``resample_poly`` does not reproduce DC exactly for every ratio, so compare
+    against its own float output: rounding stays within 0.5 LSB, whereas the
+    old truncation toward zero was off by up to 1 LSB on both signs.
+    """
+    pytest.importorskip("scipy.signal")
+    np = pytest.importorskip("numpy")
+    from scipy.signal import resample_poly
+
+    import easycat._audio_utils as au
+
+    n_input = 1600
+    source = [
+        int(12000 * math.sin(2 * math.pi * 440 * index / from_rate)) for index in range(n_input)
+    ]
+    data = struct.pack(f"<{n_input}h", *source)
+    result = au._resample_scipy_impl(data, from_rate, to_rate)
+    out = np.frombuffer(result, dtype=np.int16).astype(np.float64)
+    g = math.gcd(from_rate, to_rate)
+    samples = np.asarray(source, dtype=np.float32) / 32768.0
+    expected = resample_poly(samples, to_rate // g, from_rate // g) * 32768.0
+    assert out.shape == expected.shape
+    assert float(np.max(np.abs(out - expected))) <= 0.5 + 1e-6
 
 
 # ── Odd-length chunk handling (split 16-bit sample) ───────────────
@@ -490,8 +597,11 @@ def test_stream_resampler_carries_split_sample_byte() -> None:
     assert stream.finish() == b""
 
 
-@pytest.mark.parametrize(("from_rate", "to_rate"), [(48_000, 16_000), (16_000, 24_000)])
-@pytest.mark.parametrize("sample_count", range(1, 12))
+@pytest.mark.parametrize(
+    ("from_rate", "to_rate"),
+    [(48_000, 16_000), (16_000, 24_000), *FRACTIONAL_RATE_PAIRS],
+)
+@pytest.mark.parametrize("sample_count", [*range(1, 12), 240, 480, 960])
 def test_linear_stream_resampler_short_input_count_matches_batch(
     monkeypatch: pytest.MonkeyPatch,
     from_rate: int,
@@ -510,6 +620,30 @@ def test_linear_stream_resampler_short_input_count_matches_batch(
     output += stream.finish()
 
     assert len(output) == len(au._resample_linear(data, from_rate, to_rate))
+
+
+@pytest.mark.parametrize(("from_rate", "to_rate"), [(24_000, 44_100), (44_100, 48_000)])
+@pytest.mark.parametrize("sample_count", [240, 480, 960])
+def test_linear_upsample_stream_matches_batch_for_fractional_ratios(
+    monkeypatch: pytest.MonkeyPatch,
+    from_rate: int,
+    to_rate: int,
+    sample_count: int,
+) -> None:
+    """Batch and streaming linear upsampling interpolate at identical positions.
+
+    Both compute each source position as ``divmod(i * from_rate, to_rate)``,
+    so with no anti-alias filter in play the output bytes must be equal.
+    """
+    import easycat._audio_utils as au
+
+    monkeypatch.setattr(au, "_resolved_backend", "linear")
+    data = struct.pack(f"<{sample_count}h", *range(sample_count))
+    stream = PCM16StreamResampler(to_rate)
+
+    output = stream.process(data, from_rate) + stream.finish()
+
+    assert output == au._resample_linear(data, from_rate, to_rate)
 
 
 def test_stream_resampler_reports_output_retained_until_finish() -> None:

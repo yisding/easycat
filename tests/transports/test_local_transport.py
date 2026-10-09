@@ -205,6 +205,68 @@ class TestLocalTransport:
             await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_input_callback_rounds_mic_samples_to_nearest(self, monkeypatch):
+        """Float32 mic samples round to the nearest int16, not toward zero.
+
+        ``astype(np.int16)`` truncates toward zero, so a sample at 999.6 LSB
+        became 999 and -999.6 became -999: a sign-dependent bias (crossover
+        distortion) on every captured frame.  Mirror the resampler sites and
+        round with ``np.rint`` before the clip and cast.
+        """
+        np = pytest.importorskip("numpy")
+
+        captured: dict[str, object] = {}
+
+        class FakeStream:
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        class FakeSoundDevice:
+            @staticmethod
+            def InputStream(*, callback: object, **_kwargs: object) -> FakeStream:
+                captured["input_callback"] = callback
+                return FakeStream()
+
+            @staticmethod
+            def OutputStream(**_kwargs: object) -> FakeStream:
+                return FakeStream()
+
+        def fake_require_module(module_name: str, **_kwargs: object) -> object:
+            if module_name == "sounddevice":
+                return FakeSoundDevice()
+            return np
+
+        monkeypatch.setattr(local_mod, "require_module", fake_require_module)
+
+        transport = LocalTransport()
+        await transport.connect()
+        try:
+            input_callback = captured["input_callback"]
+            frame_samples = transport._frame_samples
+            lsb = [999.6, -999.6, 0.6, -0.6, 0.4, -0.4, 12344.7, -12344.7]
+            expected = [1000, -1000, 1, -1, 0, 0, 12345, -12345]
+            buf = np.zeros((frame_samples, 1), dtype=np.float32)
+            buf[: len(lsb), 0] = np.asarray(lsb, dtype=np.float32) / np.float32(32767.0)
+            input_callback(buf, frame_samples, None, None)  # type: ignore[operator]
+
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+            chunk = transport._in_queue.get_nowait()
+            assert chunk is not None
+            samples = np.frombuffer(chunk.data, dtype=np.int16)
+            assert samples[: len(expected)].tolist() == expected
+            assert not samples[len(expected) :].any()
+        finally:
+            await transport.disconnect()
+
+    @pytest.mark.asyncio
     async def test_disconnect_idempotent(self):
         transport = LocalTransport()
         await transport.disconnect()
