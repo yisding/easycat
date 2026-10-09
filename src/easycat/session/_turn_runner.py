@@ -1147,6 +1147,10 @@ class TurnRunner:
         agent_task = asyncio.create_task(_run_agent_consumer())
         tts_task = asyncio.create_task(self._consume_tts_payloads(st))
         st.tts_consumer_task = tts_task
+        # Handlers and error paths run inside these helpers; a cancel issued
+        # from them must not cancel or await this enclosing turn task.
+        self._tts.adopt_turn_child_task(agent_task)
+        self._tts.adopt_turn_child_task(tts_task)
 
         try:
             try:
@@ -1305,7 +1309,11 @@ class TurnRunner:
         except asyncio.CancelledError:
             cancelled = True
         except TTSTimeoutError:
-            await self._tts.cancel()
+            # Cancel only the provider synthesis. ``self._tts.cancel()`` would
+            # cancel and await ``active_turn_task`` -- the on_turn_ended task
+            # this consumer runs under -- and wedge the turn in a circular
+            # cancel/await.
+            await self._tts.synthesizer.cancel()
         except Exception as exc:
             st.error = exc
             logger.exception("TTS streaming error")
@@ -1759,7 +1767,11 @@ class TurnRunner:
             return True
         if self._application_prompt_cancel_token is not None:
             self._application_prompt_cancel_token.cancel()
-        if previous is asyncio.current_task():
+        # A caller inside the prompt (directly, or from a bot-speaking handler
+        # or agent stream code running in one of its adopted streaming
+        # helpers) must not cancel or await its own enclosing prompt task.
+        # The cancelled token winds the prompt down once the caller returns.
+        if previous in self._tts.enclosing_turn_tasks():
             return False
         previous.cancel()
         done, _ = await asyncio.wait({previous}, timeout=drain_timeout_s)
