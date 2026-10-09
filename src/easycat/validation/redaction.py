@@ -115,12 +115,41 @@ _SECRET_VALUE = (
     r"""(?!""|''|\\"\\")"""
     r"""(?:(?P<quote>\\?["'])(?:\\.|(?!(?P=quote))[^\\\n])+(?P=quote)|"""
 )
+# Authorization schemes other than ``Bearer`` whose credential follows the
+# scheme word (``Authorization: Basic <base64(user:pass)>``). The scheme word is
+# kept so the redacted header stays readable; ``Bearer`` keeps its historical
+# behavior of being redacted together with its token. Only a known scheme word
+# is skipped: a generic "first word" rule would leak bare tokens followed by
+# trailing text (``Authorization: <token> (from env)``).
+#
+# Single-token schemes carry one credential token, so the historical unquoted
+# ``[^\s;,]+`` value applies and trailing ``; next`` text survives.
+_AUTH_TOKEN_SCHEME = (
+    r"(?P<scheme>(?:basic|token|negotiate|ntlm|dpop|concealed|privatetoken|vapid|"
+    r"apikey|api-key)[ \t]+)"
+)
+# Parameter-list schemes carry a comma-separated list of ``name=value`` pairs
+# (``Digest username="u", response="<hash>"``, OAuth 1.0 ``oauth_signature=``,
+# HTTP ``Signature keyId=..., signature=...``, ``AWS4-HMAC-SHA256 Credential=...,
+# Signature=...``, ``Hawk id=..., mac=...``). Any of those pairs may be the
+# credential, so the whole unquoted remainder of the line is redacted. That may
+# over-redact trailing text on the same line, which is the safe direction; a
+# quoted value is already consumed whole by ``_SECRET_VALUE``.
+_AUTH_PARAMS_SCHEME = (
+    r"(?P<param_scheme>(?:digest|oauth|signature|hawk|aws4-hmac-sha256|"
+    r"scram-sha-1|scram-sha-256|mutual|hoba|gnap)[ \t]+)"
+)
 _HEADER_SECRET_RE = re.compile(
     r"(?i)((?:authorization|x-api-key|xi-api-key|openai-organization|openai-project)"
     + _KEY_CLOSING_QUOTE
     + r"[:=]\s*)"
     + _SECRET_VALUE
-    + r"(?:bearer\s+)?[^\s;,]+)"
+    + _AUTH_PARAMS_SCHEME
+    # Keep trailing horizontal whitespace outside the redacted value.
+    + r"(?P<param_value>\S(?:[^\r\n]*\S)?)|"
+    + r"(?:bearer\s+|"
+    + _AUTH_TOKEN_SCHEME
+    + r")?[^\s;,]+)"
 )
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s;,]+")
 _KEY_VALUE_SECRET_RE = re.compile(
@@ -144,8 +173,10 @@ _HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
 
 
 def _secret_after_prefix(match: re.Match[str]) -> str:
-    quote = match.groupdict().get("quote") or ""
-    return f"{match.group(1)}{quote}{REDACTED_SECRET}{quote}"
+    groups = match.groupdict()
+    quote = groups.get("quote") or ""
+    scheme = groups.get("scheme") or groups.get("param_scheme") or ""
+    return f"{match.group(1)}{quote}{scheme}{REDACTED_SECRET}{quote}"
 
 
 def _redacted_home_path(match: re.Match[str]) -> str:
@@ -472,10 +503,21 @@ def contains_unredacted_sensitive_text(value: str) -> bool:
         return True
     for pattern in (_HEADER_SECRET_RE, _KEY_VALUE_SECRET_RE, _REQUEST_ID_RE):
         for match in pattern.finditer(value):
-            if _is_placeholder_match(match.group(0)):
+            if _is_placeholder_match(match.group(0)) and not _has_unredacted_auth_params(match):
                 continue
             return True
     return False
+
+
+def _has_unredacted_auth_params(match: re.Match[str]) -> bool:
+    """Return whether a parameter-list ``Authorization`` value is only partly redacted.
+
+    ``redact_text`` replaces the whole parameter list with one placeholder, so
+    any other text after the scheme word (``Digest [REDACTED_SECRET],
+    response="..."``) means a credential parameter may still be visible.
+    """
+    param_value = match.groupdict().get("param_value")
+    return param_value is not None and param_value != REDACTED_SECRET
 
 
 @functools.lru_cache(maxsize=32)
