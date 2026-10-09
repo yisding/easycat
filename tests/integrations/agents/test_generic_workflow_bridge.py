@@ -90,6 +90,21 @@ class _ShallowRequiredCancelTokenWorkflow:
         return f"Echo: {text}"
 
 
+class _StreamingWithRequiredCancelTokenFallback:
+    """Shallow streaming workflow whose unused on_user_turn fallback requires cancel_token."""
+
+    def __init__(self) -> None:
+        self.fallback_calls = 0
+
+    async def on_user_turn(self, text: str, *, cancel_token) -> str:
+        self.fallback_calls += 1
+        return f"fallback: {text}"
+
+    async def on_user_turn_streaming(self, text: str) -> AsyncIterator[str]:
+        for word in text.split():
+            yield word + " "
+
+
 class _NoOnUserTurn:
     """Invalid workflow — no on_user_turn."""
 
@@ -109,6 +124,23 @@ class TestShallowMode:
         used to fail every turn with TypeError; construction now fails instead."""
         with pytest.raises(BridgeInputError, match="cancel_token.*only in deep mode"):
             GenericWorkflowBridge(workflow=_ShallowRequiredCancelTokenWorkflow())
+
+    @pytest.mark.asyncio
+    async def test_streaming_workflow_may_keep_required_cancel_token_fallback(self):
+        """Shallow mode calls on_user_turn_streaming and never on_user_turn, so a
+        required cancel_token on the unused fallback must not be rejected."""
+        workflow = _StreamingWithRequiredCancelTokenFallback()
+        bridge = GenericWorkflowBridge(workflow=workflow)
+        assert not bridge.deep_mode
+
+        events = [
+            ev async for ev in bridge.invoke(AgentTurnInput.from_text("hello world"), _recorder())
+        ]
+
+        done = [e for e in events if e.kind == "done"]
+        assert len(done) == 1
+        assert done[0].text.strip() == "hello world"
+        assert workflow.fallback_calls == 0
 
     @pytest.mark.asyncio
     async def test_invoke_yields_text(self):

@@ -33,6 +33,20 @@ class _ShallowRequiredCancelTokenWorkflow:
         return text
 
 
+class _StreamingRequiredCancelTokenFallbackWorkflow:
+    """Shallow streaming workflow; shallow mode never calls the on_user_turn fallback."""
+
+    def __init__(self) -> None:
+        self.fallback_calls = 0
+
+    async def on_user_turn(self, text: str, *, cancel_token: CancelToken) -> str:
+        self.fallback_calls += 1
+        return f"fallback {text}"
+
+    async def on_user_turn_streaming(self, text: str):
+        yield f"stream {text}"
+
+
 class _ShallowOptionalCancelTokenWorkflow:
     def __init__(self) -> None:
         self.received: list[CancelToken | None] = []
@@ -204,6 +218,20 @@ async def test_auto_adapt_agent_deep_workflow_receives_required_cancel_token() -
     token = CancelToken()
     assert await _collect_text(bridge, token) == ["echo hi"]
     assert workflow.received == [token]
+
+
+async def test_auto_adapt_agent_streaming_workflow_keeps_required_cancel_token_fallback() -> None:
+    """on_user_turn_streaming takes precedence in shallow mode, so the unused
+    on_user_turn fallback may still require cancel_token."""
+    from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
+
+    workflow = _StreamingRequiredCancelTokenFallbackWorkflow()
+    bridge = auto_adapt_agent(workflow)
+    assert isinstance(bridge, GenericWorkflowBridge)
+    assert not bridge.deep_mode
+
+    assert await _collect_text(bridge, CancelToken()) == ["stream hi"]
+    assert workflow.fallback_calls == 0
 
 
 async def test_auto_adapt_agent_shallow_workflow_keeps_optional_cancel_token_default() -> None:

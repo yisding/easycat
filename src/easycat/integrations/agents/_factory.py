@@ -162,7 +162,8 @@ def _adapt_llama_workflow(agent: Any, _model: str | None) -> _AdaptedAgent | Non
 
 # GenericWorkflowBridge picks deep mode when ``on_user_turn`` declares
 # ``recorder``; only deep mode passes ``cancel_token``. Shallow mode passes
-# just ``text``.
+# just ``text``, and only when it has no ``on_user_turn_streaming`` (which
+# shallow mode calls instead, leaving ``on_user_turn`` unused).
 _DEEP_MODE_WORKFLOW_KWARGS = frozenset({"recorder", "cancel_token"})
 
 
@@ -170,14 +171,21 @@ def _adapt_generic_workflow(agent: Any, _model: str | None) -> _AdaptedAgent | N
     on_user_turn = getattr(agent, "on_user_turn", None)
     if not callable(on_user_turn) or isinstance(agent, type):
         return None
-    if not _workflow_signature_is_supported(on_user_turn):
-        return None
-    from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
+    from easycat.integrations.agents.generic_workflow import (
+        GenericWorkflowBridge,
+        has_streaming_entry_point,
+    )
 
+    if not _workflow_signature_is_supported(
+        on_user_turn, streaming=has_streaming_entry_point(agent)
+    ):
+        return None
     return _AdaptedAgent(GenericWorkflowBridge(workflow=agent))
 
 
-def _workflow_signature_is_supported(on_user_turn: Callable[..., Any]) -> bool:
+def _workflow_signature_is_supported(
+    on_user_turn: Callable[..., Any], *, streaming: bool = False
+) -> bool:
     try:
         signature_parameters = inspect.signature(on_user_turn).parameters
     except (ValueError, TypeError):
@@ -185,7 +193,10 @@ def _workflow_signature_is_supported(on_user_turn: Callable[..., Any]) -> bool:
 
     parameters = signature_parameters.values()
     deep_mode = "recorder" in signature_parameters
-    bridge_supplied = _DEEP_MODE_WORKFLOW_KWARGS if deep_mode else frozenset()
+    # Shallow mode with on_user_turn_streaming never calls on_user_turn, so the
+    # fallback may keep a required cancel_token without being rejected.
+    shallow_streaming = streaming and not deep_mode
+    bridge_supplied = _DEEP_MODE_WORKFLOW_KWARGS if deep_mode or shallow_streaming else frozenset()
 
     positional = [
         parameter
