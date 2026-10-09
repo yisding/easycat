@@ -143,20 +143,28 @@ async def serve_supervisor_websocket(
         )
         return
 
-    await _send_supervisor_json(
-        ws,
-        {
-            "type": "hello",
-            "role": "supervisor",
-            # supervisor_message_authorized() always enforces a configured token,
-            # so allow_unauthenticated only relaxes auth when no token is set.
-            "auth_required": expected_token is not None,
-            "message": 'Send {"type":"subscribe","session_id":"...","token":"..."}',
-        },
-    )
+    try:
+        await _send_supervisor_json(
+            ws,
+            {
+                "type": "hello",
+                "role": "supervisor",
+                # supervisor_message_authorized() always enforces a configured token,
+                # so allow_unauthenticated only relaxes auth when no token is set.
+                "auth_required": expected_token is not None,
+                "message": 'Send {"type":"subscribe","session_id":"...","token":"..."}',
+            },
+        )
+    except ConnectionClosed:
+        # The peer already closed the socket, so there is nobody to send an error to.
+        logger.info("Supervisor disconnected before subscribing")
+        return
 
     try:
         raw = await asyncio.wait_for(_recv_supervisor_message(ws), timeout=subscribe_timeout_s)
+    except ConnectionClosed:
+        logger.info("Supervisor disconnected before subscribing")
+        return
     except TimeoutError:
         await _close_supervisor_with_error(
             ws,

@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from dataclasses import replace
 
 import pytest
+from websockets.exceptions import ConnectionClosed, ConnectionClosedError, ConnectionClosedOK
+from websockets.frames import Close
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
@@ -687,6 +690,66 @@ async def test_subscribe_timeout_error_reports_configured_timeout() -> None:
     assert error["message"] == "Expected subscribe message with session_id within 0.05 seconds."
     assert ws.close_code == 4408
     assert ws.close_reason == "Subscribe timed out"
+
+
+class _ClosedBeforeSubscribeWebSocket(_FakeSupervisorWebSocket):
+    """Peer that closes the socket before sending its subscribe message."""
+
+    def __init__(self, exc: ConnectionClosed, *, fail_on_send: bool = False) -> None:
+        super().__init__()
+        self._exc = exc
+        self._fail_on_send = fail_on_send
+
+    async def send(self, message: str) -> None:
+        if self._fail_on_send:
+            raise self._exc
+        await super().send(message)
+
+    async def recv(self) -> object:
+        raise self._exc
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ConnectionClosedOK(Close(1000, ""), Close(1000, ""), rcvd_then_sent=True),
+        ConnectionClosedError(Close(1006, "abnormal"), None),
+    ],
+    ids=["closed-ok", "closed-error"],
+)
+@pytest.mark.parametrize("fail_on_send", [False, True], ids=["on-recv", "on-hello"])
+async def test_supervisor_disconnect_before_subscribe_returns_quietly(
+    caplog: pytest.LogCaptureFixture,
+    exc: ConnectionClosed,
+    fail_on_send: bool,
+) -> None:
+    """A supervisor closing before it subscribes is a routine disconnect, not a handler error.
+
+    The hello send and the subscribe recv used to let ``ConnectionClosed`` escape, so the
+    websockets server logged "connection handler failed" at ERROR for a clean client close.
+    """
+    ws = _ClosedBeforeSubscribeWebSocket(exc, fail_on_send=fail_on_send)
+
+    with caplog.at_level(logging.INFO, logger="easycat.supervisor"):
+        await serve_supervisor_websocket(ws, {}, expected_token="secret")
+
+    assert ws.close_code is None  # nothing to close: the peer is already gone
+    expected_sent = [] if fail_on_send else ["hello"]
+    assert [json.loads(raw)["type"] for raw in ws.sent] == expected_sent
+    records = [r for r in caplog.records if r.name == "easycat.supervisor"]
+    assert [r.getMessage() for r in records] == ["Supervisor disconnected before subscribing"]
+    assert all(r.levelno == logging.INFO and r.exc_info is None for r in records)
+
+
+@pytest.mark.asyncio
+async def test_non_disconnect_error_before_subscribe_still_propagates() -> None:
+    class _BrokenRecvWebSocket(_FakeSupervisorWebSocket):
+        async def recv(self) -> object:
+            raise RuntimeError("recv failed")
+
+    with pytest.raises(RuntimeError, match="recv failed"):
+        await serve_supervisor_websocket(_BrokenRecvWebSocket(), {}, expected_token="secret")
 
 
 @pytest.mark.parametrize(
