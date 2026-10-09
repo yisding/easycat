@@ -375,6 +375,10 @@ class _SentenceStreamBuffer:
         # trigger character of its own.
         held_number = self._has_trailing_numeric_separator(self._text)
         had_lookahead_hold = held_number or _ends_with_held_initial_period(self._text)
+        # A backtick run at the end of the text may still grow, so
+        # ``markdown_open_state`` holds an inline span that it closes open.
+        # Any delta settles the run, so recheck even without a closer in it.
+        had_trailing_backtick = self._text.endswith("`")
         self._text += delta
 
         # Markdown stripping is regex-heavy and sentence splitting scans the
@@ -383,13 +387,14 @@ class _SentenceStreamBuffer:
         # to be open, punctuation inside the open span is also not enough;
         # wait until a plausible markdown closer arrives before rechecking.
         #
-        # Exception: when the window is open *only* because a trailing
+        # Exceptions: when the window is open *only* because a trailing
         # ``[label]`` is awaiting its ``(destination)``, any non-space,
         # non-``(`` character proves it is not a link and re-opens
-        # streaming.  Recheck eagerly in that case so an ordinary-prose
+        # streaming; and a trailing backtick run is settled by whatever
+        # follows it.  Recheck eagerly in those cases so an ordinary-prose
         # continuation does not stall emission until the final flush.
         if self._markdown_window_open:
-            recheck = any(ch in delta for ch in _MARKDOWN_RECHECK_CHARS)
+            recheck = had_trailing_backtick or any(ch in delta for ch in _MARKDOWN_RECHECK_CHARS)
             if not recheck and self._awaiting_link_dest:
                 recheck = any(not ch.isspace() and ch != "(" for ch in delta)
             if not recheck:

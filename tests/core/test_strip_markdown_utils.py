@@ -886,6 +886,134 @@ def test_strip_markdown_fenced_code_wins_over_wrapped_inline_span() -> None:
     assert strip_markdown(text) == "x = `a\nb`"
 
 
+@pytest.mark.parametrize("normalize_code_spans", [False, True])
+def test_strip_markdown_fence_run_inside_inline_span_is_span_content(
+    normalize_code_spans: bool,
+) -> None:
+    """A triple-backtick run inside a double-backtick span is code content.
+
+    The fenced pass used to stash ```` ```b``` ```` first; the inline pass then
+    wrapped that placeholder in the surrounding span, so the restore pass
+    never expanded it and ``a <sentinel>0<sentinel> c`` reached TTS.
+    CommonMark reads one span: the triple run cannot close a double-run span.
+    """
+    text = "``a ```b``` c``"
+
+    assert strip_markdown(text, normalize_code_spans=normalize_code_spans) == "a ```b``` c"
+    assert has_markdown(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("`x` ```py\ncode\n```", "x code"),
+        ("`x` ```py\ncode\n``` and `y`", "x code and y"),
+        ("Use `x`\n```py\nprint(1)\n```\nthen `y`.", "Use x\nprint(1)\nthen y."),
+        # A stray backtick before a fence line cannot pair across the block.
+        ("`a\n```py\ncode\n```\nb`", "`a\ncode\nb`"),
+    ],
+)
+def test_strip_markdown_fenced_block_after_inline_span_stays_a_block(
+    text: str, expected: str
+) -> None:
+    assert strip_markdown(text) == expected
+
+
+def test_strip_markdown_fence_closer_takes_whole_backtick_run() -> None:
+    """A longer closing run is all delimiter, never a stray spoken backtick."""
+    assert strip_markdown("````\ncode\n````") == "code"
+    assert strip_markdown("```a````") == "a"
+    assert strip_markdown("```a```` b `c`") == "a b c"
+    # A run that ends its line is all closer, however long.
+    assert strip_markdown("```py\nx\n``````\nafter") == "x\nafter"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("```py\nx\n``````js\ny\n```", "xy"),
+        ("b cDone. ```z``````z```", "b cDone. zz"),
+    ],
+)
+@pytest.mark.parametrize("normalize_code_spans", [False, True])
+def test_strip_markdown_fence_closer_leaves_the_next_fence_opener(
+    text: str, expected: str, normalize_code_spans: bool
+) -> None:
+    """A closer run with text after it on the line keeps a following opener.
+
+    Taking the whole run as the closer swallowed the next block's opening
+    backticks, so its info string and code were spoken with the fence after
+    them (``xjs y ```...``) and the streaming window stayed open.
+    """
+    assert strip_markdown(text, normalize_code_spans=normalize_code_spans) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("`a\n````\ncode with `tick\n````", "`a\ncode with `tick"),
+        ("`a\n````py\ncode `x`\n````\nb`", "`a\ncode `x`\nb`"),
+        ("`a\n  `````\ncode\n`````\nb`", "`a\n  code\nb`"),
+        # A double-backtick span cannot cross the fence line either.  The fence
+        # it opens has no closer, so the whole text stays literal, as it does
+        # with a three-backtick line.
+        ("``a\n````\nb``", "``a\n````\nb``"),
+        ("``a\n```\nb``", "``a\n```\nb``"),
+    ],
+)
+def test_strip_markdown_stray_tick_never_pairs_across_long_fence_line(
+    text: str, expected: str
+) -> None:
+    """A fence line of four or more backticks ends the paragraph too.
+
+    Only exactly-three-backtick lines stopped an inline span, so a stray tick
+    before a ```` ```` ```` fence paired with a tick after the block, read the
+    block as one wrapped span and spoke its fence markers.
+    """
+    assert strip_markdown(text) == expected
+
+
+def test_strip_markdown_code_scan_stays_fast_on_fence_runs_after_ticks() -> None:
+    """Ticks left mid-run by a fence closer would rescan the paragraph each time.
+
+    With a closer that stopped after three backticks, every leftover tick
+    searched to the end of the text for a single-tick closer, so this input
+    took quadratic time.
+    """
+    text = "`a ```" * 20_000
+
+    assert strip_markdown(text) == "`a " + "`aa " * 9_999 + "`a"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("``a ```b``` c``", "a ```b``` c"),
+        ("`a ```b``` c`", "a ```b``` c"),
+        ("``a ```b``` c`` and ```d```", "a ```b``` c and d"),
+        ("`x ```y` z```", "x ```y z```"),
+        ("```a``` ``b ```c``` d`` `e`", "a b ```c``` d e"),
+        ("``a\n```b``` c``", "a ```b``` c"),
+        # A code span inside a link destination is restored there too.
+        ("[l](https://x/``a ```b``` c``)", "l https://x/a ```b``` c"),
+    ],
+)
+@pytest.mark.parametrize("normalize_code_spans", [False, True])
+def test_strip_markdown_nested_backtick_runs_never_leak_placeholders(
+    text: str, expected: str, normalize_code_spans: bool
+) -> None:
+    from easycat.strip_markdown import _SENTINEL_CHARS_RE
+
+    result = strip_markdown(text, normalize_code_spans=normalize_code_spans)
+
+    assert _SENTINEL_CHARS_RE.search(result) is None
+    assert not any(0xE000 <= ord(ch) <= 0xF8FF for ch in result)
+    # The leak read as a bare stash index ("a 0 c") once the sentinels were
+    # dropped downstream.
+    assert not any(ch.isdigit() for ch in result)
+    assert result == expected
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
