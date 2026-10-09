@@ -1403,6 +1403,52 @@ async def test_openai_realtime_aclose_without_active_stream_is_idempotent():
 
 
 @pytest.mark.asyncio
+async def test_openai_realtime_start_stream_during_aclose_fails_cleanly():
+    """A start_stream() queued behind aclose() must not adopt the closing socket.
+
+    aclose() releases the lifecycle lock between ending the logical stream and
+    closing the socket. A stream admitted in that gap used to reuse the socket
+    aclose() then closed, leaving ``_running`` set with no connection.
+    """
+    first_socket = _PersistentMockWSConnection(respond_to_commit=False)
+    second_socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([first_socket, second_socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+    await stt.start_stream()
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=100)):
+        await stt.send_audio(chunk)
+
+    closer = asyncio.create_task(stt.aclose())
+    # aclose() -> end_stream() now holds the lifecycle lock awaiting the final.
+    for _ in range(100):
+        if first_socket.commit_count:
+            break
+        await asyncio.sleep(0)
+    assert first_socket.commit_count == 1
+    starter = asyncio.create_task(stt.start_stream())
+    await asyncio.sleep(0)
+    await first_socket.push(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": "x"}
+    )
+
+    await asyncio.wait_for(closer, timeout=1.0)
+    with pytest.raises(RuntimeError, match="closing"):
+        await asyncio.wait_for(starter, timeout=1.0)
+
+    assert stt._running is False
+    assert stt._ws is None
+    assert first_socket.close_code == 1000
+    assert factory.call_count == 1
+
+    # Once aclose() returns the provider is reusable on a fresh socket.
+    await stt.start_stream()
+    assert factory.call_count == 2
+    await stt.aclose()
+    assert second_socket.close_code == 1000
+    assert stt._running is False
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_aclose_joins_errors_emitted_during_socket_close():
     """Provider errors raised while aclose() closes the socket are joined too."""
     from easycat.events import Error, EventBus
