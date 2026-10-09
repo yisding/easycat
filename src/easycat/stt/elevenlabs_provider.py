@@ -714,11 +714,15 @@ class ElevenLabsSTT(WebSocketSTTBase):
         if wav_data is None:
             return
         result = await self._transcribe_batch(wav_data)
-        if result:
+        text = result.get("text") if result else None
+        # Silence-only audio comes back as ``{"text": ""}``. Like the realtime
+        # ``committed_transcript`` path, never expose an empty FINAL: downstream
+        # it would commit an empty segment and could end the turn on nothing.
+        if result and isinstance(text, str) and text:
             self._emit_event(
                 STTEvent(
                     type=STTEventType.FINAL,
-                    text=result["text"],
+                    text=text,
                     # ``language_code`` is the response field; ``language``
                     # does not exist, so the detected language used to be
                     # discarded in favour of the configured one (gh 1064).
