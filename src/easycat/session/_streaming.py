@@ -29,6 +29,7 @@ from easycat.events import (
 from easycat.integrations.agents._text_stream import AgentTextStream, AgentTextUpdate
 from easycat.session.text import (
     _FIRST_PHRASE_TARGET_CHARS,
+    _ends_with_held_initial_period,
     _split_first_phrase,
     markdown_open_state,
     split_at_sentence_boundaries,
@@ -317,7 +318,11 @@ class _SentenceStreamBuffer:
         return False
 
     async def _add_markdown_delta(self, delta: str) -> bool:
-        had_trailing_numeric_separator = self._has_trailing_numeric_separator(self._text)
+        # A trailing "3." / "1," or lone-letter period ("tools e.") was held
+        # for lookahead, so the next delta must recheck even without a
+        # trigger character of its own.
+        held_number = self._has_trailing_numeric_separator(self._text)
+        had_lookahead_hold = held_number or _ends_with_held_initial_period(self._text)
         self._text += delta
 
         # Markdown stripping is regex-heavy and sentence splitting scans the
@@ -354,7 +359,7 @@ class _SentenceStreamBuffer:
             )
             if (
                 not bounded_first_phrase_ready
-                and not had_trailing_numeric_separator
+                and not had_lookahead_hold
                 and not any(ch in delta for ch in triggers)
             ):
                 return False
