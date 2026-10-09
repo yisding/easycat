@@ -667,6 +667,34 @@ async def test_first_clause_defers_inside_open_markdown_span():
     assert streaming[0].startswith("Let me look into that for you")
 
 
+async def test_markdown_holds_double_backtick_span_split_across_deltas():
+    """A ``double-backtick`` span split across deltas is held until it closes.
+
+    Backtick parity treated ``Use ``obj.`` as closed, so the buffer stripped
+    the window early and emitted the unmatched ```` `` ```` opener (and later
+    the closer) for TTS to speak.  The single backtick inside the span is
+    code content and survives; the delimiter runs never reach TTS.
+    """
+    from easycat.strip_markdown import strip_markdown
+
+    deltas = ["Use ``obj.", "`method()`` now."]
+    built = await _run_streaming_payloads(deltas, strip_md=True)
+
+    texts = [text for text, _ in built]
+    assert all("``" not in text for text in texts)
+    assert "".join(texts) == strip_markdown("".join(deltas), normalize_code_spans=True)
+    assert "".join(texts) == "Use obj dot `method open paren close paren now."
+
+
+async def test_markdown_double_backtick_span_across_deltas_leaves_no_backticks():
+    deltas = ["First one. Use ``obj.", "method()`` now. ", "Done."]
+    built = await _run_streaming_payloads(deltas, strip_md=True)
+
+    texts = [text for text, _ in built]
+    assert all("`" not in text for text in texts)
+    assert "".join(texts) == "First one. Use obj dot method open paren close paren now. Done."
+
+
 async def test_markdown_buffer_commits_remainder_before_first_payload_handoff():
     """Cancellation after queueing must not leave emitted text pending."""
     from easycat.session._streaming import _SentenceStreamBuffer
