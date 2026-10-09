@@ -331,6 +331,60 @@ def test_telnyx_env_fallbacks_feed_server_config(
     assert config.stream_token_secret == "env-secret"
 
 
+_TELNYX_TIMEOUT_ENV = {
+    "start_timeout_s": "TELNYX_START_TIMEOUT_S",
+    "drain_timeout_s": "TELNYX_DRAIN_TIMEOUT_S",
+    "force_shutdown_timeout_s": "TELNYX_FORCE_SHUTDOWN_TIMEOUT_S",
+}
+
+
+@pytest.mark.parametrize("env_value", ["soon", "", "   "])
+@pytest.mark.parametrize(("field", "env_name"), sorted(_TELNYX_TIMEOUT_ENV.items()))
+def test_telnyx_explicit_timeout_kwarg_ignores_malformed_env(
+    monkeypatch: pytest.MonkeyPatch, field: str, env_name: str, env_value: str
+) -> None:
+    """An explicit timeout kwarg wins without parsing the env fallback.
+
+    The env var used to be parsed eagerly as the ``kwargs.pop`` default, so a
+    blank or malformed value raised ``ValueError`` even when the caller passed
+    the kwarg explicitly.
+    """
+    monkeypatch.setenv(env_name, env_value)
+    config = VoiceApp(agent="a")._telnyx_server_config(**{field: 3.5})
+    assert getattr(config, field) == 3.5
+
+
+@pytest.mark.parametrize("env_value", ["", "   "])
+@pytest.mark.parametrize(("field", "env_name"), sorted(_TELNYX_TIMEOUT_ENV.items()))
+def test_telnyx_blank_timeout_env_uses_server_config_default(
+    monkeypatch: pytest.MonkeyPatch, field: str, env_name: str, env_value: str
+) -> None:
+    """A blank timeout env var (e.g. ``X=`` in ``.env``) means "unset"."""
+    monkeypatch.setenv(env_name, env_value)
+    config = VoiceApp(agent="a")._telnyx_server_config()
+    assert getattr(config, field) == getattr(TelnyxVoiceServerConfig, field)
+
+
+@pytest.mark.parametrize(("field", "env_name"), sorted(_TELNYX_TIMEOUT_ENV.items()))
+def test_telnyx_timeout_env_used_when_kwarg_absent(
+    monkeypatch: pytest.MonkeyPatch, field: str, env_name: str
+) -> None:
+    """A valid timeout env var feeds the config when no kwarg is given."""
+    monkeypatch.setenv(env_name, " 7.25 ")
+    config = VoiceApp(agent="a")._telnyx_server_config()
+    assert getattr(config, field) == 7.25
+
+
+@pytest.mark.parametrize(("field", "env_name"), sorted(_TELNYX_TIMEOUT_ENV.items()))
+def test_telnyx_malformed_timeout_env_error_names_variable(
+    monkeypatch: pytest.MonkeyPatch, field: str, env_name: str
+) -> None:
+    """A malformed timeout env var (no kwarg) raises an error naming the var."""
+    monkeypatch.setenv(env_name, "soon")
+    with pytest.raises(ValueError, match=f"{env_name} must be a number, got 'soon'"):
+        VoiceApp(agent="a")._telnyx_server_config()
+
+
 def test_run_telnyx_voice_app_drives_async_server(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

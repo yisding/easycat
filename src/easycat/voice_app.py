@@ -183,6 +183,22 @@ def _normalize_mode(mode: str) -> VoiceMode:
 _LIVE_CAPABLE_FIELDS: frozenset[str] = _FORWARDED_CONFIG_FIELDS - frozenset({"debug"})
 
 
+def _env_timeout_s(name: str, default: float) -> float:
+    """Read a phone-server timeout fallback from env var ``name``.
+
+    Called only when the matching ``run``/``serve`` kwarg is absent, so an
+    explicit kwarg never parses the env var. A missing or blank value means
+    ``default``; a non-numeric value raises a ``ValueError`` naming ``name``.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a number, got {raw!r}") from None
+
+
 def _phone_preset_factory(
     mode: VoiceMode,
     forwarded: dict[str, Any],
@@ -874,36 +890,24 @@ class VoiceApp:
             "max_sessions",
             self._config_kwargs.get("max_sessions", TwilioVoiceServerConfig.max_sessions),
         )
-        start_timeout_s = kwargs.pop(
-            "start_timeout_s",
-            float(
-                os.environ.get(
-                    "TWILIO_START_TIMEOUT_S",
-                    TwilioVoiceServerConfig.start_timeout_s,
-                )
-            ),
-        )
+        start_timeout_s = kwargs.pop("start_timeout_s", None)
+        if start_timeout_s is None:
+            start_timeout_s = _env_timeout_s(
+                "TWILIO_START_TIMEOUT_S", TwilioVoiceServerConfig.start_timeout_s
+            )
         public_twiml_url = kwargs.pop("public_twiml_url", None) or os.environ.get(
             "TWILIO_PUBLIC_TWIML_URL"
         )
-        drain_timeout_s = kwargs.pop(
-            "drain_timeout_s",
-            float(
-                os.environ.get(
-                    "TWILIO_DRAIN_TIMEOUT_S",
-                    TwilioVoiceServerConfig.drain_timeout_s,
-                )
-            ),
-        )
-        force_shutdown_timeout_s = kwargs.pop(
-            "force_shutdown_timeout_s",
-            float(
-                os.environ.get(
-                    "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
-                    TwilioVoiceServerConfig.force_shutdown_timeout_s,
-                )
-            ),
-        )
+        drain_timeout_s = kwargs.pop("drain_timeout_s", None)
+        if drain_timeout_s is None:
+            drain_timeout_s = _env_timeout_s(
+                "TWILIO_DRAIN_TIMEOUT_S", TwilioVoiceServerConfig.drain_timeout_s
+            )
+        force_shutdown_timeout_s = kwargs.pop("force_shutdown_timeout_s", None)
+        if force_shutdown_timeout_s is None:
+            force_shutdown_timeout_s = _env_timeout_s(
+                "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S", TwilioVoiceServerConfig.force_shutdown_timeout_s
+            )
         self._reject_unknown_mode_kwargs("twilio", kwargs)
         return TwilioVoiceServerConfig(
             host=host,
@@ -986,33 +990,21 @@ class VoiceApp:
             "max_sessions",
             self._config_kwargs.get("max_sessions", TelnyxVoiceServerConfig.max_sessions),
         )
-        start_timeout_s = kwargs.pop(
-            "start_timeout_s",
-            float(
-                os.environ.get(
-                    "TELNYX_START_TIMEOUT_S",
-                    TelnyxVoiceServerConfig.start_timeout_s,
-                )
-            ),
-        )
-        drain_timeout_s = kwargs.pop(
-            "drain_timeout_s",
-            float(
-                os.environ.get(
-                    "TELNYX_DRAIN_TIMEOUT_S",
-                    TelnyxVoiceServerConfig.drain_timeout_s,
-                )
-            ),
-        )
-        force_shutdown_timeout_s = kwargs.pop(
-            "force_shutdown_timeout_s",
-            float(
-                os.environ.get(
-                    "TELNYX_FORCE_SHUTDOWN_TIMEOUT_S",
-                    TelnyxVoiceServerConfig.force_shutdown_timeout_s,
-                )
-            ),
-        )
+        start_timeout_s = kwargs.pop("start_timeout_s", None)
+        if start_timeout_s is None:
+            start_timeout_s = _env_timeout_s(
+                "TELNYX_START_TIMEOUT_S", TelnyxVoiceServerConfig.start_timeout_s
+            )
+        drain_timeout_s = kwargs.pop("drain_timeout_s", None)
+        if drain_timeout_s is None:
+            drain_timeout_s = _env_timeout_s(
+                "TELNYX_DRAIN_TIMEOUT_S", TelnyxVoiceServerConfig.drain_timeout_s
+            )
+        force_shutdown_timeout_s = kwargs.pop("force_shutdown_timeout_s", None)
+        if force_shutdown_timeout_s is None:
+            force_shutdown_timeout_s = _env_timeout_s(
+                "TELNYX_FORCE_SHUTDOWN_TIMEOUT_S", TelnyxVoiceServerConfig.force_shutdown_timeout_s
+            )
         self._reject_unknown_mode_kwargs("telnyx", kwargs)
         return TelnyxVoiceServerConfig(
             host=host,
