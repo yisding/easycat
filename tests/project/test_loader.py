@@ -108,6 +108,30 @@ def test_invalid_toml_raises_e602(tmp_path: Path) -> None:
     assert exc_info.value.code == "EASYCAT_E602"
 
 
+def test_non_utf8_manifest_raises_e602(tmp_path: Path) -> None:
+    """A latin-1 manifest is not valid TOML and must surface as coded E602.
+
+    ``read_text`` raises ``UnicodeDecodeError`` (a ValueError, not an OSError),
+    which used to escape ``load_manifest`` uncoded and crash ``plan``/``doctor``
+    with a raw traceback instead of the JSON error envelope.
+    """
+    path = tmp_path / DEFAULT_MANIFEST_NAME
+    path.write_bytes(b'[project]\nname = "caf\xe9"\n[voice.default]\ntransport = "webrtc"\n')
+    with pytest.raises(EasyCatError) as exc_info:
+        load_manifest(path)
+    assert exc_info.value.code == "EASYCAT_E602"
+    assert "not valid UTF-8" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, UnicodeDecodeError)
+
+
+def test_utf8_non_ascii_manifest_loads(tmp_path: Path) -> None:
+    """Valid UTF-8 non-ASCII text still parses; only bad encodings are rejected."""
+    path = _write(
+        tmp_path, '[project]\nname = "caf\u00e9"\n[voice.default]\ntransport = "webrtc"\n'
+    )
+    assert load_manifest(path).project.name == "caf\u00e9"
+
+
 def test_no_voice_profiles_raises_e602(tmp_path: Path) -> None:
     path = _write(tmp_path, '[project]\nname = "x"\n')
     with pytest.raises(EasyCatError) as exc_info:
