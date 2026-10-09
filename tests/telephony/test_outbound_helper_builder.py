@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, Mock, call
+from typing import Any
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
 
@@ -11,6 +12,7 @@ from easycat.config._outbound_helpers import (
     _IVRCallbackCoordinator,
     build_outbound_helpers,
 )
+from easycat.config.easy import VoicemailDetectionConfig
 from easycat.events import (
     CallAnswered,
     CallEnded,
@@ -25,7 +27,7 @@ from easycat.events import (
 )
 from easycat.telephony.call_state import OutboundCallState
 from easycat.telephony.ivr import IVRNavigator
-from easycat.telephony.outbound import OutboundCallManager
+from easycat.telephony.outbound import OutboundCallManager, TelnyxOutboundClient
 from easycat.telephony.screening import CallScreeningDetector, ScreeningState
 from easycat.telephony.voicemail import (
     PostScreeningVoicemailDetector,
@@ -67,6 +69,72 @@ def test_builder_preserves_default_helper_order_and_shared_patterns() -> None:
     assert built.state_machine is built.helpers[3]
     assert built.screening_detector is built.helpers[4]
     assert built.state_machine._screening_patterns is built.screening_detector._patterns
+
+
+def _build_telnyx_manager(voicemail_detection: VoicemailDetectionConfig) -> OutboundCallManager:
+    built = build_outbound_helpers(
+        EventBus(),
+        OutboundCallConfig(
+            from_number="+15550001111",
+            provider="telnyx",
+            telnyx_api_key="KEY_x",
+            telnyx_connection_id="conn-1",
+            voicemail_detection=voicemail_detection,
+        ),
+        manager_cls=OutboundCallManager,
+    )
+    return next(helper for helper in built.helpers if isinstance(helper, OutboundCallManager))
+
+
+def _telnyx_dial_payload(voicemail_detection: VoicemailDetectionConfig) -> dict[str, Any]:
+    manager = _build_telnyx_manager(voicemail_detection)
+    assert isinstance(manager._client, TelnyxOutboundClient)
+    dials: list[dict[str, Any]] = []
+
+    async def fake_dial(self: TelnyxOutboundClient, payload: dict[str, Any]) -> dict[str, Any]:
+        dials.append(payload)
+        return {"data": {"call_control_id": "CC-1"}}
+
+    with patch.object(TelnyxOutboundClient, "dial", fake_dial):
+        manager._client.calls.create(**manager._build_create_kwargs("+15550002222"))
+    assert len(dials) == 1
+    return dials[0]
+
+
+@pytest.mark.parametrize("mode", ["detect", "detect_end_of_greeting"])
+def test_telnyx_manager_honors_configured_voicemail_detection_mode(mode: str) -> None:
+    """Telnyx outbound dials carry the configured AMD mode.
+
+    The Telnyx branch of the builder used to drop ``voicemail_detection``,
+    so the manager kept its ``DetectMessageEnd`` default and every Telnyx
+    dial asked for ``greeting_end`` even when ``mode="detect"`` was set.
+    """
+    voicemail_detection = VoicemailDetectionConfig(mode=mode, detection_timeout_s=10)
+
+    payload = _telnyx_dial_payload(voicemail_detection)
+
+    assert (
+        payload["answering_machine_detection"]
+        == voicemail_detection.to_telnyx_params()["answering_machine_detection"]
+    )
+
+
+def test_telnyx_manager_receives_voicemail_detection_tuning() -> None:
+    """Timeout and threshold tuning reach the Telnyx-backed manager too."""
+    manager = _build_telnyx_manager(
+        VoicemailDetectionConfig(mode="detect", detection_timeout_s=10, speech_threshold_ms=1800)
+    )
+
+    assert manager._amd_mode == "Enable"
+    assert manager._amd_timeout == 10
+    assert manager._speech_threshold == 1800
+
+
+def test_telnyx_manager_default_voicemail_detection_waits_for_greeting_end() -> None:
+    """The default policy keeps the greeting-end posture on Telnyx."""
+    payload = _telnyx_dial_payload(VoicemailDetectionConfig())
+
+    assert payload["answering_machine_detection"] == "greeting_end"
 
 
 def test_builder_omits_disabled_optional_helpers() -> None:
