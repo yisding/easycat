@@ -585,6 +585,31 @@ class TestSqliteJournalLifecycle:
         j.close()
         assert ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite").latest_sequence == 0
 
+    def test_live_counter_ignores_retained_degraded_marker(self, tmp_path, monkeypatch):
+        """If a prior marker-only table survives reconcile, the counter stays at 0.
+
+        Reconcile normally truncates the table; this covers the case where that
+        truncation does not happen and only the -1 ``JournalDegraded`` row
+        remains. The live counter must not start from -1.
+        """
+        j1 = SqliteJournal("sess", data_dir=tmp_path)
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        assert (
+            j1.append(kind=JournalRecordKind.EVENT, name="fail", session_id="sess", data=circular)
+            == -1
+        )
+        j1.close()
+
+        monkeypatch.setattr(SqliteJournal, "_reconcile_prior_session", lambda self, session_id: 0)
+        j2 = SqliteJournal("sess", data_dir=tmp_path)
+        try:
+            assert [r.sequence for r in j2.read(start=-1)] == [-1]
+            assert j2.latest_sequence == 0
+            assert j2.append(kind=JournalRecordKind.EVENT, name="ok", session_id="sess") == 1
+        finally:
+            j2.close()
+
     def test_reused_session_clears_persisted_degraded_marker(self, tmp_path):
         from easycat.runtime import ReadonlySqliteJournal
 
@@ -2329,6 +2354,43 @@ class _FailOnceCloseConn(_LockProbeConn):
         super().close()
 
 
+class _SqliteBackedLibsqlConn:
+    """Fake libSQL connection that persists to a real local SQLite file."""
+
+    def __init__(self, path: str) -> None:
+        self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+
+    def execute(self, sql, params=None):
+        return self._conn.execute(sql, params or ())
+
+    def executemany(self, sql, rows):
+        return self._conn.executemany(sql, rows)
+
+    def executescript(self, sql):
+        return self._conn.executescript(sql)
+
+    def commit(self) -> None:
+        if self._conn.in_transaction:
+            self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def sync(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+class _SqliteBackedLibsqlModule:
+    """``libsql_experimental`` stand-in that opens a fresh SQLite-backed conn."""
+
+    @staticmethod
+    def connect(**kwargs: object) -> _SqliteBackedLibsqlConn:
+        return _SqliteBackedLibsqlConn(str(kwargs["uri"]))
+
+
 class TestLibsqlJournal:
     def test_invalid_session_id_is_rejected_before_optional_sdk_import(self, tmp_path) -> None:
         from easycat.runtime import LibsqlJournal
@@ -2761,6 +2823,58 @@ class TestLibsqlJournal:
         assert ro.degraded is False
         records = ro.read(start=0)
         assert [record.name for record in records] == ["fresh"]
+
+    def test_libsql_unclean_reuse_ignores_degraded_marker_for_sequence(self, tmp_path):
+        """A retained -1 degraded marker must not seed the reopened counter.
+
+        If the prior libSQL session degraded before any commit, its only row is
+        the ``JournalDegraded`` marker at sequence -1. Unclean reuse retains
+        that row, so recovering ``_seq`` from an unfiltered ``MAX(sequence)``
+        reported ``latest_sequence == -1`` and gave the first real append
+        sequence 0 instead of 1.
+        """
+        from easycat.runtime import LibsqlJournal, ReadonlySqliteJournal
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": _SqliteBackedLibsqlModule}):
+            j1 = LibsqlJournal("sess-marker", data_dir=tmp_path, sync_url=None)
+            circular: dict[str, object] = {}
+            circular["self"] = circular
+            assert (
+                j1.append(
+                    kind=JournalRecordKind.EVENT,
+                    name="fail",
+                    session_id="sess-marker",
+                    data=circular,
+                )
+                == -1
+            )
+            assert j1.degraded is True
+            assert j1.latest_sequence == 0
+            # close() writes no clean_close marker for libSQL: unclean reuse.
+            j1.close()
+
+            with sqlite3.connect(j1.db_path) as conn:
+                rows = conn.execute("SELECT sequence, name FROM journal").fetchall()
+            assert rows == [(-1, "journal_degraded")]
+
+            j2 = LibsqlJournal("sess-marker", data_dir=tmp_path, sync_url=None)
+            try:
+                assert j2.latest_sequence == 0
+                assert (
+                    j2.append(kind=JournalRecordKind.EVENT, name="ok", session_id="sess-marker")
+                    == 1
+                )
+                j2.flush()
+            finally:
+                j2.close()
+
+        ro = ReadonlySqliteJournal(tmp_path / "journals" / "sess-marker.sqlite")
+        assert [(r.sequence, r.name) for r in ro.read(start=-1)] == [
+            (-1, "journal_degraded"),
+            (1, "ok"),
+        ]
+        assert ro.latest_sequence == 1
+        assert ro.degraded is True
 
     def test_libsql_sync_paths_hold_writer_lock(self, tmp_path):
         """Regression (bug #5): the periodic ``sync()`` daemon, ``flush()``,
