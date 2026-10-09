@@ -481,6 +481,67 @@ class TestDegradedMode:
         snapshot = j.snapshot()
         assert snapshot.latest_sequence == j.latest_sequence == 1
 
+    @pytest.mark.parametrize("backend", ["memory", "sqlite"])
+    def test_failed_record_build_does_not_consume_sequence(self, backend, tmp_path):
+        """A real write-filter failure must not advance ``latest_sequence``.
+
+        ``InMemoryRingBuffer`` used to bump ``_seq`` before building the record,
+        so when the redaction write filter raised (here: a self-referential
+        ``data`` dict) the counter pointed at a sequence no record carried and
+        no ``append()`` returned, unlike the SQL backends which restore it.
+        """
+        from easycat.runtime import SqliteJournal
+
+        j: InMemoryRingBuffer | SqliteJournal
+        if backend == "memory":
+            j = InMemoryRingBuffer(capacity=10)
+        else:
+            j = SqliteJournal("s1", data_dir=tmp_path)
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+        try:
+            assert j.append(kind=JournalRecordKind.EVENT, name="ok", session_id="s1") == 1
+            bad = j.append(
+                kind=JournalRecordKind.EVENT, name="bad", session_id="s1", data=circular
+            )
+            assert bad == -1
+            assert j.degraded is True
+            assert j.latest_sequence == 1
+            # Only the real record and the out-of-band degraded marker exist.
+            assert sorted(r.sequence for r in j.read(start=-1)) == [-1, 1]
+            if isinstance(j, InMemoryRingBuffer):
+                assert j.snapshot().latest_sequence == 1
+        finally:
+            j.close()
+
+    def test_failed_record_build_on_full_buffer_leaves_ring_untouched(self):
+        """A failed build on a full ring must not evict, count drops, or add overflow.
+
+        Only the out-of-band ``JournalDegraded`` marker may displace a record.
+        """
+        j = InMemoryRingBuffer(capacity=3)
+        for name in ("e1", "e2", "e3"):
+            j.append(kind=JournalRecordKind.EVENT, name=name, session_id="s1")
+        assert j.dropped_records == 0
+        circular: dict[str, object] = {}
+        circular["self"] = circular
+
+        bad = j.append(kind=JournalRecordKind.EVENT, name="bad", session_id="s1", data=circular)
+
+        assert bad == -1
+        assert j.degraded is True
+        assert j.latest_sequence == 3
+        assert j.snapshot().latest_sequence == 3
+        # The degraded marker evicted e1; the failed append itself evicted
+        # nothing and inserted no BufferOverflow marker.
+        records = j.read(start=-1)
+        assert [(r.sequence, r.kind) for r in records] == [
+            (2, JournalRecordKind.EVENT),
+            (3, JournalRecordKind.EVENT),
+            (-1, JournalRecordKind.DEGRADED),
+        ]
+        assert j.dropped_records == 1
+
     def test_degraded_signalled_via_property_not_record_stream(self):
         # The degraded marker at sequence=-1 is a deliberate out-of-band signal:
         # normal consumers detect degradation via the ``degraded`` property, NOT
