@@ -63,6 +63,14 @@ class FunASROnnxVAD(_VADBase):
         cache_dir: str | None = None,
     ) -> None:
         super().__init__()
+        # FunASR applies the end-of-speech silence inside the model via
+        # max_end_sil.  Keep that duration in its own attribute (seeded from
+        # the shared default) and disable the shared state machine's silence
+        # gate here as well as in configure(), so a directly constructed
+        # instance does not wait for the same silence twice.
+        self._model_end_sil_ms: int = self._min_silence_duration_ms
+        self._min_silence_duration_ms = 0
+        self._threshold = 0.5
         if cache_dir is not None:
             raise ValueError(
                 "cache_dir is not supported by EasyCat's in-tree FunASR runtime; "
@@ -82,7 +90,6 @@ class FunASROnnxVAD(_VADBase):
             raise ValueError("chunk_size_ms produced an empty chunk")
 
         self._buffer: bytes = b""
-        self._buffer_rate: int | None = None
         self._funasr_active: bool = False
         self._numpy: Any = None
         self._model: Any = None
@@ -106,7 +113,7 @@ class FunASROnnxVAD(_VADBase):
                 device_id=self._device_id,
                 quantize=self._quantize,
                 intra_op_num_threads=self._intra_op_num_threads,
-                max_end_sil=self._min_silence_duration_ms,
+                max_end_sil=self._model_end_sil_ms,
             )
         except Exception as exc:
             raise RuntimeError(f"FunASR ONNX VAD initialization failed: {exc}") from exc
@@ -127,6 +134,7 @@ class FunASROnnxVAD(_VADBase):
             min_silence_duration_ms=min_silence_duration_ms,
             sensitivity=sensitivity,
         )
+        self._model_end_sil_ms = min_silence_duration_ms
         if self._model is not None and hasattr(self._model, "max_end_sil"):
             try:
                 self._model.max_end_sil = min_silence_duration_ms
@@ -156,16 +164,10 @@ class FunASROnnxVAD(_VADBase):
         chunk = self._source_frame_aligner.align(chunk)
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
-        if (
-            self._audio_resampler.source_rate is not None
-            and chunk.format.sample_rate == _FUNASR_SAMPLE_RATE
-        ):
-            self._audio_resampler.reset()
-        target_rate = chunk.format.sample_rate
-        if self._buffer_rate is not None and self._buffer_rate != target_rate:
-            self._buffer = b""
-        self._buffer_rate = target_rate
-
+        # The buffer only ever holds 16 kHz model-rate PCM, so a source-rate
+        # switch must not clear it. The resampler flushes the old segment's
+        # interpolation tail ahead of the new chunk on any rate change,
+        # including a switch to native 16 kHz passthrough.
         self._buffer += self._audio_resampler.process(
             chunk.data,
             chunk.format.sample_rate,
@@ -221,7 +223,6 @@ class FunASROnnxVAD(_VADBase):
         self._audio_resampler.reset()
         self._source_frame_aligner.reset()
         self._buffer = b""
-        self._buffer_rate = None
         self._funasr_active = False
         self._param_dict = {"in_cache": []}
         reset = getattr(self._model, "reset", None)
@@ -238,7 +239,6 @@ class FunASROnnxVAD(_VADBase):
         if source_frame_aligner is not None:
             source_frame_aligner.reset()
         self._buffer = b""
-        self._buffer_rate = None
         self._funasr_active = False
         self._param_dict = {"in_cache": []}
 

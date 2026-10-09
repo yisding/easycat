@@ -751,6 +751,10 @@ _SPLIT_SWEEP_TEXTS = [
     "Use ``a ```b``` c`` here. Then `x` ```py\nprint(1)\n``` ran. Done.",
     "Say `x ```y` z``` now. Then ``k`` ok. Done.",
     "Not \\`code\\` here. Use ``a ```b``` c`` now. Done.",
+    (
+        '"Stop now." \U0001f600 Smile here. (Aside one.) "Quote" - not a list. '
+        "1. Not a list. [Docs.] (x) and **bold** text. “Curly end.” > Not quoted. Done."
+    ),
 ]
 
 
@@ -954,3 +958,169 @@ def test_compaction_cuts_ignore_paragraph_breaks_after_bound() -> None:
     # A break before the bound is still the preferred cut.
     with_break = "Head para.\n\nFirst one. Second two. tail"
     assert _compaction_cuts(with_break, with_break.index("tail"))[0] == len("Head para.\n\n")
+
+
+_NON_LETTER_SENTENCES = {
+    # Each sentence starts with a quote, an emoji or ends with a closer, so
+    # no sentence end is followed by a space and a letter.
+    "quoted": '"Quoted sentence {i} ends." ',
+    "curly": "“Curly sentence {i} ends.” ",
+    "paren-closer": "Sentence {i} ends (see the note.) ",
+    "emoji-start": "\U0001f600 Emoji sentence {i} ends here. ",
+    "emoji-and-paren": "\U0001f600 Emoji sentence {i} ends (see the note.) ",
+    # Closers outside the old list and blank runs other than one space.
+    "brace-double-space": "Brace sentence {i} ends {{see the note.}}  ",
+    "cjk-space": "第{i}句话结束了。 ",
+    "hash-start": "Issue {i} is fixed. ",
+}
+
+
+@pytest.mark.parametrize("kind", list(_NON_LETTER_SENTENCES))
+async def test_markdown_buffer_stays_bounded_on_non_letter_sentences(kind: str) -> None:
+    """A single-line turn whose sentences start or end in non-letters is compacted.
+
+    A sentence cut used to need ``. `` followed by a letter, so these turns
+    were never compacted: ``_text`` held the whole turn and every recheck
+    stripped it again, making streaming quadratic.
+    """
+    from easycat.session._streaming import _SentenceStreamBuffer
+    from easycat.strip_markdown import strip_markdown
+
+    sentence = _NON_LETTER_SENTENCES[kind]
+    # A line that merely starts with ``#`` (not ``#`` then a blank) is no
+    # ATX heading, so its sentence ends are still cuts.
+    text, count = ("#123 " if kind == "hash-start" else ""), 0
+    while len(text) <= 8000:
+        text += sentence.format(i=count)
+        count += 1
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    buffer = _SentenceStreamBuffer(
+        tts_queue=tts_queue,
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=True,
+    )
+
+    longest_raw = 0
+    for start in range(0, len(text), 5):
+        await buffer.add_delta(text[start : start + 5])
+        longest_raw = max(longest_raw, len(buffer._text))
+    await buffer.flush()
+
+    # A few sentences' worth, not the whole turn.  The segmenter does not
+    # split at ``.) \U0001f600``, so that turn is spoken (and can only be
+    # compacted) in larger pieces.
+    assert longest_raw < (1000 if kind == "emoji-and-paren" else 400)
+    spoken = []
+    while not tts_queue.empty():
+        payload = tts_queue.get_nowait()
+        assert payload is not None
+        spoken.append(payload.text)
+    assert "".join(spoken).split() == strip_markdown(text, normalize_code_spans=True).split()
+
+
+def test_compaction_cuts_allow_quotes_closers_and_symbols() -> None:
+    """Sentence ends may carry closing quotes or brackets; tails may start with a quote."""
+    from easycat.session._streaming import _compaction_cuts
+
+    def sentence_cuts(raw: str, bound: int | None = None) -> list[int]:
+        return _compaction_cuts(raw, len(raw) if bound is None else bound)
+
+    # After ``." `` and before an opening quote.
+    raw = 'He said "stop." "Next one" tail'
+    assert sentence_cuts(raw) == [raw.index('"Next')]
+    raw = "He said “stop.” “Next one” tail"
+    assert sentence_cuts(raw) == [raw.index("“Next")]
+    # After ``.)`` / ``.")`` and before a letter, a bracket or an emoji.
+    raw = "One (aside.) Two"
+    assert sentence_cuts(raw) == [raw.index("Two")]
+    raw = 'One ("aside.") (Two'
+    assert sentence_cuts(raw) == [raw.index("(Two")]
+    raw = "One. [link](https://x) two"
+    assert sentence_cuts(raw) == [raw.index("[link")]
+    raw = "One. \U0001f600 two"
+    assert sentence_cuts(raw) == [raw.index("\U0001f600")]
+    raw = "你好。“引号”"
+    assert sentence_cuts(raw) == [raw.index("“")]
+    # Every closer the segmenter keeps attached, not just quotes and brackets.
+    raw = "One {aside.} Two"
+    assert sentence_cuts(raw) == [raw.index("Two")]
+    raw = "He said 「ok.」 Two"
+    assert sentence_cuts(raw) == [raw.index("Two")]
+    raw = "他说「好。」再见"
+    assert sentence_cuts(raw) == [raw.index("再")]
+    # Any run of spaces or tabs after the sentence end, ASCII or CJK.
+    raw = "One.  Two"
+    assert sentence_cuts(raw) == [raw.index("Two")]
+    raw = "One.\tTwo"
+    assert sentence_cuts(raw) == [raw.index("Two")]
+    raw = "你好。 再见"
+    assert sentence_cuts(raw) == [raw.index("再")]
+    raw = "One (aside.)  Two"
+    assert sentence_cuts(raw) == [raw.index("Two")]
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "- item",
+        "* item",
+        "+ item",
+        "1. item",
+        "1) item",
+        "> quote",
+        "# head",
+        "```code",
+        "~~~code",
+        "___",
+        "=== x",
+        "| cell",
+        "<b>x",
+        "![alt](u)",
+        "\\*x",
+        " - indented",
+        "\u00a0- nbsp",
+        "\uff11. fullwidth digit",
+        "\ue002# sentinel",
+    ],
+)
+def test_compaction_cuts_reject_tails_that_can_start_a_block(tail: str) -> None:
+    """A tail is stripped as if it began a line, so it must not start a block marker."""
+    from easycat.session._streaming import _compaction_cuts
+
+    for end in (". ", '." ', ".) "):
+        head = f"First one{end}"
+        assert _compaction_cuts(head + tail, len(head)) == []
+
+
+def test_compaction_cuts_reject_paren_after_closing_label() -> None:
+    """``[label.] (url)`` may still pair, so no cut is offered between them."""
+    from easycat.session._streaming import _compaction_cuts
+
+    raw = "See [label.] (https://x) now"
+    assert _compaction_cuts(raw, raw.index("(")) == []
+    raw = "See [Docs.]  (x) now"
+    assert _compaction_cuts(raw, raw.index("(")) == []
+    raw = "See [Docs.]\t (x) now"
+    assert _compaction_cuts(raw, raw.index("(")) == []
+    raw = "See (label.) (more) now"
+    assert _compaction_cuts(raw, raw.index("(more")) == [raw.index("(more")]
+
+
+def test_compaction_cuts_skip_sentence_ends_in_headings() -> None:
+    from easycat.session._streaming import _compaction_cuts
+
+    raw = '# Title. "Quoted." (Aside.) more'
+    assert _compaction_cuts(raw, len(raw)) == []
+    for raw in ("# Title. More", "###### H6. More", "##\tTabbed. More"):
+        assert _compaction_cuts(raw, len(raw)) == [], raw
+    # The line cut, then a sentence cut on the line before the heading.
+    raw = 'Intro. "Lead." Next\n# Title. "Quoted." more'
+    assert _compaction_cuts(raw, len(raw)) == [raw.index("\n") + 1, raw.index("Next")]
+
+
+def test_compaction_cuts_allow_sentence_ends_on_non_heading_hash_lines() -> None:
+    """Only ``#`` to ``######`` then a blank opens an ATX heading."""
+    from easycat.session._streaming import _compaction_cuts
+
+    for raw in ("#123 is fixed. Next", "####### seven. Next", "#hashtag day. Next"):
+        assert _compaction_cuts(raw, len(raw)) == [raw.index("Next")], raw
