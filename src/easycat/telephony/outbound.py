@@ -17,7 +17,7 @@ import asyncio
 import inspect
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
@@ -296,7 +296,10 @@ def telnyx_dial_payload_from_create_kwargs(
 
     Only the provider-shared subset is translated (destination, caller,
     AMD mode, webhook target, stream parameters when present); Twilio-only
-    media-stream/transcription keys are ignored.
+    media-stream/transcription keys are ignored. When a stream is requested,
+    the ``client_state`` blob is stamped ``direction="outbound"`` (merged over
+    any caller-supplied ``client_state`` mapping, whose explicit direction
+    wins) so the media stream's start frame parses as an outbound leg.
     """
     from easycat.telephony.telnyx import build_stream_parameters
 
@@ -315,7 +318,10 @@ def telnyx_dial_payload_from_create_kwargs(
         payload["answering_machine_detection"] = amd_mode
     stream_url = create_kwargs.get("stream_url")
     if isinstance(stream_url, str) and stream_url:
-        payload.update(build_stream_parameters(stream_url=stream_url))
+        caller_state = create_kwargs.get("client_state")
+        client_state = dict(caller_state) if isinstance(caller_state, Mapping) else {}
+        client_state.setdefault("direction", "outbound")
+        payload.update(build_stream_parameters(stream_url=stream_url, client_state=client_state))
     effective_webhook_url = webhook_url or create_kwargs.get("status_callback")
     if isinstance(effective_webhook_url, str) and effective_webhook_url:
         payload["webhook_url"] = effective_webhook_url
