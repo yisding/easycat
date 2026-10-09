@@ -26,8 +26,26 @@ from easycat.stages.base import (
     put_artifact_async,
     record_stage_failure,
 )
+from easycat.tts.input import TTSInput
 
 logger = logging.getLogger(__name__)
+
+
+def _tts_input_fields(input: Any) -> dict[str, Any]:
+    """Return the ``stage_start`` fields that let LIVE replay re-synthesize.
+
+    Records the text to synthesize as ``input`` (what
+    :func:`live_replay_input` reads) and, for a :class:`TTSInput`, its
+    ``format`` as ``input_format`` so SSML and plain text stay distinct.
+    A ``TTSInput`` must not be ``str()``-ed: that would record the
+    dataclass repr instead of the text.
+    """
+    if isinstance(input, str):
+        return {"input": input}
+    if isinstance(input, TTSInput):
+        return {"input": input.text, "input_format": input.format}
+    text = getattr(input, "text", None)
+    return {"input": text if isinstance(text, str) else str(input)}
 
 
 class TTSStage:
@@ -59,6 +77,7 @@ class TTSStage:
                 name="stage_start",
                 turn_id=turn.id,
                 state_before=state_before,
+                data_extra=_tts_input_fields(input),
             )
         try:
             result = self._provider.synthesize(input)
