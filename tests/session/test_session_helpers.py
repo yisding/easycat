@@ -5,7 +5,9 @@ Tests for has_unclosed_markdown_delimiters.
 
 from __future__ import annotations
 
-from easycat.session.text import has_unclosed_markdown_delimiters
+import pytest
+
+from easycat.session.text import has_unclosed_markdown_delimiters, markdown_open_state
 
 
 class TestMarkdownDelimiters:
@@ -50,3 +52,49 @@ class TestMarkdownDelimiters:
 
     def test_unclosed_image(self) -> None:
         assert has_unclosed_markdown_delimiters("![alt text")
+
+
+class TestInlineCodeRunPairing:
+    """Inline code spans pair backtick runs of equal length (CommonMark).
+
+    A run of N backticks closes only at the next run of exactly N; runs of
+    other lengths inside are content.  Odd/even backtick parity got both
+    directions wrong for multi-backtick spans.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "`a",
+            "Use ``obj.",
+            # The single backtick is content, not the closer of the ``.
+            "Use ``obj.`",
+            # ``a has no closer yet; a later `` would swallow the `b` span.
+            "``a `b` c",
+            "Use ``obj.\nmore",
+            # Fence handling is unchanged.
+            "```",
+        ],
+    )
+    def test_open(self, text: str) -> None:
+        assert markdown_open_state(text) == (True, False)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Use ``obj.`method()``.",
+            "``co`de``",
+            "`a` and ``b`` and ```c```",
+            "Use `wrapped\ncode` here.",
+            # A blank line ends the paragraph, so the opener is literal for
+            # good and cannot hold the window open.
+            "Use `x here.\n\nThen more.",
+            "Use ``x here.\r\n\r\nThen more.",
+        ],
+    )
+    def test_closed(self, text: str) -> None:
+        assert markdown_open_state(text) == (False, False)
+
+    def test_emphasis_inside_multi_backtick_span_is_ignored(self) -> None:
+        assert not has_unclosed_markdown_delimiters("Call ``a`**`` now.")
+        assert has_unclosed_markdown_delimiters("Call ``a`b`` and **still open")
