@@ -522,6 +522,13 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # and leave stray characters for TTS to speak.
     result = _HR_RE.sub("", result)
 
+    # 2c. ATX heading closers (``# Title #``) while the heading line is still
+    # intact: a ``#`` that only ends the line once emphasis, strikethrough or
+    # link markup has been stripped (``# **C #**``) is content, not a closer.
+    result = _HEADING_LINE_RE.sub(
+        partial(_strip_heading_closing_sequence, allow_at_text_end=trim), result
+    )
+
     # 3/4. Links/images with balanced destination parsing.
     result = _replace_markdown_links_and_images(result)
 
@@ -536,10 +543,7 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # 7. Strikethrough
     result = _STRIKETHROUGH_RE.sub(r"\1", result)
 
-    # 8. Headings: drop the optional closing ``#`` run, then the opener.
-    result = _HEADING_LINE_RE.sub(
-        partial(_strip_heading_closing_sequence, allow_at_text_end=trim), result
-    )
+    # 8. Headings: the opener (the closing ``#`` run went in step 2c).
     result = _HEADING_RE.sub("", result)
 
     # 9. Blockquotes

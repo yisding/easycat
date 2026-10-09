@@ -457,6 +457,10 @@ def test_strip_markdown_removes_atx_heading_closing_sequence(text: str, expected
         ("## Foo \\#", "Foo \\#"),
         ("####### Seven #", "####### Seven #"),
         ("# Use `x #` here", "Use x # here"),
+        ("# **C #**", "C #"),
+        ("# *x #*", "x #"),
+        ("# ~~value #~~", "value #"),
+        ("# Title **#**", "Title #"),
     ],
 )
 def test_strip_markdown_keeps_hash_that_is_not_a_heading_closer(text: str, expected: str) -> None:
