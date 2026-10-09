@@ -479,3 +479,26 @@ def test_strip_markdown_heading_closer_scan_handles_long_lines() -> None:
     body = " a #" * 20_000
     assert strip_markdown(f"#{body}") == body.strip().removesuffix(" #")
     assert strip_markdown(f"#{body}x") == f"{body}x".strip()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="link destinations are emphasis-stripped after link rendering (bug)",
+)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("[docs](https://example.com/_next_/static)", "docs https://example.com/_next_/static"),
+        ("[docs](https://example.com/_foo_)", "docs https://example.com/_foo_"),
+    ],
+)
+def test_strip_markdown_link_destination_is_not_treated_as_emphasis(
+    text: str, expected: str
+) -> None:
+    """Link rendering promises ``label URL``; the URL must survive verbatim.
+
+    The URL is spliced into the text before the italic passes run, so
+    ``/_foo_`` (underscores after a non-word ``/``) is read as italic and the
+    spoken URL loses its underscores.
+    """
+    assert strip_markdown(text) == expected
