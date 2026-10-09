@@ -10,6 +10,7 @@ output), and any explicit runtime secret passed to
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from pathlib import Path
@@ -24,6 +25,7 @@ from easycat.validation import redaction as redaction_module
 from easycat.validation.redaction import (
     REDACTED_SECRET,
     ArtifactRedactionError,
+    RedactionPolicy,
     contains_unredacted_sensitive_text,
     redact_command,
     redact_runtime_secrets,
@@ -384,6 +386,208 @@ def test_redact_text_redacts_json_quoted_key_value_secret(policy, text, expected
 )
 def test_shared_detector_flags_json_quoted_key_value_secret(text) -> None:
     assert contains_unredacted_sensitive_text(text)
+
+
+def _basic_credential() -> str:
+    # Built at runtime so no credential-shaped literal is committed.
+    return base64.b64encode(b"user:hunter2-password").decode()
+
+
+@pytest.mark.parametrize("policy", ["secrets", "pii"])
+@pytest.mark.parametrize(
+    "scheme",
+    ["Basic", "Token", "Digest", "NTLM", "Negotiate", "DPoP", "ApiKey", "basic", "TOKEN"],
+)
+def test_redact_text_hides_non_bearer_authorization_credentials(
+    policy: RedactionPolicy,
+    scheme: str,
+) -> None:
+    # Regression for #1203: ``Authorization: Basic <base64(user:password)>``
+    # carries a reusable credential. Only the scheme word used to be redacted,
+    # so the credential itself leaked into reports.
+    credential = _basic_credential()
+    text = f"Authorization: {scheme} {credential}"
+
+    redacted = redact_text(text, policy=policy)
+
+    assert credential not in redacted
+    assert redacted == f"Authorization: {scheme} {REDACTED_SECRET}"
+    assert redact_text(redacted, policy=policy) == redacted
+    assert contains_unredacted_sensitive_text(text)
+    assert not contains_unredacted_sensitive_text(redacted)
+
+
+@pytest.mark.parametrize("policy", ["secrets", "pii"])
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        ("Proxy-Authorization: Basic {cred}", "Proxy-Authorization: Basic {redacted}"),
+        ("authorization=basic {cred}", "authorization=basic {redacted}"),
+        ("Authorization:  Basic\t{cred}; next", "Authorization:  Basic\t{redacted}; next"),
+        ("Authorization: Token {cred}, retry", "Authorization: Token {redacted}, retry"),
+        # JSON-quoted header values are redacted whole, scheme included.
+        ('{{"authorization": "Basic {cred}"}}', '{{"authorization": "{redacted}"}}'),
+        ('\\"Authorization\\": \\"Token {cred}\\"', '\\"Authorization\\": \\"{redacted}\\"'),
+    ],
+)
+def test_redact_text_hides_non_bearer_authorization_header_variants(
+    policy: RedactionPolicy,
+    template: str,
+    expected: str,
+) -> None:
+    credential = _basic_credential()
+    text = template.format(cred=credential)
+
+    redacted = redact_text(text, policy=policy)
+
+    assert credential not in redacted
+    assert redacted == expected.format(redacted=REDACTED_SECRET)
+    assert redact_text(redacted, policy=policy) == redacted
+    assert contains_unredacted_sensitive_text(text)
+    assert not contains_unredacted_sensitive_text(redacted)
+
+
+@pytest.mark.parametrize("policy", ["secrets", "pii"])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Bearer keeps its historical spelling: the scheme is redacted too.
+        ("Authorization: Bearer short-secret", f"Authorization: {REDACTED_SECRET}"),
+        # A lone scheme word with no credential is redacted as the value.
+        ("Authorization: Basic", f"Authorization: {REDACTED_SECRET}"),
+        # A scheme followed by a line break does not swallow the next line.
+        ("Authorization: Basic\nnext line", f"Authorization: {REDACTED_SECRET}\nnext line"),
+        # A word that merely starts with a scheme name is the value itself.
+        ("Authorization: Tokenized-value rest", f"Authorization: {REDACTED_SECRET} rest"),
+        # An unknown first word is treated as a bare credential, never skipped.
+        (
+            "Authorization: opaque-credential (from env)",
+            f"Authorization: {REDACTED_SECRET} (from env)",
+        ),
+    ],
+)
+def test_redact_text_authorization_scheme_edge_cases(
+    policy: RedactionPolicy,
+    text: str,
+    expected: str,
+) -> None:
+    redacted = redact_text(text, policy=policy)
+
+    assert redacted == expected
+    assert redact_text(redacted, policy=policy) == redacted
+    assert not contains_unredacted_sensitive_text(redacted)
+
+
+def _param_credential() -> str:
+    # Obviously fake, low-entropy marker so no credential-shaped literal is
+    # committed; every sensitive parameter in the fixtures below carries it.
+    return "fake-param-credential"
+
+
+_PARAMETER_LIST_AUTHORIZATIONS = [
+    pytest.param(
+        "Digest",
+        'username="u", realm="r", nonce="{cred}", uri="/x", response="{cred}"',
+        id="digest",
+    ),
+    pytest.param(
+        "OAuth",
+        'oauth_consumer_key="k", oauth_nonce="{cred}", oauth_signature="{cred}"',
+        id="oauth",
+    ),
+    pytest.param(
+        "Signature",
+        'keyId="k",algorithm="hmac-sha256",headers="date",signature="{cred}"',
+        id="signature",
+    ),
+    pytest.param(
+        "AWS4-HMAC-SHA256",
+        "Credential=k/20260101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature={cred}",
+        id="aws4-hmac-sha256",
+    ),
+    pytest.param("Hawk", 'id="k", ts="1", nonce="n", mac="{cred}"', id="hawk"),
+    pytest.param("digest", 'username="u", response="{cred}"', id="digest-lowercase"),
+    pytest.param("SIGNATURE", 'keyId="k", signature="{cred}"', id="signature-uppercase"),
+]
+
+
+@pytest.mark.parametrize("policy", ["secrets", "pii"])
+@pytest.mark.parametrize("header", ["Authorization: ", "Proxy-Authorization: ", "authorization="])
+@pytest.mark.parametrize(("scheme", "params"), _PARAMETER_LIST_AUTHORIZATIONS)
+def test_redact_text_hides_every_parameter_of_parameter_list_authorization(
+    policy: RedactionPolicy,
+    header: str,
+    scheme: str,
+    params: str,
+) -> None:
+    # Digest, OAuth 1.0, HTTP Signatures, AWS SigV4, and Hawk carry their
+    # credential in a later ``name=value`` parameter, so redacting only the
+    # first parameter left ``response=``/``signature=``/``mac=`` visible.
+    credential = _param_credential()
+    text = f"{header}{scheme} {params.format(cred=credential)}\nnext line"
+
+    redacted = redact_text(text, policy=policy)
+
+    assert credential not in redacted
+    assert redacted == f"{header}{scheme} {REDACTED_SECRET}\nnext line"
+    assert redact_text(redacted, policy=policy) == redacted
+    assert contains_unredacted_sensitive_text(text)
+    assert not contains_unredacted_sensitive_text(redacted)
+
+
+@pytest.mark.parametrize("policy", ["secrets", "pii"])
+@pytest.mark.parametrize(("scheme", "params"), _PARAMETER_LIST_AUTHORIZATIONS)
+def test_redact_text_hides_quoted_parameter_list_authorization(
+    policy: RedactionPolicy,
+    scheme: str,
+    params: str,
+) -> None:
+    # A JSON-quoted header value is consumed whole by the quoted-value branch,
+    # escaped inner quotes included.
+    credential = _param_credential()
+    value = f"{scheme} {params.format(cred=credential)}"
+    text = json.dumps({"authorization": value})
+
+    redacted = redact_text(text, policy=policy)
+
+    assert credential not in redacted
+    assert redacted == f'{{"authorization": "{REDACTED_SECRET}"}}'
+    assert redact_text(redacted, policy=policy) == redacted
+    assert contains_unredacted_sensitive_text(text)
+    assert not contains_unredacted_sensitive_text(redacted)
+
+
+def test_shared_detector_flags_partially_redacted_parameter_list_authorization() -> None:
+    # A placeholder in the first parameter must not hide a later credential.
+    text = f'Authorization: Digest {REDACTED_SECRET}, response="{_param_credential()}"'
+
+    assert contains_unredacted_sensitive_text(text)
+    assert not contains_unredacted_sensitive_text(redact_text(text))
+
+
+@pytest.mark.parametrize("policy", ["secrets", "pii"])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Trailing horizontal whitespace stays outside the redacted value.
+        ("Authorization: Hawk id=x  ", f"Authorization: Hawk {REDACTED_SECRET}  "),
+        # A parameter-list scheme with no parameters is redacted as the value.
+        ("Authorization: Digest", f"Authorization: {REDACTED_SECRET}"),
+        ("Authorization: Digest  \nnext", f"Authorization: {REDACTED_SECRET}  \nnext"),
+        # Single-token schemes still stop at the first separator.
+        ("Authorization: Token x, retry", f"Authorization: Token {REDACTED_SECRET}, retry"),
+    ],
+)
+def test_redact_text_parameter_list_authorization_edge_cases(
+    policy: RedactionPolicy,
+    text: str,
+    expected: str,
+) -> None:
+    redacted = redact_text(text, policy=policy)
+
+    assert redacted == expected
+    assert redact_text(redacted, policy=policy) == redacted
+    assert not contains_unredacted_sensitive_text(redacted)
 
 
 @pytest.mark.parametrize("policy", ["pii", "secrets"])

@@ -479,3 +479,124 @@ def test_strip_markdown_heading_closer_scan_handles_long_lines() -> None:
     body = " a #" * 20_000
     assert strip_markdown(f"#{body}") == body.strip().removesuffix(" #")
     assert strip_markdown(f"#{body}x") == f"{body}x".strip()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("``a``", "a"),
+        ("``co`de``", "co`de"),
+        ("see ``a`b`` ok", "see a`b ok"),
+        ("```a``` and ``b``", "a and b"),
+        ("``a`` then `b` then ``c`d``", "a then b then c`d"),
+        ("``__init__`` and ``*x*``", "__init__ and *x*"),
+    ],
+)
+def test_strip_markdown_handles_multi_backtick_inline_code_spans(text: str, expected: str) -> None:
+    """A CommonMark code span delimited by N backticks must lose its delimiters.
+
+    ``_INLINE_CODE_RE`` only matched single-backtick spans, leaving stray
+    backticks in the TTS text. Double-backtick spans are the standard way to
+    embed a literal backtick in inline code.
+    """
+    assert strip_markdown(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # One padding space is stripped from each side so a span can begin or
+        # end with a literal backtick.
+        ("`` `a` ``", "`a`"),
+        ("say `` ` `` now", "say ` now"),
+        ("x ` a ` y", "x a y"),
+        # Padding on only one side is kept.
+        ("x `` a`` y", "x  a y"),
+        # An all-space span is not stripped.
+        ("x ``  `` y", "x    y"),
+    ],
+)
+def test_strip_markdown_strips_one_padding_space_from_code_spans(text: str, expected: str) -> None:
+    assert strip_markdown(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A closer must be exactly as long as its opener; otherwise the run is
+        # literal text.
+        "``a```",
+        "```a``",
+        "`a`` b",
+        "a ` b",
+        "a `` b",
+    ],
+)
+def test_strip_markdown_leaves_unmatched_backtick_runs_literal(text: str) -> None:
+    assert strip_markdown(text) == text
+
+
+def test_strip_markdown_unmatched_opener_run_does_not_swallow_later_span() -> None:
+    # ``a has no closing double run, so it stays literal; the later single
+    # backtick pair is still a code span.
+    assert strip_markdown("``a `b` c") == "``a b c"
+
+
+def test_strip_markdown_normalizes_multi_backtick_code_spans_for_tts() -> None:
+    text = "Call ``print()`` or ``a`b``."
+
+    assert (
+        strip_markdown(text, normalize_code_spans=True)
+        == "Call print open paren close paren or a`b."
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # CommonMark: a code span may wrap across line endings, and each line
+        # ending inside it reads as a single space.
+        ("`foo\nbar`", "foo bar"),
+        ("``a\nb``", "a b"),
+        ("`foo\r\nbar`", "foo bar"),
+        ("``a\r\nb``", "a b"),
+        ("Run `pip\ninstall easycat` now.", "Run pip install easycat now."),
+        # The line ending becomes a space before the padding rule runs.
+        ("``\nfoo\n``", "foo"),
+    ],
+)
+def test_strip_markdown_inline_code_span_crosses_line_endings(text: str, expected: str) -> None:
+    assert strip_markdown(text) == expected
+    assert strip_markdown(text, trim=False) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Use `x here.\n\nThen y` there.",
+        "Use ``x here.\n\nThen y`` there.",
+        "Use `x here.\r\n\r\nThen y` there.",
+        # A whitespace-only line is still a blank line.
+        "Use `x here.\n  \t\nThen y` there.",
+    ],
+)
+def test_strip_markdown_inline_code_span_does_not_cross_blank_line(text: str) -> None:
+    """Backticks in different paragraphs must not pair into one code span.
+
+    A blank line ends the paragraph, so the opener and closer are literal
+    text; pairing them would hide the prose between them inside a span.
+    """
+    assert strip_markdown(text) == text
+
+
+def test_strip_markdown_wrapped_code_span_normalizes_for_tts() -> None:
+    assert (
+        strip_markdown("Call `print(\n)` now.", normalize_code_spans=True)
+        == "Call print open paren close paren now."
+    )
+
+
+def test_strip_markdown_fenced_code_wins_over_wrapped_inline_span() -> None:
+    text = "```py\nx = `a\nb`\n```"
+
+    assert strip_markdown(text) == "x = `a\nb`"
