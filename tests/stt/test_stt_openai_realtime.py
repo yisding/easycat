@@ -1403,6 +1403,40 @@ async def test_openai_realtime_aclose_without_active_stream_is_idempotent():
 
 
 @pytest.mark.asyncio
+async def test_openai_realtime_aclose_joins_errors_emitted_during_socket_close():
+    """Provider errors raised while aclose() closes the socket are joined too."""
+    from easycat.events import Error, EventBus
+
+    class _ErrorOnCloseSocket(_PersistentMockWSConnection):
+        async def close(self) -> None:
+            if self.close_code is None:
+                await self.push({"type": "error", "error": {"message": "late close error"}})
+            await super().close()
+
+    delivered: list[Error] = []
+
+    async def slow_subscriber(event: Error) -> None:
+        await asyncio.sleep(0.05)
+        delivered.append(event)
+
+    bus = EventBus()
+    bus.subscribe(Error, slow_subscriber)
+    socket = _ErrorOnCloseSocket()
+    factory = _PersistentMockWSFactory([socket])
+    stt = OpenAIRealtimeSTT(
+        OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory, event_bus=bus)
+    )
+    await stt.start_stream()
+
+    await stt.aclose()
+
+    assert [str(event.exception) for event in delivered] == ["late close error"]
+    assert stt._emit_tasks == set()
+    assert socket.close_code == 1000
+    assert stt._running is False
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_reusable_across_streams():
     factory1 = _MockWSFactory([_make_transcription_completed("stream one")])
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory1)

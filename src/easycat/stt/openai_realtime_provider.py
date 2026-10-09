@@ -620,7 +620,14 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
                 self._session_ready = None
                 self._reset_logical_turn_state()
             finally:
-                await self._close_owned_runtime_scope_if_idle()
+                try:
+                    # The receive loop can emit provider errors while the
+                    # socket closes, after STTBase.close() already drained
+                    # them. Join those too, outside the lifecycle lock, since
+                    # an Error subscriber may re-enter close().
+                    await self._drain_provider_error_tasks()
+                finally:
+                    await self._close_owned_runtime_scope_if_idle()
 
     def version_info(self) -> dict[str, str]:
         return {
