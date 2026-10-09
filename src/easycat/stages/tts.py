@@ -26,7 +26,7 @@ from easycat.stages.base import (
     put_artifact_async,
     record_stage_failure,
 )
-from easycat.tts.input import TTSInput
+from easycat.tts.input import TTSInput, TTSInputFormat
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,45 @@ def _tts_input_fields(input: Any) -> dict[str, Any]:
         return {"input": input.text, "input_format": input.format}
     text = getattr(input, "text", None)
     return {"input": text if isinstance(text, str) else str(input)}
+
+
+def _live_replay_tts_input(spec: ReplaySpec, cassette: ReplayCassette | None) -> Any:
+    """Rebuild the text a recorded TTS turn synthesized, for LIVE replay.
+
+    A session synthesizes one turn in several chunks (one ``execute`` per
+    sentence), so a per-turn cassette holds one ``stage_start`` per chunk.
+    Every chunk's recorded ``input`` is used, in journal order, so LIVE
+    replay covers the same speech that ARTIFACT replay's concatenated
+    ``tts_frame`` bytes do. Chunks keep their own whitespace, so plain
+    text chunks are joined with ``""``.
+
+    Returns ``spec.overrides["input"]`` when given. Otherwise returns a
+    ``str`` when every chunk is plain text, a :class:`TTSInput` with
+    ``format="ssml"`` for a single SSML chunk, and a ``tuple`` of
+    :class:`TTSInput` (one per chunk) when several chunks include SSML,
+    because separate SSML documents cannot be joined into one. Cassettes
+    without recorded ``input`` text fall back to :func:`live_replay_input`.
+    """
+    if "input" in spec.overrides:
+        return spec.overrides["input"]
+    if cassette is not None:
+        chunks: list[TTSInput] = []
+        for record in cassette.records_named("stage_start"):
+            data = record.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            text = data.get("input")
+            if not isinstance(text, str):
+                continue
+            fmt: TTSInputFormat = "ssml" if data.get("input_format") == "ssml" else "plain"
+            chunks.append(TTSInput(text=text, format=fmt))
+        if chunks:
+            if all(chunk.format == "plain" for chunk in chunks):
+                return "".join(chunk.text for chunk in chunks)
+            if len(chunks) == 1:
+                return chunks[0]
+            return tuple(chunks)
+    return live_replay_input(spec, cassette, source="data_input")
 
 
 class TTSStage:
@@ -280,12 +319,14 @@ class TTSStage:
         preferring concatenated ``tts_frame`` blobs when the cassette
         has them, falling back to ``spec.overrides["audio"]`` or the
         legacy ``stage_complete`` output ref.  ``LIVE`` returns the
-        captured input text so the caller can re-run synthesis on a
-        fresh provider.
+        captured input of every synthesis chunk in the cassette so the
+        caller can re-run synthesis on a fresh provider: the joined
+        ``str`` for plain text, or :class:`TTSInput` values that keep
+        the SSML format (see :func:`_live_replay_tts_input`).
         """
         overrides = spec.overrides
         if spec.fidelity is ReplayFidelity.LIVE:
-            return live_replay_input(spec, cassette, source="data_input")
+            return _live_replay_tts_input(spec, cassette)
 
         if "audio" in overrides or "result" in overrides:
             return overrides.get("audio", overrides.get("result"))

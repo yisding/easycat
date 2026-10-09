@@ -1186,8 +1186,12 @@ class TestStageExecuteRecording:
         assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), cassette) == b"outbound"
 
     @staticmethod
-    async def _record_tts_cassette(payload, *, journal_detail: str = "full"):
-        """Run a streaming TTSStage over *payload* and return its replay cassette."""
+    async def _record_tts_cassette(*payloads, journal_detail: str = "full"):
+        """Run a streaming TTSStage over each payload and return one replay cassette.
+
+        Several payloads mimic a session synthesizing one turn sentence by
+        sentence: each is a separate ``execute`` call into the same journal.
+        """
         from easycat.runtime.replay import ReplayCassette
 
         class _AudioEvent:
@@ -1206,8 +1210,10 @@ class TestStageExecuteRecording:
             journal_detail=journal_detail,
         )
         stage = TTSStage(_StreamingTTS(), journal=journal)
-        stream = await stage.execute(payload, ctx, _make_turn())
-        assert [event async for event in stream]
+        turn = _make_turn()
+        for payload in payloads:
+            stream = await stage.execute(payload, ctx, turn)
+            assert [event async for event in stream]
         records = tuple(
             {
                 "sequence": r.sequence,
@@ -1238,19 +1244,58 @@ class TestStageExecuteRecording:
         so ``live_replay_input(source="data_input")`` always returned None
         for a real recording and a LIVE ``stage_replayer`` had nothing to
         re-synthesize.  A ``TTSInput`` records its text (not the dataclass
-        repr) plus its format.
+        repr) plus its format, and SSML comes back as a ``TTSInput`` so the
+        format survives the replay boundary.
         """
         from easycat.runtime.replay import ReplayFidelity
 
         stage, records, cassette = await self._record_tts_cassette(payload)
         expected_text = payload if isinstance(payload, str) else payload.text
+        expected_live = payload if expected_format == "ssml" else expected_text
 
         start = next(r for r in records if r["name"] == "stage_start")
         assert start["data"]["input"] == expected_text
         assert start["data"].get("input_format") == expected_format
-        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), cassette) == expected_text
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), cassette) == expected_live
         # ARTIFACT replay still concatenates the captured tts_frame bytes.
         assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.ARTIFACT), cassette) == b"\x01\x02"
+
+    async def test_tts_live_replay_joins_every_chunk_of_a_turn(self):
+        """LIVE replay returns the whole turn, not just the last chunk.
+
+        A session calls ``execute`` once per sentence, so one turn's
+        cassette holds one ``stage_start`` per chunk.  Reading only the
+        last one dropped every earlier sentence while ARTIFACT replay still
+        returned every chunk's audio.
+        """
+        from easycat.runtime.replay import ReplayFidelity
+
+        stage, records, cassette = await self._record_tts_cassette(
+            "Hello world. ",
+            TTSInput(text="This is the second sentence. "),
+            "And a third.",
+        )
+
+        assert [r["name"] for r in records].count("stage_start") == 3
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), cassette) == (
+            "Hello world. This is the second sentence. And a third."
+        )
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.ARTIFACT), cassette) == (
+            b"\x01\x02" * 3
+        )
+
+    async def test_tts_live_replay_keeps_ssml_chunks_separate(self):
+        """SSML documents cannot be joined, so each chunk keeps its format."""
+        from easycat.runtime.replay import ReplayFidelity
+
+        first = TTSInput(text="<speak>Hello.</speak>", format="ssml")
+        second = TTSInput(text="Plain tail.")
+        stage, _records, cassette = await self._record_tts_cassette(first, second)
+
+        assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), cassette) == (
+            first,
+            second,
+        )
 
     async def test_tts_live_replay_override_wins_over_recorded_text(self):
         from easycat.runtime.replay import ReplayFidelity

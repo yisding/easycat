@@ -103,7 +103,9 @@ class _EchoAgent:
         return f"reply: {text}"
 
 
-def _build_session() -> tuple[Session, InMemoryRingBuffer, InMemoryArtifactStore]:
+def _build_session(
+    agent: Any = None,
+) -> tuple[Session, InMemoryRingBuffer, InMemoryArtifactStore]:
     journal = InMemoryRingBuffer(capacity=512)
     artifact_store = InMemoryArtifactStore()
     session = Session(
@@ -111,7 +113,7 @@ def _build_session() -> tuple[Session, InMemoryRingBuffer, InMemoryArtifactStore
             stt=_StubSTT(),
             tts=_ScriptedTTS(),
             transport=_StubTransport(),
-            agent=_EchoAgent(),
+            agent=agent if agent is not None else _EchoAgent(),
             journal=journal,
             artifact_store=artifact_store,
             turn_manager_config=TurnManagerConfig(end_of_turn_silence_ms=1),
@@ -170,3 +172,43 @@ async def test_ws4_cross_workstream_round_trip(tmp_path):
     # implements ``version_info``) — this is the WS1 hook surviving
     # through WS4 export.
     assert "transport" in bundle.manifest.provider_versions
+
+
+class _MultiSentenceAgent:
+    REPLY = "Hello world. This is the second sentence of a long reply. And a third one."
+
+    async def run(self, text: str) -> str:
+        return self.REPLY
+
+
+@pytest.mark.asyncio
+async def test_tts_live_replay_returns_every_chunk_of_a_session_turn(tmp_path):
+    """LIVE TTS replay of a multi-sentence turn returns the whole reply.
+
+    The session synthesizes a reply one sentence chunk at a time, so the
+    turn's TTS cassette holds several ``stage_start`` records.  LIVE replay
+    used to read only the last one and silently drop earlier sentences.
+    """
+    from easycat.stages.tts import TTSStage
+
+    session, journal, _artifact_store = _build_session(_MultiSentenceAgent())
+    await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    starts = [
+        r for r in journal.read() if r.name == "stage_start" and r.data.get("stage") == "tts"
+    ]
+    assert len(starts) > 1, "expected the reply to be synthesized in several chunks"
+
+    bundle_path = tmp_path / "multi_chunk.zip"
+    export_debug_bundle(session, str(bundle_path))
+    bundle = RunBundle.load(bundle_path)
+    tts_cassette = bundle.cassette_for_stage("tts")
+
+    stage = TTSStage(_ScriptedTTS())
+    assert (
+        stage.replay(ReplaySpec(fidelity=ReplayFidelity.LIVE), tts_cassette)
+        == _MultiSentenceAgent.REPLY
+    )
+    assert stage.replay(ReplaySpec(fidelity=ReplayFidelity.ARTIFACT), tts_cassette) == (
+        (_ScriptedTTS.CHUNK_A + _ScriptedTTS.CHUNK_B) * len(starts)
+    )
