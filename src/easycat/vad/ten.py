@@ -91,8 +91,8 @@ class TenVAD(_VADBase):
 
             frame = self._numpy.frombuffer(frame_data, dtype=self._numpy.int16).copy()
             speech_prob, _ = self._ten_vad.process(frame)
-            audio_time_s = self._advance_audio_time(self._hop_size / _TEN_SAMPLE_RATE)
-            for event in self._evaluate_speech(float(speech_prob), audio_time_s):
+            audio_time = self._advance_audio_time(self._hop_size, _TEN_SAMPLE_RATE)
+            for event in self._evaluate_speech(float(speech_prob), audio_time):
                 yield event
 
             # Buffered transports may deliver many model frames in one chunk.
