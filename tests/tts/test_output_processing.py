@@ -47,6 +47,18 @@ def test_phonetic_replacement_does_not_rewrite_already_spoken_terms() -> None:
     assert payload.text == "Doctor Smith asked the Dok-tur."
 
 
+def test_phonetic_replacement_ignores_empty_term() -> None:
+    # An empty-string term (e.g. from a blank row in a user pronunciation
+    # table) has nothing to pronounce. It must not match zero-width spots
+    # between non-word characters and splice its spoken form into the text.
+    processor = PhoneticReplacementProcessor({"": "X", "Dr.": "Doctor"})
+    payload = TTSInput("Dr. Smith said: hello, ... bye.")
+
+    result = processor.process(payload, is_final=True, is_streaming=False)
+
+    assert result.text == "Doctor Smith said: hello, ... bye."
+
+
 def test_default_pronunciation_processors_order() -> None:
     processors = default_pronunciation_processors(
         name_pronunciations={"Siobhan": "shi-vawn"},
