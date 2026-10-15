@@ -1136,3 +1136,26 @@ def test_strip_markdown_nested_link_destinations_are_kept_verbatim(
     """
     assert strip_markdown(text) == expected
     assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="list-marker passes use \\s+ and consume the newline after a lone marker line",
+)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("The answer is\n42.\n\nDone", "The answer is\n42.\n\nDone"),
+        ("Step\n7.\nThen", "Step\n7.\nThen"),
+        ("Total\n-\nNext", "Total\n-\nNext"),
+    ],
+    ids=["number-line-before-paragraph", "number-line-before-text", "dash-line"],
+)
+def test_strip_markdown_keeps_lone_marker_line_content(text: str, expected: str) -> None:
+    """A line holding only ``42.`` / ``-`` is prose, not a list marker with a body.
+
+    The ordered/unordered list passes match ``\\s+`` after the marker, which
+    spans the line ending, so the number is dropped from the spoken text and the
+    following line (or paragraph break) is glued on.
+    """
+    assert strip_markdown(text) == expected
