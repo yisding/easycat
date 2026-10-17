@@ -645,3 +645,18 @@ def test_redact_command_redacts_split_secret_flags() -> None:
     assert redact_command("easycat validate --api-key=short") == (
         f"easycat validate --api-key={REDACTED_SECRET}"
     )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="_SECRET_KEY_RE requires the keyword to end at a separator, so plural keys leak",
+)
+@pytest.mark.parametrize("key", ["api_keys", "credentials", "secrets", "passwords"])
+def test_secrets_policy_redacts_plural_secret_field_names(key: str) -> None:
+    """A plural secret field name is as sensitive as its singular form.
+
+    ``{"api_key": "short"}`` is redacted by field name alone; the value has no
+    recognizable secret shape, so a plural key must be redacted the same way.
+    """
+    assert redact_value({"api_key": "short"}, policy="secrets") == {"api_key": REDACTED_SECRET}
+    assert redact_value({key: "short"}, policy="secrets") == {key: REDACTED_SECRET}
