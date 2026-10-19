@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
           version: "0.12.1"
           enable-cache: true
@@ -57,7 +57,7 @@ jobs:
           -m serial
       - name: Upload full local validation artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: nightly-validation-report-full-local-py${{ matrix.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
           version: "0.12.1"
           enable-cache: true
@@ -83,7 +83,7 @@ jobs:
       - run: uv run --python 3.12 easycat validate socket --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-socket" --show-output
       - name: Upload socket validation artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: nightly-validation-report-socket-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
@@ -99,7 +99,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
           version: "0.12.1"
           enable-cache: true
@@ -109,7 +109,7 @@ jobs:
       - run: uv run --python 3.12 easycat validate stress --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-stress" --show-output
       - name: Upload stress validation artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: nightly-validation-report-stress-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
@@ -123,7 +123,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
           version: "0.12.1"
           enable-cache: true
@@ -140,7 +140,7 @@ jobs:
           uv run --python 3.12 pytest --collect-only -q -m flaky | tee flaky-quarantine.txt || [ "$?" -eq 5 ]
       - name: Upload flaky quarantine report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: flaky-quarantine-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: flaky-quarantine.txt
@@ -202,7 +202,7 @@ jobs:
         env:
           EXTRA_NAME: ${{ matrix.extra }}
         run: python3 scripts/transport_extras_evidence.py node "$EXTRA_NAME" >> "$GITHUB_OUTPUT"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
           version: "0.12.1"
           enable-cache: true
@@ -249,7 +249,7 @@ jobs:
           --output "$BRIDGE_EXTRAS_EVIDENCE_DIR/evidence.json"
       - name: Upload exact-SHA bridge extras evidence
         if: always() && steps.bridge-contract.outputs.node != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: bridge-extras-proof-${{ matrix.extra }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.BRIDGE_EXTRAS_EVIDENCE_DIR }}
@@ -275,7 +275,7 @@ jobs:
           --output "$TRANSPORT_EXTRAS_EVIDENCE_DIR/evidence.json"
       - name: Upload exact-SHA transport extras evidence
         if: always() && steps.transport-contract.outputs.node != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: transport-extras-proof-${{ matrix.extra }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.TRANSPORT_EXTRAS_EVIDENCE_DIR }}
@@ -297,7 +297,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
           version: "0.12.1"
           enable-cache: true
@@ -324,7 +324,7 @@ jobs:
         run: uv run --no-sync --python 3.12 easycat validate live --provider openai --provider deepgram --provider elevenlabs --provider cartesia --surface stt --surface tts --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --show-output
       - name: Upload redacted live validation artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: nightly-validation-report-live-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
@@ -342,7 +342,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
           version: "0.12.1"
           enable-cache: true
@@ -360,7 +360,7 @@ jobs:
           uv run --python 3.12 easycat validate latency --require-samples --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --show-output
       - name: Upload latency validation artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: nightly-validation-report-latency-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
