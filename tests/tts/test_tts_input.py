@@ -101,3 +101,22 @@ def test_resolve_tts_input_policy_rejects_malformed_policy() -> None:
 
     with pytest.raises(TypeError, match="input_policy"):
         resolve_tts_input_policy(Provider())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="strip_ssml_tags replaces every tag with a space, splitting words and "
+    "detaching punctuation around inline tags",
+)
+@pytest.mark.parametrize(
+    ("ssml", "expected"),
+    [
+        ("<speak>Say <emphasis>Hel</emphasis>lo.</speak>", "Say Hello."),
+        ('<speak><prosody rate="slow">Hello</prosody>, world</speak>', "Hello, world"),
+        ('<speak>Total: <say-as interpret-as="cardinal">5</say-as>.</speak>', "Total: 5."),
+    ],
+)
+def test_strip_ssml_tags_does_not_split_words_or_detach_punctuation(
+    ssml: str, expected: str
+) -> None:
+    assert strip_ssml_tags(ssml) == expected
