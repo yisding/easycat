@@ -592,6 +592,39 @@ async def test_serve_supervisor_websocket_fails_closed_without_token() -> None:
     assert ws.close_reason == "Unauthorized"
 
 
+@pytest.mark.parametrize("blank_token", ["", "   "])
+def test_supervisor_message_authorized_rejects_blank_expected_token(blank_token: str) -> None:
+    # A blank token is not a usable secret (see BearerTokenAuth); it must not
+    # authorize a subscriber that echoes the same blank value back.
+    assert not supervisor_message_authorized({"token": blank_token}, blank_token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blank_token", ["", "   "])
+async def test_serve_supervisor_websocket_rejects_blank_expected_token(
+    blank_token: str,
+) -> None:
+    session = _DummySession("session-a")
+    broadcaster = SessionAudioBroadcaster(session)
+    ws = _FakeSupervisorWebSocket(
+        [json.dumps({"type": "subscribe", "session_id": "session-a", "token": blank_token})]
+    )
+
+    # Bounded so a fail-open auth bug (the helper keeps streaming) fails fast.
+    await asyncio.wait_for(
+        serve_supervisor_websocket(
+            ws,
+            {"session-a": broadcaster},
+            expected_token=blank_token,
+        ),
+        timeout=2,
+    )
+
+    assert ws.close_code == 4401
+    assert ws.close_reason == "Unauthorized"
+    assert broadcaster.listener_count == 0
+
+
 @pytest.mark.asyncio
 async def test_serve_supervisor_websocket_rejects_bad_token() -> None:
     session = _DummySession("session-a")
