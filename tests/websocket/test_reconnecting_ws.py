@@ -1038,6 +1038,37 @@ class TestReconnectingWebSocket:
         delay = ws._compute_delay(1.0)
         assert 0.5 <= delay <= 1.5
 
+    async def test_jittered_backoff_never_exceeds_max_delay(self):
+        # ``max_delay`` is the documented ceiling for the backoff between
+        # connect attempts. Jitter must not push a capped delay above it (the
+        # telephony ``RetryStrategy`` keeps its jittered delay within its cap).
+        ws = self._make_ws(
+            base_delay=1.0,
+            max_delay=2.0,
+            backoff_factor=2.0,
+            jitter_factor=0.5,
+            max_retries=4,
+        )
+        sleeps: list[float] = []
+
+        async def record_backoff(delay: float) -> None:
+            sleeps.append(delay)
+
+        with (
+            patch("easycat.reconnecting_ws.random.random", return_value=0.999),
+            patch.object(ws, "_backoff_or_close", side_effect=record_backoff),
+            patch(
+                "easycat.reconnecting_ws.websockets.connect",
+                new_callable=AsyncMock,
+                side_effect=ConnectionError("fail"),
+            ),
+            pytest.raises(ConnectionError, match="Failed to connect"),
+        ):
+            await ws.connect()
+
+        assert len(sleeps) == 4
+        assert max(sleeps) <= 2.0, f"backoff delays {sleeps} exceed max_delay=2.0"
+
     async def test_no_jitter_when_factor_zero(self):
         ws = self._make_ws(jitter_factor=0.0)
         delay = ws._compute_delay(2.0)
