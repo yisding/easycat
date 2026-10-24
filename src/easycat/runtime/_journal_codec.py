@@ -111,17 +111,6 @@ def _insert_tag_index_rows(conn: Any, sequence: int, tags: frozenset[str]) -> No
         )
 
 
-def _escape_like(value: str) -> str:
-    """Escape SQL ``LIKE`` metacharacters so *value* matches literally.
-
-    Pairs with ``ESCAPE '\\'`` in the predicate.  Backslash is escaped first so
-    the escape character itself is treated literally, then ``%`` and ``_`` (the
-    LIKE wildcards) are neutralised — without this a tag containing ``%`` or
-    ``_`` would match unrelated records.
-    """
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def _build_slice_where(
     *,
     kind: JournalRecordKind | None = None,
@@ -147,9 +136,10 @@ def _build_slice_where(
     * ``use_tag_index=False`` (default; read-only views over arbitrary/older
       files that may predate the junction table): each requested tag matches
       the comma-wrapped ``tags`` column exactly via
-      ``(',' || tags || ',') LIKE '%,tag,%'`` with LIKE metacharacters
-      escaped.  This stays correct on files that lack ``journal_tags`` at the
-      cost of a scan.
+      ``instr(',' || tags || ',', ',tag,') > 0``.  ``instr`` compares bytes, so
+      the match is case-sensitive like the tag index (SQLite ``LIKE`` folds
+      ASCII case) and has no wildcard characters to escape.  This stays
+      correct on files that lack ``journal_tags`` at the cost of a scan.
     """
     clauses: list[str] = []
     params: list[Any] = []
@@ -171,8 +161,8 @@ def _build_slice_where(
                 clauses.append("sequence IN (SELECT sequence FROM journal_tags WHERE tag = ?)")
                 params.append(tag)
             else:
-                clauses.append(r"(',' || tags || ',') LIKE ? ESCAPE '\'")
-                params.append(f"%,{_escape_like(tag)},%")
+                clauses.append("instr(',' || tags || ',', ?) > 0")
+                params.append(f",{tag},")
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     return where, params
 

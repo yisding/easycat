@@ -379,7 +379,7 @@ class _SqlJournalBase:
             tags=tags,
             # A live backend always has the ``journal_tags`` junction (created +
             # backfilled on open), so tag filters use the index rather than a
-            # comma-string LIKE scan.
+            # comma-string scan.
             use_tag_index=True,
         )
         with self._lock:
