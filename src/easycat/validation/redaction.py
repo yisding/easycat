@@ -69,22 +69,25 @@ _SAFE_SECRET_NAME_FIELDS = frozenset(
 
 _BARE_SECRET_VALUE_KEYS = frozenset({"api", "auth"})
 
+# Plural forms (``api_keys``, ``credentials``) are accepted only for keywords
+# whose plural still names credential material: ``tokens`` / ``max_tokens`` are
+# usage counts and ``keys`` is commonly a list of non-secret names.
 _SECRET_KEY_RE = re.compile(
     r"(?i)(^|[_\-.])("
-    r"api[-_]?key|"
+    r"api[-_]?keys?|"
     r"x[-_]?api[-_]?key|"
     r"xi[-_]?api[-_]?key|"
     r"(?:api|auth)[-_.]?(?:header|value)|"
-    r"access[-_]?token|"
-    r"refresh[-_]?token|"
-    r"client[-_]?secret|"
+    r"access[-_]?tokens?|"
+    r"refresh[-_]?tokens?|"
+    r"client[-_]?secrets?|"
     r"signed[-_]?url|"
     r"signature|"
     r"authorization|"
     r"bearer|"
-    r"credential|"
-    r"password|"
-    r"secret|"
+    r"credentials?|"
+    r"passwords?|"
+    r"secrets?|"
     r"token|"
     r"key"
     r")($|[_\-.])"
