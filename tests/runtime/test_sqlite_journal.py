@@ -395,6 +395,24 @@ class TestSqliteJournalBasics:
         )
         assert [r.name for r in journal.slice(tags=frozenset({"a_b"}))] == ["literal"]
 
+    def test_readonly_slice_by_tags_is_case_sensitive(self, journal):
+        # The live journal (``journal_tags.tag = ?``) and the in-memory backend
+        # (``requested <= record.tags``) compare tags case-sensitively, so the
+        # postmortem read-only view must too.
+        for name, tag in (("upper_first", "Alpha"), ("exact", "alpha"), ("upper", "ALPHA")):
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name=name,
+                session_id="test-session",
+                tags=frozenset({tag}),
+            )
+        wanted = frozenset({"alpha"})
+        assert [r.name for r in journal.slice(tags=wanted)] == ["exact"]
+
+        journal.flush()
+        readonly = ReadonlySqliteJournal(journal.db_path)
+        assert [r.name for r in readonly.slice(tags=wanted)] == ["exact"]
+
     def test_timing_populated(self, journal):
         journal.append(
             kind=JournalRecordKind.EVENT,
