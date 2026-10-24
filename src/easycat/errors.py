@@ -54,6 +54,16 @@ class EasyCatError(Exception):
         self._fix = fix
         super().__init__(self._render())
 
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Rebuild from instance state, not ``args``, for copy and pickle.
+
+        ``args`` holds only the rendered string, which does not match the
+        ``__init__`` signature of this class or its subclasses, so the default
+        ``BaseException`` reduction raises ``TypeError`` (for example when a
+        ``ProcessPoolExecutor`` worker sends the error back to its parent).
+        """
+        return (_rebuild_easycat_error, (type(self), self.args), dict(self.__dict__))
+
     def _render(self) -> str:
         """Render ``CODE: message`` with the registry fix + explain hint.
 
@@ -91,6 +101,13 @@ class EasyCatError(Exception):
             return entry.fix.format(**self.context) if self.context else entry.fix
         except (KeyError, IndexError):
             return entry.fix
+
+
+def _rebuild_easycat_error(cls: type[EasyCatError], args: tuple[Any, ...]) -> EasyCatError:
+    """Create a bare *cls* instance; ``__reduce__`` state restores its attributes."""
+    exc = cls.__new__(cls)
+    exc.args = args
+    return exc
 
 
 class EasyConfigError(ValueError, EasyCatError):

@@ -1154,3 +1154,14 @@ def test_strip_markdown_keeps_lone_marker_line_content(text: str, expected: str)
     following line (or paragraph break) is glued on.
     """
     assert strip_markdown(text) == expected
+
+
+def test_strip_markdown_keeps_spaced_double_asterisk_operators() -> None:
+    """Whitespace-flanked ``**`` is not emphasis and must survive verbatim.
+
+    ``2 ** 10`` is already preserved, but with two operators the italic regex
+    treats the first ``*`` of the first ``**`` (left-flanked by ``**``) as an
+    opener and the last ``*`` of the second ``**`` as its closer, rewriting
+    the text to ``2 * 3 * 4``.
+    """
+    assert strip_markdown("2 ** 3 ** 4") == "2 ** 3 ** 4"
