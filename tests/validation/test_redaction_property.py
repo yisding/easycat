@@ -647,10 +647,6 @@ def test_redact_command_redacts_split_secret_flags() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="_SECRET_KEY_RE requires the keyword to end at a separator, so plural keys leak",
-)
 @pytest.mark.parametrize("key", ["api_keys", "credentials", "secrets", "passwords"])
 def test_secrets_policy_redacts_plural_secret_field_names(key: str) -> None:
     """A plural secret field name is as sensitive as its singular form.
@@ -660,3 +656,9 @@ def test_secrets_policy_redacts_plural_secret_field_names(key: str) -> None:
     """
     assert redact_value({"api_key": "short"}, policy="secrets") == {"api_key": REDACTED_SECRET}
     assert redact_value({key: "short"}, policy="secrets") == {key: REDACTED_SECRET}
+
+
+@pytest.mark.parametrize("key", ["tokens", "max_tokens", "input_tokens", "keys"])
+def test_secrets_policy_keeps_plural_non_secret_field_names(key: str) -> None:
+    """Usage counts and key-name lists are not credentials (gh 1270)."""
+    assert redact_value({key: 7}, policy="secrets") == {key: 7}

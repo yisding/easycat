@@ -225,7 +225,7 @@ class TestTemplateDefaults:
                         "api_key": "TOP_LEVEL_DROPPED",
                         "config": {"api_key": "NESTED_KEY_LEAK", "safe": "ok"},
                         "auth_config": {"auth": "NESTED_AUTH_FIELD_LEAK"},
-                        "camel_credentials": {
+                        "camel_fields": {
                             "authToken": "AUTH_TOKEN_CAMEL_LEAK",
                             "apiToken": "API_TOKEN_CAMEL_LEAK",
                             "apiSecret": "API_SECRET_CAMEL_LEAK",
@@ -273,7 +273,7 @@ class TestTemplateDefaults:
         assert state["apiVersion"] == "v1"
         assert state["config"] == {"api_key": "[REDACTED_SECRET]", "safe": "ok"}
         assert state["auth_config"] == {"auth": "[REDACTED_SECRET]"}
-        assert state["camel_credentials"] == {
+        assert state["camel_fields"] == {
             "authToken": "[REDACTED_SECRET]",
             "apiToken": "[REDACTED_SECRET]",
             "apiSecret": "[REDACTED_SECRET]",
