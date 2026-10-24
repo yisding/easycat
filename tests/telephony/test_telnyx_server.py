@@ -541,6 +541,26 @@ def test_nonfinite_start_timeout_raises_value_error(start_timeout_s: float) -> N
         asyncio.run(serve_telnyx_voice_app(lambda t: None, config))
 
 
+@pytest.mark.parametrize("field", ["drain_timeout_s", "force_shutdown_timeout_s"])
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), -1.0])
+def test_invalid_shutdown_timeouts_raise_value_error(field: str, bad_value: float) -> None:
+    """Shutdown timeouts are validated at startup, before any listener binds (gh 1259)."""
+    config = default_config(**{field: bad_value})
+
+    with pytest.raises(ValueError, match=field):
+        asyncio.run(serve_telnyx_voice_app(lambda t: None, config))
+
+
+@pytest.mark.parametrize("field", ["drain_timeout_s", "force_shutdown_timeout_s"])
+def test_zero_shutdown_timeouts_are_accepted_at_startup(field: str) -> None:
+    """``0`` is a legal shutdown budget (drain by force immediately)."""
+    config = default_config(**{field: 0.0}, telnyx_api_key=None)
+
+    # Validation accepts the timeout and fails on the next check instead.
+    with pytest.raises(ValueError, match="telnyx_api_key"):
+        asyncio.run(serve_telnyx_voice_app(lambda t: None, config))
+
+
 def test_media_listener_bounds_messages_and_disables_compression(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
