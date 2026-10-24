@@ -395,10 +395,6 @@ class TestSqliteJournalBasics:
         )
         assert [r.name for r in journal.slice(tags=frozenset({"a_b"}))] == ["literal"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="ReadonlySqliteJournal tag filter uses case-insensitive SQLite LIKE",
-    )
     def test_readonly_slice_by_tags_is_case_sensitive(self, journal):
         # The live journal (``journal_tags.tag = ?``) and the in-memory backend
         # (``requested <= record.tags``) compare tags case-sensitively, so the
