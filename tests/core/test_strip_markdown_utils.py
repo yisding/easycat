@@ -1138,10 +1138,6 @@ def test_strip_markdown_nested_link_destinations_are_kept_verbatim(
     assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ordered-list pass uses \\s+ and consumes the newline after a lone number line",
-)
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
