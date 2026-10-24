@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from websockets.exceptions import ConnectionClosed
 
-from easycat._net import constant_time_strings_equal
+from easycat._net import constant_time_strings_equal, normalize_auth_token
 from easycat.audio_format import AudioChunk
 from easycat.events import (
     AudioIn,
@@ -87,8 +87,10 @@ def supervisor_message_authorized(
     Supervisor listen-in streams live caller and assistant audio, so helpers fail
     closed unless a token is configured.  Tests or tightly controlled in-process
     callers can opt into unauthenticated mode explicitly with
-    ``allow_unauthenticated=True``.
+    ``allow_unauthenticated=True``.  A blank or whitespace-only
+    ``expected_token`` is not a usable secret and counts as no token.
     """
+    expected_token = normalize_auth_token(expected_token)
     if expected_token is None:
         return allow_unauthenticated
     supplied_token = message.get("token")
@@ -134,6 +136,7 @@ async def serve_supervisor_websocket(
     :class:`SessionAudioBroadcaster` until the caller session closes or the
     supervisor disconnects.
     """
+    expected_token = normalize_auth_token(expected_token)
     if expected_token is None and not allow_unauthenticated:
         await _close_supervisor_with_error(
             ws,
