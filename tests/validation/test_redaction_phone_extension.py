@@ -5,10 +5,6 @@ import pytest
 from easycat.validation.redaction import REDACTED_PHONE, redact_text
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="_PHONE_RE's trailing (?!\\w) lets a phone number with an attached extension leak",
-)
 @pytest.mark.parametrize(
     "text",
     [
