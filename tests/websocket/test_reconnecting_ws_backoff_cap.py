@@ -9,10 +9,6 @@ import pytest
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="jitter is applied after the max_delay cap, so waits can reach 1.5x max_delay",
-)
 async def test_jittered_backoff_delay_never_exceeds_max_delay() -> None:
     """``max_delay`` should bound the wait between attempts, jitter included."""
     config = ReconnectConfig(
