@@ -170,6 +170,21 @@ _KEY_VALUE_SECRET_RE = re.compile(
     + _SECRET_VALUE
     + r"[^\s;,]+)"
 )
+# A name ending in a secret key (``AWS_SECRET_ACCESS_KEY=``, ``SECRET_KEY=``,
+# ``private_key=``) or a plural secret keyword (``API_KEYS=``, ``passwords=``),
+# which ``redact_value`` already masks as a mapping key; ``_KEY_VALUE_SECRET_RE``
+# only knows singular keywords. A bare ``_key`` suffix is not enough
+# (``record_key=cp_42`` names a lookup key), and a name that only starts with a
+# keyword (``token_count``) is left alone. Only the unspaced ``NAME=`` form and
+# a quoted ``"NAME": ...`` key are matched, keeping the TOML-reference carve-out
+# above.
+_COMPOUND_SECRET_NAME_RE = re.compile(
+    r"(?i)((?<![\w.-])(?:--)?(?:[a-z0-9]+[_.-])*"
+    r"(?:(?:secret|private|access|signing|encryption)[-_.]?keys?|"
+    r"api[-_]?keys|access[-_]?tokens|refresh[-_]?tokens|client[-_]?secrets|"
+    r"credentials?|passwords|secrets)"
+    r"""(?:=|\\?["'][ \t]*[:=][ \t]*))""" + _SECRET_VALUE + r"[^\s;,]+)"
+)
 _REQUEST_ID_RE = re.compile(r"\b(?:req|request|resp|response)_[A-Za-z0-9_-]{6,}\b")
 _PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
 _HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
@@ -198,6 +213,7 @@ _SECRET_TEXT_REDACTIONS: tuple[tuple[re.Pattern[str], _TextReplacement], ...] = 
     (_HEADER_SECRET_RE, _secret_after_prefix),
     (_BEARER_RE, _secret_after_prefix),
     (_KEY_VALUE_SECRET_RE, _secret_after_prefix),
+    (_COMPOUND_SECRET_NAME_RE, _secret_after_prefix),
     (_JWT_RE, REDACTED_SECRET),
     (_SECRET_RE, REDACTED_SECRET),
 )
@@ -504,7 +520,12 @@ def contains_unredacted_sensitive_text(value: str) -> bool:
     """Return True when contract artifacts still contain sensitive patterns."""
     if any(pattern.search(value) for pattern in (_sensitive_url_re(), _SECRET_RE, _JWT_RE)):
         return True
-    for pattern in (_HEADER_SECRET_RE, _KEY_VALUE_SECRET_RE, _REQUEST_ID_RE):
+    for pattern in (
+        _HEADER_SECRET_RE,
+        _KEY_VALUE_SECRET_RE,
+        _COMPOUND_SECRET_NAME_RE,
+        _REQUEST_ID_RE,
+    ):
         for match in pattern.finditer(value):
             if _is_placeholder_match(match.group(0)) and not _has_unredacted_auth_params(match):
                 continue
