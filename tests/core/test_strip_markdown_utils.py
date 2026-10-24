@@ -1138,10 +1138,6 @@ def test_strip_markdown_nested_link_destinations_are_kept_verbatim(
     assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="italic pass pairs the first and last `*` of `2 ** 3 ** 4`, eating one asterisk each",
-)
 def test_strip_markdown_keeps_spaced_double_asterisk_operators() -> None:
     """Whitespace-flanked ``**`` is not emphasis and must survive verbatim.
 
