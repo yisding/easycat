@@ -481,6 +481,43 @@ def test_nonfinite_start_timeout_raises_value_error(start_timeout_s: float) -> N
         asyncio.run(serve_twilio_voice_app(lambda t: EasyConfig.phone(transport=t), config))
 
 
+@pytest.mark.parametrize("field", ["drain_timeout_s", "force_shutdown_timeout_s"])
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), -1.0])
+def test_invalid_shutdown_timeouts_fail_before_serving(field: str, bad_value: float) -> None:
+    """Shutdown timeouts are validated at startup, like ``start_timeout_s``.
+
+    Otherwise the bad value is only rejected inside ``runtime.drain`` at
+    shutdown, after the listeners have served calls and before any live
+    session has been stopped.
+    """
+    config = TwilioVoiceServerConfig(
+        host="127.0.0.1",
+        http_host="127.0.0.1",
+        media_port=0,
+        http_port=0,
+        stream_url="wss://example/media",
+        unsafe_allow_unsigned_webhooks=True,
+        **{field: bad_value},
+    )
+
+    async def _serve() -> None:
+        task = asyncio.ensure_future(
+            serve_twilio_voice_app(lambda t: EasyConfig.phone(transport=t), config)
+        )
+        # A correct implementation rejects the config immediately. A buggy one
+        # binds the listeners and keeps serving until the invalid value is
+        # finally rejected by ``runtime.drain`` at shutdown.
+        await asyncio.wait({task}, timeout=1)
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            pytest.fail(f"served with invalid {field}={bad_value!r}; rejected only at shutdown")
+        task.result()
+
+    with pytest.raises(ValueError, match=field):
+        asyncio.run(_serve())
+
+
 def test_run_twilio_without_stream_url_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without stream_url (kwarg or env) the helper's ValueError surfaces."""
     monkeypatch.delenv("TWILIO_STREAM_URL", raising=False)

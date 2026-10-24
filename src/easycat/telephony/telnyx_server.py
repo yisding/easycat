@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -43,6 +42,7 @@ from easycat.teardown_budgets import (
     SERVER_DRAIN_TIMEOUT_S,
     SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
 )
+from easycat.telephony._server_timeouts import validate_server_timeouts
 from easycat.telephony._stream_tokens import STREAM_TOKEN_PARAMETER, StreamTokenStore
 from easycat.telephony.telnyx import (
     TELNYX_WEBHOOK_SIGNATURE_HEADER,
@@ -326,8 +326,12 @@ async def serve_telnyx_voice_app(
             "the wss:// media URL Telnyx connects back to. Set stream_url (or the "
             "TELNYX_STREAM_URL env var when running through VoiceApp)."
         )
-    if not math.isfinite(config.start_timeout_s) or config.start_timeout_s <= 0:
-        raise ValueError("TelnyxVoiceServerConfig.start_timeout_s must be positive")
+    validate_server_timeouts(
+        "TelnyxVoiceServerConfig",
+        start_timeout_s=config.start_timeout_s,
+        drain_timeout_s=config.drain_timeout_s,
+        force_shutdown_timeout_s=config.force_shutdown_timeout_s,
+    )
     if not config.telnyx_api_key:
         raise ValueError(
             "TelnyxVoiceServerConfig.telnyx_api_key is required so POST "
