@@ -186,7 +186,9 @@ _COMPOUND_SECRET_NAME_RE = re.compile(
     r"""(?:=|\\?["'][ \t]*[:=][ \t]*))""" + _SECRET_VALUE + r"[^\s;,]+)"
 )
 _REQUEST_ID_RE = re.compile(r"\b(?:req|request|resp|response)_[A-Za-z0-9_-]{6,}\b")
-_PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
+# An extension attached without a space (``415-555-2671x22``) is part of the
+# number; a spaced one (``... x22``) is left as trailing text.
+_PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?:(?i:x|ext\.?)\d+)?(?!\w)")
 _HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
 
 
