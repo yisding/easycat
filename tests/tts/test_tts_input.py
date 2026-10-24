@@ -101,3 +101,17 @@ def test_resolve_tts_input_policy_rejects_malformed_policy() -> None:
 
     with pytest.raises(TypeError, match="input_policy"):
         resolve_tts_input_policy(Provider())
+
+
+@pytest.mark.parametrize(
+    ("ssml", "expected"),
+    [
+        ("<speak>See <emphasis>Dr</emphasis>.</speak>", "See Dr."),
+        ("<speak>It was <emphasis>un</emphasis>believable!</speak>", "It was unbelievable!"),
+        ('<speak>Call <say-as interpret-as="digits">911</say-as>, now</speak>', "Call 911, now"),
+    ],
+)
+def test_strip_ssml_tags_does_not_insert_spaces_around_inline_tags(
+    ssml: str, expected: str
+) -> None:
+    assert strip_ssml_tags(ssml) == expected
