@@ -15,6 +15,7 @@ import logging
 import math
 import time
 from collections.abc import Awaitable, Callable, Iterable
+from contextvars import Token
 from dataclasses import replace
 from datetime import UTC, datetime
 from functools import wraps
@@ -366,7 +367,7 @@ class Session:
         self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
-        self._session_log_token = None
+        self._session_log_token: Token[str | None] | None = None
         self._event_subscription_owner = object()
         self._event_subscriptions: list[EventSubscription] = []
         # Canonical turn-identity owner. Private compatibility properties below
