@@ -117,12 +117,21 @@ class TTSInputPolicy:
         return payload
 
 
+_SSML_INLINE_TAGS = frozenset({"emphasis", "say-as", "prosody", "sub", "phoneme", "lang", "w"})
+
+
 def strip_ssml_tags(text: str) -> str:
     """Best-effort conversion from SSML markup to plain text."""
     import html
     import re
 
-    without_tags = re.sub(r"<[^>]+>", " ", text)
+    # Inline tags can wrap part of a word or sit against punctuation, so they
+    # vanish without a trace; boundary and unknown tags become a space.
+    def _replace_tag(match: re.Match[str]) -> str:
+        name = match.group(1)
+        return "" if name is not None and name.lower() in _SSML_INLINE_TAGS else " "
+
+    without_tags = re.sub(r"<(?=[^>])(?:/?\s*([A-Za-z][\w:-]*))?[^>]*>", _replace_tag, text)
     collapsed = re.sub(r"\s+", " ", without_tags).strip()
     return html.unescape(collapsed)
 

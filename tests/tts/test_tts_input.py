@@ -103,11 +103,6 @@ def test_resolve_tts_input_policy_rejects_malformed_policy() -> None:
         resolve_tts_input_policy(Provider())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="strip_ssml_tags replaces every tag with a space, splitting words and "
-    "detaching punctuation from wrapped text",
-)
 @pytest.mark.parametrize(
     ("ssml", "expected"),
     [

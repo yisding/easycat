@@ -239,7 +239,15 @@ class PhoneticReplacementProcessor:
         # Longest terms first so "New York" wins over "York" at the same
         # position; ``sorted`` is stable, so equal-length terms (including
         # case-only duplicates) keep insertion order and the first one wins.
-        entries = sorted(self.replacements.items(), key=lambda item: len(item[0]), reverse=True)
+        # An empty term matches at every non-word boundary and would inject
+        # its spoken form throughout the text, so it is ignored.
+        entries = sorted(
+            ((term, spoken) for term, spoken in self.replacements.items() if term),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        )
+        if not entries:
+            return payload
         spoken_terms = [spoken for _term, spoken in entries]
         # One capture group per term identifies which entry matched without
         # re-deriving it from the matched text's case. Word boundaries are
