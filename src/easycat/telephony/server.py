@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -44,6 +43,7 @@ from easycat.teardown_budgets import (
     SERVER_DRAIN_TIMEOUT_S,
     SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
 )
+from easycat.telephony._server_timeouts import validate_server_timeouts
 from easycat.telephony._stream_tokens import StreamTokenStore
 from easycat.transports._limits import MAX_WEBSOCKET_MESSAGE_BYTES
 
@@ -320,8 +320,12 @@ async def serve_twilio_voice_app(
             "wss:// media URL Twilio connects back to. Set stream_url (or the "
             "TWILIO_STREAM_URL env var when running through VoiceApp)."
         )
-    if not math.isfinite(config.start_timeout_s) or config.start_timeout_s <= 0:
-        raise ValueError("TwilioVoiceServerConfig.start_timeout_s must be positive")
+    validate_server_timeouts(
+        "TwilioVoiceServerConfig",
+        start_timeout_s=config.start_timeout_s,
+        drain_timeout_s=config.drain_timeout_s,
+        force_shutdown_timeout_s=config.force_shutdown_timeout_s,
+    )
 
     # aiohttp is the only thing that makes twilio mode need the telephony extra;
     # websockets and TwilioConnectionTransport import at base. Gate it here so a
