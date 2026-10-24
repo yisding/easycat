@@ -407,10 +407,6 @@ def test_pause_processor_unit_capture_groups_select_full_match() -> None:
     assert result.text == "4 ... 8 ... 2"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="empty replacement key matches at every empty boundary and injects text",
-)
 def test_phonetic_replacement_empty_key_does_not_inject_text() -> None:
     processor = PhoneticReplacementProcessor({"": "x"})
     payload = TTSInput(text="Hi, there", format="plain")
