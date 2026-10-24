@@ -280,12 +280,14 @@ class ReconnectingWebSocket:
             await self._connect_with_retry()
 
     def _compute_delay(self, base_delay: float) -> float:
-        """Compute delay with jitter applied."""
+        """Compute delay with jitter applied, never exceeding ``max_delay``."""
         jitter = self._config.jitter_factor
         if jitter <= 0:
             return base_delay
-        # Apply jitter: delay * (1 - jitter + random * 2 * jitter)
-        return base_delay * (1.0 - jitter + random.random() * 2.0 * jitter)
+        # Apply jitter: delay * (1 - jitter + random * 2 * jitter). The cap is
+        # applied after jitter so ``max_delay`` bounds the actual wait.
+        jittered = base_delay * (1.0 - jitter + random.random() * 2.0 * jitter)
+        return min(jittered, self._config.max_delay)
 
     def _max_attempts(self) -> int | None:
         """Return the max number of connect attempts, or None for unlimited."""
