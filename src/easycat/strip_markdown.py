@@ -23,7 +23,7 @@ from functools import partial
 _MD_DETECT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\*\*(?=\S).+?(?<=\S)\*\*"),  # bold **text**
     re.compile(r"(?<!\w)__(?=\S).+?(?<=\S)__(?!\w)"),  # bold __text__ (not intraword)
-    re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)"),  # italic *text*
+    re.compile(r"(?<![\w*])\*(?![\s*])(.+?)(?<![\s*])\*(?![\w*])"),  # italic *text*
     re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)"),  # italic _text_
     re.compile(r"~~.+?~~"),  # strikethrough
     re.compile(r"`.+?`"),  # inline code
@@ -31,7 +31,7 @@ _MD_DETECT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^\s*[-*+]\s+", re.MULTILINE),  # unordered lists
     # Ordered lists: intentionally cap to 1–3 digits to avoid stripping
     # leading year-like numeric sentences (e.g. "2026. We launched").
-    re.compile(r"^\s*\d{1,3}\.\s+", re.MULTILINE),
+    re.compile(r"^\s*\d{1,3}\.[ \t]+", re.MULTILINE),
     re.compile(r"^>\s+", re.MULTILINE),  # blockquotes
     re.compile(r"^---{1,}\s*$", re.MULTILINE),  # horizontal rules (dashes)
     re.compile(r"^```", re.MULTILINE),  # fenced code blocks
@@ -101,7 +101,9 @@ _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
 # Underscore runs inside a word never open or close emphasis (CommonMark), so
 # ``foo__bar__baz`` and ``test__one.py`` keep their underscores.
 _BOLD_UNDERSCORE_RE = re.compile(r"(?<!\w)__(?=\S)([\s\S]+?)(?<=\S)__(?!\w)")
-_ITALIC_ASTERISK_RE = re.compile(r"(?<!\w)\*(?=\S)(.+?)(?<=\S)\*(?!\w)")
+# An italic delimiter is a lone ``*``: one that is part of a longer run (the
+# spaced ``**`` in ``2 ** 3 ** 4``) neither opens nor closes emphasis.
+_ITALIC_ASTERISK_RE = re.compile(r"(?<![\w*])\*(?![\s*])(.+?)(?<![\s*])\*(?![\w*])")
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")
 _STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~")
 _HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
@@ -114,7 +116,9 @@ _BLOCKQUOTE_RE = re.compile(r"^(?:>[ \t]*)+", re.MULTILINE)
 _UNORDERED_LIST_RE = re.compile(r"^(\s*)[-*+]\s+", re.MULTILINE)
 # Ordered lists: cap to 1–3 digits (mirrors the detect pattern) to avoid
 # stripping leading year-like numeric sentences (e.g. "2026. We launched").
-_ORDERED_LIST_RE = re.compile(r"^(\s*)\d{1,3}\.\s+", re.MULTILINE)
+# Only horizontal whitespace may follow the marker: a number alone on its line
+# (``42.``) is paragraph text, and ``\s+`` would also eat the line ending.
+_ORDERED_LIST_RE = re.compile(r"^(\s*)\d{1,3}\.[ \t]+", re.MULTILINE)
 # Horizontal rules: three or more of one of ``-``, ``*`` or ``_`` alone on a
 # line, optionally spaced (``* * *``) and indented up to three spaces.
 _HR_RE = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}\s*$", re.MULTILINE)
