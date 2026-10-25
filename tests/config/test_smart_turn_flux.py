@@ -11,6 +11,7 @@ from easycat import (
     create_session,
 )
 from easycat.config import TelephonyConfig
+from easycat.errors import EasyCatError, EasyConfigError
 from easycat.smart_turn import SmartTurnConfig
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.tts.openai_tts import OpenAITTSConfig
@@ -264,6 +265,20 @@ def test_create_session_derives_endpoint_threshold_from_smart_turn_sensitivity(
 def test_easyconfig_smart_turn_sensitivity_rejects_invalid_values(value: object) -> None:
     with pytest.raises(ValueError, match="smart_turn_sensitivity"):
         EasyConfig(openai_api_key="test-key", smart_turn_sensitivity=value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.1, math.nan, True, "eager"])
+def test_easyconfig_smart_turn_sensitivity_invalid_value_raises_easyconfigerror(
+    value: object,
+) -> None:
+    # docs/reference/easyconfig.md: configuration failures share the public
+    # ``EasyCatError`` boundary and invalid field values raise ``EasyConfigError``
+    # (code EASYCAT_E105), not a bare ``ValueError``.
+    with pytest.raises(EasyConfigError, match="smart_turn_sensitivity") as excinfo:
+        EasyConfig(openai_api_key="test-key", smart_turn_sensitivity=value)  # type: ignore[arg-type]
+
+    assert isinstance(excinfo.value, EasyCatError)
+    assert excinfo.value.code == "EASYCAT_E105"
 
 
 def test_easyconfig_smart_turn_false_rejects_sensitivity() -> None:
