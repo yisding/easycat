@@ -60,6 +60,22 @@ class TestIVRNavigatorConfig:
         with pytest.raises(ValueError, match=field):
             IVRNavigatorConfig(**{field: value})
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "prompt_timeout_s",
+            "agent_timeout_s",
+            "agent_retry_delay_s",
+            "hold_silence_threshold_s",
+        ],
+    )
+    def test_rejects_integers_too_large_for_float_with_value_error(self, field: str) -> None:
+        # ``math.isfinite`` converts to a C double and raises OverflowError for
+        # ints above ~1.8e308; config validation must raise its documented
+        # ValueError instead (see ``easycat._numeric.is_finite_number``).
+        with pytest.raises(ValueError, match=field):
+            IVRNavigatorConfig(**{field: 10**400})
+
 
 class TestIVRNavigator:
     def test_start_stop_lifecycle(self) -> None:
