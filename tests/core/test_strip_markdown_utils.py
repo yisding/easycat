@@ -1165,3 +1165,27 @@ def test_strip_markdown_keeps_spaced_double_asterisk_operators() -> None:
     the text to ``2 * 3 * 4``.
     """
     assert strip_markdown("2 ** 3 ** 4") == "2 ** 3 ** 4"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Backslash escapes of ASCII punctuation other than * _ ` leave the backslash in "
+    "the output, which TTS speaks as 'backslash'",
+)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (r"The total is 5\.00 dollars", "The total is 5.00 dollars"),
+        (r"Great\! See you soon", "Great! See you soon"),
+        (r"Call it \(optional\)", "Call it (optional)"),
+        (r"Step 1\. Open the app", "Step 1. Open the app"),
+    ],
+)
+def test_strip_markdown_unescapes_punctuation_backslash_escapes(text: str, expected: str) -> None:
+    """CommonMark ``\\.``, ``\\!`` and ``\\(`` render as the bare punctuation.
+
+    ``strip_markdown`` already drops the backslash for ``\\*``, ``\\_`` and
+    ``\\```, but every other escapable ASCII punctuation character keeps its
+    backslash, so a TTS provider reads "five backslash dot zero zero".
+    """
+    assert strip_markdown(text) == expected
