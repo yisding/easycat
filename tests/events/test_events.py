@@ -569,7 +569,9 @@ def test_eventbus_rejects_non_finite_slow_handler_threshold(threshold):
         EventBus(slow_handler_threshold_s=threshold)
 
 
-@pytest.mark.parametrize("threshold", [10**400, -(10**400)])
+@pytest.mark.parametrize(
+    "threshold", [10**400, -(10**400)], ids=["huge-positive", "huge-negative"]
+)
 def test_eventbus_rejects_oversized_int_slow_handler_threshold_with_value_error(threshold):
     # math.isfinite() converts ints to C doubles and raises OverflowError for
     # integers beyond float range; the documented validation error is ValueError
