@@ -569,6 +569,15 @@ def test_eventbus_rejects_non_finite_slow_handler_threshold(threshold):
         EventBus(slow_handler_threshold_s=threshold)
 
 
+@pytest.mark.parametrize("threshold", [10**400, -(10**400)])
+def test_eventbus_rejects_oversized_int_slow_handler_threshold_with_value_error(threshold):
+    # math.isfinite() converts ints to C doubles and raises OverflowError for
+    # integers beyond float range; the documented validation error is ValueError
+    # (see easycat._numeric.is_finite_number).
+    with pytest.raises(ValueError, match="slow_handler_threshold_s"):
+        EventBus(slow_handler_threshold_s=threshold)
+
+
 @pytest.mark.asyncio
 async def test_eventbus_raise_error_policy_stops_and_propagates():
     bus = EventBus(handler_error_policy="raise")
