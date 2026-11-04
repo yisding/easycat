@@ -1171,6 +1171,9 @@ def test_strip_markdown_keeps_spaced_double_asterisk_operators() -> None:
     strict=True,
     reason="Backslash escapes of ASCII punctuation other than * _ ` leave the backslash in "
     "the output, which TTS speaks as 'backslash'",
+
+
+    reason="strip_markdown only recognises backtick fences; CommonMark tilde fences leak '~~~'",
 )
 @pytest.mark.parametrize(
     ("text", "expected"),
@@ -1187,5 +1190,16 @@ def test_strip_markdown_unescapes_punctuation_backslash_escapes(text: str, expec
     ``strip_markdown`` already drops the backslash for ``\\*``, ``\\_`` and
     ``\\```, but every other escapable ASCII punctuation character keeps its
     backslash, so a TTS provider reads "five backslash dot zero zero".
+
+
+        ("Here:\n~~~python\nprint(1)\n~~~\nDone", "Here:\nprint(1)\nDone"),
+        ("~~~\nx = 1\n~~~", "x = 1"),
+    ],
+)
+def test_strip_markdown_strips_tilde_fenced_code_markers(text: str, expected: str) -> None:
+    """``~~~`` is a CommonMark code fence just like three backticks.
+
+    The backtick form already drops the fence markers and language tag, but the
+    tilde form is left verbatim, so TTS would speak the fence delimiters.
     """
     assert strip_markdown(text) == expected
