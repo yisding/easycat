@@ -1165,3 +1165,23 @@ def test_strip_markdown_keeps_spaced_double_asterisk_operators() -> None:
     the text to ``2 * 3 * 4``.
     """
     assert strip_markdown("2 ** 3 ** 4") == "2 ** 3 ** 4"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="strip_markdown only recognises backtick fences; CommonMark tilde fences leak '~~~'",
+)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Here:\n~~~python\nprint(1)\n~~~\nDone", "Here:\nprint(1)\nDone"),
+        ("~~~\nx = 1\n~~~", "x = 1"),
+    ],
+)
+def test_strip_markdown_strips_tilde_fenced_code_markers(text: str, expected: str) -> None:
+    """``~~~`` is a CommonMark code fence just like three backticks.
+
+    The backtick form already drops the fence markers and language tag, but the
+    tilde form is left verbatim, so TTS would speak the fence delimiters.
+    """
+    assert strip_markdown(text) == expected
