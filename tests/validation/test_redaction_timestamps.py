@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+import pytest
+
+from easycat.validation.redaction import redact_text
+
+_TIMESTAMP_BUG = (
+    "_PHONE_RE (`\\+?\\d[\\d\\s().-]{7,}\\d`) treats a space-separated "
+    "date + time as a phone number and eats the hour"
+)
+
+
+@pytest.mark.xfail(strict=True, reason=_TIMESTAMP_BUG)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "started at 2026-11-05 12:30:00Z",
+        "started at 2026-11-05 12:30:00.123456",
+        "2026-11-05 12:30:00 ERROR provider timed out",
+    ],
+)
+def test_pii_redaction_keeps_space_separated_timestamps(text: str) -> None:
+    # Log-style timestamps are not phone numbers; redacting them corrupts
+    # validation reports (e.g. ``[REDACTED_PHONE]:30:00Z``).
+    assert redact_text(text, policy="pii") == text
+
+
+def test_pii_redaction_keeps_t_separated_timestamp() -> None:
+    # Control: the ISO-8601 ``T`` form is already left intact.
+    text = "2026-11-05T12:30:00"
+    assert redact_text(text, policy="pii") == text
