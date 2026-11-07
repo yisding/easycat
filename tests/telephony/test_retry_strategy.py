@@ -168,3 +168,21 @@ def test_retry_strategy_revalidates_mutated_config() -> None:
 
     with pytest.raises(ValueError, match="base_delay_s"):
         RetryStrategy(config)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="shorter_delay_s (busy) bypasses the max_delay_s cap in RetryStrategy.get_delay",
+)
+def test_busy_shorter_delay_respects_max_delay_cap() -> None:
+    """``max_delay_s`` is the upper bound on every retry delay, busy included."""
+    config = RetryStrategyConfig(
+        base_delay_s=1.0,
+        max_delay_s=10.0,
+        shorter_delay_s=30.0,
+        jitter_fraction=0.0,
+    )
+    strategy = RetryStrategy(config)
+    strategy.record_attempt("+1555", "busy")
+
+    assert strategy.get_delay("+1555") <= config.max_delay_s
