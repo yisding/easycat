@@ -77,6 +77,22 @@ class TestHasMarkdown:
     def test_horizontal_rule(self) -> None:
         assert has_markdown("---")
 
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            "---",
+            pytest.param("***", marks=pytest.mark.xfail(strict=True, reason="known bug")),
+            "___",
+            "* * *",
+            pytest.param("_ _ _", marks=pytest.mark.xfail(strict=True, reason="known bug")),
+        ],
+    )
+    def test_horizontal_rule_variants_match_strip_markdown(self, rule: str) -> None:
+        """Every thematic break ``strip_markdown`` removes is also detected."""
+        text = f"Intro\n\n{rule}\n\nNext"
+        assert strip_markdown(text) == "Intro\n\nNext"
+        assert has_markdown(text)
+
     def test_image(self) -> None:
         assert has_markdown("![alt text](image.png)")
 
