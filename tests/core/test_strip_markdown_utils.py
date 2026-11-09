@@ -1165,3 +1165,25 @@ def test_strip_markdown_keeps_spaced_double_asterisk_operators() -> None:
     the text to ``2 * 3 * 4``.
     """
     assert strip_markdown("2 ** 3 ** 4") == "2 ** 3 ** 4"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="tilde fences are not handled: https://github.com/yisding/easycat/issues/1323",
+)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("~~~\ncode\n~~~", "code"),
+        ("~~~python\nx = 1\n~~~", "x = 1"),
+    ],
+)
+def test_strip_markdown_tilde_fenced_code_block_drops_fence_markers(
+    text: str, expected: str
+) -> None:
+    """CommonMark allows ``~~~`` fences; they must be stripped like backtick fences.
+
+    Otherwise TTS speaks the literal tildes (and the info string) around code.
+    """
+    assert has_markdown(text)
+    assert strip_markdown(text) == expected
