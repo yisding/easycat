@@ -407,7 +407,12 @@ def _session_artifact_for_analysis(session: Any, ref: str) -> bytes | None:
         return None
     bounded = getattr(store, "get_head_tail", None)
     if callable(bounded):
-        return bounded(ref, byte_cap=AUDIO_ANALYSIS_BYTE_CAP)
+        try:
+            # Mono 16-bit PCM: keep the tail window on the sample grid.
+            return bounded(ref, byte_cap=AUDIO_ANALYSIS_BYTE_CAP, align=2)
+        except TypeError:
+            # Out-of-tree stores may predate the ``align`` keyword.
+            return bounded(ref, byte_cap=AUDIO_ANALYSIS_BYTE_CAP)
     return store.get(ref)
 
 

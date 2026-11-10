@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import string
+from bisect import bisect_right
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import partial
@@ -33,8 +34,9 @@ _MD_DETECT_PATTERNS: list[re.Pattern[str]] = [
     # leading year-like numeric sentences (e.g. "2026. We launched").
     re.compile(r"^\s*\d{1,3}\.[ \t]+", re.MULTILINE),
     re.compile(r"^>\s+", re.MULTILINE),  # blockquotes
-    re.compile(r"^---{1,}\s*$", re.MULTILINE),  # horizontal rules (dashes)
-    re.compile(r"^```", re.MULTILINE),  # fenced code blocks
+    # Horizontal rules: the same shape ``_HR_RE`` strips (---, ***, ___, * * *).
+    re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}\s*$", re.MULTILINE),
+    re.compile(r"^(?:```| {0,3}~~~)", re.MULTILINE),  # fenced code blocks
 ]
 
 
@@ -71,6 +73,12 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
 #   next block (six backticks then ``js`` close one block and open another),
 #   and otherwise the whole run, leaving no stray tick that could pair with a
 #   later one.
+# - A tilde fence opens with a run of three or more ``~`` at the start of a
+#   line (up to three spaces of indent; ``tildes`` group) and closes on a line
+#   holding only a run at least as long.  Backticks inside it are code, and an
+#   opener with no closing line is left as literal text.  The pattern matches
+#   only the opener: ``_stash_code`` pairs it with its closing line from an
+#   index of closer lines, since a lazy scan per opener would be quadratic.
 # - An inline span (``code`` group) is a run of N backticks closed by the next
 #   run of exactly N, so a double-backtick span can carry a literal backtick,
 #   and a triple-backtick run inside it is content rather than a nested fence.
@@ -91,11 +99,13 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
 _CODE_SPAN_RE = re.compile(
     r"(?P<escape>\\[\\`])"
     r"|```(?P<fence>[\s\S]*?)```(?:`*(?=[ \t]*(?:\r?\n|$))|(?=```)|`*)"
+    r"|(?m:^) {0,3}(?P<tildes>~{3,})"
     r"|(?P<run>``?)(?!`)"
     r"(?P<code>(?:[^\n]|\n(?![ \t]*\r?\n)(?! {0,3}`{3,}[^`\r\n]*(?:\r?\n|$)))+?)"
     r"(?<!`)(?P=run)(?!`)"
     r"|`+"
 )
+_TILDE_FENCE_CLOSER_RE = re.compile(r"^ {0,3}(~{3,})[ \t]*$", re.MULTILINE)
 _CODE_SPAN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
 # Underscore runs inside a word never open or close emphasis (CommonMark), so
@@ -134,24 +144,24 @@ _DUNDER_NAME_RE = re.compile(r"^__([A-Za-z][A-Za-z0-9_]*)__$")
 _CODE_TOKEN_OPEN = "\ue002"
 _CODE_TOKEN_CLOSE = "\ue003"
 _CODE_TOKEN_RE = re.compile(rf"{_CODE_TOKEN_OPEN}(\d+){_CODE_TOKEN_CLOSE}")
-# Backslash-escaped emphasis markers (``\*`` / ``\_``) and backticks (``\` ``)
-# are literal text, not delimiters.  They are swapped for private-use stand-ins
-# before the emphasis (or inline code) passes run and restored as the bare
-# character afterwards, so ``\*x\*`` reads as ``*x*`` instead of the italic
-# regex eating the ``*`` and leaving a spoken "backslash".  A ``\\`` pair is
-# consumed as a unit so the character after an escaped backslash is still
-# treated as markdown.
-_ESCAPED_STAR = "\ue004"
-_ESCAPED_UNDERSCORE = "\ue005"
-_ESCAPED_BACKTICK = "\ue006"
+# A backslash before ASCII punctuation is a CommonMark escape: the character
+# is literal text, not a delimiter, and the backslash is not rendered.  Each
+# escaped character is swapped for a private-use stand-in before the markdown
+# passes run and restored as the bare character afterwards, so ``\*x\*`` reads
+# as ``*x*`` and ``1\. foo`` as ``1. foo`` instead of a pass eating the marker
+# or TTS speaking "backslash".  A ``\\`` pair is consumed as a unit (and reads
+# as one backslash), so the character after an escaped backslash is still
+# treated as markdown.  A backslash before anything else (``C:\Users``) stays.
+_ESCAPED_STANDIN_BASE = 0xE100
+_ESCAPED_STANDINS = {char: chr(_ESCAPED_STANDIN_BASE + ord(char)) for char in string.punctuation}
+_ESCAPED_BACKTICK = _ESCAPED_STANDINS["`"]
 _ESCAPED_EMPHASIS_RE = re.compile(r"\\([\\*_])")
-_ESCAPED_EMPHASIS_STANDINS = {"*": _ESCAPED_STAR, "_": _ESCAPED_UNDERSCORE}
+_ESCAPED_PUNCTUATION_RE = re.compile(rf"\\([{re.escape(string.punctuation)}])")
 _RESTORE_ESCAPED_EMPHASIS = str.maketrans(
-    {_ESCAPED_STAR: "*", _ESCAPED_UNDERSCORE: "_", _ESCAPED_BACKTICK: "`"}
+    {standin: char for char, standin in _ESCAPED_STANDINS.items()}
 )
 _SENTINEL_CHARS_RE = re.compile(
-    f"[{_CODE_TOKEN_OPEN}{_CODE_TOKEN_CLOSE}{_ESCAPED_STAR}{_ESCAPED_UNDERSCORE}"
-    f"{_ESCAPED_BACKTICK}]"
+    f"[{_CODE_TOKEN_OPEN}{_CODE_TOKEN_CLOSE}{''.join(_ESCAPED_STANDINS.values())}]"
 )
 
 _SHORT_CODE_MAX_CHARS = 24
@@ -222,6 +232,57 @@ def _stash_code_spans(
     return _replace
 
 
+def _stash_code(
+    text: str,
+    code_spans: list[str],
+    fenced_extractor: Callable[[re.Match[str]], str],
+    inline_extractor: Callable[[re.Match[str]], str],
+    tilde_code: Callable[[str], str],
+) -> str:
+    """Stash every code span and fenced block of *text* behind a placeholder."""
+    replace = _stash_code_spans(code_spans, fenced_extractor, inline_extractor)
+    closers = [
+        (match.start(), match.end(), len(match.group(1)))
+        for match in _TILDE_FENCE_CLOSER_RE.finditer(text)
+    ]
+    if not closers:
+        # No line can close a tilde fence, so every opener is literal text.
+        return _CODE_SPAN_RE.sub(replace, text)
+
+    closer_starts = [start for start, _, _ in closers]
+    # Shortest opener run already known to have no closing line ahead.  Every
+    # later opener at least that long is unclosed too, which bounds the work.
+    unclosed_run: int | None = None
+    parts: list[str] = []
+    pos = 0
+    while (match := _CODE_SPAN_RE.search(text, pos)) is not None:
+        parts.append(text[pos : match.start()])
+        pos = match.end()
+        tildes = match.group("tildes")
+        if tildes is None:
+            parts.append(replace(match))
+            continue
+        closer = None
+        if unclosed_run is None or len(tildes) < unclosed_run:
+            index = bisect_right(closer_starts, match.start())
+            while index < len(closers) and closers[index][2] < len(tildes):
+                index += 1
+            if index < len(closers):
+                closer = closers[index]
+            else:
+                unclosed_run = len(tildes)
+        if closer is None:
+            parts.append(match.group(0))
+            continue
+        # The opener line's tail is the info string; the block body follows it.
+        _, _, body = text[pos : closer[0]].partition("\n")
+        code_spans.append(tilde_code(body.strip()))
+        parts.append(f"{_CODE_TOKEN_OPEN}{len(code_spans) - 1}{_CODE_TOKEN_CLOSE}")
+        pos = closer[1]
+    parts.append(text[pos:])
+    return "".join(parts)
+
+
 def _extract_inline_code(match: re.Match[str]) -> str:
     # CommonMark turns each line ending inside a code span into a space before
     # the padding rule below, so a wrapped span reads as one line.
@@ -258,7 +319,12 @@ def _strip_heading_closing_sequence(match: re.Match[str], *, allow_at_text_end: 
 
 def _protect_escaped_emphasis(match: re.Match[str]) -> str:
     char = match.group(1)
-    return _ESCAPED_EMPHASIS_STANDINS.get(char, match.group(0))
+    # A ``\\`` pair stays as written until the link pass has read it.
+    return match.group(0) if char == "\\" else _ESCAPED_STANDINS[char]
+
+
+def _protect_escaped_punctuation(match: re.Match[str]) -> str:
+    return _ESCAPED_STANDINS[match.group(1)]
 
 
 def _restore_code_spans(text: str, code_spans: list[str]) -> str:
@@ -761,12 +827,12 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # extracted text from later markdown regex passes.
     fenced_extractor: Callable[[re.Match[str]], str] = _extract_fenced_code
     inline_extractor: Callable[[re.Match[str]], str] = _extract_inline_code
+    tilde_code: Callable[[str], str] = str
     if normalize_code_spans:
         fenced_extractor = _extract_fenced_code_for_tts
         inline_extractor = _extract_inline_code_for_tts
-    result = _CODE_SPAN_RE.sub(
-        _stash_code_spans(code_spans, fenced_extractor, inline_extractor), result
-    )
+        tilde_code = _normalize_short_code_for_tts
+    result = _stash_code(result, code_spans, fenced_extractor, inline_extractor, tilde_code)
 
     # 2a. Backslash-escaped emphasis markers are literal text: hide them from
     # the bold/italic/list/rule passes (code spans keep their escapes).
@@ -789,6 +855,11 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # and list passes below never rewrite it (``/_next_/`` keeps its ``_``).
     # Labels and image alt text stay in the text: they are prose.
     result = _replace_markdown_links_and_images(result, _stash_link_destination(code_spans))
+
+    # 4b. Every other backslash-escaped punctuation character is literal text
+    # too (``1\.`` is not a list marker, ``\#`` not a heading).  This runs after
+    # the link pass, which reads backslash escapes in the raw text itself.
+    result = _ESCAPED_PUNCTUATION_RE.sub(_protect_escaped_punctuation, result)
 
     # 5. Bold (before italic so ** is matched before *).  ``__`` goes first:
     # its intraword guard reads the character beside the run, and stripping
@@ -820,7 +891,7 @@ def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool =
     # (e.g. ``> ---``).
     result = _HR_RE.sub("", result)
 
-    # 13. Restore escaped emphasis markers and backticks as literal characters,
+    # 13. Restore escaped punctuation as the bare literal characters,
     # then the protected code spans and link URLs in one substitution pass.
     result = result.translate(_RESTORE_ESCAPED_EMPHASIS)
     result = _restore_code_spans(result, code_spans)

@@ -236,7 +236,7 @@ def _prepare_configured_session(config: EasyConfig, *, feedback: FeedbackMode) -
         # silencing the banner never costs you the transcripts.
         banner_suppressed = bool(
             is_truthy(os.getenv("EASYCAT_QUIET"))
-            or is_truthy(os.getenv("NO_COLOR"))
+            or bool(os.getenv("NO_COLOR"))
             or is_truthy(os.getenv("CI"))
         )
         if not banner_suppressed:

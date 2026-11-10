@@ -5,10 +5,6 @@ import pytest
 from easycat.validation.redaction import redact_text
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="_HOME_PATH_RE only matches a home path after whitespace, '=', ':' or a quote",
-)
 @pytest.mark.parametrize(
     "text",
     [

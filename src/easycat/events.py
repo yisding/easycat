@@ -12,13 +12,13 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
-import math
 import time
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from easycat._numeric import is_finite_number
 from easycat.audio_format import AudioChunk
 
 if TYPE_CHECKING:
@@ -722,10 +722,7 @@ class EventBus:
         handler_error_policy: EventHandlerErrorPolicy = "continue",
     ) -> None:
         if slow_handler_threshold_s is not None and (
-            isinstance(slow_handler_threshold_s, bool)
-            or not isinstance(slow_handler_threshold_s, int | float)
-            or not math.isfinite(slow_handler_threshold_s)
-            or slow_handler_threshold_s < 0
+            not is_finite_number(slow_handler_threshold_s) or slow_handler_threshold_s < 0
         ):
             raise ValueError("slow_handler_threshold_s must be non-negative and finite")
         if handler_error_policy not in {"continue", "raise"}:

@@ -16,7 +16,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import math
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -27,6 +26,7 @@ import websockets
 from websockets.asyncio.server import ServerConnection
 
 from easycat._audio_utils import PCM16StreamResampler, resample
+from easycat._numeric import is_finite_number
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import (
     DTMF,
@@ -133,12 +133,7 @@ class TelnyxTransportConfig:
         if not self.stream_token_parameter:
             raise ValueError("stream_token_parameter must be non-empty")
         timeout = self.stream_token_validation_timeout_s
-        if (
-            isinstance(timeout, bool)
-            or not isinstance(timeout, int | float)
-            or not math.isfinite(timeout)
-            or timeout <= 0
-        ):
+        if not is_finite_number(timeout) or timeout <= 0:
             raise ValueError("stream_token_validation_timeout_s must be a positive finite number")
 
     @property

@@ -117,10 +117,6 @@ def test_strip_ssml_tags_does_not_insert_spaces_around_inline_tags(
     assert strip_ssml_tags(ssml) == expected
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="strip_ssml_tags ends a tag at the first '>' even inside a quoted attribute",
-)
 @pytest.mark.parametrize(
     ("ssml", "expected"),
     [

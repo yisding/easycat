@@ -21,16 +21,16 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
-import math
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from numbers import Integral, Real
+from numbers import Integral
 from typing import Any, Literal
 from uuid import uuid4
 
 from easycat._epoch import Epoch, Lease
+from easycat._numeric import is_finite_real
 from easycat._turn_context import TurnContext
 from easycat.audio_format import AudioChunk
 from easycat.cancel import CancelToken
@@ -51,12 +51,7 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_non_negative_finite_number(name: str, value: object) -> None:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, Real)
-        or not math.isfinite(float(value))
-        or value < 0
-    ):
+    if not is_finite_real(value) or value < 0:
         raise ValueError(f"{name} must be a finite non-negative number")
 
 

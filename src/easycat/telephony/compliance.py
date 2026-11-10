@@ -50,8 +50,12 @@ _AREA_CODE_TZ: dict[str, str] = {
 
 
 def _strip_to_digits(phone: str) -> str:
-    """Return only the digit characters from *phone*."""
-    return "".join(c for c in phone if c.isdigit())
+    """Return only the ASCII digit characters from *phone*.
+
+    ``str.isdigit`` is also true for superscripts and other non-ASCII digits,
+    which must not make a malformed number look like a dialable one (gh 1310).
+    """
+    return "".join(c for c in phone if c in "0123456789")
 
 
 def _extract_area_code(phone: str) -> str | None:

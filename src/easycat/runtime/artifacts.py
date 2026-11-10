@@ -273,8 +273,14 @@ class ArtifactStore(Protocol):
         """Retrieve a previously stored artifact by ref, or ``None``."""
         ...
 
-    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
-        """Retrieve at most the first and last ``byte_cap`` bytes of an artifact."""
+    def get_head_tail(self, ref: str, *, byte_cap: int, align: int = 1) -> bytes | None:
+        """Retrieve at most the first and last ``byte_cap`` bytes of an artifact.
+
+        ``align`` is the frame size in bytes of the payload (``2`` for mono
+        16-bit PCM). When a payload is windowed, the tail starts on a frame
+        boundary and a trailing partial frame is dropped, so the joined
+        windows still decode in phase.
+        """
         ...
 
     def has(self, ref: str) -> bool:
@@ -288,6 +294,21 @@ class ArtifactStore(Protocol):
     def close(self) -> None:
         """Release resources."""
         ...
+
+
+def _aligned_tail_window(size: int, byte_cap: int, align: int) -> tuple[int, int]:
+    """Return the ``[start, end)`` tail window of a *size*-byte payload.
+
+    The window covers at most the last *byte_cap* bytes, starts on an
+    *align*-byte frame boundary and ends on the last whole frame. Anchoring it
+    to the raw end of an odd-length PCM payload would decode every tail
+    sample one byte out of phase (gh 1296).
+    """
+    step = max(1, align)
+    end = size - size % step
+    start = end - byte_cap
+    start += -start % step
+    return start, max(start, end)
 
 
 def _sha256(payload: bytes) -> str:
@@ -569,14 +590,15 @@ class InMemoryArtifactStore:
         with self._lock:
             return self._store.get(ref)
 
-    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
+    def get_head_tail(self, ref: str, *, byte_cap: int, align: int = 1) -> bytes | None:
         with self._lock:
             data = self._store.get(ref)
         if data is None:
             return None
         if byte_cap <= 0 or len(data) <= 2 * byte_cap:
             return data
-        return data[:byte_cap] + data[-byte_cap:]
+        start, end = _aligned_tail_window(len(data), byte_cap, align)
+        return data[:byte_cap] + data[start:end]
 
     def has(self, ref: str) -> bool:
         with self._lock:
@@ -631,13 +653,14 @@ class SnapshotArtifactStore:
     def get(self, ref: str) -> bytes | None:
         return self._store.get(ref)
 
-    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
+    def get_head_tail(self, ref: str, *, byte_cap: int, align: int = 1) -> bytes | None:
         data = self._store.get(ref)
         if data is None:
             return None
         if byte_cap <= 0 or len(data) <= 2 * byte_cap:
             return data
-        return data[:byte_cap] + data[-byte_cap:]
+        start, end = _aligned_tail_window(len(data), byte_cap, align)
+        return data[:byte_cap] + data[start:end]
 
     def has(self, ref: str) -> bool:
         return ref in self._store
@@ -991,7 +1014,7 @@ class FilesystemArtifactStore:
         finally:
             os.close(fd)
 
-    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
+    def get_head_tail(self, ref: str, *, byte_cap: int, align: int = 1) -> bytes | None:
         """Read a bounded head/tail window without materializing the whole file."""
         try:
             fd = self._open_ref_fd(ref)
@@ -1002,8 +1025,9 @@ class FilesystemArtifactStore:
             if byte_cap <= 0 or size <= 2 * byte_cap:
                 return _read_all_fd(fd)
             head = os.read(fd, byte_cap)
-            os.lseek(fd, -byte_cap, os.SEEK_END)
-            tail = os.read(fd, byte_cap)
+            start, end = _aligned_tail_window(size, byte_cap, align)
+            os.lseek(fd, start, os.SEEK_SET)
+            tail = os.read(fd, end - start)
             return head + tail
         except (NotImplementedError, OSError):
             return None

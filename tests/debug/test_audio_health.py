@@ -10,8 +10,6 @@ from __future__ import annotations
 import math
 from array import array
 
-import pytest
-
 from easycat.debug._audio_health import (
     collect_caller_silence,
     collect_clipping,
@@ -285,10 +283,6 @@ def test_build_issues_bot_clipping_refs_do_not_starve_silence_budget() -> None:
     assert flagged == ["quiet"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="_iter_int16 tail window is not sample-aligned for odd-length blobs",
-)
 def test_iter_int16_tail_window_stays_sample_aligned_for_odd_length_blob() -> None:
     from easycat.debug._audio_health import _BYTE_CAP, _iter_int16
 

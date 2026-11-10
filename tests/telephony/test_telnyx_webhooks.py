@@ -486,10 +486,6 @@ class TestParseTelnyxCallEvent:
         assert event.sip_code == expected
         assert event.number == ""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="str.isdigit() accepts superscript digits that int() rejects",
-    )
     @pytest.mark.parametrize("sip_code_raw", ["\u00b2", "\u0663"])
     def test_hangup_with_non_decimal_digit_sip_code_does_not_raise(
         self, sip_code_raw: str

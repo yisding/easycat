@@ -660,11 +660,6 @@ class TestIVRDetection:
     def test_early_media_hold_message_ignored(self) -> None:
         assert classify_ivr_prompt("Please hold while we connect your call") is False
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="classify_ivr_prompt vetoes any text containing an early-media phrase, "
-        "even when an IVR cue such as 'press 1' is also present",
-    )
     @pytest.mark.parametrize(
         "text",
         [

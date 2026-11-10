@@ -4,13 +4,7 @@ import pytest
 
 from easycat.validation.redaction import redact_text
 
-_TIMESTAMP_BUG = (
-    "_PHONE_RE (`\\+?\\d[\\d\\s().-]{7,}\\d`) treats a space-separated "
-    "date + time as a phone number and eats the hour"
-)
 
-
-@pytest.mark.xfail(strict=True, reason=_TIMESTAMP_BUG)
 @pytest.mark.parametrize(
     "text",
     [
