@@ -33,6 +33,7 @@ def test_pii_redaction_keeps_t_separated_timestamp() -> None:
         "at 2026-11-05 12:30:00Z call +1 (415) 555-2671",
         "12:30 call 415-555-2671",
         "dial 415.555.2671 now",
+        "contact1.415.555.2671",
     ],
 )
 def test_pii_redaction_still_redacts_phone_numbers_near_timestamps(text: str) -> None:

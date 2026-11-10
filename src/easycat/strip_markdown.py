@@ -77,7 +77,7 @@ def _extract_fenced_code(match: re.Match[str]) -> str:
 #   line (up to three spaces of indent; ``tildes`` group) and closes on a line
 #   holding only a run at least as long.  Backticks inside it are code, and an
 #   opener with no closing line is left as literal text.  The pattern matches
-#   only the opener: ``_stash_code`` pairs it with its closing line from an
+#   only the opener: ``_scan_code`` pairs it with its closing line from an
 #   index of closer lines, since a lazy scan per opener would be quadratic.
 # - An inline span (``code`` group) is a run of N backticks closed by the next
 #   run of exactly N, so a double-backtick span can carry a literal backtick,
@@ -232,6 +232,38 @@ def _stash_code_spans(
     return _replace
 
 
+def _scan_code(text: str) -> Iterator[tuple[re.Match[str], tuple[int, int] | None]]:
+    """Yield each ``_CODE_SPAN_RE`` match of *text* in left-to-right order.
+
+    A tilde fence opener that has a closing line comes with that line's
+    ``(start, end)`` span, and the scan resumes after it; every other match
+    comes with ``None``.
+    """
+    closers = [
+        (match.start(), match.end(), len(match.group(1)))
+        for match in _TILDE_FENCE_CLOSER_RE.finditer(text)
+    ]
+    closer_starts = [start for start, _, _ in closers]
+    # Longest closer run from each index on: an opener longer than that has no
+    # closing line ahead, which is answered without rescanning the closers.
+    longest_ahead = [0] * (len(closers) + 1)
+    for index in range(len(closers) - 1, -1, -1):
+        longest_ahead[index] = max(closers[index][2], longest_ahead[index + 1])
+    pos = 0
+    while (match := _CODE_SPAN_RE.search(text, pos)) is not None:
+        pos = match.end()
+        tildes = match.group("tildes")
+        index = bisect_right(closer_starts, match.start()) if tildes else len(closers)
+        if tildes is None or longest_ahead[index] < len(tildes):
+            yield match, None
+            continue
+        # A closer exists, and each one skipped here lies inside this block.
+        while closers[index][2] < len(tildes):
+            index += 1
+        start, pos, _ = closers[index]
+        yield match, (start, pos)
+
+
 def _stash_code(
     text: str,
     code_spans: list[str],
@@ -241,37 +273,17 @@ def _stash_code(
 ) -> str:
     """Stash every code span and fenced block of *text* behind a placeholder."""
     replace = _stash_code_spans(code_spans, fenced_extractor, inline_extractor)
-    closers = [
-        (match.start(), match.end(), len(match.group(1)))
-        for match in _TILDE_FENCE_CLOSER_RE.finditer(text)
-    ]
-    if not closers:
-        # No line can close a tilde fence, so every opener is literal text.
+    if "~~~" not in text:
         return _CODE_SPAN_RE.sub(replace, text)
 
-    closer_starts = [start for start, _, _ in closers]
-    # Longest closer run from each index on: an opener longer than that has no
-    # closing line ahead, which is answered without rescanning the closers.
-    longest_ahead = [0] * (len(closers) + 1)
-    for index in range(len(closers) - 1, -1, -1):
-        longest_ahead[index] = max(closers[index][2], longest_ahead[index + 1])
     parts: list[str] = []
     pos = 0
-    while (match := _CODE_SPAN_RE.search(text, pos)) is not None:
+    for match, closer in _scan_code(text):
         parts.append(text[pos : match.start()])
         pos = match.end()
-        tildes = match.group("tildes")
-        if tildes is None:
+        if closer is None:
             parts.append(replace(match))
             continue
-        index = bisect_right(closer_starts, match.start())
-        if longest_ahead[index] < len(tildes):
-            parts.append(match.group(0))
-            continue
-        # A closer exists, and each one skipped here lies inside this block.
-        while closers[index][2] < len(tildes):
-            index += 1
-        closer = closers[index]
         # The opener line's tail is the info string; the block body follows it.
         _, _, body = text[pos : closer[0]].partition("\n")
         code_spans.append(tilde_code(body.strip()))

@@ -50,12 +50,17 @@ _AREA_CODE_TZ: dict[str, str] = {
 
 
 def _strip_to_digits(phone: str) -> str:
-    """Return only the ASCII digit characters from *phone*.
+    """Return only the digit characters from *phone*."""
+    return "".join(c for c in phone if c.isdigit())
 
-    ``str.isdigit`` is also true for superscripts and other non-ASCII digits,
-    which must not make a malformed number look like a dialable one (gh 1310).
+
+def _has_non_ascii_digit(phone: str) -> bool:
+    """Return whether *phone* holds a digit character outside ``0-9``.
+
+    ``str.isdigit`` is also true for superscripts and other non-ASCII digits
+    (``²``, Arabic-Indic digits).  No dialable NANP number contains one.
     """
-    return "".join(c for c in phone if c in "0123456789")
+    return any(c.isdigit() and not c.isascii() for c in phone)
 
 
 def _extract_area_code(phone: str) -> str | None:
@@ -74,6 +79,11 @@ def _extract_area_code(phone: str) -> str | None:
     compliance posture.  Production callers should supply ``timezone_override``
     or a real lookup (e.g. libphonenumber, Twilio Lookup).
     """
+    if _has_non_ascii_digit(phone):
+        # Neither counting such a character as a digit nor dropping it is
+        # safe: either way a malformed number could come out looking like a
+        # plausible NANP one, so it fails closed (gh 1310).
+        return None
     digits = _strip_to_digits(phone)
     if len(digits) == 11 and digits.startswith("1"):
         return digits[1:4]

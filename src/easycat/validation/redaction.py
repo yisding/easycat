@@ -192,10 +192,12 @@ _REQUEST_ID_RE = re.compile(r"\b(?:req|request|resp|response)_[A-Za-z0-9_-]{6,}\
 # A log-style timestamp is not a phone number.  ``2026-11-05 12`` and the
 # fractional seconds of ``12:30:00.123456`` both have the bare digit-run shape,
 # so a match may neither start on a full ``YYYY-MM-DD HH:MM`` timestamp, which
-# no phone number contains, nor directly after a ``<digit>:`` time field or a
-# ``<digit>.`` decimal point (nanosecond fractions are nine digits long).
+# no phone number contains, nor directly after a ``<digit>:`` time field or the
+# ``HH:MM:SS.`` of a fractional second (nanosecond fractions are nine digits
+# long).  A plain ``<digit>.`` is not excluded: ``ext1.415.555.2671`` must
+# still lose its number.
 _PHONE_RE = re.compile(
-    r"(?<!\w)(?<!\d[:.])(?!\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2})"
+    r"(?<!\w)(?<!\d:)(?<!\d\d:\d\d:\d\d\.)(?!\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2})"
     r"(?:\+?\d[\d\s().-]{7,}\d)(?:(?i:x|ext\.?)\d+)?(?!\w)"
 )
 # The path may follow any delimiter (``(``, a backtick, ``[``, ``,``, ``>``...);
