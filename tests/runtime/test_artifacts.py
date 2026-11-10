@@ -2363,5 +2363,7 @@ def test_get_head_tail_align_keeps_tail_on_the_frame_grid(tmp_path, store_kind, 
     window = store.get_head_tail(ref, byte_cap=16, align=2)
 
     assert window == struct.pack("<h", 0) * 8 + struct.pack("<h", 32767) * 8
+    # An odd cap still yields whole frames on both sides.
+    assert store.get_head_tail(ref, byte_cap=17, align=2) == window
     # The default stays a plain byte window.
     assert store.get_head_tail(ref, byte_cap=16) == payload[:16] + payload[-16:]

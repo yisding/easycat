@@ -101,11 +101,11 @@ _CODE_SPAN_RE = re.compile(
     r"|```(?P<fence>[\s\S]*?)```(?:`*(?=[ \t]*(?:\r?\n|$))|(?=```)|`*)"
     r"|(?m:^) {0,3}(?P<tildes>~{3,})"
     r"|(?P<run>``?)(?!`)"
-    r"(?P<code>(?:[^\n]|\n(?![ \t]*\r?\n)(?! {0,3}`{3,}[^`\r\n]*(?:\r?\n|$)))+?)"
+    r"(?P<code>(?:[^\n]|\n(?![ \t]*\r?\n)(?! {0,3}`{3,}[^`\r\n]*(?:\r?\n|$))(?! {0,3}~{3,}))+?)"
     r"(?<!`)(?P=run)(?!`)"
     r"|`+"
 )
-_TILDE_FENCE_CLOSER_RE = re.compile(r"^ {0,3}(~{3,})[ \t]*$", re.MULTILINE)
+_TILDE_FENCE_CLOSER_RE = re.compile(r"^ {0,3}(~{3,})[ \t]*(?=\r?$)", re.MULTILINE)
 _CODE_SPAN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 _BOLD_ASTERISK_RE = re.compile(r"\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*")
 # Underscore runs inside a word never open or close emphasis (CommonMark), so
@@ -250,9 +250,11 @@ def _stash_code(
         return _CODE_SPAN_RE.sub(replace, text)
 
     closer_starts = [start for start, _, _ in closers]
-    # Shortest opener run already known to have no closing line ahead.  Every
-    # later opener at least that long is unclosed too, which bounds the work.
-    unclosed_run: int | None = None
+    # Longest closer run from each index on: an opener longer than that has no
+    # closing line ahead, which is answered without rescanning the closers.
+    longest_ahead = [0] * (len(closers) + 1)
+    for index in range(len(closers) - 1, -1, -1):
+        longest_ahead[index] = max(closers[index][2], longest_ahead[index + 1])
     parts: list[str] = []
     pos = 0
     while (match := _CODE_SPAN_RE.search(text, pos)) is not None:
@@ -262,18 +264,14 @@ def _stash_code(
         if tildes is None:
             parts.append(replace(match))
             continue
-        closer = None
-        if unclosed_run is None or len(tildes) < unclosed_run:
-            index = bisect_right(closer_starts, match.start())
-            while index < len(closers) and closers[index][2] < len(tildes):
-                index += 1
-            if index < len(closers):
-                closer = closers[index]
-            else:
-                unclosed_run = len(tildes)
-        if closer is None:
+        index = bisect_right(closer_starts, match.start())
+        if longest_ahead[index] < len(tildes):
             parts.append(match.group(0))
             continue
+        # A closer exists, and each one skipped here lies inside this block.
+        while closers[index][2] < len(tildes):
+            index += 1
+        closer = closers[index]
         # The opener line's tail is the info string; the block body follows it.
         _, _, body = text[pos : closer[0]].partition("\n")
         code_spans.append(tilde_code(body.strip()))

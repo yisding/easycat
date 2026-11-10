@@ -1227,6 +1227,9 @@ def test_strip_markdown_unescapes_punctuation_backslash_escapes(text: str, expec
         ("~~~~\n**kept**\n~~~\nstill code\n~~~~~", "**kept**\n~~~\nstill code"),
         ("~~~\n```\ncode\n```\n~~~", "```\ncode\n```"),
         ("  ~~~\ncode\n  ~~~\nafter", "code\nafter"),
+        ("Here:\r\n~~~python\r\nprint(1)\r\n~~~\r\nDone", "Here:\r\nprint(1)\r\nDone"),
+        # A backtick span does not wrap across a tilde fence line.
+        ("a `b\n~~~\ncode\n~~~\nc` d", "a `b\ncode\nc` d"),
     ],
 )
 def test_strip_markdown_strips_tilde_fenced_code_markers(text: str, expected: str) -> None:
