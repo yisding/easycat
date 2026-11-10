@@ -88,6 +88,16 @@ class TestBoundedAudioQueueBasic:
         with pytest.raises(ValueError, match="policy"):
             BoundedAudioQueue(policy=policy)
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="block_timeout is not validated: NaN makes a BLOCK put wait forever and "
+        "non-numeric values raise TypeError from put() instead of ValueError at construction",
+    )
+    @pytest.mark.parametrize("block_timeout", [float("nan"), "1", None, True])
+    def test_rejects_invalid_block_timeout(self, block_timeout):
+        with pytest.raises(ValueError, match="block_timeout"):
+            BoundedAudioQueue(policy=DropPolicy.BLOCK, block_timeout=block_timeout)
+
 
 # ── Drop policies (Task 8.6) ──────────────────────────────────────
 
