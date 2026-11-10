@@ -15,7 +15,6 @@ from __future__ import annotations
 import copy
 import inspect
 import logging
-import math
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, is_dataclass, replace
@@ -196,10 +195,7 @@ def _validate_event_dispatch(
     handler_error_policy: str,
 ) -> None:
     if slow_handler_threshold_s is not None and (
-        isinstance(slow_handler_threshold_s, bool)
-        or not isinstance(slow_handler_threshold_s, int | float)
-        or not math.isfinite(slow_handler_threshold_s)
-        or slow_handler_threshold_s < 0
+        not is_finite_number(slow_handler_threshold_s) or slow_handler_threshold_s < 0
     ):
         raise EasyConfigError("slow_handler_threshold_s must be non-negative and finite")
     if (
@@ -330,7 +326,10 @@ def _normalize_smart_turn_config(
     if sensitivity is None:
         return config
 
-    value = _validate_probability_threshold("smart_turn_sensitivity", sensitivity)
+    try:
+        value = _validate_probability_threshold("smart_turn_sensitivity", sensitivity)
+    except ValueError as exc:
+        raise EasyConfigError(str(exc)) from exc
     # Higher sensitivity means "treat lower completion probabilities as enough
     # to end the turn", so it maps inversely onto the provider threshold.
     return replace(config, enabled=True, threshold=1.0 - value)

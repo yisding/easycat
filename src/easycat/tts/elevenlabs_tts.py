@@ -8,13 +8,13 @@ import contextlib
 import enum
 import json
 import logging
-import math
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 import httpx
 
+from easycat._numeric import is_finite_number
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
@@ -134,12 +134,7 @@ class ElevenLabsTTSConfig:
         validate_context_queue_maxsize(self.context_queue_maxsize, provider="ElevenLabs")
         if self.persistent_ws is None:
             self.persistent_ws = self.stream_mode == ElevenLabsStreamMode.WEBSOCKET
-        if (
-            isinstance(self.warmup_timeout_s, bool)
-            or not isinstance(self.warmup_timeout_s, int | float)
-            or not math.isfinite(self.warmup_timeout_s)
-            or self.warmup_timeout_s <= 0
-        ):
+        if not is_finite_number(self.warmup_timeout_s) or self.warmup_timeout_s <= 0:
             raise ValueError("ElevenLabs warmup_timeout_s must be a finite number > 0")
         if self.output_format not in _ELEVENLABS_FORMAT_MAP:
             supported = ", ".join(sorted(_ELEVENLABS_FORMAT_MAP))

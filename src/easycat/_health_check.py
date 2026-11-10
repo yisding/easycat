@@ -18,10 +18,10 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
-import math
 from collections.abc import Callable, Coroutine
 from typing import Any
 
+from easycat._numeric import is_finite_number
 from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.runtime.capabilities import HealthCheckable
 from easycat.runtime.scope import RuntimeScope, RuntimeTaskAction
@@ -70,7 +70,7 @@ class PeriodicHealthChecker:
     ) -> None:
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be >= 1")
-        if not math.isfinite(probe_timeout) or probe_timeout <= 0:
+        if not is_finite_number(probe_timeout) or probe_timeout <= 0:
             raise ValueError("probe_timeout must be finite and > 0")
         self._provider = provider
         self._interval = interval

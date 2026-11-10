@@ -129,6 +129,17 @@ class TestRetryStrategy:
 
         assert strategy.get_delay("+1555") == 10.0
 
+    def test_busy_shorter_delay_respects_max_delay(self) -> None:
+        config = RetryStrategyConfig(
+            shorter_delay_s=30.0,
+            max_delay_s=10.0,
+            jitter_fraction=0.0,
+        )
+        strategy = RetryStrategy(config)
+        strategy.record_attempt("+1555", "busy")
+
+        assert strategy.get_delay("+1555") <= config.max_delay_s
+
     def test_zero_base_delay_before_first_attempt_returns_zero(self) -> None:
         strategy = RetryStrategy(RetryStrategyConfig(base_delay_s=0.0, jitter_fraction=0.0))
 

@@ -729,6 +729,25 @@ async def test_markdown_holds_span_whose_closing_run_may_still_grow(
     assert [text for text, _ in built] == expected
 
 
+async def test_markdown_trailing_tilde_fence_closer_rechecks_on_any_next_delta():
+    """A tilde fence closed at the end of one delta does not stall the next.
+
+    The closing ``~~~`` line may still grow, so it is held open; the following
+    delta carries no markdown closer character and must still recheck.
+    """
+    from easycat.session._streaming import _SentenceStreamBuffer
+
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    buffer = _SentenceStreamBuffer(
+        tts_queue=tts_queue,
+        prepare_tts_payload=lambda text, **_: TTSInput(text=text),
+        strip_md=True,
+    )
+
+    assert not await buffer.add_delta("Here is the code we need:\n~~~python\nprint(1)\n~~~")
+    assert await buffer.add_delta("\nThat is all of it. Next sentence here. ")
+
+
 async def test_markdown_trailing_span_closer_rechecks_on_any_next_delta():
     """The hold on a trailing closing run lifts on the next delta, whatever it carries.
 

@@ -54,6 +54,15 @@ def _strip_to_digits(phone: str) -> str:
     return "".join(c for c in phone if c.isdigit())
 
 
+def _has_non_ascii_digit(phone: str) -> bool:
+    """Return whether *phone* holds a digit character outside ``0-9``.
+
+    ``str.isdigit`` is also true for superscripts and other non-ASCII digits
+    (``²``, Arabic-Indic digits).  No dialable NANP number contains one.
+    """
+    return any(c.isdigit() and not c.isascii() for c in phone)
+
+
 def _extract_area_code(phone: str) -> str | None:
     """Extract the 3-digit area code from a *plausibly NANP* phone number.
 
@@ -70,6 +79,11 @@ def _extract_area_code(phone: str) -> str | None:
     compliance posture.  Production callers should supply ``timezone_override``
     or a real lookup (e.g. libphonenumber, Twilio Lookup).
     """
+    if _has_non_ascii_digit(phone):
+        # Neither counting such a character as a digit nor dropping it is
+        # safe: either way a malformed number could come out looking like a
+        # plausible NANP one, so it fails closed (gh 1310).
+        return None
     digits = _strip_to_digits(phone)
     if len(digits) == 11 and digits.startswith("1"):
         return digits[1:4]

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
 
 from easycat._audio_utils import PCM16StreamResampler
+from easycat._numeric import is_finite_number
 from easycat._provider_helpers import get_package_version, word_timestamps_from_words
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
@@ -95,12 +95,7 @@ class DeepgramSTTConfig:
             "final_transcript_timeout_s",
         ):
             value = getattr(self, name)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, int | float)
-                or not math.isfinite(value)
-                or value <= 0
-            ):
+            if not is_finite_number(value) or value <= 0:
                 raise ValueError(f"Deepgram {name} must be positive and finite")
 
     @property

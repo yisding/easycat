@@ -273,8 +273,14 @@ class ArtifactStore(Protocol):
         """Retrieve a previously stored artifact by ref, or ``None``."""
         ...
 
-    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
-        """Retrieve at most the first and last ``byte_cap`` bytes of an artifact."""
+    def get_head_tail(self, ref: str, *, byte_cap: int, align: int = 1) -> bytes | None:
+        """Retrieve at most the first and last ``byte_cap`` bytes of an artifact.
+
+        ``align`` is the frame size in bytes of the payload (``2`` for mono
+        16-bit PCM). When a payload is windowed, the tail starts on a frame
+        boundary and a trailing partial frame is dropped, so the joined
+        windows still decode in phase.
+        """
         ...
 
     def has(self, ref: str) -> bool:
@@ -288,6 +294,22 @@ class ArtifactStore(Protocol):
     def close(self) -> None:
         """Release resources."""
         ...
+
+
+def _aligned_head_tail_window(size: int, byte_cap: int, align: int) -> tuple[int, int, int]:
+    """Return ``(head_end, tail_start, tail_end)`` for a *size*-byte payload.
+
+    The head and the tail each cover at most *byte_cap* bytes and both hold
+    whole *align*-byte frames, so the joined windows decode in phase.
+    Anchoring the tail to the raw end of an odd-length PCM payload would
+    decode every tail sample one byte out of phase (gh 1296).
+    """
+    step = max(1, align)
+    head_end = byte_cap - byte_cap % step
+    tail_end = size - size % step
+    tail_start = tail_end - byte_cap
+    tail_start += -tail_start % step
+    return head_end, tail_start, max(tail_start, tail_end)
 
 
 def _sha256(payload: bytes) -> str:
@@ -569,14 +591,15 @@ class InMemoryArtifactStore:
         with self._lock:
             return self._store.get(ref)
 
-    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
+    def get_head_tail(self, ref: str, *, byte_cap: int, align: int = 1) -> bytes | None:
         with self._lock:
             data = self._store.get(ref)
         if data is None:
             return None
         if byte_cap <= 0 or len(data) <= 2 * byte_cap:
             return data
-        return data[:byte_cap] + data[-byte_cap:]
+        head_end, start, end = _aligned_head_tail_window(len(data), byte_cap, align)
+        return data[:head_end] + data[start:end]
 
     def has(self, ref: str) -> bool:
         with self._lock:
@@ -631,13 +654,14 @@ class SnapshotArtifactStore:
     def get(self, ref: str) -> bytes | None:
         return self._store.get(ref)
 
-    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
+    def get_head_tail(self, ref: str, *, byte_cap: int, align: int = 1) -> bytes | None:
         data = self._store.get(ref)
         if data is None:
             return None
         if byte_cap <= 0 or len(data) <= 2 * byte_cap:
             return data
-        return data[:byte_cap] + data[-byte_cap:]
+        head_end, start, end = _aligned_head_tail_window(len(data), byte_cap, align)
+        return data[:head_end] + data[start:end]
 
     def has(self, ref: str) -> bool:
         return ref in self._store
@@ -991,7 +1015,7 @@ class FilesystemArtifactStore:
         finally:
             os.close(fd)
 
-    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
+    def get_head_tail(self, ref: str, *, byte_cap: int, align: int = 1) -> bytes | None:
         """Read a bounded head/tail window without materializing the whole file."""
         try:
             fd = self._open_ref_fd(ref)
@@ -1001,9 +1025,10 @@ class FilesystemArtifactStore:
             size = os.fstat(fd).st_size
             if byte_cap <= 0 or size <= 2 * byte_cap:
                 return _read_all_fd(fd)
-            head = os.read(fd, byte_cap)
-            os.lseek(fd, -byte_cap, os.SEEK_END)
-            tail = os.read(fd, byte_cap)
+            head_end, start, end = _aligned_head_tail_window(size, byte_cap, align)
+            head = os.read(fd, head_end)
+            os.lseek(fd, start, os.SEEK_SET)
+            tail = os.read(fd, end - start)
             return head + tail
         except (NotImplementedError, OSError):
             return None

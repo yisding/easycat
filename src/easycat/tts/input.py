@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -120,18 +121,45 @@ class TTSInputPolicy:
 _SSML_INLINE_TAGS = frozenset({"emphasis", "say-as", "prosody", "sub", "phoneme", "lang", "w"})
 
 
+# One SSML tag.  A bare ``>`` is legal inside a quoted attribute value, so a
+# quoted value is matched as a unit rather than ending the tag at the first
+# ``>``.  ``<`` is not legal there, which bounds each attempt at the next tag
+# and keeps the scan linear.  The second alternative is the lenient fallback
+# for a tag whose quotes do not pair up.
+_SSML_TAG_RE = re.compile(
+    r"<(?=[^>])(?:/?\s*(?P<name>[A-Za-z][\w:-]*))?(?:\"[^\"<]*+\"|'[^'<]*+'|[^'\"<>]++)*+>"
+    r"|<(?=[^>])(?:/?\s*(?P<loose_name>[A-Za-z][\w:-]*))?[^>]*>"
+)
+
+
+def _drop_ssml_comments(text: str) -> str:
+    """Remove ``<!-- ... -->`` comments, which may hold a bare ``>``."""
+    parts: list[str] = []
+    pos = 0
+    while (start := text.find("<!--", pos)) != -1:
+        end = text.find("-->", start + 4)
+        if end == -1:
+            # No terminator is left for this or any later opener.
+            break
+        parts.append(text[pos:start])
+        pos = end + 3
+    if not parts:
+        return text
+    parts.append(text[pos:])
+    return "".join(parts)
+
+
 def strip_ssml_tags(text: str) -> str:
     """Best-effort conversion from SSML markup to plain text."""
     import html
-    import re
 
     # Inline tags can wrap part of a word or sit against punctuation, so they
     # vanish without a trace; boundary and unknown tags become a space.
     def _replace_tag(match: re.Match[str]) -> str:
-        name = match.group(1)
+        name = match.group("name") or match.group("loose_name")
         return "" if name is not None and name.lower() in _SSML_INLINE_TAGS else " "
 
-    without_tags = re.sub(r"<(?=[^>])(?:/?\s*([A-Za-z][\w:-]*))?[^>]*>", _replace_tag, text)
+    without_tags = _SSML_TAG_RE.sub(_replace_tag, _drop_ssml_comments(text))
     collapsed = re.sub(r"\s+", " ", without_tags).strip()
     return html.unescape(collapsed)
 

@@ -281,3 +281,16 @@ def test_build_issues_bot_clipping_refs_do_not_starve_silence_budget() -> None:
     report = build_issues(records, artifact_resolver=resolver)
     flagged = [i["turn_id"] for i in report["issues"] if i["code"] == "near_silent_capture"]
     assert flagged == ["quiet"]
+
+
+def test_iter_int16_tail_window_stays_sample_aligned_for_odd_length_blob() -> None:
+    from easycat.debug._audio_health import _BYTE_CAP, _iter_int16
+
+    quiet = _pcm16([0] * (2 * _BYTE_CAP))
+    clipped = _pcm16([32767] * _BYTE_CAP)
+    even = _iter_int16(quiet + clipped, stride=1)
+    odd = _iter_int16(quiet + clipped + b"\x00", stride=1)
+
+    assert even[-1] == 32767
+    assert odd.tolist() == even.tolist()
+    assert detect_clipping(odd, max_run=10**9) == detect_clipping(even, max_run=10**9) > 0

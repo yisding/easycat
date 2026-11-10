@@ -188,8 +188,22 @@ _COMPOUND_SECRET_NAME_RE = re.compile(
 _REQUEST_ID_RE = re.compile(r"\b(?:req|request|resp|response)_[A-Za-z0-9_-]{6,}\b")
 # An extension attached without a space (``415-555-2671x22``) is part of the
 # number; a spaced one (``... x22``) is left as trailing text.
-_PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?:(?i:x|ext\.?)\d+)?(?!\w)")
-_HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
+#
+# A log-style timestamp is not a phone number.  ``2026-11-05 12`` and the
+# fractional seconds of ``12:30:00.123456`` both have the bare digit-run shape,
+# so a match may neither start on a full ``YYYY-MM-DD HH:MM`` timestamp, which
+# no phone number contains, nor directly after a ``<digit>:`` time field or the
+# ``HH:MM:SS.`` of a fractional second (nanosecond fractions are nine digits
+# long).  A plain ``<digit>.`` is not excluded: ``ext1.415.555.2671`` must
+# still lose its number.
+_PHONE_RE = re.compile(
+    r"(?<!\w)(?<!\d:)(?<!\d\d:\d\d:\d\d\.)(?!\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2})"
+    r"(?:\+?\d[\d\s().-]{7,}\d)(?:(?i:x|ext\.?)\d+)?(?!\w)"
+)
+# The path may follow any delimiter (``(``, a backtick, ``[``, ``,``, ``>``...);
+# only a preceding path or name character rules it out, so ``/srv/home/x`` and
+# ``example.com/home/x`` are not mistaken for a home directory.
+_HOME_PATH_RE = re.compile(r"(?<![\w/.~-])(?:/home|/Users)/[^/\s:]+")
 
 
 def _secret_after_prefix(match: re.Match[str]) -> str:
@@ -200,7 +214,7 @@ def _secret_after_prefix(match: re.Match[str]) -> str:
 
 
 def _redacted_home_path(match: re.Match[str]) -> str:
-    return f"{match.group('prefix')}~"
+    return "~"
 
 
 def _redacted_url_secret(match: re.Match[str]) -> str:

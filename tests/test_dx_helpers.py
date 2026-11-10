@@ -443,3 +443,30 @@ def test_debug_full_skips_when_aiohttp_missing(monkeypatch: pytest.MonkeyPatch):
     maybe_launch_debugger_ui(session=object())
 
     assert calls == []
+
+
+@pytest.mark.parametrize("value", ["0", "false", "off"])
+def test_wired_banner_suppressed_by_any_non_empty_no_color(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    value: str,
+) -> None:
+    """``NO_COLOR`` disables output decoration whenever it is non-empty.
+
+    https://no-color.org: "when present and not an empty string (regardless of
+    its value)". ``easycat._console.color_enabled()`` honors that, but the
+    banner policy in ``helpers._prepare_configured_session`` routes
+    ``NO_COLOR`` through ``is_truthy``, so ``NO_COLOR=0`` still prints it.
+    """
+    from easycat import helpers
+
+    monkeypatch.setenv("NO_COLOR", value)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("EASYCAT_QUIET", raising=False)
+    monkeypatch.setattr(helpers, "attach_runtime_feedback", lambda _session: None)
+    monkeypatch.setattr("easycat.config.create_session", lambda _config: object())
+
+    config = EasyConfig(openai_api_key="test-key")
+    helpers._prepare_configured_session(config, feedback="on")
+
+    assert "easycat: wired" not in capsys.readouterr().err

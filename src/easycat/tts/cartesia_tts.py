@@ -7,12 +7,12 @@ import base64
 import contextlib
 import json
 import logging
-import math
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 from uuid import uuid4
 
+from easycat._numeric import is_finite_number
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
@@ -110,12 +110,7 @@ class CartesiaTTSConfig:
             raise ValueError(f"Cartesia speed must be in [0.6, 1.5], got {self.speed}")
         if self.volume is not None and not 0.5 <= self.volume <= 2.0:
             raise ValueError(f"Cartesia volume must be in [0.5, 2.0], got {self.volume}")
-        if (
-            isinstance(self.warmup_timeout_s, bool)
-            or not isinstance(self.warmup_timeout_s, int | float)
-            or not math.isfinite(self.warmup_timeout_s)
-            or self.warmup_timeout_s <= 0
-        ):
+        if not is_finite_number(self.warmup_timeout_s) or self.warmup_timeout_s <= 0:
             raise ValueError("Cartesia warmup_timeout_s must be a finite number > 0")
 
 

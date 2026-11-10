@@ -113,6 +113,9 @@ def _iter_int16(blob: bytes | bytearray, *, stride: int) -> array[int]:
     because they are specific to the bounded issues scan.
     """
     view = memoryview(blob)
+    # Drop a trailing half sample first: the tail window is anchored to the end
+    # of the blob, so an odd length would decode it one byte out of phase.
+    view = view[: len(view) & ~1]
     if len(view) > 2 * _BYTE_CAP:
         head = view[:_BYTE_CAP]
         tail = view[-_BYTE_CAP:]

@@ -115,3 +115,17 @@ def test_strip_ssml_tags_does_not_insert_spaces_around_inline_tags(
     ssml: str, expected: str
 ) -> None:
     assert strip_ssml_tags(ssml) == expected
+
+
+@pytest.mark.parametrize(
+    ("ssml", "expected"),
+    [
+        ('<speak>Say <sub alias="a > b">x</sub> now</speak>', "Say x now"),
+        ('<speak><sub alias="a>b">x</sub> ok</speak>', "x ok"),
+        ("<speak><!-- hi > there -->Hello</speak>", "Hello"),
+    ],
+)
+def test_strip_ssml_tags_ignores_gt_inside_attribute_values_and_comments(
+    ssml: str, expected: str
+) -> None:
+    assert strip_ssml_tags(ssml) == expected

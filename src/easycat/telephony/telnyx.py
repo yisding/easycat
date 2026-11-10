@@ -425,8 +425,11 @@ def _parse_hangup_event(
     sip_code: int | None = None
     if isinstance(sip_code_raw, int) and not isinstance(sip_code_raw, bool):
         sip_code = sip_code_raw
-    elif isinstance(sip_code_raw, str) and sip_code_raw.strip().isdigit():
-        sip_code = int(sip_code_raw)
+    elif isinstance(sip_code_raw, str):
+        # ``isdigit`` alone also accepts superscripts, which ``int`` rejects.
+        text = sip_code_raw.strip()
+        if text.isascii() and text.isdigit():
+            sip_code = int(text)
     duration = payload.get("call_duration")
     duration_s = (
         float(duration)

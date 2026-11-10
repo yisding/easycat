@@ -9,6 +9,7 @@ validators and the replay-kwargs normaliser the routes lean on.
 
 from __future__ import annotations
 
+import inspect
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -401,12 +402,24 @@ def _session_artifact(session: Any, ref: str) -> bytes | None:
     return store.get(ref)
 
 
+def _accepts_align(get_head_tail: Callable[..., Any]) -> bool:
+    try:
+        parameters = inspect.signature(get_head_tail).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "align" or p.kind is p.VAR_KEYWORD for p in parameters)
+
+
 def _session_artifact_for_analysis(session: Any, ref: str) -> bytes | None:
     store = getattr(session, "_artifact_store", None)
     if store is None:
         return None
     bounded = getattr(store, "get_head_tail", None)
     if callable(bounded):
+        if _accepts_align(bounded):
+            # Mono 16-bit PCM: keep the tail window on the sample grid.
+            return bounded(ref, byte_cap=AUDIO_ANALYSIS_BYTE_CAP, align=2)
+        # Out-of-tree stores may predate the ``align`` keyword.
         return bounded(ref, byte_cap=AUDIO_ANALYSIS_BYTE_CAP)
     return store.get(ref)
 

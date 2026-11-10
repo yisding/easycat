@@ -15,18 +15,17 @@ __all__ = [
 
 import asyncio
 import logging
-import math
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from easycat._epoch import Epoch, Lease
+from easycat._numeric import is_finite_number
 from easycat.events import EventBus, IVRAction, IVRActionType, STTFinal
 from easycat.runtime.scope import BackgroundTaskScope
 from easycat.telephony._ivr_decision import IVRAgentDecision, parse_ivr_agent_decision
 from easycat.telephony.dtmf import is_valid_dtmf_output
-from easycat.telephony.screening import EARLY_MEDIA_PHRASES as _EARLY_MEDIA_PATTERNS
 from easycat.telephony.twiml import twiml_play_digits
 
 logger = logging.getLogger(__name__)
@@ -58,10 +57,9 @@ _HUMAN_AFTER_IVR_PATTERNS: list[str] = [
 
 def classify_ivr_prompt(text: str) -> bool:
     """Return True if *text* looks like an IVR prompt."""
-    lower = text.lower()
-    for phrase in _EARLY_MEDIA_PATTERNS:
-        if phrase in lower:
-            return False
+    # Only an explicit IVR cue decides.  Menus often open with an early-media
+    # phrase ("This call may be recorded. Press 1 for sales."), so such a
+    # phrase must not veto the cue that follows it (gh 1302).
     return any(p.search(text) for p in _IVR_PATTERNS)
 
 
@@ -94,22 +92,12 @@ class IVRNavigatorConfig:
 
 
 def _validate_positive_number(name: str, value: float) -> None:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int | float)
-        or not math.isfinite(value)
-        or value <= 0
-    ):
+    if not is_finite_number(value) or value <= 0:
         raise ValueError(f"{name} must be a positive number")
 
 
 def _validate_non_negative_number(name: str, value: float) -> None:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int | float)
-        or not math.isfinite(value)
-        or value < 0
-    ):
+    if not is_finite_number(value) or value < 0:
         raise ValueError(f"{name} must be a non-negative number")
 
 

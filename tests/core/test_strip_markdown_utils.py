@@ -77,6 +77,22 @@ class TestHasMarkdown:
     def test_horizontal_rule(self) -> None:
         assert has_markdown("---")
 
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            "---",
+            "***",
+            "___",
+            "* * *",
+            "_ _ _",
+        ],
+    )
+    def test_horizontal_rule_variants_match_strip_markdown(self, rule: str) -> None:
+        """Every thematic break ``strip_markdown`` removes is also detected."""
+        text = f"Intro\n\n{rule}\n\nNext"
+        assert strip_markdown(text) == "Intro\n\nNext"
+        assert has_markdown(text)
+
     def test_image(self) -> None:
         assert has_markdown("![alt text](image.png)")
 
@@ -125,7 +141,7 @@ class TestMarkdownReferenceScanner:
             (
                 r"broken [x](a(b\) then [ok](url)",
                 True,
-                r"broken [x](a(b\) then ok url",
+                "broken [x](a(b) then ok url",
             ),
             ("![one](img) and [two](url)", True, "one and two url"),
             ("[label]   (url)", True, "label url"),
@@ -677,9 +693,10 @@ def test_strip_markdown_does_not_treat_escaped_backticks_as_code_spans(
 @pytest.mark.parametrize(
     ("text", "normalize_code_spans", "expected"),
     [
-        # An escaped backslash does not escape the backtick after it.
-        (r"\\`code`", False, r"\\code"),
-        (r"\\`code`", True, r"\\code"),
+        # An escaped backslash does not escape the backtick after it, and
+        # reads as the single backslash it stands for.
+        (r"\\`code`", False, r"\code"),
+        (r"\\`code`", True, r"\code"),
         # Backslashes inside a code span are literal and do not escape its close.
         (r"`a\`b`", False, r"a\b`"),
         (r"`foo\`bar`", True, "foo backslashbar`"),
@@ -738,7 +755,7 @@ def test_strip_markdown_removes_atx_heading_closing_sequence(text: str, expected
         ("# Title #x", "Title #x"),
         ("Issue #5 #", "Issue #5 #"),
         ("Issue #5 #\nNext", "Issue #5 #\nNext"),
-        ("## Foo \\#", "Foo \\#"),
+        ("## Foo \\#", "Foo #"),
         ("####### Seven #", "####### Seven #"),
         ("# Use `x #` here", "Use x # here"),
         ("# **C #**", "C #"),
@@ -1165,3 +1182,74 @@ def test_strip_markdown_keeps_spaced_double_asterisk_operators() -> None:
     the text to ``2 * 3 * 4``.
     """
     assert strip_markdown("2 ** 3 ** 4") == "2 ** 3 ** 4"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (r"The total is 5\.00 dollars", "The total is 5.00 dollars"),
+        (r"Great\! See you soon", "Great! See you soon"),
+        (r"Call it \(optional\)", "Call it (optional)"),
+        (r"Step 1\. Open the app", "Step 1. Open the app"),
+        # An escaped marker is literal text, never a heading, list or quote.
+        (r"\# not a heading", "# not a heading"),
+        (r"\- not a list", "- not a list"),
+        (r"\> not a quote", "> not a quote"),
+        (r"\[not a link\](x)", "[not a link](x)"),
+        # ``\\`` is one literal backslash; the next character is still markdown.
+        (r"a \\ b", r"a \ b"),
+        (r"\\*x*", r"\x"),
+        # Only ASCII punctuation is escapable: paths and ``\n`` keep theirs.
+        (r"C:\Users\foo", r"C:\Users\foo"),
+        (r"literal \n here", r"literal \n here"),
+        # Code keeps its backslashes.
+        (r"`5\.00`", r"5\.00"),
+        ("```\n5\\.00\n```", r"5\.00"),
+    ],
+)
+def test_strip_markdown_unescapes_punctuation_backslash_escapes(text: str, expected: str) -> None:
+    """CommonMark ``\\.``, ``\\!`` and ``\\(`` render as the bare punctuation.
+
+    Left in place, the backslash reaches a TTS provider, which reads
+    "five backslash dot zero zero".
+    """
+    assert strip_markdown(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Here:\n~~~python\nprint(1)\n~~~\nDone", "Here:\nprint(1)\nDone"),
+        ("~~~\nx = 1\n~~~", "x = 1"),
+        ("~~~\ncode\n~~~", "code"),
+        ("~~~python\nx = 1\n~~~", "x = 1"),
+        # A longer closing run closes; markdown inside the block is code.
+        ("~~~~\n**kept**\n~~~\nstill code\n~~~~~", "**kept**\n~~~\nstill code"),
+        ("~~~\n```\ncode\n```\n~~~", "```\ncode\n```"),
+        ("  ~~~\ncode\n  ~~~\nafter", "code\nafter"),
+        ("Here:\r\n~~~python\r\nprint(1)\r\n~~~\r\nDone", "Here:\r\nprint(1)\r\nDone"),
+        # A backtick span does not wrap across a tilde fence line.
+        ("a `b\n~~~\ncode\n~~~\nc` d", "a `b\ncode\nc` d"),
+    ],
+)
+def test_strip_markdown_strips_tilde_fenced_code_markers(text: str, expected: str) -> None:
+    """``~~~`` is a CommonMark code fence just like three backticks.
+
+    Left verbatim, TTS would speak the fence delimiters and the info string.
+    """
+    assert has_markdown(text)
+    assert strip_markdown(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "~~~\nnever closed",
+        "~~struck~~ and ~~again~~",
+    ],
+)
+def test_strip_markdown_tilde_runs_that_are_not_fences(text: str) -> None:
+    """Only a closed, line-start ``~~~`` run is a fence."""
+    assert strip_markdown(text) == text.replace("~~struck~~", "struck").replace(
+        "~~again~~", "again"
+    )

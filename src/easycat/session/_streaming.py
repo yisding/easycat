@@ -378,7 +378,9 @@ class _SentenceStreamBuffer:
         # A backtick run at the end of the text may still grow, so
         # ``markdown_open_state`` holds an inline span that it closes open.
         # Any delta settles the run, so recheck even without a closer in it.
-        had_trailing_backtick = self._text.endswith("`")
+        # Likewise a tilde fence whose closing line ends the text is held open
+        # until the line is known to be complete.
+        had_trailing_backtick = self._text.rstrip(" \t").endswith(("`", "~~~"))
         self._text += delta
 
         # Markdown stripping is regex-heavy and sentence splitting scans the

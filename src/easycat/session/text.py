@@ -39,7 +39,7 @@ __all__ = [
 ]
 
 from easycat.audio_format import AudioChunk
-from easycat.strip_markdown import _CODE_SPAN_RE
+from easycat.strip_markdown import _scan_code
 from easycat.tts.input import TTSInput, strip_ssml_tags
 
 # ── Sentence splitting ──────────────────────────────────────────────
@@ -576,7 +576,7 @@ def _has_open_inline_code_run(text: str) -> bool:
 def _drop_closed_code(text: str) -> tuple[str, bool]:
     """Remove closed code and escaped backticks; report whether code may be open.
 
-    Scans with ``strip_markdown``'s own ``_CODE_SPAN_RE``, which finds fenced
+    Scans with ``strip_markdown``'s own ``_scan_code``, which finds fenced
     blocks, inline spans and backslash escapes in one left-to-right pass, so a
     fence that opens inside an already-open inline span is span content and an
     escaped backtick can neither open nor close either.  Closed blocks and
@@ -588,8 +588,9 @@ def _drop_closed_code(text: str) -> tuple[str, bool]:
     the caller needs none), where a later delta could still change how the
     buffered backticks pair:
 
-    - An unpaired run of three or more backticks: no ```` ``` ```` follows it
-      yet, and a later one would close it as a fence.  Stopping there keeps a
+    - An unpaired run of three or more backticks, or a tilde fence opener with
+      no closing line: no closer follows it yet, and a later one would close
+      it as a fence.  Stopping there keeps a
       long fenced block cheap to recheck while it streams.
     - An inline span whose closing run ends the text: the run may still grow,
       and a longer run no longer closes the span.  A span holding a
@@ -599,9 +600,17 @@ def _drop_closed_code(text: str) -> tuple[str, bool]:
     """
     kept: list[str] = []
     pos = 0
-    for match in _CODE_SPAN_RE.finditer(text):
+    for match, tilde_closer in _scan_code(text):
         kept.append(text[pos : match.start()])
         pos = match.end()
+        if tilde_closer is not None:
+            # A closed tilde fence is dropped whole.  While its closing line
+            # ends the text, a later delta may still extend that line into
+            # block content, so the fence counts as open.
+            pos = tilde_closer[1]
+            if pos == len(text):
+                return "", True
+            continue
         if match.group("code") is not None:
             if pos == len(text):
                 return "", True

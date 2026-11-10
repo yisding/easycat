@@ -6,13 +6,13 @@ import asyncio
 import contextlib
 import json
 import logging
-import math
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from easycat._numeric import is_finite_number
 from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
@@ -79,12 +79,7 @@ class DeepgramTTSConfig:
         self.encoding = normalized_encoding
         for name in ("clear_timeout_s", "warmup_timeout_s"):
             value = getattr(self, name)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, int | float)
-                or not math.isfinite(value)
-                or value <= 0
-            ):
+            if not is_finite_number(value) or value <= 0:
                 raise ValueError(f"Deepgram {name} must be a finite number > 0")
 
 

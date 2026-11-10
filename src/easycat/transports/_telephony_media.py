@@ -24,7 +24,6 @@ import asyncio
 import inspect
 import json
 import logging
-import math
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, ClassVar, Literal, cast, get_type_hints
@@ -35,6 +34,7 @@ from websockets.asyncio.server import ServerConnection
 from easycat._audio_utils import PCM16StreamResampler
 from easycat._epoch import Epoch, Lease
 from easycat._net import is_loopback_host
+from easycat._numeric import is_finite_number
 from easycat.events import CallEnded, EventBus
 from easycat.runtime._event_tasks import RuntimeTaskScope
 from easycat.runtime.scope import BackgroundTaskScope, RuntimeScope
@@ -708,7 +708,7 @@ class TelephonyConnectionTransportBase(AudioQueueMixin):
         """
         if timeout_s is None:
             return await self._wait_for_start()
-        if not math.isfinite(timeout_s) or timeout_s <= 0:
+        if not is_finite_number(timeout_s) or timeout_s <= 0:
             raise ValueError("timeout_s must be positive")
         try:
             async with asyncio.timeout(timeout_s):

@@ -123,7 +123,7 @@ class RetryStrategy:
         reason = state.last_reason
 
         if reason in self._config.shorter_delay_reasons:
-            return self._apply_jitter(self._config.shorter_delay_s)
+            return self._apply_jitter(min(self._config.shorter_delay_s, self._config.max_delay_s))
         if self._config.base_delay_s == 0.0:
             return 0.0
 

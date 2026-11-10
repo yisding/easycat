@@ -251,16 +251,15 @@ def test_unclosed_fence_stops_the_code_scan(monkeypatch: pytest.MonkeyPatch) -> 
     """
     from easycat.session import text as session_text
 
-    real = session_text._CODE_SPAN_RE
+    real = session_text._scan_code
     matches: list[str] = []
 
-    class _CountingPattern:
-        def finditer(self, string: str) -> Iterator[re.Match[str]]:
-            for match in real.finditer(string):
-                matches.append(match.group(0))
-                yield match
+    def _counting_scan(string: str) -> Iterator[tuple[re.Match[str], tuple[int, int] | None]]:
+        for match, tilde_closer in real(string):
+            matches.append(match.group(0))
+            yield match, tilde_closer
 
-    monkeypatch.setattr(session_text, "_CODE_SPAN_RE", _CountingPattern())
+    monkeypatch.setattr(session_text, "_scan_code", _counting_scan)
     block = "Here.\n```js\n" + "const s = `hello ${a}`;\n" * 500
 
     assert markdown_open_state(block) == (True, False)
@@ -311,3 +310,18 @@ class TestEscapedBacktickFences:
     )
     def test_open(self, text: str) -> None:
         assert markdown_open_state(text) == (True, False)
+
+
+@pytest.mark.parametrize(
+    ("text", "is_open"),
+    [
+        # A closed tilde fence must not hold the streaming window open.
+        ("Here:\n~~~python\nprint(1)\n~~~\nDone. ", False),
+        ("~~~\n**not bold\n~~~\nNext sentence. ", False),
+        # Unclosed, or its closing line may still grow: wait for more text.
+        ("Here:\n~~~python\nprint(1)\n", True),
+        ("Here:\n~~~python\nprint(1)\n~~~", True),
+    ],
+)
+def test_markdown_open_state_pairs_tilde_fences(text: str, is_open: bool) -> None:
+    assert markdown_open_state(text) == (is_open, False)

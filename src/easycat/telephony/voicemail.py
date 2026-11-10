@@ -11,6 +11,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from easycat._numeric import is_finite_number
 from easycat._privacy import redacted_phone_number_label
 from easycat.events import (
     CallAnswered,
@@ -174,22 +175,12 @@ def _validate_positive_int(name: str, value: int) -> None:
 
 
 def _validate_positive_number(name: str, value: float) -> None:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int | float)
-        or not math.isfinite(value)
-        or value <= 0
-    ):
+    if not is_finite_number(value) or value <= 0:
         raise ValueError(f"{name} must be a positive number")
 
 
 def _validate_non_negative_number(name: str, value: float) -> None:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int | float)
-        or not math.isfinite(value)
-        or value < 0
-    ):
+    if not is_finite_number(value) or value < 0:
         raise ValueError(f"{name} must be a non-negative number")
 
 

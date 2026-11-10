@@ -32,10 +32,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from easycat._numeric import is_finite_number
 from easycat.events import (
     AgentDelta,
     AgentFinal,
@@ -100,7 +100,7 @@ class BrowserEventForwarder:
         max_pending_events: int = _DEFAULT_MAX_PENDING_EVENTS,
         runtime_scope: RuntimeScope | None = None,
     ) -> None:
-        if not math.isfinite(send_timeout_s) or send_timeout_s <= 0:
+        if not is_finite_number(send_timeout_s) or send_timeout_s <= 0:
             raise ValueError("send_timeout_s must be a finite number > 0")
         if (
             isinstance(max_pending_events, bool)

@@ -60,6 +60,22 @@ class TestIVRNavigatorConfig:
         with pytest.raises(ValueError, match=field):
             IVRNavigatorConfig(**{field: value})
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "prompt_timeout_s",
+            "agent_timeout_s",
+            "agent_retry_delay_s",
+            "hold_silence_threshold_s",
+        ],
+    )
+    def test_rejects_integers_too_large_for_float_with_value_error(self, field: str) -> None:
+        # ``math.isfinite`` converts to a C double and raises OverflowError for
+        # ints above ~1.8e308; config validation must raise its documented
+        # ValueError instead (see ``easycat._numeric.is_finite_number``).
+        with pytest.raises(ValueError, match=field):
+            IVRNavigatorConfig(**{field: 10**400})
+
 
 class TestIVRNavigator:
     def test_start_stop_lifecycle(self) -> None:
@@ -643,6 +659,17 @@ class TestIVRDetection:
 
     def test_early_media_hold_message_ignored(self) -> None:
         assert classify_ivr_prompt("Please hold while we connect your call") is False
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Thank you for calling Acme. This call may be recorded. Press 1 for sales.",
+            "Your call is important to us. For billing, press 3.",
+            "Please hold while we connect you. If you know your party's extension, dial it now.",
+        ],
+    )
+    def test_early_media_phrase_with_ivr_cue_is_still_ivr(self, text: str) -> None:
+        assert classify_ivr_prompt(text) is True
 
     def test_hold_music_detection(self) -> None:
         bus = EventBus()

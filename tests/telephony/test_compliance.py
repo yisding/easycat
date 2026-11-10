@@ -329,3 +329,31 @@ class TestSQLiteDNCListAsyncAPI:
             await store.aadd("not a phone")
 
         await store.aclose()
+
+
+class TestNonAsciiDigitsFailClosed:
+    """``str.isdigit`` accepts non-ASCII "digits" such as superscripts.
+
+    The area-code extractor documents that anything that is not a plausible
+    NANP number fails closed, so a malformed number containing a superscript
+    must not be treated as a 10-digit US number and routed to a timezone.
+    """
+
+    def test_extract_area_code_rejects_superscript_digit(self) -> None:
+        from easycat.telephony.compliance import _extract_area_code
+
+        assert _extract_area_code("415555267²") is None
+
+    @pytest.mark.parametrize("phone", ["+\u0664\u06644155552671", "4155552671\u00b2"])
+    def test_non_ascii_digits_are_not_dropped_to_form_a_valid_number(self, phone: str) -> None:
+        from easycat.telephony.compliance import _extract_area_code, lookup_timezone
+
+        assert _extract_area_code(phone) is None
+        assert lookup_timezone(phone) is None
+
+    def test_check_calling_hours_blocks_malformed_number(self) -> None:
+        from easycat.telephony.compliance import check_calling_hours, lookup_timezone
+
+        malformed = "+1 415 555 267²"
+        assert lookup_timezone(malformed) is None
+        assert check_calling_hours(malformed) is False

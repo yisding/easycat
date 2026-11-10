@@ -16,12 +16,12 @@ __all__ = [
 
 import asyncio
 import logging
-import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
+from easycat._numeric import is_finite_number
 from easycat.events import (
     CallAnswered,
     CallEnded,
@@ -857,12 +857,7 @@ class CallScreeningDetector:
 
 
 def _validate_positive_number(name: str, value: float) -> None:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int | float)
-        or not math.isfinite(value)
-        or value <= 0
-    ):
+    if not is_finite_number(value) or value <= 0:
         raise ValueError(f"{name} must be a positive number")
 
 

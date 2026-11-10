@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterator
 from fractions import Fraction
-from numbers import Real
 from typing import Literal, TypeAlias
 
+from easycat._numeric import is_finite_real
 from easycat.events import Event, VADStartSpeaking, VADStopSpeaking
 
 VADBackend: TypeAlias = Literal["auto", "silero", "funasr", "ten", "krisp"]
@@ -24,18 +23,14 @@ def _validate_vad_backend(backend: str) -> VADBackend:
 
 
 def _validate_vad_sensitivity(sensitivity: float) -> None:
-    if (
-        not isinstance(sensitivity, Real)
-        or isinstance(sensitivity, bool)
-        or not math.isfinite(float(sensitivity))
-    ):
+    if not is_finite_real(sensitivity):
         raise ValueError("sensitivity must be a number between 0 and 1")
     if not 0 <= sensitivity <= 1:
         raise ValueError("sensitivity must be between 0 and 1")
 
 
 def _validate_non_negative_ms(name: str, value: int) -> None:
-    if not isinstance(value, Real) or isinstance(value, bool) or not math.isfinite(float(value)):
+    if not is_finite_real(value):
         raise ValueError(f"{name} must be a non-negative number")
     if value < 0:
         raise ValueError(f"{name} must be non-negative")

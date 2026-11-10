@@ -2334,3 +2334,36 @@ class TestRingBufferArtifactEviction:
         self._append(buf)
         assert not store.has(ref_in)
         assert not store.has(ref_out)
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "snapshot", "filesystem"])
+@pytest.mark.parametrize("extra", [b"", b"\x00"], ids=["even", "odd"])
+def test_get_head_tail_align_keeps_tail_on_the_frame_grid(tmp_path, store_kind, extra):
+    """An odd-length PCM payload must not shift the tail window by a byte (gh 1296)."""
+    import struct
+
+    from easycat.runtime.artifacts import (
+        FilesystemArtifactStore,
+        InMemoryArtifactStore,
+        SnapshotArtifactStore,
+    )
+
+    payload = struct.pack("<h", 0) * 64 + struct.pack("<h", 32767) * 64 + extra
+    if store_kind == "snapshot":
+        ref = "a" * 64
+        store = SnapshotArtifactStore({ref: payload})
+    else:
+        store = (
+            InMemoryArtifactStore()
+            if store_kind == "memory"
+            else FilesystemArtifactStore("sess-align", data_dir=tmp_path)
+        )
+        ref = store.put(payload)
+
+    window = store.get_head_tail(ref, byte_cap=16, align=2)
+
+    assert window == struct.pack("<h", 0) * 8 + struct.pack("<h", 32767) * 8
+    # An odd cap still yields whole frames on both sides.
+    assert store.get_head_tail(ref, byte_cap=17, align=2) == window
+    # The default stays a plain byte window.
+    assert store.get_head_tail(ref, byte_cap=16) == payload[:16] + payload[-16:]

@@ -19,13 +19,12 @@ import os
 import sys
 import threading
 from dataclasses import dataclass, field
-from numbers import Real
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from easycat._audio_utils import resample, to_mono
 from easycat._extras import require_module
-from easycat._numeric import is_finite_number
+from easycat._numeric import is_finite_number, is_finite_real
 from easycat._smart_turn_features import (
     _create_triangular_filter_bank as _create_triangular_filter_bank,  # noqa: PLC0414 compatibility export
 )
@@ -100,7 +99,7 @@ def _intra_op_thread_count() -> int:
 
 def _validate_probability_threshold(name: str, value: float) -> float:
     """Validate a completion probability threshold in the inclusive 0..1 range."""
-    if not isinstance(value, Real) or isinstance(value, bool) or not math.isfinite(float(value)):
+    if not is_finite_real(value):
         raise ValueError(f"{name} must be a number between 0 and 1")
     threshold = float(value)
     if not 0 <= threshold <= 1:

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 from easycat._numeric import is_finite_number
 
 
@@ -21,7 +19,7 @@ def validate_server_timeouts(
     would let the server take calls with a config that ``drain`` then rejects
     before stopping any live session (gh 1259).
     """
-    if not math.isfinite(start_timeout_s) or start_timeout_s <= 0:
+    if not is_finite_number(start_timeout_s) or start_timeout_s <= 0:
         raise ValueError(f"{config_name}.start_timeout_s must be positive")
     for name, value in (
         ("drain_timeout_s", drain_timeout_s),
