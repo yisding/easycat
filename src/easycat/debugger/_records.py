@@ -140,12 +140,73 @@ def _filter_and_paginate(
     return full, total
 
 
+_REGEX_REPEAT_OPS = frozenset({"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"})
+_REGEX_FIXED_WIDTH_OPS = frozenset({"LITERAL", "NOT_LITERAL", "IN", "ANY"})
+# Category pairs that can never match the same character, so two adjacent
+# repeats over them have exactly one way to split any input.
+_REGEX_DISJOINT_CATEGORIES = frozenset(
+    {
+        frozenset({"CATEGORY_SPACE", "CATEGORY_DIGIT"}),
+        frozenset({"CATEGORY_SPACE", "CATEGORY_WORD"}),
+    }
+)
+
+
+class _RepeatScope:
+    """Repeat bookkeeping for one sibling sequence of regex tokens."""
+
+    __slots__ = ("optional_repeats", "pending_required")
+
+    def __init__(self) -> None:
+        self.optional_repeats = 0
+        # Category of the last required variable-width repeat that no
+        # mandatory token has separated from what follows; ``None`` when there
+        # is none and ``""`` when its character set is not a known category.
+        self.pending_required: str | None = None
+
+
+def _regex_repeat_category(child: Any) -> str:
+    """Return the lone character category a repeat's body matches, else ``""``."""
+    if len(child) != 1:
+        return ""
+    op, arg = child[0]
+    if str(op) != "IN" or len(arg) != 1 or str(arg[0][0]) != "CATEGORY":
+        return ""
+    return str(arg[0][1])
+
+
+def _regex_repeat_is_unsafe(
+    min_repeat: int, max_repeat: int, child: Any, scope: _RepeatScope
+) -> bool:
+    """Record one top-level repeat in *scope*; true when it makes the sequence unsafe."""
+    if min_repeat == max_repeat:
+        if min_repeat:
+            scope.pending_required = None
+        return False
+    if min_repeat == 0:
+        scope.optional_repeats += 1
+        return scope.optional_repeats > 1
+    category = _regex_repeat_category(child)
+    previous = scope.pending_required
+    scope.pending_required = category
+    if previous is None:
+        return False
+    return frozenset({previous, category}) not in _REGEX_DISJOINT_CATEGORIES
+
+
+def _regex_branches_consume_input(branches: Any) -> bool:
+    try:
+        return all(branch.getwidth()[0] >= 1 for branch in branches)
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def _regex_tree_has_unsafe_backtracking(
     tokens: Any,
     *,
     inside_repeat: bool = False,
     repeated_token: bool = False,
-    variable_repeats: list[int] | None = None,
+    scope: _RepeatScope | None = None,
 ) -> bool:
     """Return true when parsed regex tokens can cause exponential backtracking.
 
@@ -154,23 +215,33 @@ def _regex_tree_has_unsafe_backtracking(
     make Python's ``re`` engine spend unbounded CPU on a single haystack, so
     reject them instead of trying to sandbox individual ``search()`` calls.
 
-    A single repeat is fine, but two or more *variable-width* (``min != max``)
-    repeats in the same sibling sequence -- e.g. ``a?a?...aaa``, ``a+a+a+!``,
-    ``a{1,2}a{1,2}...`` or grouped twins like ``(a+)(a+)`` -- let the engine
-    try every way of splitting the input between them and blow up
-    polynomially or exponentially even though no repeat is nested inside
-    another. The ``variable_repeats`` accumulator counts those siblings;
-    ``SUBPATTERN`` reuses the parent's counter (transparent groups stay in the
-    same sequence) while branches and repeat children start a fresh count for
-    their own scope.
+    A single repeat is fine, and so are repeats separated by a mandatory
+    token (``\\d+\\.\\d+``, ``https?://\\S+``). Two shapes in one sibling
+    sequence are rejected even though no repeat is nested inside another:
+
+    * two or more *optional* (``min == 0``) repeats -- e.g. ``a?a?...aaa`` or
+      its grouped twin ``(a?)(a?)...`` -- which let the engine explore every
+      "skip vs. match" subset;
+    * *required* variable-width repeats (``min >= 1``, ``min != max``) that
+      follow one another with no mandatory token between them -- e.g.
+      ``a+a+a+!``, ``a{1,2}a{1,2}...`` or ``(a+)(a+)`` -- which let the engine
+      try every way of splitting the input between them. Adjacent repeats
+      over provably disjoint categories (``\\w+\\s+\\w+``) have a single split
+      and stay allowed.
+
+    ``scope`` carries that bookkeeping; ``SUBPATTERN`` reuses the parent's
+    scope (transparent groups stay in the same sequence) while branches and
+    repeat children start a fresh one.
     """
-    if variable_repeats is None:
-        variable_repeats = [0]
+    if scope is None:
+        scope = _RepeatScope()
     for op, arg in tokens:
         op_name = str(op)
         if op_name in {"GROUPREF", "GROUPREF_EXISTS", "ASSERT", "ASSERT_NOT"}:
             return True
-        if op_name == "BRANCH":
+        if op_name in _REGEX_FIXED_WIDTH_OPS:
+            scope.pending_required = None
+        elif op_name == "BRANCH":
             _none, branches = arg
             if repeated_token:
                 return True
@@ -179,27 +250,21 @@ def _regex_tree_has_unsafe_backtracking(
                 for branch in branches
             ):
                 return True
-            continue
-        if op_name in {"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"}:
+            if _regex_branches_consume_input(branches):
+                scope.pending_required = None
+        elif op_name in _REGEX_REPEAT_OPS:
             min_repeat, max_repeat, child = arg
-            if inside_repeat:
+            if inside_repeat or _regex_repeat_is_unsafe(min_repeat, max_repeat, child, scope):
                 return True
-            if min_repeat != max_repeat:
-                variable_repeats[0] += 1
-                if variable_repeats[0] > 1:
-                    return True
             if _regex_tree_has_unsafe_backtracking(child, inside_repeat=True, repeated_token=True):
                 return True
-            continue
-        if op_name == "SUBPATTERN":
-            child = arg[-1]
-            if _regex_tree_has_unsafe_backtracking(
-                child,
-                inside_repeat=inside_repeat,
-                repeated_token=repeated_token,
-                variable_repeats=variable_repeats,
-            ):
-                return True
+        elif op_name == "SUBPATTERN" and _regex_tree_has_unsafe_backtracking(
+            arg[-1],
+            inside_repeat=inside_repeat,
+            repeated_token=repeated_token,
+            scope=scope,
+        ):
+            return True
     return False
 
 

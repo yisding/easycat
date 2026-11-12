@@ -665,6 +665,10 @@ def test_search_records_rejects_adjacent_optional_repeats():
         r"\w+" * 4 + "@",
         "(a+)" * 2 + "!",
         "a{1,2}" * 3 + "!",
+        r"\w+\d+!",
+        r"\w+\s*\w+!",
+        "a+(b|)a+!",
+        ".+[a-z]+!",
     ],
 )
 def test_search_records_rejects_chained_variable_width_repeats(pattern):
@@ -674,6 +678,26 @@ def test_search_records_rejects_chained_variable_width_repeats(pattern):
 
 @pytest.mark.parametrize("pattern", [r"\w+@", "a{3}b{3}", "timeout|pcm", "t.s", ".", "a+|b+"])
 def test_search_records_accepts_single_variable_width_repeat(pattern):
+    assert _compile_search_regex(pattern).pattern == pattern
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        # Repeats separated by a mandatory token cannot trade input with each
+        # other, so ordinary grep patterns must keep working.
+        r"\d+\.\d+",
+        r"\d+\.\d+\.\d+\.\d+",
+        r"https?://\S+",
+        r"error.*timeout\d+",
+        r"turn_\w+ failed after \d+ms",
+        r"error:\s*\d+",
+        r"\w+\s+\w+",
+        r"\d+(ms|s)\d+",
+        r"a+b{2}a+",
+    ],
+)
+def test_search_records_accepts_separated_variable_width_repeats(pattern):
     assert _compile_search_regex(pattern).pattern == pattern
 
 
