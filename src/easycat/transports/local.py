@@ -168,6 +168,15 @@ class LocalTransport(AudioQueueMixin):
         # does not repeatedly pay the pre-roll delay.
         self._primed: bool = False
 
+        # A queued chunk that is longer than the rest of the current callback
+        # frame is split across callbacks, so frames are packed back-to-back
+        # instead of padding each chunk's short tail with silence.  Only the
+        # audio thread touches ``_playout_partial``; the loop thread asks for it
+        # to be dropped by setting ``_discard_playout_partial`` after draining
+        # the queue (in ``clear_audio``/``_flush_queues``).
+        self._playout_partial: tuple[_QueuedOutputChunk, int] | None = None
+        self._discard_playout_partial = False
+
         self._input_stream: Any = None
         self._output_stream: Any = None
 
@@ -197,6 +206,7 @@ class LocalTransport(AudioQueueMixin):
             # it on its first reference drain when AEC is wired.
             self._aec_reference_enabled = False
             self._primed = False
+            self._playout_partial = None
             sd = require_module(
                 "sounddevice",
                 extra="local",
@@ -382,7 +392,7 @@ class LocalTransport(AudioQueueMixin):
         *,
         stream_generation: int | None = None,
     ) -> None:
-        """Speaker callback: drain one queued frame per call behind a pre-roll.
+        """Speaker callback: play one frame of queued audio behind a pre-roll.
 
         ``np`` is bound via ``partial`` at ``connect()`` time so this stays a
         plain method (testable without ``sounddevice``) while sounddevice still
@@ -405,18 +415,13 @@ class LocalTransport(AudioQueueMixin):
                 return
             self._primed = True
 
-        try:
-            queued = self._out_queue.get_nowait()
-        except thread_queue.Empty:
-            queued = None
-
-        if queued is None:
+        pcm = self._take_output_frame(frame_bytes, stream_generation=stream_generation)
+        if not pcm:
             outdata[:] = 0
             if self._aec_reference_enabled:
                 self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
             return
 
-        pcm = queued.chunk.data
         arr = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
         arr /= 32767.0
         # Pad / trim to fit outdata
@@ -439,7 +444,42 @@ class LocalTransport(AudioQueueMixin):
                 ref = pcm[:frame_bytes]
             self._push_aec_reference(ref)
 
-        self._schedule_audio_delivery(queued, stream_generation=stream_generation)
+    def _take_output_frame(self, frame_bytes: int, *, stream_generation: int | None) -> bytes:
+        """Assemble up to one frame of PCM from the partial chunk and the queue.
+
+        Runs on the audio thread.  Delivery is reported only once a queued
+        chunk has been fully played.
+        """
+        partial = self._playout_partial
+        if self._discard_playout_partial:
+            # Reset before reading the queue: a clear that lands later sets the
+            # flag again, so a stale chunk taken below is dropped next callback.
+            self._discard_playout_partial = False
+            partial = None
+        parts: list[bytes] = []
+        filled = 0
+        while filled < frame_bytes:
+            if partial is None:
+                try:
+                    queued = self._out_queue.get_nowait()
+                except thread_queue.Empty:
+                    break
+                if queued is None:
+                    break
+                partial = (queued, 0)
+            queued, offset = partial
+            data = queued.chunk.data
+            piece = data[offset : offset + frame_bytes - filled]
+            parts.append(piece)
+            filled += len(piece)
+            offset += len(piece)
+            if offset >= len(data):
+                self._schedule_audio_delivery(queued, stream_generation=stream_generation)
+                partial = None
+            else:
+                partial = (queued, offset)
+        self._playout_partial = partial
+        return b"".join(parts)
 
     def _flush_queues(self) -> None:
         """Drain all audio queues synchronously (called from disconnect and teardown)."""
@@ -453,6 +493,7 @@ class LocalTransport(AudioQueueMixin):
                 self._out_queue.get_nowait()
             except thread_queue.Empty:
                 break
+        self._discard_playout_partial = True
         while not self._aec_ref_queue.empty():
             try:
                 self._aec_ref_queue.get_nowait()
@@ -601,6 +642,7 @@ class LocalTransport(AudioQueueMixin):
                 self._out_queue.get_nowait()
             except thread_queue.Empty:
                 break
+        self._discard_playout_partial = True
         # Deliberately do NOT drain ``_aec_ref_queue`` here: the already-played
         # reference frames describe the bot's last words, whose echo is still
         # arriving at the mic during the barge-in.  Retaining them lets AEC
@@ -617,7 +659,10 @@ class LocalTransport(AudioQueueMixin):
         Backed by the outbound frame count so ``await_drain`` can avoid
         reporting the bot drained while the local speaker buffer is non-empty.
         """
-        return self._out_queue.qsize() * self._config.frame_duration_ms
+        pending_frames = self._out_queue.qsize()
+        if self._playout_partial is not None and not self._discard_playout_partial:
+            pending_frames += 1
+        return pending_frames * self._config.frame_duration_ms
 
     def _schedule_audio_delivery(
         self,
