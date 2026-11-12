@@ -162,8 +162,8 @@ length, or idle timeout emits `DTMFAggregated`.
 Outgoing DTMF is call control. Twilio does not send outbound DTMF through a
 bidirectional Media Stream; EasyCat updates the call with TwiML `<Play
 digits="...">`. `SendDTMFAction` applies a bounded inter-digit delay and
-sanitizes the allowed `0-9`, `*`, `#`, `A-D`, and pause characters before XML
-rendering.
+rejects any digits outside `0-9`, `*`, `#`, `A-D`, and the `w`/`W` pause
+characters at construction, before XML rendering.
 
 Never concatenate model output into TwiML. Use the typed action and TwiML
 helpers, which validate or escape values.

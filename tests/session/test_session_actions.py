@@ -183,6 +183,32 @@ class TestSessionActionsQueue:
         with pytest.raises(ValueError, match="inter_digit_delay_ms"):
             actions.send_dtmf("12", inter_digit_delay_ms=-1)
 
+    @pytest.mark.parametrize("digits", ["press one", "1-2", "abc", "12a"])
+    def test_send_dtmf_rejects_invalid_digits(self, digits: str) -> None:
+        with pytest.raises(ValueError, match="DTMF digits"):
+            SessionActions().send_dtmf(digits)
+        with pytest.raises(ValueError, match="DTMF digits"):
+            SendDTMFAction(digits=digits)
+
+    def test_send_dtmf_rejects_non_str_digits(self) -> None:
+        with pytest.raises(TypeError, match="digits must be a str"):
+            SendDTMFAction(digits=123)  # type: ignore[arg-type]
+
+    def test_send_dtmf_accepts_full_dtmf_alphabet(self) -> None:
+        assert SendDTMFAction(digits="*#0123456789ABCDwW").digits == "*#0123456789ABCDwW"
+
+    def test_transfer_plan_validates_post_dial_digit_characters(self) -> None:
+        with pytest.raises(ValueError, match="DTMF digits"):
+            TransferPlan(post_dial_digits="1-2")
+        assert TransferPlan().post_dial_digits == ""
+        assert TransferPlan(post_dial_digits="ww42#").post_dial_digits == "ww42#"
+
+    def test_dtmf_alphabet_matches_telephony(self) -> None:
+        from easycat.session import actions as session_actions
+        from easycat.telephony.dtmf import VALID_DTMF_OUTPUT_CHARS
+
+        assert session_actions._VALID_DTMF_OUTPUT_CHARS == VALID_DTMF_OUTPUT_CHARS
+
     def test_transfer_plan_rejects_excessive_post_dial_digits(self) -> None:
         with pytest.raises(ValueError, match="DTMF digits"):
             TransferPlan(post_dial_digits="w" * (MAX_DTMF_DIGITS + 1))

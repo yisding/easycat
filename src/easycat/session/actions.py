@@ -23,9 +23,22 @@ MAX_DTMF_DIGITS = 128
 MAX_DTMF_INTER_DIGIT_DELAY_MS = 10_000
 
 
-def _validate_dtmf_digits(digits: str) -> None:
+# Mirrors ``easycat.telephony.dtmf.VALID_DTMF_OUTPUT_CHARS``; kept local so the
+# session layer does not import telephony.  A test guards against drift.
+_VALID_DTMF_OUTPUT_CHARS = frozenset("0123456789*#ABCDwW")
+
+
+def _validate_dtmf_digits(digits: str, *, field_name: str) -> None:
+    if not isinstance(digits, str):
+        raise TypeError(f"{field_name} must be a str")
     if len(digits) > MAX_DTMF_DIGITS:
         raise ValueError(f"DTMF digits must be {MAX_DTMF_DIGITS} characters or fewer")
+    invalid = sorted(set(digits) - _VALID_DTMF_OUTPUT_CHARS)
+    if invalid:
+        raise ValueError(
+            f"DTMF digits for {field_name} contain unsupported characters {invalid!r}; "
+            "allowed: 0-9 * # A-D w W"
+        )
 
 
 class SessionActionType(enum.StrEnum):
@@ -72,7 +85,7 @@ class TransferPlan:
     caller_id: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_dtmf_digits(self.post_dial_digits)
+        _validate_dtmf_digits(self.post_dial_digits, field_name="post_dial_digits")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +109,7 @@ class SendDTMFAction(SessionAction):
     inter_digit_delay_ms: int = 1000
 
     def __post_init__(self) -> None:
-        _validate_dtmf_digits(self.digits)
+        _validate_dtmf_digits(self.digits, field_name="digits")
         if not 0 <= self.inter_digit_delay_ms <= MAX_DTMF_INTER_DIGIT_DELAY_MS:
             raise ValueError(
                 f"DTMF inter_digit_delay_ms must be between 0 and {MAX_DTMF_INTER_DIGIT_DELAY_MS}"

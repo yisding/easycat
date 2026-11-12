@@ -16,6 +16,8 @@ versioning contract that begins at 1.0.0 is documented in
 
 - Plain-mode agent streaming no longer re-runs the sentence segmenter over the
   whole pending text on every delta when no sentence boundary is possible.
+- `SendDTMFAction` and `TransferPlan.post_dial_digits` now reject characters
+  outside the DTMF alphabet instead of silently playing pauses on Twilio.
 
 ## 0.1.0 - Unreleased
 
