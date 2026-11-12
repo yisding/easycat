@@ -14,6 +14,9 @@ versioning contract that begins at 1.0.0 is documented in
 
 ### Fixed
 
+- `LiveKitAEC` drops a buffered sub-frame remainder when a stream's channel
+  count or sample width changes, instead of swapping stereo channels for the
+  rest of the stream.
 - `easycat journal grep --regex` and the debugger's `/api/records?regex=1`
   now reject patterns with more than one variable-width repeat in sequence
   (such as `a+a+a+!`), which could backtrack for minutes.

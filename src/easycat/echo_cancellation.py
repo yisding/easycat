@@ -24,7 +24,7 @@ from easycat._pipeline_decisions import (
     has_provider_shape,
 )
 from easycat._provider_catalog import ProviderCatalog
-from easycat.audio_format import AudioChunk
+from easycat.audio_format import AudioChunk, AudioFormat
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,11 @@ class LiveKitAEC:
         # retaining the sub-frame remainder for the next call.
         self._near_buffer: bytes = b""
         self._far_buffer: bytes = b""
+        # Format each buffer's remainder was captured in. A remainder from a
+        # different channel count or sample width would misalign every later
+        # frame (e.g. swap L/R), so it is dropped on a format change.
+        self._near_format: AudioFormat | None = None
+        self._far_format: AudioFormat | None = None
         logger.info("LiveKit AEC initialized")
 
     def _check_stream_rate(self, sample_rate: int) -> None:
@@ -119,6 +124,8 @@ class LiveKitAEC:
         self._apm = None
         self._near_buffer = b""
         self._far_buffer = b""
+        self._near_format = None
+        self._far_format = None
 
     def __del__(self) -> None:
         self.close()
@@ -142,6 +149,9 @@ class LiveKitAEC:
         self._check_stream_rate(fmt.sample_rate)
         frame_bytes = frame_samples * fmt.frame_size
 
+        if self._near_format != fmt:
+            self._near_buffer = b""
+            self._near_format = fmt
         self._near_buffer += chunk.data
         processed_parts: list[bytes] = []
         while len(self._near_buffer) >= frame_bytes:
@@ -172,6 +182,9 @@ class LiveKitAEC:
         self._check_stream_rate(fmt.sample_rate)
         frame_bytes = frame_samples * fmt.frame_size
 
+        if self._far_format != fmt:
+            self._far_buffer = b""
+            self._far_format = fmt
         self._far_buffer += chunk.data
         while len(self._far_buffer) >= frame_bytes:
             frame_data = self._far_buffer[:frame_bytes]
