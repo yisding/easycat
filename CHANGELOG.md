@@ -18,6 +18,8 @@ versioning contract that begins at 1.0.0 is documented in
   whole pending text on every delta when no sentence boundary is possible.
 - `SendDTMFAction` and `TransferPlan.post_dial_digits` now reject characters
   outside the DTMF alphabet instead of silently playing pauses on Twilio.
+- Interruption estimation caps each SSML `<break>` at 10 s, so one huge `time`
+  value can no longer allocate an unbounded pause timeline.
 
 ## 0.1.0 - Unreleased
 

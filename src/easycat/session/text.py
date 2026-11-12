@@ -683,6 +683,9 @@ def has_unclosed_markdown_delimiters(text: str) -> bool:
 
 _PAUSE_MARKER = ""
 _PAUSE_CHARS_PER_SECOND = 14.0
+# TTS providers cap an SSML break at about 5-10 s; clamping here also bounds
+# the marker allocation for an arbitrarily large ``time`` value.
+_MAX_ESTIMATION_BREAK_MS = 10_000.0
 
 
 def _text_for_estimation_timeline(payload: TTSInput) -> str:
@@ -707,6 +710,7 @@ def _text_for_estimation_timeline(payload: TTSInput) -> str:
             amount = float(time_match.group(2))
             unit = time_match.group(3).lower()
             ms = amount if unit == "ms" else amount * 1000.0
+        ms = min(ms, _MAX_ESTIMATION_BREAK_MS)
         count = max(1, round((ms / 1000.0) * _PAUSE_CHARS_PER_SECOND)) if ms > 0 else 1
         return _PAUSE_MARKER * count
 

@@ -652,6 +652,18 @@ def test_text_for_estimation_timeline_supports_second_breaks() -> None:
     assert timeline.count("\ue000") == 7
 
 
+@pytest.mark.parametrize("duration", ["3600s", "99999999s", "99999999ms"])
+def test_text_for_estimation_timeline_caps_break_duration(duration: str) -> None:
+    payload = TTSInput(
+        text=f'<speak>a<break time="{duration}"/>b</speak>',
+        format="ssml",
+    )
+
+    timeline = _text_for_estimation_timeline(payload)
+    assert timeline.count("") == 140
+    assert len(timeline) == 142
+
+
 def test_cleanup_estimation_text_removes_pause_markers() -> None:
     payload = TTSInput(
         text='<speak>A<break time="500ms"/>B</speak>',
