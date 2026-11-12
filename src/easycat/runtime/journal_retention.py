@@ -173,7 +173,7 @@ class _RetentionSweep:
             if not self._prune_oldest():
                 break
 
-    def prune_to_caps(self, max_sessions: int, max_bytes: int) -> None:
+    def prune_to_caps(self, max_sessions: int, max_bytes: float) -> None:
         """Prune the oldest prunable journal until count and byte caps hold."""
         while (
             self._files
