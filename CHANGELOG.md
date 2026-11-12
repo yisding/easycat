@@ -14,6 +14,8 @@ versioning contract that begins at 1.0.0 is documented in
 
 ### Fixed
 
+- `with_agent_timeout` and `with_tts_timeout` close the wrapped coroutine or
+  stream when they reject an invalid `timeout`, instead of leaking it.
 - `LiveKitAEC` drops a buffered sub-frame remainder when a stream's channel
   count or sample width changes, instead of swapping stereo channels for the
   rest of the stream.

@@ -105,6 +105,15 @@ class TestAgentTimeout:
         with pytest.raises(ValueError, match="timeout must be a finite positive number"):
             await with_agent_timeout(object(), timeout=timeout)
 
+    async def test_invalid_timeout_closes_wrapped_coroutine(self):
+        async def agent():
+            return "response"
+
+        coro = agent()
+        with pytest.raises(ValueError, match="timeout must be a finite positive number"):
+            await with_agent_timeout(coro, timeout=0)
+        assert coro.cr_frame is None
+
     async def test_no_timeout_when_agent_responds(self):
         async def fast_agent():
             return "response"
@@ -182,6 +191,22 @@ class TestTTSTimeout:
     async def test_invalid_timeout_rejected_at_public_boundary(self, timeout):
         with pytest.raises(ValueError, match="timeout must be a finite positive number"):
             await _collect(with_tts_timeout(_slow_iter([]), timeout=timeout))
+
+    async def test_invalid_timeout_closes_wrapped_stream(self):
+        closed: list[bool] = []
+
+        async def source():
+            try:
+                yield b"chunk1"
+                yield b"chunk2"
+            finally:
+                closed.append(True)
+
+        events = source()
+        await events.__anext__()
+        with pytest.raises(ValueError, match="timeout must be a finite positive number"):
+            await _collect(with_tts_timeout(events, timeout=float("nan")))
+        assert closed == [True]
 
     async def test_no_timeout_when_audio_arrives(self):
         events = _slow_iter([b"chunk1", b"chunk2"], delay=0.0)
