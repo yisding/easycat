@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "rationale": "config: _validate_common delegates mcp_servers checks to one helper",
+  "rationale": "Journal search regex guard split into per-repeat helpers, dropping its PLR0912 violation",
   "counts": {
     "C901": 54,
-    "PLR0912": 31,
+    "PLR0912": 30,
     "PLR0915": 27
   },
   "entries": [
@@ -39,7 +39,6 @@
     "src/easycat/debugger/_records.py\tC901\t_filter_records",
     "src/easycat/debugger/_records.py\tC901\t_regex_tree_has_unsafe_backtracking",
     "src/easycat/debugger/_records.py\tPLR0912\t_filter_records",
-    "src/easycat/debugger/_records.py\tPLR0912\t_regex_tree_has_unsafe_backtracking",
     "src/easycat/debugger/server.py\tC901\t_DebuggerRoutes.replay",
     "src/easycat/debugger/server.py\tC901\t_DebuggerRoutes.websocket",
     "src/easycat/debugger/server.py\tC901\t_collect_audio_frames",
