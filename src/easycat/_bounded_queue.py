@@ -13,6 +13,7 @@ from collections import deque
 from collections.abc import Callable
 
 from easycat import _observability as observability
+from easycat._numeric import is_finite_number
 from easycat.audio_format import AudioChunk
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,8 @@ class BoundedAudioQueue:
             raise ValueError("max_size must be a positive integer")
         if not isinstance(policy, DropPolicy):
             raise ValueError("policy must be a DropPolicy")  # noqa: TRY004 domain-specific validation error
+        if not is_finite_number(block_timeout) or block_timeout < 0:
+            raise ValueError("block_timeout must be a finite non-negative number")
         self._max_size = max_size
         self._policy = policy
         self._block_timeout = block_timeout

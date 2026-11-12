@@ -26,6 +26,9 @@ versioning contract that begins at 1.0.0 is documented in
 - `OpenAITTSConfig.speed` must be in [0.25, 4.0] and ElevenLabs TTS
   `stability`/`similarity_boost` in [0.0, 1.0]; bad values now fail when the
   config is built instead of on the first synthesis.
+- `BoundedAudioQueue` rejects NaN, infinite, negative and non-numeric
+  `block_timeout` values at construction, so a `BLOCK` queue can no longer
+  wait forever or fail on its first full `put()`.
 
 ## 0.1.0 - Unreleased
 
