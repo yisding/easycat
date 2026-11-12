@@ -758,6 +758,35 @@ class TestLocalTransport:
         assert len(received) == queued_slices
 
     @pytest.mark.asyncio
+    async def test_output_callback_reports_slice_only_after_it_fully_plays(self):
+        from easycat.events import TransportAudioDelivered
+
+        np = pytest.importorskip("numpy")
+        transport = self._unaligned_transport()
+        bus = EventBus()
+        received: list[TransportAudioDelivered] = []
+        bus.subscribe(TransportAudioDelivered, lambda e: received.append(e))
+        transport._event_bus = bus
+        transport._loop = asyncio.get_running_loop()
+        sample = (1000).to_bytes(2, "little", signed=True)
+        # 300 samples, then a full 480-sample frame: the first callback plays
+        # all of the first slice and only 180 samples of the second.
+        await transport.send_audio(AudioChunk(data=sample * 300, format=PCM16_MONO_24K))
+        await transport.send_audio(AudioChunk(data=sample * 480, format=PCM16_MONO_24K))
+        assert transport._out_queue.qsize() == 2
+
+        async def _callback() -> None:
+            outdata = np.ones((transport._frame_samples, 1), dtype=np.float32)
+            transport._output_callback(np, outdata, transport._frame_samples, None, None)
+            for _ in range(10):
+                await asyncio.sleep(0)
+
+        await _callback()
+        assert len(received) == 1
+        await _callback()
+        assert len(received) == 2
+
+    @pytest.mark.asyncio
     async def test_clear_audio_discards_partially_played_chunk(self):
         np = pytest.importorskip("numpy")
         transport = self._unaligned_transport()

@@ -155,7 +155,7 @@ _REGEX_DISJOINT_CATEGORIES = frozenset(
 class _RepeatScope:
     """Repeat bookkeeping for one sibling sequence of regex tokens."""
 
-    __slots__ = ("optional_repeats", "pending_required")
+    __slots__ = ("consumed", "leading_open", "optional_repeats", "pending_required")
 
     def __init__(self) -> None:
         self.optional_repeats = 0
@@ -163,6 +163,22 @@ class _RepeatScope:
         # mandatory token has separated from what follows; ``None`` when there
         # is none and ``""`` when its character set is not a known category.
         self.pending_required: str | None = None
+        # Whether a token that always consumes input has been seen, and
+        # whether a required variable-width repeat came before any such token
+        # (so it can trade input with whatever precedes this sequence).
+        self.consumed = False
+        self.leading_open = False
+
+    def mandatory(self) -> None:
+        self.pending_required = None
+        self.consumed = True
+
+
+def _regex_min_width(tokens: Any) -> int:
+    try:
+        return int(tokens.getwidth()[0])
+    except (AttributeError, TypeError, ValueError):
+        return 0
 
 
 def _regex_repeat_category(child: Any) -> str:
@@ -180,8 +196,9 @@ def _regex_repeat_is_unsafe(
 ) -> bool:
     """Record one top-level repeat in *scope*; true when it makes the sequence unsafe."""
     if min_repeat == max_repeat:
-        if min_repeat:
-            scope.pending_required = None
+        # An empty body (``(?:){1}``) consumes nothing and separates nothing.
+        if min_repeat and _regex_min_width(child) >= 1:
+            scope.mandatory()
         return False
     if min_repeat == 0:
         scope.optional_repeats += 1
@@ -189,16 +206,39 @@ def _regex_repeat_is_unsafe(
     category = _regex_repeat_category(child)
     previous = scope.pending_required
     scope.pending_required = category
+    if not scope.consumed:
+        scope.leading_open = True
+    scope.consumed = True
     if previous is None:
         return False
     return frozenset({previous, category}) not in _REGEX_DISJOINT_CATEGORIES
 
 
-def _regex_branches_consume_input(branches: Any) -> bool:
-    try:
-        return all(branch.getwidth()[0] >= 1 for branch in branches)
-    except (AttributeError, TypeError, ValueError):
-        return False
+def _regex_branch_is_unsafe(branches: Any, scope: _RepeatScope, *, inside_repeat: bool) -> bool:
+    """Check each alternative, then fold the alternation into *scope*.
+
+    An alternative that starts or ends with a required variable-width repeat
+    (``(?:a+|b+)``) leaves that repeat adjacent to the alternation's
+    neighbours, so the alternation only separates repeats on the sides where
+    every alternative has a mandatory token.
+    """
+    leading = trailing = False
+    for branch in branches:
+        sub = _RepeatScope()
+        if _regex_tree_has_unsafe_backtracking(branch, inside_repeat=inside_repeat, scope=sub):
+            return True
+        leading = leading or sub.leading_open
+        trailing = trailing or sub.pending_required is not None
+    if leading:
+        if scope.pending_required is not None:
+            return True
+        if not scope.consumed:
+            scope.leading_open = True
+    if all(_regex_min_width(branch) >= 1 for branch in branches):
+        scope.mandatory()
+    if trailing:
+        scope.pending_required = ""
+    return False
 
 
 def _regex_tree_has_unsafe_backtracking(
@@ -230,8 +270,9 @@ def _regex_tree_has_unsafe_backtracking(
       and stay allowed.
 
     ``scope`` carries that bookkeeping; ``SUBPATTERN`` reuses the parent's
-    scope (transparent groups stay in the same sequence) while branches and
-    repeat children start a fresh one.
+    scope (transparent groups stay in the same sequence) while repeat children
+    start a fresh one and each alternative of a branch is checked in its own
+    scope and then folded back into the parent's.
     """
     if scope is None:
         scope = _RepeatScope()
@@ -240,18 +281,13 @@ def _regex_tree_has_unsafe_backtracking(
         if op_name in {"GROUPREF", "GROUPREF_EXISTS", "ASSERT", "ASSERT_NOT"}:
             return True
         if op_name in _REGEX_FIXED_WIDTH_OPS:
-            scope.pending_required = None
+            scope.mandatory()
         elif op_name == "BRANCH":
             _none, branches = arg
             if repeated_token:
                 return True
-            if any(
-                _regex_tree_has_unsafe_backtracking(branch, inside_repeat=inside_repeat)
-                for branch in branches
-            ):
+            if _regex_branch_is_unsafe(branches, scope, inside_repeat=inside_repeat):
                 return True
-            if _regex_branches_consume_input(branches):
-                scope.pending_required = None
         elif op_name in _REGEX_REPEAT_OPS:
             min_repeat, max_repeat, child = arg
             if inside_repeat or _regex_repeat_is_unsafe(min_repeat, max_repeat, child, scope):

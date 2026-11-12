@@ -669,6 +669,13 @@ def test_search_records_rejects_adjacent_optional_repeats():
         r"\w+\s*\w+!",
         "a+(b|)a+!",
         ".+[a-z]+!",
+        # An empty fixed-count group separates nothing.
+        "a+(?:){1}a+!",
+        # Alternatives that begin or end with a repeat stay adjacent to their
+        # neighbours even though the alternation always consumes input.
+        "(?:a+|b+)" * 3 + "!",
+        "a+(?:a+|b)!",
+        "(?:b|a+)a+!",
     ],
 )
 def test_search_records_rejects_chained_variable_width_repeats(pattern):
@@ -695,6 +702,9 @@ def test_search_records_accepts_single_variable_width_repeat(pattern):
         r"\w+\s+\w+",
         r"\d+(ms|s)\d+",
         r"a+b{2}a+",
+        r"\d+(?:ms|seconds?)",
+        r"x(?:a+|b+)y(?:a+|b+)!",
+        r"(?:a+b|c)(?:a+b|c)",
     ],
 )
 def test_search_records_accepts_separated_variable_width_repeats(pattern):
