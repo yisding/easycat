@@ -79,6 +79,7 @@ _MAX_FLUSH_MS = 100
 
 _TELNYX_INBOUND_TRACKS = {"inbound", "inbound_track"}
 _L16_ENCODINGS = {"L16", "PCM16", "PCM_S16LE"}
+_L16_SAMPLE_RATES = (8000, 16000, 24000, 48000)
 _PCMU_ENCODINGS = {"PCMU", "G711U", "MULAW"}
 
 
@@ -123,7 +124,7 @@ class TelnyxTransportConfig:
         if self.codec == "PCMU":
             if self.sampling_rate != 8000:
                 raise ValueError("PCMU requires sampling_rate=8000")
-        elif self.sampling_rate not in (8000, 16000, 24000, 48000):
+        elif self.sampling_rate not in _L16_SAMPLE_RATES:
             raise ValueError("sampling_rate must be one of 8000, 16000, 24000, 48000 for L16")
         if self.codec == "L16" and self.audio_format.sample_rate != self.sampling_rate:
             raise ValueError(
@@ -672,6 +673,13 @@ class _TelnyxProtocolMixin:
         channels = _parse_telnyx_int(media_format.get("channels")) or 1
         if encoding in _L16_ENCODINGS:
             sample_rate = sample_rate or 16000
+            if sample_rate not in _L16_SAMPLE_RATES:
+                self._emit_degraded(
+                    _DEGRADED_TELNYX_MEDIA_FORMAT,
+                    f"unsupported L16 sample_rate {sample_rate!r}",
+                    fatal=True,
+                )
+                return False
         elif encoding in _PCMU_ENCODINGS:
             encoding = "PCMU"
             sample_rate = 8000

@@ -29,6 +29,9 @@ versioning contract that begins at 1.0.0 is documented in
 - `BoundedAudioQueue` rejects NaN, infinite, negative and non-numeric
   `block_timeout` values at construction, so a `BLOCK` queue can no longer
   wait forever or fail on its first full `put()`.
+- Telnyx start frames negotiating L16 at a sample rate other than 8000, 16000,
+  24000 or 48000 Hz are now rejected with close code 4003 instead of breaking
+  or amplifying inbound audio later.
 
 ## 0.1.0 - Unreleased
 

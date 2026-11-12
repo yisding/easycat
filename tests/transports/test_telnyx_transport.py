@@ -209,6 +209,38 @@ async def test_unsupported_encoding_degrades_fatal_and_closes() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sample_rate", [-16000, 3, 12345, 10**9])
+async def test_unsupported_l16_sample_rate_degrades_fatal_and_closes(sample_rate: int) -> None:
+    bus, collected = make_telnyx_bus()
+    ws = _DummyTelnyxWebSocket()
+    transport = TelnyxTransport(TelnyxTransportConfig(), event_bus=bus)
+    transport._ws = ws
+
+    await transport._handle_message(_start_msg(encoding="L16", sample_rate=sample_rate))
+    await drain(transport)
+
+    assert ws.closed_with == (4003, "Unsupported media format")
+    assert transport.stream_id is None
+    assert transport._negotiated_sample_rate == 16000
+    degraded = collected.get(TransportDegraded, [])
+    assert any(event.reason == _DEGRADED_TELNYX_MEDIA_FORMAT and event.fatal for event in degraded)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sample_rate", "expected"), [(0, 16000), (8000, 8000), (48000, 48000)])
+async def test_supported_l16_sample_rates_are_accepted(sample_rate: int, expected: int) -> None:
+    ws = _DummyTelnyxWebSocket()
+    transport = TelnyxTransport(TelnyxTransportConfig())
+    transport._ws = ws
+
+    await transport._handle_message(_start_msg(encoding="L16", sample_rate=sample_rate))
+
+    assert ws.closed_with is None
+    assert transport.stream_id == "ST1"
+    assert transport._negotiated_sample_rate == expected
+
+
+@pytest.mark.asyncio
 async def test_start_without_stream_id_is_rejected() -> None:
     ws = _DummyTelnyxWebSocket()
     transport = TelnyxTransport(TelnyxTransportConfig())
