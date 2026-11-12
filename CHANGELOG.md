@@ -12,6 +12,11 @@ versioning contract that begins at 1.0.0 is documented in
 - Release-readiness checks, including installed version metadata and strict
   release-tag validation.
 
+### Fixed
+
+- Plain-mode agent streaming no longer re-runs the sentence segmenter over the
+  whole pending text on every delta when no sentence boundary is possible.
+
 ## 0.1.0 - Unreleased
 
 ### Added

@@ -69,6 +69,17 @@ _MARKDOWN_RECHECK_CHARS = frozenset("`*_~])")
 # also warrants a markdown-mode recheck.
 _FIRST_CLAUSE_TRIGGER_CHARS = frozenset(",;:")
 
+# Plain-mode pre-filters over the whole pending text (see
+# ``_SentenceStreamBuffer._plain_split_possible``).
+_PLAIN_RECHECK_RE = re.compile(
+    "[" + re.escape("".join(sorted(_STREAMING_SENTENCE_TRIGGER_CHARS))) + "]"
+)
+_PLAIN_FIRST_RECHECK_RE = re.compile(
+    "["
+    + re.escape("".join(sorted(_STREAMING_SENTENCE_TRIGGER_CHARS | _FIRST_CLAUSE_TRIGGER_CHARS)))
+    + "]"
+)
+
 # Places where the markdown buffer may drop already-spoken raw text (see
 # ``_SentenceStreamBuffer._compact``), most preferred first: a paragraph
 # break, a line ending, then a sentence end.
@@ -270,7 +281,8 @@ class _SentenceStreamBuffer:
     Owns the buffering/sentence-splitting/markdown-window state that used
     to live as locals inside :func:`consume_agent_stream`:
 
-    - plain mode: split at sentence boundaries on every delta;
+    - plain mode: split at sentence boundaries on a delta whenever the
+      pending text could hold one (see ``_plain_split_possible``);
     - markdown mode: defer the regex-heavy strip/split work until a delta
       could plausibly complete a sentence or close a markdown span.
 
@@ -364,10 +376,26 @@ class _SentenceStreamBuffer:
         if self._strip_md:
             return await self._add_markdown_delta(delta)
         self._text += delta
+        if not self._plain_split_possible():
+            return False
         ready, self._text = self._split_pending(self._text)
         if ready:
             return await self._put_payload(ready, is_final=False)
         return False
+
+    def _plain_split_possible(self) -> bool:
+        # Segmenting rescans the whole pending text, so skip it when no split
+        # can result.  Without a segmenter terminator anywhere in the pending
+        # text there is no sentence boundary; while the first payload is
+        # pending, a clause char or the bounded first-phrase length can also
+        # split.  The whole text is scanned (not just the delta) because a
+        # held terminator such as "Dr." or "http:" can be resolved by a later
+        # delta with no trigger of its own.
+        if self._first_payload_pending:
+            if len(self._text) >= _FIRST_PHRASE_TARGET_CHARS:
+                return True
+            return _PLAIN_FIRST_RECHECK_RE.search(self._text) is not None
+        return _PLAIN_RECHECK_RE.search(self._text) is not None
 
     async def _add_markdown_delta(self, delta: str) -> bool:
         # A trailing "3." / "1," or lone-letter period ("tools e.") was held
