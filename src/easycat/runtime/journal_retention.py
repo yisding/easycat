@@ -17,6 +17,25 @@ from easycat.runtime.crash_sweep import is_journal_live
 
 logger = logging.getLogger(__name__)
 
+_VALID_RETENTION_MODES = frozenset({"archive", "delete"})
+
+
+def validate_retention_mode(mode: object) -> Literal["archive", "delete"]:
+    """Return *mode* if it is a known retention mode, else raise ``ValueError``.
+
+    Any unknown string would otherwise fall through to the delete path.
+    """
+    if not isinstance(mode, str) or mode not in _VALID_RETENTION_MODES:
+        raise ValueError(
+            f"Invalid retention mode {mode!r}. Must be one of {sorted(_VALID_RETENTION_MODES)}."
+        )
+    return mode  # type: ignore[return-value]
+
+
+def _validate_retention_limit(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer, got {value!r}")
+
 
 def run_retention(
     data_dir: str | Path,
@@ -43,6 +62,10 @@ def run_retention(
     the caller's own journal path (threaded in by ``SqliteJournal.close()``)
     and is likewise never swept, even when it is the oldest file.
     """
+    validate_retention_mode(mode)
+    _validate_retention_limit("max_sessions", max_sessions)
+    _validate_retention_limit("max_bytes", max_bytes)
+    _validate_retention_limit("max_age_days", max_age_days)
     root = Path(data_dir)
     journals_dir = root / "journals"
     if not journals_dir.is_dir():

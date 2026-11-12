@@ -39,6 +39,10 @@ versioning contract that begins at 1.0.0 is documented in
   leaving it to garbage collection, which warned on Python 3.13+.
 - `run_text_turn` and `run_text_turns` find each turn's journal records by
   sequence number, so results stay correct after the in-memory journal wraps.
+- `run_retention`, `SqliteJournal` and `create_journal` reject unknown retention
+  modes, debug levels, backends and negative limits with `ValueError`, so a
+  typo such as `mode="Archive"` no longer deletes journals instead of
+  archiving them.
 
 ## 0.1.0 - Unreleased
 
