@@ -208,6 +208,28 @@ def _validate_event_dispatch(
         )
 
 
+def _validate_mcp_servers(mcp_servers: Any) -> None:
+    if isinstance(mcp_servers, (str, bytes)):
+        raise EasyConfigError(
+            f"Invalid mcp_servers={mcp_servers!r}. Must be a list of URI strings, "
+            "not a single string; wrap it in a list."
+        )
+    try:
+        uris = list(mcp_servers)
+    except TypeError:
+        raise EasyConfigError(
+            f"Invalid mcp_servers={mcp_servers!r}. Must be a list of URI strings."
+        ) from None
+    for uri in uris:
+        if not isinstance(uri, str):
+            raise EasyConfigError(f"Invalid MCP server URI: {uri!r}. Must be a string.")
+        if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
+            raise EasyConfigError(
+                f"Invalid MCP server URI: {uri!r}. "
+                f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
+            )
+
+
 def _validate_common(
     *,
     debug: str,
@@ -241,12 +263,7 @@ def _validate_common(
         )
     _validate_capture_audio(capture_audio)
     if mcp_servers is not None:
-        for uri in mcp_servers:
-            if not any(uri.startswith(scheme) for scheme in _VALID_MCP_SCHEMES):
-                raise EasyConfigError(
-                    f"Invalid MCP server URI: {uri!r}. "
-                    f"Must start with one of {', '.join(_VALID_MCP_SCHEMES)}"
-                )
+        _validate_mcp_servers(mcp_servers)
     if session_id is not None:
         try:
             validate_session_id(session_id)

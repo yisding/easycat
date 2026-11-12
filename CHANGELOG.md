@@ -14,6 +14,9 @@ versioning contract that begins at 1.0.0 is documented in
 
 ### Fixed
 
+- `EasyConfig(mcp_servers=...)` raises `EasyConfigError` for a bare string,
+  a non-iterable, or a non-string item, instead of a raw `AttributeError` or a
+  misleading per-character URI error.
 - `with_agent_timeout` and `with_tts_timeout` close the wrapped coroutine or
   stream when they reject an invalid `timeout`, instead of leaking it.
 - `LiveKitAEC` drops a buffered sub-frame remainder when a stream's channel

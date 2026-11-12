@@ -558,3 +558,24 @@ def test_easycat_config_smart_turn_explicit_false_overrides_local_default():
     )
 
     assert config.smart_turn.enabled is False
+
+
+@pytest.mark.parametrize(
+    ("mcp_servers", "match"),
+    [
+        ("stdio://x", "wrap it in a list"),
+        (b"stdio://x", "wrap it in a list"),
+        (42, "Must be a list of URI strings"),
+        ([None], "Must be a string"),
+        ([123], "Must be a string"),
+        (["ftp://x"], "Must start with one of"),
+    ],
+)
+def test_mcp_servers_invalid_values_raise_easyconfig_error(mcp_servers, match):
+    with pytest.raises(EasyConfigError, match=match):
+        EasyConfig(openai_api_key="test-key", mcp_servers=mcp_servers)
+
+
+@pytest.mark.parametrize("mcp_servers", [None, ["stdio://x"], ("stdio://x",)])
+def test_mcp_servers_valid_values_accepted(mcp_servers):
+    EasyConfig(openai_api_key="test-key", mcp_servers=mcp_servers)
