@@ -290,6 +290,24 @@ async def test_run_text_turns_runs_every_turn_on_one_session():
     assert_turn_completed(second, second.turn_id)
 
 
+async def test_run_text_turns_scopes_records_after_ring_buffer_wraps():
+    # A small ring buffer wraps within a few turns; each result must still
+    # carry its own turn's records rather than an empty or stale tail.
+    session = create_text_session(agent=_EchoAgent(), debug="light", journal_capacity=30)
+    async with session:
+        results = await run_text_turns(session, [f"hi {i}" for i in range(6)])
+
+    assert len({result.turn_id for result in results}) == 6
+    for i, result in enumerate(results):
+        assert result.turn_id
+        assert result.response == f"echo: hi {i}"
+        own = turn_records(result, result.turn_id)
+        assert {"turn_started", "agent_final", "turn_ended"} <= {r["name"] for r in own}
+        assert_turn_completed(result, result.turn_id)
+        latency = [r["data"]["value"] for r in own if r["name"] == "text_turn_latency_ms"]
+        assert result.latency_ms == latency[0]
+
+
 async def test_run_text_turns_with_caller_owned_session_keeps_it_open():
     session = create_text_session(agent=_EchoAgent(), debug="light")
     async with session:

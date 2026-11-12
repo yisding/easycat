@@ -37,6 +37,8 @@ versioning contract that begins at 1.0.0 is documented in
   silence after each one.
 - `ReadonlySqliteJournal` closes its SQLite connection after every query instead
   leaving it to garbage collection, which warned on Python 3.13+.
+- `run_text_turn` and `run_text_turns` find each turn's journal records by
+  sequence number, so results stay correct after the in-memory journal wraps.
 
 ## 0.1.0 - Unreleased
 
