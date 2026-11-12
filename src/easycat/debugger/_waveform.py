@@ -60,21 +60,24 @@ def decode_pcm_peaks(
         end = ((b + 1) * frame_count) // buckets
         if end <= start:
             end = min(start + 1, frame_count)
+        if channels == 1:
+            # C-speed reduction over the slice; a per-sample loop takes seconds
+            # on the 32 MiB the waveform route allows.
+            chunk = samples[start:end]
+            out.append((min(chunk), max(chunk)))
+            continue
         lo: int | None = None
         hi: int | None = None
         for frame_index in range(start, end):
             sample_index = frame_index * channels
-            if channels == 1:
-                sample = samples[sample_index]
-            else:
-                total = 0
-                for channel_offset in range(channels):
-                    total += samples[sample_index + channel_offset]
-                # ``round`` (half-to-even), never ``//``: floor division rounds
-                # toward negative infinity and biases the strip negative by up
-                # to 1 LSB.  Matches ``easycat.debug._pcm.decode_pcm_mono`` and
-                # ``easycat._audio_utils.to_mono``.
-                sample = round(total / channels)
+            total = 0
+            for channel_offset in range(channels):
+                total += samples[sample_index + channel_offset]
+            # ``round`` (half-to-even), never ``//``: floor division rounds
+            # toward negative infinity and biases the strip negative by up
+            # to 1 LSB.  Matches ``easycat.debug._pcm.decode_pcm_mono`` and
+            # ``easycat._audio_utils.to_mono``.
+            sample = round(total / channels)
             lo = sample if lo is None else min(lo, sample)
             hi = sample if hi is None else max(hi, sample)
         out.append((lo, hi) if lo is not None and hi is not None else (0, 0))

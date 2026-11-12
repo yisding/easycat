@@ -20,6 +20,8 @@ versioning contract that begins at 1.0.0 is documented in
 - `VoiceServerConfig` rejects non-integer and out-of-range ports, and port
   65535 while the raw WebSocket listener (which binds `port + 1`) is enabled,
   instead of failing at startup with an `OverflowError`.
+- The debugger's waveform PNG route reduces mono PCM peaks at C speed instead
+  of a per-sample Python loop that could block the debugger for seconds.
 - Plain-mode agent streaming no longer re-runs the sentence segmenter over the
   whole pending text on every delta when no sentence boundary is possible.
 - `SendDTMFAction` and `TransferPlan.post_dial_digits` now reject characters
