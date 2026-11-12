@@ -544,6 +544,23 @@ async def test_first_payload_holds_trailing_decimal_period_for_lookahead():
     assert "The estimate is 3." not in streaming
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="the first TTS payload is cut at the port colon of a host:port token",
+)
+@pytest.mark.parametrize("strip_md", [False, True])
+async def test_first_payload_does_not_split_host_port(strip_md: bool):
+    """A host:port address in the opening clause ships in one payload."""
+    built = await _run_streaming_payloads(
+        ["The server runs on localhost:8080, so open that page."],
+        strip_md=strip_md,
+    )
+    assert [text for text, _is_final in built] == [
+        "The server runs on localhost:8080, ",
+        "so open that page.",
+    ]
+
+
 async def test_first_payload_holds_trailing_numeric_comma_for_lookahead():
     """A thousands separator split across deltas ships as one payload."""
     built = await _run_streaming_payloads(
