@@ -17,6 +17,9 @@ versioning contract that begins at 1.0.0 is documented in
 - `easycat journal grep --regex` and the debugger's `/api/records?regex=1`
   now reject patterns with more than one variable-width repeat in sequence
   (such as `a+a+a+!`), which could backtrack for minutes.
+- `VoiceServerConfig` rejects non-integer and out-of-range ports, and port
+  65535 while the raw WebSocket listener (which binds `port + 1`) is enabled,
+  instead of failing at startup with an `OverflowError`.
 - Plain-mode agent streaming no longer re-runs the sentence segmenter over the
   whole pending text on every delta when no sentence boundary is possible.
 - `SendDTMFAction` and `TransferPlan.post_dial_digits` now reject characters
