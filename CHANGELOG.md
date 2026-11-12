@@ -23,8 +23,9 @@ versioning contract that begins at 1.0.0 is documented in
   count or sample width changes, instead of swapping stereo channels for the
   rest of the stream.
 - `easycat journal grep --regex` and the debugger's `/api/records?regex=1`
-  now reject patterns with more than one variable-width repeat in sequence
-  (such as `a+a+a+!`), which could backtrack for minutes.
+  now reject patterns that chain variable-width repeats with nothing mandatory
+  between them (such as `a+a+a+!`), which could backtrack for minutes. Repeats
+  separated by a required token, such as `\d+\.\d+`, are still accepted.
 - `VoiceServerConfig` rejects non-integer and out-of-range ports, and port
   65535 while the raw WebSocket listener (which binds `port + 1`) is enabled,
   instead of failing at startup with an `OverflowError`.
@@ -52,7 +53,7 @@ versioning contract that begins at 1.0.0 is documented in
   that are not a whole number of speaker frames no longer play with a burst of
   silence after each one.
 - `ReadonlySqliteJournal` closes its SQLite connection after every query instead
-  leaving it to garbage collection, which warned on Python 3.13+.
+  of leaving it to garbage collection, which warned on Python 3.13+.
 - `run_text_turn` and `run_text_turns` find each turn's journal records by
   sequence number, so results stay correct after the in-memory journal wraps.
 - `run_retention`, `SqliteJournal` and `create_journal` reject unknown retention
