@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "rationale": "DX1: _validate delegates catalog lookup to one helper",
+  "rationale": "Journal search regex guard split into per-repeat helpers, dropping its PLR0912 violation",
   "counts": {
-    "C901": 55,
-    "PLR0912": 31,
+    "C901": 54,
+    "PLR0912": 30,
     "PLR0915": 27
   },
   "entries": [
@@ -28,7 +28,6 @@
     "src/easycat/cli/scaffold/init.py\tPLR0912\tinit",
     "src/easycat/cli/scaffold/init.py\tPLR0915\tinit",
     "src/easycat/config/easy.py\tC901\tEasyConfig.__post_init__",
-    "src/easycat/config/easy.py\tC901\t_validate_common",
     "src/easycat/debug/_turn_timeline.py\tC901\tbuild_timeline",
     "src/easycat/debug/_turn_timeline.py\tC901\textract_turn_transcripts",
     "src/easycat/debug/_turn_timeline.py\tC901\tsummarise_turns",
@@ -40,7 +39,6 @@
     "src/easycat/debugger/_records.py\tC901\t_filter_records",
     "src/easycat/debugger/_records.py\tC901\t_regex_tree_has_unsafe_backtracking",
     "src/easycat/debugger/_records.py\tPLR0912\t_filter_records",
-    "src/easycat/debugger/_records.py\tPLR0912\t_regex_tree_has_unsafe_backtracking",
     "src/easycat/debugger/server.py\tC901\t_DebuggerRoutes.replay",
     "src/easycat/debugger/server.py\tC901\t_DebuggerRoutes.websocket",
     "src/easycat/debugger/server.py\tC901\t_collect_audio_frames",

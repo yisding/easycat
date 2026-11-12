@@ -603,6 +603,34 @@ class TestSqliteJournalLifecycle:
         j.close()
         assert ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite").latest_sequence == 0
 
+    def test_readonly_journal_closes_every_connection(self, tmp_path, monkeypatch):
+        """Each read-only query closes its connection instead of relying on GC."""
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        j.append(kind=JournalRecordKind.EVENT, name="a", session_id="sess")
+        j.close()
+
+        # Track only this view's connections: patching ``sqlite3.connect``
+        # would also count background crash-sweep timers from earlier tests.
+        opened: list[sqlite3.Connection] = []
+        real_connect = ReadonlySqliteJournal._connect
+
+        def _connect(self):
+            conn = real_connect(self)
+            opened.append(conn)
+            return conn
+
+        monkeypatch.setattr(ReadonlySqliteJournal, "_connect", _connect)
+        view = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
+        assert len(view.read()) == 1
+        assert len(view.slice()) == 1
+        assert view.slice_by_stage("x") == []
+        assert view.latest_sequence == 1
+        assert view.degraded is False
+        assert len(opened) == 5
+        for conn in opened:
+            with pytest.raises(sqlite3.ProgrammingError):
+                conn.execute("SELECT 1")
+
     def test_live_counter_ignores_retained_degraded_marker(self, tmp_path, monkeypatch):
         """If a prior marker-only table survives reconcile, the counter stays at 0.
 

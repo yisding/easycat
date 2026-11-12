@@ -285,12 +285,13 @@ async def _run_turn_on_session(session: Any, user_input: str) -> TurnResult:
             'session with create_text_session(..., debug="light") (or "full").'
         )
 
-    seen = len(view.read())
+    # Sequence cursor, not list length: a full ring buffer stays the same length.
+    start = view.latest_sequence + 1
     t0 = time.monotonic()
     response = await session.send_text(user_input)
     wall_ms = (time.monotonic() - t0) * 1000
 
-    records = tuple(record_to_dict(record) for record in view.read()[seen:])
+    records = tuple(record_to_dict(record) for record in view.read(start=start))
     turn_id = next((r["turn_id"] for r in records if r.get("turn_id")), "")
     return TurnResult(
         turn_id=turn_id,

@@ -939,6 +939,24 @@ class TestCreateJournal:
         j = create_journal("test-session")
         assert isinstance(j, InMemoryRingBuffer)
 
+    def test_off_returns_ring_buffer(self):
+        assert isinstance(create_journal("test-session", debug="off"), InMemoryRingBuffer)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"debug": "Full"},
+            {"debug": "full", "backend": "litestream"},
+            {"backend": "litestream"},
+            {"retention_mode": "Archive"},
+        ],
+    )
+    def test_rejects_unknown_option_strings(self, tmp_path, kwargs) -> None:
+        with pytest.raises(ValueError, match="Invalid"):
+            create_journal("test-session", data_dir=tmp_path, **kwargs)
+
+        assert not (tmp_path / "journals").exists()
+
     def test_in_memory_journal_does_not_apply_filesystem_id_rules(self):
         j = create_journal("../not-persisted")
         assert isinstance(j, InMemoryRingBuffer)

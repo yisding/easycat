@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_48K, AudioChunk
+from easycat.audio_format import PCM16_MONO_16K, PCM16_MONO_48K, AudioChunk, AudioFormat
 from easycat.echo_cancellation import (
     EchoCancellationConfig,
     LiveKitAEC,
@@ -122,6 +122,48 @@ async def test_livekit_aec_process_buffers_subframe_remainder():
     assert mock_apm.process_stream.call_count == 2
     assert len(result2.data) == 320
     assert aec._near_buffer == b""
+
+
+_PCM16_STEREO_16K = AudioFormat(sample_rate=16000, channels=2, sample_width=2)
+
+
+def _passthrough_aec() -> tuple[LiveKitAEC, MagicMock]:
+    mock_rtc = MagicMock()
+    mock_apm = MagicMock()
+    mock_rtc.AudioProcessingModule.return_value = mock_apm
+    mock_rtc.AudioFrame.side_effect = _fake_audio_frame
+    with patch("easycat.echo_cancellation.require_module", return_value=mock_rtc):
+        aec = LiveKitAEC()
+    return aec, mock_apm
+
+
+@pytest.mark.asyncio
+async def test_livekit_aec_process_drops_remainder_on_channel_change():
+    """A mono sub-frame remainder must not shift a later stereo stream's channels."""
+    aec, _ = _passthrough_aec()
+
+    await aec.process(AudioChunk(data=struct.pack("<161h", *([7] * 161)), format=PCM16_MONO_16K))
+    assert len(aec._near_buffer) == 2
+
+    stereo = struct.pack("<640h", *([1000, -1000] * 320))
+    result = await aec.process(AudioChunk(data=stereo, format=_PCM16_STEREO_16K))
+
+    assert result.format == _PCM16_STEREO_16K
+    assert result.data == stereo
+    assert aec._near_buffer == b""
+
+
+def test_livekit_aec_feed_reference_drops_remainder_on_channel_change():
+    """The far-end remainder is dropped when the reference format changes."""
+    aec, mock_apm = _passthrough_aec()
+
+    aec.feed_reference(AudioChunk(data=struct.pack("<161h", *([7] * 161)), format=PCM16_MONO_16K))
+    stereo = struct.pack("<640h", *([1000, -1000] * 320))
+    aec.feed_reference(AudioChunk(data=stereo, format=_PCM16_STEREO_16K))
+
+    frames = [bytes(call.args[0].data) for call in mock_apm.process_reverse_stream.call_args_list]
+    assert frames[1:] == [stereo[:640], stereo[640:]]
+    assert aec._far_buffer == b""
 
 
 def test_livekit_aec_feed_reference_mocked():

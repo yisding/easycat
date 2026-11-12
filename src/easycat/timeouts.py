@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -146,7 +147,14 @@ async def with_agent_timeout(
     If the agent doesn't respond within `timeout` seconds, emits an
     error event and raises AgentTimeoutError.
     """
-    timeout = _finite_positive_timeout(timeout, name="timeout")
+    try:
+        timeout = _finite_positive_timeout(timeout, name="timeout")
+    except ValueError:
+        # Close a bare coroutine so it is not left un-awaited. Tasks and
+        # futures stay untouched: their owners settle them.
+        if inspect.iscoroutine(coro):
+            coro.close()
+        raise
     timeout_context = asyncio.timeout(timeout)
     try:
         async with timeout_context:
@@ -198,7 +206,14 @@ async def with_tts_timeout(
     values retain the historical behavior where their first item satisfies
     the timeout.
     """
-    timeout = _finite_positive_timeout(timeout, name="timeout")
+    try:
+        timeout = _finite_positive_timeout(timeout, name="timeout")
+    except ValueError:
+        aclose = getattr(events_iter, "aclose", None)
+        if callable(aclose):
+            with contextlib.suppress(Exception):
+                await aclose()
+        raise
     first_audio_received = False
     timed_out = False
     first_audio_deadline = asyncio.get_running_loop().time() + timeout

@@ -80,6 +80,62 @@ def test_decode_pcm_peaks_large_mono_does_not_materialise_python_int_list():
     assert peak < 16 * 1024 * 1024
 
 
+def _reference_mono_peaks(samples: list[int], buckets: int) -> list[tuple[int, int]]:
+    frames = len(samples)
+    out = []
+    for b in range(buckets):
+        start = (b * frames) // buckets
+        end = ((b + 1) * frames) // buckets
+        if end <= start:
+            end = min(start + 1, frames)
+        bucket = [samples[i] for i in range(start, end)]
+        out.append((min(bucket), max(bucket)))
+    return out
+
+
+def test_decode_pcm_peaks_mono_matches_per_sample_reference():
+    import random
+
+    rng = random.Random(1234)
+    for typecode, width, limit in (("h", 2, 2**15), ("i", 4, 2**31)):
+        values = [rng.randint(-limit, limit - 1) for _ in range(1001)]
+        blob = array(typecode, values).tobytes()
+        for buckets in (1, 3, 8, 600, 2000):
+            peaks = decode_pcm_peaks(blob, sample_width=width, channels=1, buckets=buckets)
+            assert peaks == _reference_mono_peaks(values, buckets)
+    two = array("h", [7, -7]).tobytes()
+    peaks = decode_pcm_peaks(two, sample_width=2, channels=1, buckets=6)
+    assert peaks == [(7, 7), (7, 7), (7, 7), (-7, -7), (-7, -7), (-7, -7)]
+
+
+def test_decode_pcm_peaks_mono_scans_buckets_in_c_not_per_sample(monkeypatch):
+    # The waveform route may pass up to 32 MiB of PCM; a per-sample Python
+    # loop takes seconds and holds the GIL, so mono buckets must be reduced
+    # from slices (C-speed min/max) instead of indexing every sample.
+    from easycat.debugger import _waveform
+
+    int_reads = 0
+
+    class _CountingArray(array):
+        def __getitem__(self, key):  # type: ignore[override]
+            nonlocal int_reads
+            if isinstance(key, int):
+                int_reads += 1
+            return super().__getitem__(key)
+
+    real_decode = _waveform._decode_pcm_sample_array
+
+    def _decode(pcm, *, sample_width, channels):
+        samples, frames, chans = real_decode(pcm, sample_width=sample_width, channels=channels)
+        return _CountingArray(samples.typecode, samples), frames, chans
+
+    monkeypatch.setattr(_waveform, "_decode_pcm_sample_array", _decode)
+    blob = array("h", range(-500, 500)).tobytes()
+    peaks = decode_pcm_peaks(blob, sample_width=2, channels=1, buckets=10)
+    assert peaks == [(-500 + 100 * b, -401 + 100 * b) for b in range(10)]
+    assert int_reads == 0
+
+
 def test_decode_pcm_peaks_downmixes_stereo_by_averaging():
     # Interleaved L/R: (100,300) -> 200, (-100,-300) -> -200.
     stereo = array("h", [100, 300, -100, -300]).tobytes()

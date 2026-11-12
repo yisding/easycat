@@ -698,6 +698,134 @@ class TestLocalTransport:
         assert np.any(outdata)
         assert transport._out_queue.empty()
 
+    @staticmethod
+    def _unaligned_transport() -> LocalTransport:
+        transport = LocalTransport(
+            LocalTransportConfig(
+                audio_format=PCM16_MONO_24K, frame_duration_ms=20, output_preroll_frames=0
+            )
+        )
+        transport._connected = True
+        return transport
+
+    @staticmethod
+    def _drain_output(np, transport: LocalTransport) -> list:
+        frames = []
+        while not transport._out_queue.empty() or transport._playout_partial is not None:
+            outdata = np.ones((transport._frame_samples, 1), dtype=np.float32)
+            transport._output_callback(np, outdata, transport._frame_samples, None, None)
+            frames.append(outdata.reshape(-1).copy())
+            assert len(frames) < 100
+        return frames
+
+    @pytest.mark.asyncio
+    async def test_output_callback_packs_unaligned_chunks_without_gaps(self):
+        """Chunks that are not frame-aligned are joined, not padded with silence."""
+        np = pytest.importorskip("numpy")
+        transport = self._unaligned_transport()
+        sample = (1000).to_bytes(2, "little", signed=True)
+        for _ in range(10):
+            assert await transport.send_audio(AudioChunk(data=sample * 500, format=PCM16_MONO_24K))
+
+        frames = self._drain_output(np, transport)
+
+        assert len(frames) == 11  # ceil(5000 / 480)
+        assert sum(int(np.count_nonzero(frame)) for frame in frames) == 5000
+        assert all(np.all(frame) for frame in frames[:-1])
+
+    @pytest.mark.asyncio
+    async def test_output_callback_reports_each_unaligned_chunk_delivered(self):
+        from easycat.events import TransportAudioDelivered
+
+        np = pytest.importorskip("numpy")
+        transport = self._unaligned_transport()
+        bus = EventBus()
+        received: list[TransportAudioDelivered] = []
+        bus.subscribe(TransportAudioDelivered, lambda e: received.append(e))
+        transport._event_bus = bus
+        transport._loop = asyncio.get_running_loop()
+        sample = (1000).to_bytes(2, "little", signed=True)
+        for _ in range(10):
+            await transport.send_audio(AudioChunk(data=sample * 500, format=PCM16_MONO_24K))
+
+        queued_slices = transport._out_queue.qsize()
+        self._drain_output(np, transport)
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+        # One event per queued slice, each reported once it has fully played.
+        assert queued_slices == 20
+        assert len(received) == queued_slices
+
+    @pytest.mark.asyncio
+    async def test_output_callback_reports_slice_only_after_it_fully_plays(self):
+        from easycat.events import TransportAudioDelivered
+
+        np = pytest.importorskip("numpy")
+        transport = self._unaligned_transport()
+        bus = EventBus()
+        received: list[TransportAudioDelivered] = []
+        bus.subscribe(TransportAudioDelivered, lambda e: received.append(e))
+        transport._event_bus = bus
+        transport._loop = asyncio.get_running_loop()
+        sample = (1000).to_bytes(2, "little", signed=True)
+        # 300 samples, then a full 480-sample frame: the first callback plays
+        # all of the first slice and only 180 samples of the second.
+        await transport.send_audio(AudioChunk(data=sample * 300, format=PCM16_MONO_24K))
+        await transport.send_audio(AudioChunk(data=sample * 480, format=PCM16_MONO_24K))
+        assert transport._out_queue.qsize() == 2
+
+        async def _callback() -> None:
+            outdata = np.ones((transport._frame_samples, 1), dtype=np.float32)
+            transport._output_callback(np, outdata, transport._frame_samples, None, None)
+            for _ in range(10):
+                await asyncio.sleep(0)
+
+        await _callback()
+        assert len(received) == 1
+        await _callback()
+        assert len(received) == 2
+
+    @pytest.mark.asyncio
+    async def test_clear_audio_discards_partially_played_chunk(self):
+        np = pytest.importorskip("numpy")
+        transport = self._unaligned_transport()
+        sample = (1000).to_bytes(2, "little", signed=True)
+        await transport.send_audio(AudioChunk(data=sample * 300, format=PCM16_MONO_24K))
+        await transport.send_audio(AudioChunk(data=sample * 300, format=PCM16_MONO_24K))
+        frame_samples = transport._frame_samples
+        transport._output_callback(
+            np, np.zeros((frame_samples, 1), dtype=np.float32), frame_samples, None, None
+        )
+        assert transport._playout_partial is not None
+        assert transport.pending_playout_ms() > 0
+
+        await transport.clear_audio()
+        outdata = np.ones((frame_samples, 1), dtype=np.float32)
+        transport._output_callback(np, outdata, frame_samples, None, None)
+
+        assert (outdata == 0).all()
+        assert transport._playout_partial is None
+
+    @pytest.mark.asyncio
+    async def test_output_callback_aec_reference_matches_packed_frames(self):
+        np = pytest.importorskip("numpy")
+        transport = self._unaligned_transport()
+        transport._aec_reference_enabled = True
+        frame_bytes = transport._frame_samples * PCM16_MONO_24K.frame_size
+        for value in range(1, 4):
+            sample = (value * 1000).to_bytes(2, "little", signed=True)
+            await transport.send_audio(AudioChunk(data=sample * 500, format=PCM16_MONO_24K))
+
+        frames = self._drain_output(np, transport)
+        refs = [chunk.data for chunk in transport.drain_aec_reference_frames()]
+
+        assert len(refs) == len(frames)
+        for frame, ref in zip(frames, refs, strict=True):
+            assert len(ref) == frame_bytes
+            emitted = np.frombuffer(ref, dtype="<i2").astype(np.float32) / 32767.0
+            assert np.array_equal(emitted, frame)
+
     @pytest.mark.asyncio
     async def test_clear_audio_re_primes_jitter_buffer(self):
         """clear_audio() drops queued audio and re-arms the pre-roll."""

@@ -284,6 +284,26 @@ class TestElevenLabsTTSValidation:
         with pytest.raises(ValueError, match="style must be in"):
             ElevenLabsTTSConfig(api_key="key", style=1.5)
 
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [
+            ("stability", 5.0),
+            ("stability", float("nan")),
+            ("similarity_boost", -1.0),
+            ("similarity_boost", float("inf")),
+        ],
+    )
+    def test_out_of_range_voice_settings_rejected(self, name: str, value: float) -> None:
+        with pytest.raises(ValueError, match=f"{name} must be in"):
+            ElevenLabsTTSConfig(api_key="key", **{name: value})
+
+    @pytest.mark.parametrize("value", [0.0, 1.0])
+    def test_voice_settings_bounds_accepted(self, value: float) -> None:
+        config = ElevenLabsTTSConfig(
+            api_key="key", stability=value, similarity_boost=value, style=value
+        )
+        assert config.stability == config.similarity_boost == config.style == value
+
 
 class TestElevenLabsTTSHTTP:
     def _make_provider(self, **kwargs) -> ElevenLabsTTS:

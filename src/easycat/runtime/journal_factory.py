@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal
 
 from easycat._session_id import validate_persistent_session_id
 from easycat.runtime.journal_memory import InMemoryRingBuffer
+from easycat.runtime.journal_retention import validate_retention_mode
 from easycat.runtime.journal_sql import (
     LibsqlJournal,
     LitestreamSqliteJournal,
@@ -19,6 +20,9 @@ if TYPE_CHECKING:
     from easycat.runtime.artifacts import InMemoryArtifactStore
 
 logger = logging.getLogger(__name__)
+
+_VALID_DEBUG_LEVELS = ("off", "light", "full")
+_VALID_BACKENDS = ("sqlite", "sqlite+litestream", "libsql")
 
 
 def create_journal(
@@ -46,6 +50,15 @@ def create_journal(
     automatically.  Ignored for persistent backends (they use
     file-level retention instead).
     """
+    if debug not in _VALID_DEBUG_LEVELS:
+        raise ValueError(
+            f"Invalid debug level {debug!r}. Must be one of {list(_VALID_DEBUG_LEVELS)}."
+        )
+    if backend not in _VALID_BACKENDS:
+        raise ValueError(
+            f"Invalid journal backend {backend!r}. Must be one of {list(_VALID_BACKENDS)}."
+        )
+    validate_retention_mode(retention_mode)
     if debug == "full":
         validate_persistent_session_id(session_id)
         if backend == "sqlite+litestream":

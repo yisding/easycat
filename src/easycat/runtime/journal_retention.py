@@ -11,19 +11,45 @@ import time
 from pathlib import Path
 from typing import Literal
 
+from easycat._numeric import is_finite_number
 from easycat.runtime._journal_lock import journal_file_claim
 from easycat.runtime._private_files import mkdir_private, private_tar_filter
 from easycat.runtime.crash_sweep import is_journal_live
 
 logger = logging.getLogger(__name__)
 
+_VALID_RETENTION_MODES = frozenset({"archive", "delete"})
+
+
+def validate_retention_mode(mode: object) -> Literal["archive", "delete"]:
+    """Return *mode* if it is a known retention mode, else raise ``ValueError``.
+
+    Any unknown string would otherwise fall through to the delete path.
+    """
+    if not isinstance(mode, str) or mode not in _VALID_RETENTION_MODES:
+        raise ValueError(
+            f"Invalid retention mode {mode!r}. Must be one of {sorted(_VALID_RETENTION_MODES)}."
+        )
+    return mode  # type: ignore[return-value]
+
+
+def _validate_retention_count(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer, got {value!r}")
+
+
+def _validate_retention_limit(name: str, value: object) -> None:
+    """Accept any finite non-negative number: half a day or ``1.5 * 1024**3`` bytes."""
+    if not is_finite_number(value) or value < 0:
+        raise ValueError(f"{name} must be a finite non-negative number, got {value!r}")
+
 
 def run_retention(
     data_dir: str | Path,
     *,
     max_sessions: int = 50,
-    max_bytes: int = 2 * 1024 * 1024 * 1024,  # 2 GB
-    max_age_days: int = 14,
+    max_bytes: float = 2 * 1024 * 1024 * 1024,  # 2 GB
+    max_age_days: float = 14,
     mode: Literal["archive", "delete"] = "archive",
     skip: str | Path | None = None,
 ) -> int:
@@ -43,6 +69,10 @@ def run_retention(
     the caller's own journal path (threaded in by ``SqliteJournal.close()``)
     and is likewise never swept, even when it is the oldest file.
     """
+    validate_retention_mode(mode)
+    _validate_retention_count("max_sessions", max_sessions)
+    _validate_retention_limit("max_bytes", max_bytes)
+    _validate_retention_limit("max_age_days", max_age_days)
     root = Path(data_dir)
     journals_dir = root / "journals"
     if not journals_dir.is_dir():
@@ -143,7 +173,7 @@ class _RetentionSweep:
             if not self._prune_oldest():
                 break
 
-    def prune_to_caps(self, max_sessions: int, max_bytes: int) -> None:
+    def prune_to_caps(self, max_sessions: int, max_bytes: float) -> None:
         """Prune the oldest prunable journal until count and byte caps hold."""
         while (
             self._files

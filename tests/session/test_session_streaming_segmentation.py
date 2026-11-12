@@ -461,6 +461,62 @@ def _drain(tts_queue) -> list[str]:
     return payloads
 
 
+async def test_plain_stream_skips_segmenter_without_possible_boundary(monkeypatch) -> None:
+    """Terminator-free pending text must not be re-segmented on every delta."""
+    from easycat.session import _streaming
+
+    calls = 0
+    real_split = _streaming.split_at_sentence_boundaries
+
+    def counting_split(text: str) -> tuple[str, str]:
+        nonlocal calls
+        calls += 1
+        return real_split(text)
+
+    monkeypatch.setattr(_streaming, "split_at_sentence_boundaries", counting_split)
+    buffer, tts_queue = _stream_buffer(strip_md=False)
+    text = "word " * 400 + "."
+    for i in range(0, len(text), 4):
+        await buffer.add_delta(text[i : i + 4])
+    await buffer.flush()
+
+    assert calls <= 3
+    assert "".join(_drain(tts_queue)) == text
+
+
+@pytest.mark.parametrize("step", [1, 2, 3, 5])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Dr. Smith arrived. Then left.",
+        "It costs 3.5 dollars. Ok.",
+        "We stock tools e.g. hammers. Done.",
+        "Well, here is the first clause and more. Next.",
+        "hello … ok; http://a.b/c v1.2.3 ",
+        "See foo@bar.com now. Bye.",
+        "今日は良い天気です。明日も晴れます。",
+        "this is a long unpunctuated opener that keeps going well past the bound and on",
+    ],
+)
+async def test_plain_stream_prefilter_matches_unfiltered_split(
+    monkeypatch, text: str, step: int
+) -> None:
+    from easycat.session._streaming import _SentenceStreamBuffer
+
+    async def stream(buffer) -> None:
+        for i in range(0, len(text), step):
+            await buffer.add_delta(text[i : i + step])
+        await buffer.flush()
+
+    filtered, filtered_queue = _stream_buffer(strip_md=False)
+    await stream(filtered)
+    monkeypatch.setattr(_SentenceStreamBuffer, "_plain_split_possible", lambda self: True)
+    reference, reference_queue = _stream_buffer(strip_md=False)
+    await stream(reference)
+
+    assert _drain(filtered_queue) == _drain(reference_queue)
+
+
 @pytest.mark.parametrize("strip_md", [False, True])
 @pytest.mark.parametrize(
     ("deltas", "queued_after_each"),
@@ -594,6 +650,18 @@ def test_text_for_estimation_timeline_supports_second_breaks() -> None:
     assert "Hello" in timeline and "world" in timeline
     assert timeline != "Hello world"
     assert timeline.count("\ue000") == 7
+
+
+@pytest.mark.parametrize("duration", ["3600s", "99999999s", "99999999ms"])
+def test_text_for_estimation_timeline_caps_break_duration(duration: str) -> None:
+    payload = TTSInput(
+        text=f'<speak>a<break time="{duration}"/>b</speak>',
+        format="ssml",
+    )
+
+    timeline = _text_for_estimation_timeline(payload)
+    assert timeline.count("") == 140
+    assert len(timeline) == 142
 
 
 def test_cleanup_estimation_text_removes_pause_markers() -> None:

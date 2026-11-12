@@ -132,6 +132,15 @@ class TestOpenAITTSConfig:
         assert config.voice == "nova"
         assert config.speed == 1.5
 
+    @pytest.mark.parametrize("speed", [10.0, 0, -1, float("nan"), "fast", True])
+    def test_out_of_range_speed_rejected(self, speed: object) -> None:
+        with pytest.raises(ValueError, match="speed"):
+            OpenAITTSConfig(api_key="key", speed=speed)
+
+    @pytest.mark.parametrize("speed", [0.25, 4.0])
+    def test_speed_bounds_accepted(self, speed: float) -> None:
+        assert OpenAITTSConfig(api_key="key", speed=speed).speed == speed
+
 
 class TestOpenAITTS:
     def _make_provider(self, api_key: str = "test-key") -> OpenAITTS:

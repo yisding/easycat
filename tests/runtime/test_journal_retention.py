@@ -21,7 +21,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from easycat.runtime import SqliteJournal, run_retention
+from easycat.runtime import LitestreamSqliteJournal, SqliteJournal, run_retention
 from easycat.runtime import journal_retention as journal_retention_module
 from easycat.runtime._journal_lock import _LOCK_BUCKET_COUNT, journal_file_claim
 from easycat.runtime.records import JournalRecordKind
@@ -626,3 +626,60 @@ def test_caps_skip_callers_own_db_prune_other_instead(tmp_path):
     assert removed == 1
     assert own.exists()
     assert not other.exists()
+
+
+def test_invalid_mode_raises_instead_of_deleting(tmp_path):
+    stale = _seed_journal(tmp_path, "stale-sess")
+    _backdate(stale, age_days=30)
+
+    with pytest.raises(ValueError, match="retention mode"):
+        run_retention(tmp_path, max_age_days=14, mode="Archive")  # type: ignore[arg-type]
+
+    assert stale.exists()
+    assert not (tmp_path / "archive").exists()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_age_days": -1},
+        {"max_sessions": -1},
+        {"max_bytes": -1},
+        {"max_age_days": None},
+        {"max_sessions": True},
+        {"max_sessions": 1.5},
+        {"max_bytes": True},
+        {"max_bytes": float("nan")},
+        {"max_bytes": float("inf")},
+        {"max_age_days": float("nan")},
+        {"max_age_days": float("inf")},
+        {"max_age_days": "14"},
+    ],
+)
+def test_invalid_limits_raise_before_sweeping(tmp_path, kwargs):
+    stale = _seed_journal(tmp_path, "stale-sess")
+
+    with pytest.raises(ValueError, match=next(iter(kwargs))):
+        run_retention(tmp_path, mode="delete", **kwargs)
+
+    assert stale.exists()
+
+
+def test_fractional_age_and_float_byte_limits_are_accepted(tmp_path):
+    stale = _seed_journal(tmp_path, "stale-sess")
+    _backdate(stale, age_days=1)
+    fresh = _seed_journal(tmp_path, "fresh-sess")
+
+    removed = run_retention(tmp_path, max_age_days=0.5, max_bytes=1.5 * 1024**3, mode="delete")
+
+    assert removed == 1
+    assert not stale.exists()
+    assert fresh.exists()
+
+
+@pytest.mark.parametrize("journal_cls", [SqliteJournal, LitestreamSqliteJournal])
+def test_journal_rejects_invalid_retention_mode_at_construction(tmp_path, journal_cls):
+    with pytest.raises(ValueError, match="retention mode"):
+        journal_cls("sess", data_dir=tmp_path, retention_mode="bogus")
+
+    assert not (tmp_path / "journals" / "sess.sqlite").exists()

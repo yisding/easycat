@@ -53,7 +53,7 @@ from easycat.runtime.crash_sweep import (
     sweep_crashed_journals,
 )
 from easycat.runtime.journal import _validate_read_limit
-from easycat.runtime.journal_retention import run_retention
+from easycat.runtime.journal_retention import run_retention, validate_retention_mode
 from easycat.runtime.records import (
     ErrorInfo,
     JournalRecord,
@@ -468,9 +468,10 @@ class SqliteJournal(_SqlJournalBase):
     ) -> None:
         validate_persistent_session_id(session_id)
         self._redaction = validate_redaction_policy(redaction)
+        # Validate here, not only in run_retention: close() swallows its errors.
+        self._retention_mode = validate_retention_mode(retention_mode)
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
         self._root = root
-        self._retention_mode = retention_mode
         journals_dir = root / "journals"
         mkdir_private(journals_dir)
         self._db_path = journals_dir / f"{session_id}.sqlite"

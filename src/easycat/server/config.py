@@ -84,6 +84,15 @@ class VoiceServerConfig:
 
     def __post_init__(self) -> None:
         _validate_max_sessions(self.max_sessions)
+        if isinstance(self.port, bool) or not isinstance(self.port, int):
+            raise ValueError("port must be an integer")  # noqa: TRY004 domain-specific validation error
+        if not 0 <= self.port <= 65535:
+            raise ValueError("port must be between 0 and 65535")
+        if self.enable_websocket and self.port == 65535:
+            raise ValueError(
+                "port=65535 leaves no room for the raw WebSocket listener, which binds "
+                "port + 1; choose a port <= 65534 or set enable_websocket=False"
+            )
         if not isinstance(self.drain_mode, str) or self.drain_mode not in _DRAIN_MODES:
             raise ValueError(
                 f"Invalid drain_mode={self.drain_mode!r}. Must be one of {sorted(_DRAIN_MODES)}."

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +97,7 @@ class ReadonlySqliteJournal:
     def latest_sequence(self) -> int:
         # Exclude the out-of-band degraded marker (sequence -1) so the
         # postmortem view matches the live journal's "0 when empty".
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             row = conn.execute("SELECT MAX(sequence) FROM journal WHERE sequence >= 0").fetchone()
         return row[0] if row and row[0] is not None else 0
 
@@ -108,7 +109,7 @@ class ReadonlySqliteJournal:
         if self._degraded:
             return True
         try:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 row = conn.execute(
                     "SELECT value FROM session_state WHERE key = 'degraded'"
                 ).fetchone()
@@ -124,7 +125,7 @@ class ReadonlySqliteJournal:
         return sqlite3.connect(sqlite_readonly_uri(self._db_path), uri=True)
 
     def _query(self, sql: str, params: list[Any]) -> list[JournalRecord]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_record(r) for r in rows]
 
