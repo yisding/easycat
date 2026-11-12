@@ -603,6 +603,36 @@ class TestSqliteJournalLifecycle:
         j.close()
         assert ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite").latest_sequence == 0
 
+    def test_readonly_journal_closes_every_connection(self, tmp_path, monkeypatch):
+        """Each read-only query closes its connection instead of relying on GC."""
+        from easycat.runtime import journal_views
+
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        j.append(kind=JournalRecordKind.EVENT, name="a", session_id="sess")
+        j.close()
+
+        counts = {"opened": 0, "closed": 0}
+
+        class _CountingConnection(sqlite3.Connection):
+            def close(self) -> None:
+                counts["closed"] += 1
+                super().close()
+
+        real_connect = sqlite3.connect
+
+        def _connect(*args, **kwargs):
+            counts["opened"] += 1
+            return real_connect(*args, factory=_CountingConnection, **kwargs)
+
+        monkeypatch.setattr(journal_views.sqlite3, "connect", _connect)
+        view = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
+        assert len(view.read()) == 1
+        assert len(view.slice()) == 1
+        assert view.slice_by_stage("x") == []
+        assert view.latest_sequence == 1
+        assert view.degraded is False
+        assert counts == {"opened": 5, "closed": 5}
+
     def test_live_counter_ignores_retained_degraded_marker(self, tmp_path, monkeypatch):
         """If a prior marker-only table survives reconcile, the counter stays at 0.
 

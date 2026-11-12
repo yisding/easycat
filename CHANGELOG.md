@@ -35,6 +35,8 @@ versioning contract that begins at 1.0.0 is documented in
 - `LocalTransport` packs outbound audio across chunk boundaries, so TTS chunks
   that are not a whole number of speaker frames no longer play with a burst of
   silence after each one.
+- `ReadonlySqliteJournal` closes its SQLite connection after every query instead
+  leaving it to garbage collection, which warned on Python 3.13+.
 
 ## 0.1.0 - Unreleased
 
