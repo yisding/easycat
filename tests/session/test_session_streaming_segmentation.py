@@ -242,6 +242,40 @@ def test_split_first_clause_does_not_split_email_address() -> None:
     assert remaining == "thanks"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="split_first_clause treats the port colon of a host:port token as a clause "
+    "boundary, so the first TTS payload ends mid-address ('... localhost:' / '8080 ...')",
+)
+@pytest.mark.parametrize(
+    ("text", "ready", "remaining"),
+    [
+        (
+            "The server runs on localhost:8080, so open that page.",
+            "The server runs on localhost:8080, ",
+            "so open that page.",
+        ),
+        (
+            "Please open example.com:8080 in your browser, then continue.",
+            "Please open example.com:8080 in your browser, ",
+            "then continue.",
+        ),
+        (
+            "Connect to db.internal:5432 with the client, then log in.",
+            "Connect to db.internal:5432 with the client, ",
+            "then log in.",
+        ),
+    ],
+)
+def test_split_first_clause_does_not_split_host_port(
+    text: str, ready: str, remaining: str
+) -> None:
+    # A ":" between a hostname and its port has no whitespace after it and is
+    # not a clause boundary.  The dots of the hostname and a digit:digit time
+    # colon are already protected; the letter-preceded port colon is not.
+    assert split_first_clause(text) == (ready, remaining)
+
+
 @pytest.mark.parametrize(
     ("text", "ready", "remaining"),
     [
