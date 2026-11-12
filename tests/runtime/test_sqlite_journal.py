@@ -605,33 +605,31 @@ class TestSqliteJournalLifecycle:
 
     def test_readonly_journal_closes_every_connection(self, tmp_path, monkeypatch):
         """Each read-only query closes its connection instead of relying on GC."""
-        from easycat.runtime import journal_views
-
         j = SqliteJournal("sess", data_dir=tmp_path)
         j.append(kind=JournalRecordKind.EVENT, name="a", session_id="sess")
         j.close()
 
-        counts = {"opened": 0, "closed": 0}
+        # Track only this view's connections: patching ``sqlite3.connect``
+        # would also count background crash-sweep timers from earlier tests.
+        opened: list[sqlite3.Connection] = []
+        real_connect = ReadonlySqliteJournal._connect
 
-        class _CountingConnection(sqlite3.Connection):
-            def close(self) -> None:
-                counts["closed"] += 1
-                super().close()
+        def _connect(self):
+            conn = real_connect(self)
+            opened.append(conn)
+            return conn
 
-        real_connect = sqlite3.connect
-
-        def _connect(*args, **kwargs):
-            counts["opened"] += 1
-            return real_connect(*args, factory=_CountingConnection, **kwargs)
-
-        monkeypatch.setattr(journal_views.sqlite3, "connect", _connect)
+        monkeypatch.setattr(ReadonlySqliteJournal, "_connect", _connect)
         view = ReadonlySqliteJournal(tmp_path / "journals" / "sess.sqlite")
         assert len(view.read()) == 1
         assert len(view.slice()) == 1
         assert view.slice_by_stage("x") == []
         assert view.latest_sequence == 1
         assert view.degraded is False
-        assert counts == {"opened": 5, "closed": 5}
+        assert len(opened) == 5
+        for conn in opened:
+            with pytest.raises(sqlite3.ProgrammingError):
+                conn.execute("SELECT 1")
 
     def test_live_counter_ignores_retained_degraded_marker(self, tmp_path, monkeypatch):
         """If a prior marker-only table survives reconcile, the counter stays at 0.
