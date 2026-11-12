@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from easycat._numeric import is_finite_number
 from easycat._provider_helpers import ProviderErrorEmitter, get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import ErrorStage, TTSEvent
@@ -77,6 +78,10 @@ class OpenAITTSConfig:
     # the session event bus (it detects the field structurally), so OpenAI TTS
     # emits journal-visible provider Errors on failure like the WS providers.
     event_bus: object | None = None
+
+    def __post_init__(self) -> None:
+        if not is_finite_number(self.speed) or not 0.25 <= self.speed <= 4.0:
+            raise ValueError(f"OpenAI TTS speed must be in [0.25, 4.0], got {self.speed!r}")
 
 
 class OpenAITTS(ProviderErrorEmitter, TTSBase):

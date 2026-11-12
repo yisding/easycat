@@ -23,6 +23,9 @@ versioning contract that begins at 1.0.0 is documented in
 - `OpenAISTTConfig` and `ElevenLabsSTTConfig` reject NaN, infinite and
   non-positive timeouts, and ElevenLabs STT rejects unsupported
   `realtime_sample_rate` values when the config is built.
+- `OpenAITTSConfig.speed` must be in [0.25, 4.0] and ElevenLabs TTS
+  `stability`/`similarity_boost` in [0.0, 1.0]; bad values now fail when the
+  config is built instead of on the first synthesis.
 
 ## 0.1.0 - Unreleased
 

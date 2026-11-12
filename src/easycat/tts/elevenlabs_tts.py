@@ -148,8 +148,10 @@ class ElevenLabsTTSConfig:
                 "ElevenLabs apply_text_normalization must be 'auto', 'on', or 'off', "
                 f"got {self.apply_text_normalization!r}"
             )
-        if not 0.0 <= self.style <= 1.0:
-            raise ValueError(f"ElevenLabs style must be in [0.0, 1.0], got {self.style}")
+        for name in ("stability", "similarity_boost", "style"):
+            value = getattr(self, name)
+            if not is_finite_number(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f"ElevenLabs {name} must be in [0.0, 1.0], got {value}")
         if self.persistent_ws and self.stream_mode == ElevenLabsStreamMode.HTTP:
             raise ValueError(
                 "ElevenLabs persistent_ws=True requires stream_mode=WEBSOCKET; "
