@@ -606,6 +606,18 @@ def test_openai_stt_config_rejects_negative_max_retries():
         OpenAISTTConfig(api_key="test-key", max_retries=-1)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1, 0])
+def test_openai_stt_config_rejects_invalid_timeout(value: float) -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        OpenAISTTConfig(api_key="test-key", timeout=value)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0])
+def test_openai_stt_config_rejects_invalid_stream_timeout(value: float) -> None:
+    with pytest.raises(ValueError, match="stream_timeout"):
+        OpenAISTTConfig(api_key="test-key", stream_timeout=value)
+
+
 @pytest.mark.parametrize(
     "limit_name",
     ["max_audio_chunk_bytes", "max_audio_buffer_bytes", "max_audio_duration_ms"],

@@ -20,6 +20,9 @@ versioning contract that begins at 1.0.0 is documented in
   outside the DTMF alphabet instead of silently playing pauses on Twilio.
 - Interruption estimation caps each SSML `<break>` at 10 s, so one huge `time`
   value can no longer allocate an unbounded pause timeline.
+- `OpenAISTTConfig` and `ElevenLabsSTTConfig` reject NaN, infinite and
+  non-positive timeouts, and ElevenLabs STT rejects unsupported
+  `realtime_sample_rate` values when the config is built.
 
 ## 0.1.0 - Unreleased
 

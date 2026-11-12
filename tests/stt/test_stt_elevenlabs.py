@@ -491,6 +491,25 @@ def test_elevenlabs_stt_config_rejects_negative_max_retries():
         ElevenLabsSTTConfig(api_key="k", max_retries=-1)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1, 0])
+def test_elevenlabs_stt_config_rejects_invalid_timeout(value: float) -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        ElevenLabsSTTConfig(api_key="k", timeout=value)
+
+
+@pytest.mark.parametrize("rate", [12345, 0, -5, True, 16000.0])
+def test_elevenlabs_stt_config_rejects_unsupported_realtime_sample_rate(rate: object) -> None:
+    with pytest.raises(ValueError, match="realtime_sample_rate"):
+        ElevenLabsSTTConfig(api_key="k", realtime_sample_rate=rate)
+
+
+@pytest.mark.parametrize("rate", [8000, 16000, 22050, 24000, 44100, 48000])
+def test_elevenlabs_stt_config_accepts_supported_realtime_sample_rates(rate: int) -> None:
+    config = ElevenLabsSTTConfig(api_key="k", realtime_sample_rate=rate)
+
+    assert ElevenLabsSTT(config)._realtime_audio_format() == f"pcm_{rate}"
+
+
 @pytest.mark.parametrize(
     "limit_name",
     ["max_audio_chunk_bytes", "max_audio_buffer_bytes", "max_audio_duration_ms"],

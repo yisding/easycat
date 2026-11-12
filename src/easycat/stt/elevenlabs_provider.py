@@ -36,6 +36,15 @@ logger = logging.getLogger(__name__)
 # seam used by the provider tests.
 _FINAL_TRANSCRIPT_TIMEOUT_S = 5.0
 
+_REALTIME_AUDIO_FORMATS: dict[int, str] = {
+    8000: "pcm_8000",
+    16000: "pcm_16000",
+    22050: "pcm_22050",
+    24000: "pcm_24000",
+    44100: "pcm_44100",
+    48000: "pcm_48000",
+}
+
 
 @dataclass(slots=True)
 class _PendingManualCommit:
@@ -126,6 +135,19 @@ class ElevenLabsSTTConfig:
             return "scribe_v2_realtime"
         return "scribe_v1"
 
+    def _validate_transport_settings(self) -> None:
+        if not is_finite_number(self.timeout) or self.timeout <= 0:
+            raise ValueError("ElevenLabsSTTConfig.timeout must be a finite positive number")
+        if (
+            isinstance(self.realtime_sample_rate, bool)
+            or not isinstance(self.realtime_sample_rate, int)
+            or self.realtime_sample_rate not in _REALTIME_AUDIO_FORMATS
+        ):
+            raise ValueError(
+                "ElevenLabsSTTConfig.realtime_sample_rate must be one of "
+                f"{sorted(_REALTIME_AUDIO_FORMATS)} Hz (got {self.realtime_sample_rate!r})"
+            )
+
     def __post_init__(self) -> None:
         normalized_mode = self.mode.strip().lower() if isinstance(self.mode, str) else ""
         if normalized_mode not in {"realtime", "batch"}:
@@ -154,6 +176,8 @@ class ElevenLabsSTTConfig:
                 "ElevenLabsSTTConfig.final_transcript_timeout_s must be a finite positive number"
             )
         self.final_transcript_timeout_s = float(self.final_transcript_timeout_s)
+
+        self._validate_transport_settings()
 
         if self.max_retries < 0:
             raise ValueError(
@@ -266,14 +290,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
 
     def _realtime_audio_format(self) -> str:
         sample_rate = self._config.realtime_sample_rate
-        supported = {
-            8000: "pcm_8000",
-            16000: "pcm_16000",
-            22050: "pcm_22050",
-            24000: "pcm_24000",
-            44100: "pcm_44100",
-            48000: "pcm_48000",
-        }
+        supported = _REALTIME_AUDIO_FORMATS
         if sample_rate not in supported:
             raise ValueError(
                 "ElevenLabs realtime STT requires one of "

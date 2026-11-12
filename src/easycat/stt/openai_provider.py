@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from easycat._numeric import is_finite_number
 from easycat._provider_helpers import ProviderErrorEmitter, get_package_version
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import ErrorStage, STTEvent, STTEventType
@@ -82,10 +83,14 @@ class OpenAISTTConfig:
         STTBase._validate_positive_limit(
             "OpenAISTTConfig.max_audio_duration_ms", self.max_audio_duration_ms
         )
-        if self.timeout <= 0:
-            raise ValueError("OpenAISTTConfig.timeout must be positive")
-        if self.stream_timeout is not None and self.stream_timeout <= 0:
-            raise ValueError("OpenAISTTConfig.stream_timeout must be positive when set")
+        if not is_finite_number(self.timeout) or self.timeout <= 0:
+            raise ValueError("OpenAISTTConfig.timeout must be a finite positive number")
+        if self.stream_timeout is not None and (
+            not is_finite_number(self.stream_timeout) or self.stream_timeout <= 0
+        ):
+            raise ValueError(
+                "OpenAISTTConfig.stream_timeout must be a finite positive number when set"
+            )
         if self.max_stream_events <= 0:
             raise ValueError("OpenAISTTConfig.max_stream_events must be positive")
         if self.max_stream_line_bytes <= 0:
