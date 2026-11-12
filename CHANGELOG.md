@@ -14,6 +14,9 @@ versioning contract that begins at 1.0.0 is documented in
 
 ### Fixed
 
+- `easycat journal grep --regex` and the debugger's `/api/records?regex=1`
+  now reject patterns with more than one variable-width repeat in sequence
+  (such as `a+a+a+!`), which could backtrack for minutes.
 - Plain-mode agent streaming no longer re-runs the sentence segmenter over the
   whole pending text on every delta when no sentence boundary is possible.
 - `SendDTMFAction` and `TransferPlan.post_dial_digits` now reject characters

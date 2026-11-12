@@ -656,6 +656,27 @@ def test_search_records_rejects_adjacent_optional_repeats():
         _compile_search_regex(pattern)
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        # Chained required/bounded variable-width repeats backtrack
+        # polynomially or exponentially; built at runtime like the test above.
+        "a+" * 3 + "!",
+        r"\w+" * 4 + "@",
+        "(a+)" * 2 + "!",
+        "a{1,2}" * 3 + "!",
+    ],
+)
+def test_search_records_rejects_chained_variable_width_repeats(pattern):
+    with pytest.raises(ValueError, match="unsafe regex"):
+        _compile_search_regex(pattern)
+
+
+@pytest.mark.parametrize("pattern", [r"\w+@", "a{3}b{3}", "timeout|pcm", "t.s", ".", "a+|b+"])
+def test_search_records_accepts_single_variable_width_repeat(pattern):
+    assert _compile_search_regex(pattern).pattern == pattern
+
+
 def test_search_records_rejects_overlong_query():
     too_long = "a" * (_SEARCH_MAX_QUERY_LEN + 1)
     with pytest.raises(ValueError, match="query too long"):
