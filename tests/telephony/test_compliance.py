@@ -82,6 +82,25 @@ class TestCallingHoursEnforcement:
         # And the call must be blocked rather than allowed via a guessed tz.
         assert not check_calling_hours("+442012345678")
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="_extract_area_code accepts any 10-digit number, including E.164 numbers "
+        "with a non-+1 country code, so foreign numbers resolve to a US timezone",
+    )
+    @pytest.mark.parametrize(
+        "phone",
+        [
+            # Valid Egyptian fixed line (+20); first three digits collide with NJ "201".
+            "+20 15 178 128",
+            # Valid El Salvador toll-free number (+503); collides with Oregon "503".
+            "+503 801 5788",
+        ],
+    )
+    def test_non_nanp_ten_digit_e164_number_does_not_resolve_timezone(self, phone: str) -> None:
+        # A "+" prefix means the country code follows. Unless it is "+1", the
+        # number is not NANP and must fail closed (no US timezone guess).
+        assert lookup_timezone(phone) is None
+
     def test_malformed_short_number_returns_none(self) -> None:
         # Too few digits to be a NANP number — no area code guessing.
         assert lookup_timezone("212") is None
