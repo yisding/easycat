@@ -1253,3 +1253,32 @@ def test_strip_markdown_tilde_runs_that_are_not_fences(text: str) -> None:
     assert strip_markdown(text) == text.replace("~~struck~~", "struck").replace(
         "~~again~~", "again"
     )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="the ordered-list pass runs after the ATX opener (and emphasis) is stripped, so a "
+    "heading whose text starts with a number like '1. ' loses that number",
+)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("## 1. Getting started", "1. Getting started"),
+        ("# 2. Install\n\nRun it.", "2. Install\n\nRun it."),
+        ("### 10. Wrap up", "10. Wrap up"),
+        ("## **1. Bold**", "1. Bold"),
+        # A real list item under a numbered heading still loses its marker.
+        ("## 1. Setup\n1. do x", "1. Setup\ndo x"),
+    ],
+    ids=["h2-numbered", "h1-numbered-with-body", "h3-two-digit", "h2-bold", "heading-then-list"],
+)
+def test_strip_markdown_keeps_section_number_of_numbered_heading(text: str, expected: str) -> None:
+    """``## 1. Getting started`` is a heading whose text is ``1. Getting started``.
+
+    An ATX heading's content is inline text (CommonMark 4.2), never a list
+    item, so the section number is part of what TTS should speak.  Stripping
+    the ``#`` opener leaves the number at the start of the line, where the
+    ordered-list pass then deletes it.
+    """
+    assert strip_markdown(text) == expected
+    assert strip_markdown(text, trim=False, normalize_code_spans=True) == expected
