@@ -598,6 +598,76 @@ async def test_streaming_plan_b_sentence_ships_once_next_delta_arrives(strip_md:
     assert _drain(tts_queue) == []
 
 
+_URL_QUERY_SPLIT_XFAIL = pytest.mark.xfail(
+    strict=True,
+    reason="split_at_sentence_boundaries has no URL guard: the segmenter ends a sentence at "
+    "the '?' that starts a URL query string, so the URL is cut into two TTS payloads",
+)
+
+
+def test_split_at_sentence_boundaries_still_splits_after_url_ending_question() -> None:
+    """Control: a ``?`` that follows a URL and precedes a space is a real sentence end."""
+    ready, remaining = split_at_sentence_boundaries(
+        "Is it at https://example.com/search? Yes it is"
+    )
+    assert ready == "Is it at https://example.com/search? "
+    assert remaining == "Yes it is"
+
+
+@_URL_QUERY_SPLIT_XFAIL
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Open https://example.com/search?q=cats in your browser",
+            ("", "Open https://example.com/search?q=cats in your browser"),
+        ),
+        (
+            "It is done. Open https://example.com/search?q=cats in your browser",
+            ("It is done. ", "Open https://example.com/search?q=cats in your browser"),
+        ),
+        (
+            "The link is example.com/watch?v=abc123 and it works",
+            ("", "The link is example.com/watch?v=abc123 and it works"),
+        ),
+    ],
+)
+def test_split_at_sentence_boundaries_does_not_split_url_query_string(
+    text: str, expected: tuple[str, str]
+) -> None:
+    """The ``?`` that starts a URL query string is not a sentence end.
+
+    ``split_first_clause`` already protects URL separators; the full-sentence
+    splitter used for every later payload must keep the URL whole as well.
+    """
+    assert split_at_sentence_boundaries(text) == expected
+
+
+@_URL_QUERY_SPLIT_XFAIL
+@pytest.mark.parametrize("strip_md", [False, True])
+async def test_streaming_does_not_split_url_query_string_across_payloads(
+    strip_md: bool,
+) -> None:
+    """A streamed URL with a query string reaches TTS in a single payload."""
+    buffer, tts_queue = _stream_buffer(strip_md)
+    deltas = [
+        "I found the page for you. ",
+        "Open ",
+        "https://example.com/search?q=cats ",
+        "in your browser. ",
+        "Then log in.",
+    ]
+    for delta in deltas:
+        await buffer.add_delta(delta)
+    await buffer.flush()
+
+    assert _drain(tts_queue) == [
+        "I found the page for you. ",
+        "Open https://example.com/search?q=cats in your browser. ",
+        "Then log in.",
+    ]
+
+
 def test_split_first_phrase_bounds_punctuation_free_opener() -> None:
     text = "This response keeps streaming words without reaching punctuation for quite a while"
 
