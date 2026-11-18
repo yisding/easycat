@@ -65,12 +65,14 @@ uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --show-e
 uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --json
 ```
 
-No resync is needed: every checkpoint runs as a separate script that needs only
-the dev group, so any chapter's prerequisite install already covers the spine.
-From a fresh checkout, `uv sync --group dev` is the minimum. Each listed
-**Setup** line names a sufficient install, not a step to rerun: `uv sync`
-removes extras you leave out, so never run a narrower sync than your current
-chapter's.
+Every checkpoint runs as a separate script that needs only the dev group, so
+any chapter's prerequisite install already covers the spine; from a fresh
+checkout, `uv sync --group dev` is the minimum. Treat each listed **Setup**
+line, and the `uv sync` line in each chapter's completion block, as a
+sufficient install rather than a required resync. `uv sync` removes extras you
+leave out, so if your current install carries more (Deepgram in Chapters 3-10,
+RNNoise in Chapter 10, Chapter 13's provider and transport extras), skip that
+line or append your extras to it instead of narrowing your install.
 
 Execute all 16 checkpoints as a compact smoke run:
 

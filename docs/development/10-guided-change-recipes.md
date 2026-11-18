@@ -243,7 +243,8 @@ Classify the change:
 | segment finalization | `STTCommitter` |
 | semantic endpoint scoring | smart-turn provider + `TurnStage` |
 | transcript-to-agent transition | `TurnRunner` |
-| barge-in cutoff/history | Session + `CancelOrchestrator` |
+| barge-in cutoff | Session + `CancelOrchestrator` (signal fan-out, interruption-mode policy, journaling) |
+| interruption history application | `TurnRunner` via `session/interruption.py` |
 
 ### Required evidence
 
@@ -342,6 +343,7 @@ Inspect:
 - [`session/_audio_router.py`](../../src/easycat/session/_audio_router.py)
 - [`_turn_context.py`](../../src/easycat/_turn_context.py)
 - [`session/interruption.py`](../../src/easycat/session/interruption.py)
+- [`session/_turn_runner.py`](../../src/easycat/session/_turn_runner.py)
 - [`session/_cancel_orchestrator.py`](../../src/easycat/session/_cancel_orchestrator.py)
 
 Test direct transports, delivery-reporting buffered transports, fresh and

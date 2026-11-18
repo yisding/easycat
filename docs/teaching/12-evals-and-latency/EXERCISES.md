@@ -78,8 +78,10 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 4</summary>
 
-The rubric lives in `llm_judge.py`. Extend the prompt and
-   `SCORE_KEYS` with a `filler_appropriate: 1-5` field. The
+The rubric lives in `llm_judge.py`. Copy it (for example under
+   `.easycat/`) rather than editing it in place, then extend the
+   copy's prompt and `SCORE_KEYS` with a `filler_appropriate: 1-5`
+   field. The
    judge's evaluation prompt should ask whether filler utterances
    landed at appropriate moments and matched the tool that was
    running.
@@ -114,9 +116,8 @@ Copy a `ch07-tools-*.bundle` from `docs/teaching/07-tools/runs/`
    provider-free stand-in whose first sentence is weather filler).
    A chapter-7 bundle has no `stt.final` (the user text lives in
    `turn.gap.data.text`), and `extract_transcript` drops tool records,
-   so the judge cannot see which tool a filler preceded. Copy
-   `llm_judge.py` rather than editing it in place, then extend your
-   copy's `extract_transcript`: fall back to `turn.gap.data.text`, and
+   so the judge cannot see which tool a filler preceded. Extend the
+   same copy's `extract_transcript`: fall back to `turn.gap.data.text`, and
    walk the records in sequence order emitting `tool.call.started`
    names alongside each `stage.tts.execute` line's `kind` (`filler`
    or `reply`) and `tool_call_id`.

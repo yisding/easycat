@@ -14,9 +14,10 @@ Replay only the cumulative spine through a completed chapter::
 
     uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --show-evidence
 
-Any chapter's prerequisite install already covers the spine, so no resync is
-needed; from a fresh checkout, ``uv sync --group dev`` is the minimum. ``uv sync``
-removes extras you leave out, so never run a narrower sync than your chapter's.
+Any chapter's prerequisite install already covers the spine; from a fresh
+checkout, ``uv sync --group dev`` is the minimum. Each listed ``Setup`` line is a
+sufficient install, not a required resync: ``uv sync`` removes extras you leave
+out, so skip it or append your chapter's extras rather than narrowing an install.
 
 The runner removes every ``*_API_KEY`` variable from child environments and
 disables bytecode-cache writes. The selected scripts are designed not to open

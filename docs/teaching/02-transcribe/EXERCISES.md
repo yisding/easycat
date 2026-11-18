@@ -64,8 +64,8 @@ The interesting case is when the *final* commits to a wrong
 <details markdown="1">
 <summary>Hint 4 of 4</summary>
 
-The opposite case is also interesting: the final is *right* but
-   the user saw wrong-looking partials flap by. That's why chapter 6
+The opposite case is also interesting (Deepgram only): the final is
+   *right* but the user saw wrong-looking partials flap by. That's why chapter 6
    reinforces "never commit spoken output from a partial."
 
 **Wider points to check yourself on**

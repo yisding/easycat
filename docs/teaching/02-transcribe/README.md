@@ -526,17 +526,17 @@ audio arrives, it revises its guess — producing a sequence of
 
 ```
   (speaking: "go into town")
-  t+5100ms  [part ] going to
-  t+5140ms  [part ] going to town
-  t+5180ms  [part ] go into town
-  t+5200ms  [FINAL] go into town
+  t+900ms   [part ] going to
+  t+1500ms  [part ] going to town
+  t+2200ms  [part ] go into town
+  t+2600ms  [FINAL] go into town
 ```
 
 That revision is what Deepgram's interim results show (`--provider
 deepgram`): the sequence spreads across the utterance, and an earlier
 hypothesis can be replaced. The default OpenAI path shows a narrower
 shape: its partials are growing prefixes of the final text (`go`,
-`going`, `going to`, …), all emitted in the same instant after the
+`go into`, `go into town`), all emitted in the same instant after the
 response completes, so the final equals the last prefix and no
 revision is visible. Either way the contract is the same: partials
 can change until the provider commits.
@@ -618,9 +618,9 @@ happened," and every runnable chapter from here on will dump one.
 
 Say a word the STT consistently mishears ("bass" vs "base",
 "pear" vs "pair"). Re-run `streaming.py`, then read the bundle
-and find the exact partial where the wrong guess stuck. Compare
-that to the final. Did the revision save it, or did the provider
-commit to the wrong word?
+and find the first partial where the wrong word appeared. Compare
+that to the final. Only `--provider deepgram` can show a revision:
+did it save the word, or did the provider commit to the wrong one?
 
 <!-- BEGIN auto:practice-handoff -->
 ## Practice and self-check

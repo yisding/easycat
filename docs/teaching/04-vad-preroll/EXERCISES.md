@@ -139,14 +139,16 @@ Silero is a small neural net trained on speech vs not-speech. A
 <details markdown="1">
 <summary>Hint 3 of 3</summary>
 
-`main.py` journals only turn boundaries, and both scripts read
-   the live mic, so this is a comparison across two separate takes,
-   not a time-aligned overlay of one input. For the same spoken
-   breaker, compare when `naive_vad.classify` first turns speech on
-   with `main.py`'s `turn.started`, each relative to its run's start.
-   Expect Silero's turn start to come at least about 250 ms after
-   onset (the `min_speech_duration_ms` gate) but to be far less
-   fooled by keystrokes and fans.
+`main.py` journals `turn.started`, `turn.ended`, and
+   `parrot.delivery`; both scripts read the live mic, so these are
+   two separate takes, not a time-aligned overlay of one input.
+   Compare counts, not timestamps: for the keystroke and fan
+   breakers, count how often `naive_vad.classify`'s `decision`
+   flips from `idle` to `speech`, then count `main.py`'s
+   `turn.started` records for the same breakers. Silero should fire
+   far less often. Its start lag is known, not measured here:
+   `VADConfig.min_speech_duration_ms` (default 250) requires speech
+   for at least that long before it confirms a start.
 
 </details>
 <!-- END auto:exercise-hints -->

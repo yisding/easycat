@@ -81,9 +81,11 @@ exports a bundle; it writes one to that chapter's generated `runs/`
 directory after you run it. Set `OPENAI_API_KEY` and `DEEPGRAM_API_KEY`
 first. Pick the chapter whose records match your question. Chapter 9's
 variant C, `estimate.py`, has the richest interruption evidence
-(delivered bytes, cancellation, and the heard-text estimate); chapters 6
-and 8 carry the timing records (`stt.final`, `agent.first_token`,
-`tts.first_audio`, `turn.gap`). Run that chapter first, then pass one of
+(delivered bytes, cancellation, and the heard-text estimate); chapter 6
+carries the full timing chain (`stt.final`, `agent.first_token`,
+`tts.first_audio`, `turn.gap`); chapter 8 has `tts.first_audio` and
+`turn.gap` (with speech-end fields) plus `turn.endpoint_commit` and
+`smart_turn.classify`, but no `stt.final` or `agent.first_token`. Run that chapter first, then pass one of
 its generated `runs/*.bundle` files (for example from
 `docs/teaching/09-interruption/runs/`) to `investigate.py` in this
 chapter once you've finished the three planted-bug investigations below.
@@ -359,9 +361,11 @@ schema deliberately rather than assuming `dict[str, Any]` made it safe.
 
 Chapters 5-9 and the fixtures here emit *composite events* of the
 form `stage.<name>.execute` with a single `elapsed_ms` field — one
-record per stage span. (Chapter 9c's `estimate.py` and chapter 10 keep
-the record name but carry delivery and cancellation fields such as
-`bytes_accepted_so_far` and `cancelled` instead of `elapsed_ms`.) This
+record per stage span. (Chapter 9c's `estimate.py` keeps the record
+name but carries delivery and cancellation fields such as
+`bytes_accepted_so_far` and `cancelled` instead of `elapsed_ms`;
+chapter 10's record carries only `stage` and the spoken `text`, plus
+`aec_reference_feeds` in `wrong_order.py`.) This
 is deliberate: the query layer stays at the surface and the reader can
 read the bundle top-to-bottom.
 
