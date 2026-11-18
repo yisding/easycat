@@ -344,6 +344,25 @@ class TestStripMarkdown:
             == "Use print open paren close paren and dunder init."
         )
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="the `==` speech rule runs before `!=`, so it consumes the tail of `!==` and "
+        "leaves a bare `!`: strict inequality is spoken as '! equals equals'",
+    )
+    @pytest.mark.parametrize(
+        "text",
+        ["Use `a !== b` here.", "The `!==` operator.", "```js\nx !== y\n```"],
+    )
+    def test_strict_inequality_code_tts_normalization_keeps_negation(self, text: str) -> None:
+        # ``!=`` reads "not equals" and ``===`` reads "triple equals"; ``!==``
+        # must not degrade to an unspeakable ``!`` followed by "equals equals",
+        # which a TTS engine voices as plain equality.
+        spoken = strip_markdown(text, normalize_code_spans=True)
+        equality = strip_markdown(text.replace("!==", "=="), normalize_code_spans=True)
+
+        assert "!" not in spoken
+        assert spoken != equality
+
     @pytest.mark.parametrize("whitespace", ["  ", "\t", "\v", "\N{NO-BREAK SPACE}"])
     def test_plain_inline_code_still_collapses_whitespace(self, whitespace: str) -> None:
         text = f"say `hello{whitespace}world` now"
