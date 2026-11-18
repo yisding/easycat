@@ -21,7 +21,7 @@
 
 **Task.** Type loudly on your keyboard while saying "hello." Run
 each of the four `--nr/--aec` combinations. Where does VAD fire
-in each?
+in each? Use the bundle's `vad.start` / `vad.stop` records.
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**
@@ -32,16 +32,18 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 5</summary>
 
-Keyboard clicks are short, energetic, broadband — they look
-   like consonants to a VAD that just measures energy.
+The default VAD is neural Silero with a 250 ms minimum speech
+   window, not an energy meter. An isolated click may not trigger it,
+   but sustained typing, or typing over your voice, can — and NR
+   changes the input it classifies.
 
 </details>
 
 <details markdown="1">
 <summary>Hint 2 of 5</summary>
 
-With NR off, the journal shows VAD-on events that line up with
-   click timestamps, not with your voice.
+With NR off, look for `vad.start` records (`t_ms`) during bursts
+   of typing, before or after your "hello" rather than with it.
 
 </details>
 
@@ -58,8 +60,9 @@ With NR on (RNNoise or Krisp), keystrokes should drop below
 <summary>Hint 4 of 5</summary>
 
 AEC doesn't help here — it cancels *the bot's voice*, not
-   keystrokes. If your bundle shows AEC on + NR off with VAD
-   still firing on clicks, that's the experiment landing.
+   keystrokes. If your bundle shows AEC on + NR off with
+   `vad.start` records still landing during typing, that's the
+   experiment landing.
 
 </details>
 
@@ -163,11 +166,11 @@ AEC alone (without NR): subtracts the bot's voice but leaves
 <details markdown="1">
 <summary>Hint 4 of 4</summary>
 
-The order also matters: NR-first lets NR see raw noise and
-   model it cleanly; AEC then handles whatever NR couldn't
-   classify as noise (the bot's voice has speech *structure*, so
-   NR leaves it alone). This is why the pipeline is NR → AEC, not
-   the other way.
+The order also matters: AEC needs a mic signal that is still a
+   linear function of the reference, so it runs on the raw mic.
+   NR's per-frame nonlinear gains would break that. NR then cleans
+   the residual. This is why the pipeline is AEC → NR, not the
+   other way.
 
 </details>
 <!-- END auto:exercise-hints -->
@@ -304,7 +307,7 @@ RMS is not a quality score. A filter that deletes the user can show a
 > passes without looking.
 <!-- END auto:self-check-protocol -->
 
-1. Can you draw NR → AEC → VAD → STT from memory and justify each boundary with
+1. Can you draw AEC → NR → VAD → STT from memory and justify each boundary with
    one observed failure that a different order would cause?
 2. Which `--nr/--aec` combination would you test first for a quiet Bluetooth
    headset, a noisy speakerphone kiosk, and a Twilio call, and why?

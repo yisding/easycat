@@ -81,8 +81,8 @@
   start-of-utterance truncation; `naive_threshold.py` showing why
   an energy threshold isn't enough; `delivery_probe.py` for provider-free
   output-acceptance evidence.
-- **Modified:** turns now commit on VAD boundaries, not on a
-  fixed-timeout absence of STT partials.
+- **Modified:** turns now commit on VAD stop (a short acoustic-silence
+  debounce), not on a fixed-timeout absence of STT partials.
 - **Preserved:** `speak()` acceptance/rejection counts still become
   `parrot.delivery`; better input endpointing does not prove output playback.
 - **Removed:** the silence-timeout turn detector from chapter 3.
@@ -282,7 +282,7 @@
          },
      )
      if rejected_chunks:
-@@ -124,183 +119,123 @@
+@@ -124,183 +119,127 @@
          )
 
 
@@ -380,12 +380,16 @@
 +                # Drain the event queue until the sentinel from end_stream().
 +                # A VADStop before STT saw any speech is harmless — we just
 +                # close an empty stream and get no FINAL back.
++                # One VAD turn can yield several FINAL segments; each carries
++                # only its own words, so join them like production does.
 +                active_stt = stt
++                finals: list[str] = []
 +                try:
 +                    await active_stt.end_stream()
 +                    async for event in active_stt.events():
-+                        if event.type == STTEventType.FINAL:
-+                            collected_final = event.text
++                        if event.type == STTEventType.FINAL and event.text.strip():
++                            finals.append(" ".join(event.text.split()))
++                    collected_final = " ".join(finals)
 +                finally:
 +                    stt = None
 +                    await close_if_supported(active_stt)
@@ -608,10 +612,27 @@ primitive that makes a turn detector possible.
 Silero → FunASR → TEN → Krisp. Silero is the default; its ONNX
 model is bundled.
 
+### Two debounces turn verdicts into events
+
+Per-frame verdicts flicker, so `VADConfig` debounces them before
+emitting events. `VADStartSpeaking` fires only after
+`min_speech_duration_ms` (default 250 ms) of continuous
+speech-classified frames; that confirmation gate is why the start
+event is always late and why pre-roll exists. `VADStopSpeaking` fires
+after `min_silence_duration_ms` (default 50 ms) of non-speech frames.
+That stop debounce is still a silence timeout, just a much shorter one
+on an acoustic signal instead of STT event cadence, so it decides
+whether a pause splits a turn. Production `TurnManager` adds a further
+`end_of_turn_silence_ms` grace after VAD stop, and
+[chapter 8](../08-smart-turn/) tunes `min_silence_duration_ms` against
+smart-turn.
+
 ## The pre-roll problem
 
 A VAD is a decision made *after* it has seen enough audio. Its
-"speech" verdict can land after the utterance has already started.
+`VADStartSpeaking` event lands at least the 250 ms confirmation gate
+after the utterance has already started, plus more when the first soft
+frames score below threshold.
 If you only forward chunks from VAD-on onward, the STT stream lacks
 the earlier frames and may mis-hear the leading sound (for example,
 a live run might turn "Hello" into "Elo"). The delay and transcript
@@ -637,6 +658,14 @@ The mic feeds the ring buffer continuously (oldest chunk drops out
 every 20 ms). When VAD fires, the whole buffer is flushed to STT
 first — so STT sees the 300 ms that arrived *before* the VAD
 decision — and live chunks then flow directly to STT.
+
+Size pre-roll from the start gate: it must cover
+`min_speech_duration_ms`, one VAD frame of quantization (Silero uses
+32 ms frames), and an onset margin for soft leading sounds. This
+chapter's 300 ms covers the 250 ms gate with only a few tens of
+milliseconds to spare; production `TurnManager` uses `pre_roll_ms=450`
+(the gate plus 200 ms of onset context). Raise `min_speech_duration_ms`
+without growing pre-roll and the onset clipping comes back.
 
 ## `MiniTurnDetector`
 
@@ -715,6 +744,12 @@ events, and then calls `close_if_supported()` because this script also owns the
 provider object. Cancellation needs the same final cleanup even when no
 `speech_ended` tag arrives.
 
+One VAD turn can drain several `FINAL` events: Deepgram finalizes per
+segment, and each segment carries only its own words. The parrot joins
+every non-empty segment with a space, as production
+`TurnContext.transcript_text` does, so `turn.ended.data.text` holds the
+whole turn rather than its tail.
+
 Run both normal and cancelled paths without credentials:
 
 ```bash
@@ -746,7 +781,8 @@ Run the real VAD-turn parrot path with scripted STT, TTS, and transport results:
 uv run python docs/teaching/04-vad-preroll/delivery_probe.py
 ```
 
-The probe's STT starts, receives one frame, ends, and closes before TTS returns
+The probe's STT starts, receives one frame, ends with two `FINAL` segments
+that the parrot joins into one `committed_text`, and closes before TTS returns
 two accepted chunks and one rejection. Its journal order is `turn.started`,
 `turn.ended`, then `parrot.delivery`. That order is evidence of three distinct
 boundaries—not proof that the final accepted chunk reached a device.

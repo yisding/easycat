@@ -79,11 +79,15 @@ keys, without a mic — pick the constraint that fits.
 If you do want to scrub a *live* bundle: run a runnable chapter that
 exports a bundle; it writes one to that chapter's generated `runs/`
 directory after you run it. Set `OPENAI_API_KEY` and `DEEPGRAM_API_KEY`
-first. Chapter 9's
-variant C, `estimate.py`, is the most interesting — barge-in turns have
-the richest record set. Run that chapter first, then pass one of the
-generated `runs/*.bundle` files from
-`docs/teaching/09-interruption/runs/` to `investigate.py` in this
+first. Pick the chapter whose records match your question. Chapter 9's
+variant C, `estimate.py`, has the richest interruption evidence
+(delivered bytes, cancellation, and the heard-text estimate); chapter 6
+carries the full timing chain (`stt.final`, `agent.first_token`,
+`tts.first_audio`, `turn.gap`); chapter 8 has `tts.first_audio` and
+`turn.gap` (with speech-end fields) plus `turn.endpoint_commit` and
+`smart_turn.classify`, but no `stt.final` or `agent.first_token`. Run that chapter first, then pass one of
+its generated `runs/*.bundle` files (for example from
+`docs/teaching/09-interruption/runs/`) to `investigate.py` in this
 chapter once you've finished the three planted-bug investigations below.
 
 ## Diff from chapter 10
@@ -183,8 +187,11 @@ for r in b.records():
 The vocabulary transfers, but the record representation differs:
 bundle records are dictionaries (`r["name"]`), while live journal
 records are typed objects (`r.name`). Both stage and turn filters
-return materialized lists; stage filtering scans the records, while
-an exact sequence lookup is bounded on a live journal backend.
+return materialized lists, never lazy iterators. A `RunBundle`, an
+in-memory journal, or a read-only view over an older file scans its
+records to answer them; the live SQL backends answer both from indexed
+columns, and an exact sequence lookup there is a bounded primary-key
+read.
 
 ## Turn isolation can hide session causes
 
@@ -264,7 +271,14 @@ Open `bug_01_empty_final.bundle`. Work the evidence:
 2. `stt.final` at t_ms=1,001,100. Look at `data["text"]`.
 
 What do you see? An **empty string**. The turn committed a final
-but there was no transcript.
+but there was no transcript. Before guessing why, read every STT
+record in the turn, not just the final:
+
+```bash
+... --stage stt
+```
+
+What did STT actually receive?
 
 Now look for the agent:
 
@@ -345,32 +359,42 @@ schema deliberately rather than assuming `dict[str, Any]` made it safe.
 
 ### The teaching shape vs. the production shape
 
-Chapters 2-10 and the fixtures here emit *composite events* of the
+Chapters 5-9 and the fixtures here emit *composite events* of the
 form `stage.<name>.execute` with a single `elapsed_ms` field — one
-record per stage span. This is deliberate: the query layer stays
-at the surface and the reader can read the bundle top-to-bottom.
+record per stage span. (Chapter 9c's `estimate.py` keeps the record
+name but carries delivery and cancellation fields such as
+`bytes_accepted_so_far` and `cancelled` instead of `elapsed_ms`;
+chapter 10's record carries only `stage` and the spoken `text`, plus
+`aec_reference_feeds` in `wrong_order.py`.) This
+is deliberate: the query layer stays at the surface and the reader can
+read the bundle top-to-bottom.
 
 The production journal in `src/easycat/runtime/` emits **paired
 records**: `stage_start` at the beginning of a span, a matching
 `stage_complete` at the end, with artifact refs and error blobs
-in between. You reconstruct a span by matching start/complete on
-a span correlation id carried in the record `data`. Paired records
-buy you partial-span visibility on crashes and concurrent-span
-overlap that single events can't express. Read the production
-records after you've internalised the teaching ones.
+in between. There is no span id: you reconstruct a span by pairing
+start/complete records that share a `turn_id` and `data["stage"]`, in
+sequence order. `stage_complete` carries `elapsed_ms`, and a
+`stage_error` record can carry `input_sequence`/`input_record_ref`
+pointing back at its input. The
+[journal record reference](../../reference/journal-records.md) lists
+the exact fields. Paired records buy you partial-span visibility on
+crashes and concurrent-span overlap that single events can't express.
+Read the production records after you've internalised the teaching
+ones.
 
-Also be aware: `turn.state_changed` and `ws.reconnect.*` records
-in these bundles are **representative synthetic records** — the
-production pipeline emits similar signals, but chapters 2-10's
-own scripts do not write them. They are here so the fixtures
+Also be aware: `turn.state_changed`, `stt.input`, and `ws.reconnect.*`
+records in these bundles are **representative synthetic records** —
+the production pipeline emits similar signals, but chapters 2-10's own
+scripts do not write them. They are here so the fixtures
 tell a coherent story without running the whole framework.
 
 ## Try breaking it
 
-Pick any bundle from your `runs/` directories — chapter 9 is
-good — and write three hypotheses for what *could* go wrong on a
-flaky day. For each hypothesis, name the record you'd query
-first.
+Pick any bundle from your `runs/` directories — chapter 9c for
+interruption evidence, chapter 6 or 8 for timing — and write three
+hypotheses for what *could* go wrong on a flaky day. For each
+hypothesis, name the record you'd query first.
 
 Then plant your own bug in chapter 9c's code. Dump the bundle.
 Can a classmate (or your future self) find it?

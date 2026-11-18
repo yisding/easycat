@@ -73,9 +73,20 @@ ordering is firm:
    near-end frame when the transport supports that capability.
 4. Run AEC on raw microphone audio.
 5. Run noise reduction on the echo-cancelled result.
-6. Run VAD and pass its events to the event bus and turn manager.
+6. Run VAD; publish start events immediately, but defer `VADStopSpeaking`
+   and every event after it until step 8 has run.
 7. Give the processed frame to `TurnManager` for pre-roll/turn capture.
 8. Send the frame to STT when an STT stream is active.
+9. Replay the deferred VAD events in their original order, even when the STT
+   send raises: `VADStopSpeaking` goes to `TurnManager.on_vad_event` (opening
+   the pause epoch) before it is published, while any later event is published
+   first and then passed to `TurnManager`. The STT send attempt for the
+   stop-producing frame therefore completes before any segment commit or
+   stream end can be scheduled, so on a successful send that frame has reached
+   STT first
+   ([`test_vad_stop_commit_waits_for_stop_frame_stt_send`](../../tests/session/test_turn_runner.py));
+   if the send raises, the stop is still replayed and the frame is not
+   delivered.
 
 [`AudioStage`](../../src/easycat/stages/audio.py) groups AEC and noise
 reduction as one replay stage but preserves the internal AEC-before-NR order.
@@ -293,13 +304,17 @@ policies:
 
 | Policy | Good fit | Audio consequence |
 | --- | --- | --- |
-| `DROP_OLDEST` | live input where newest context may be preferable | loses the earliest queued audio |
+| `DROP_OLDEST` | custom or provider-side live-input queues where newest context may be preferable | loses the earliest queued audio |
 | `DROP_NEWEST` | default outbound speech | preserves already accepted prefix, may trim later chunks |
 | `BLOCK` | caller explicitly wants producer backpressure | can increase latency and must have a hard timeout |
 
 Dropping the oldest outbound chunk makes the listener hear an utterance jump
-forward mid-sentence. That is why default outbound policy differs from common
-live-input queue policy. The builder's constants in
+forward mid-sentence, so outbound keeps the accepted prefix instead. Built-in
+transports bound ingress separately with `_InboundAudioQueue`
+([`transports/_base.py`](../../src/easycat/transports/_base.py)), which
+rejects the arriving frame and emits an `inbound_queue_full`
+`TransportDegraded`; this is why `Session.start()` warms models before
+`connect()`. The builder's constants in
 [`session/_builder.py`](../../src/easycat/session/_builder.py) are authoritative
 for current size and policy; do not duplicate those numbers in downstream
 docs or code.
@@ -355,8 +370,8 @@ this evidence into history mutation.
   events.
 - **Unbounded pre-roll or turn buffers:** long noise/speech turns become memory
   leaks.
-- **One queue policy everywhere:** inbound freshness and outbound continuity
-  have different priorities.
+- **Dropping the oldest outbound audio:** outbound speech must preserve the
+  already accepted prefix, or the listener hears the utterance jump forward.
 - **Recording capture consent late:** buffered frames must retain the decision
   made at ingress.
 - **Observability on the serialized send path:** a slow diagnostic handler

@@ -296,10 +296,10 @@
 +
 +async def run_turn(transport, stt, client, tts, journal) -> None:
 +    """STT-final → fan out to LLM-stream → sentence-queue → TTS-drain."""
-     final_text = ""
-     stt_final_t = None
-     async for event in stt.events():
-@@ -131,53 +207,20 @@
+     # A turn can yield several FINAL segments; join them (as chapter 4
+     # does) and stamp the gap start at the last one.
+     finals: list[str] = []
+@@ -135,53 +211,20 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -365,7 +365,7 @@
      total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-@@ -186,13 +229,10 @@
+@@ -190,13 +233,10 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
@@ -381,7 +381,7 @@
          },
      )
      if total_gap is None:
-@@ -208,7 +248,7 @@
+@@ -212,7 +252,7 @@
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 
 
@@ -390,7 +390,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -221,11 +261,11 @@
+@@ -225,11 +265,11 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  active_stt = stt
@@ -404,7 +404,7 @@
                      await close_if_supported(active_stt)
      finally:
          if stt is not None:
-@@ -261,10 +301,15 @@
+@@ -265,10 +305,15 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
@@ -665,45 +665,47 @@ STT protocol.
 About 40 lines for `stream_sentences_to_tts`, another 20 for the
 drain coroutine. EasyCat's real implementation lives in
 `src/easycat/session/_streaming.py::consume_agent_stream`. Read
-it once. It takes nine parameters: `CancelToken` (for chapter 9),
-`TurnContext` (per-turn timing), `emit` (EasyCat event bus),
-`prepare_tts_payload` (custom envelopes), `strip_md`, `voice`,
-and more. Every parameter is defending against something the toy
-ducks. When you can look at a parameter and name the scenario —
-"ah, `CancelToken` is there so `await cancel_token.check()`
-inside the stream loop can abort a reply mid-sentence on
-barge-in" — you understand the production code.
+it once. It takes about a dozen parameters, among them
+`stream_factory` (the agent bridge stream), `cancel_token` (for
+chapter 9), `tts_queue` (the bounded TTS handoff), `turn`
+(`TurnContext`, per-turn timing), `emit` (EasyCat event bus),
+`prepare_tts_payload` (custom envelopes), `strip_md`,
+`abort_event`, and `consumer_gone`. Every parameter is defending
+against something the toy ducks. When you can look at a parameter
+and name the scenario — "ah, `cancel_token` is there so the stream
+loop can check `cancel_token.is_cancelled` and abort a reply
+mid-sentence on barge-in" — you understand the production code.
 
 ## Measure the win
 
-Same bundle format as chapter 5. Compare first-audio latency on
-the same prompt:
+Chapters 5 and 6 both journal a `turn.gap` record whose
+`total_gap_ms` is the STT-final → first-accepted-audio interval.
+Compare it across both chapters' runs on the same prompt:
 
 ```python
 from pathlib import Path
 from easycat.debug.testing import load_bundle
 
 
-def first_audio_gap_ms(bundle_path):
+def total_gap_ms(bundle_path):
     b = load_bundle(bundle_path)
-    stt_t = next(
-        (r["data"]["t_ms"] for r in b.records() if r["name"] == "stt.final"),
-        None,
-    )
-    tts_t = next(
-        (r["data"]["t_ms"] for r in b.records() if r["name"] == "tts.first_audio"),
-        None,
-    )
-    return None if stt_t is None or tts_t is None else tts_t - stt_t
+    gap = next((r for r in b.records() if r["name"] == "turn.gap"), None)
+    return None if gap is None else gap["data"].get("total_gap_ms")
 
 
-for b in Path("docs/teaching/06-streaming-agent/runs/").glob("*.bundle"):
-    print(b.name, f"first-audio gap = {first_audio_gap_ms(b):.0f} ms")
+def format_ms(value):
+    return "n/a" if value is None else f"{value:.0f} ms"
+
+
+for chapter in ("05-blocking-agent", "06-streaming-agent"):
+    for b in sorted(Path(f"docs/teaching/{chapter}/runs/").glob("*.bundle")):
+        print(chapter, b.name, f"first-audio gap = {format_ms(total_gap_ms(b))}")
 ```
 
-The bundle's `turn.gap.data["total_gap_ms"]` stores that same
-STT-final → first-accepted-audio interval. The drain continues after
-that milestone; `reply_enqueue_gap_ms` preserves the later time when
+A turn whose audio was never accepted records `total_gap_ms: None`,
+so the helper prints `n/a` instead of a number. In chapter 6 the
+drain continues after the first-audio milestone; its
+`reply_enqueue_gap_ms` preserves the later time when
 the complete reply has been synthesized and handed to the transport.
 Neither value is acoustic playback time — measuring that needs a
 loopback, as chapter 5 explains.
@@ -741,19 +743,26 @@ Three things bite every voice agent the instant it ships:
 
 ## Sidebar — backpressure
 
-Our `asyncio.Queue` is unbounded. If the agent streams faster
-than TTS+playback drains it, the queue grows without limit —
-fine for short exchanges, a slow leak in a long-running session.
-Production uses `easycat._bounded_queue.BoundedAudioQueue` with a
+Our `asyncio.Queue` is unbounded, but it holds only text
+sentences, so it stays small. The audio side is already bounded:
+`LocalTransport` caps its playback queue (`max_pending_out_chunks`,
+about 10 s of 20 ms frames), and once that fills `send_audio`
+drops the frames and returns `False`. Production's outbound queue
+is an `easycat._bounded_queue.BoundedAudioQueue` with a
 `DropPolicy`:
 
-- `DROP_OLDEST` — shed stale audio first. Good for live
-  conversation.
-- `DROP_NEWEST` — refuse new audio until the queue drains. Good
-  for transactional flows.
-- `BLOCK` — apply backpressure to the producer. Safest, but if
-  the producer can't slow down (an LLM stream doesn't negotiate),
-  it stalls.
+- `DROP_NEWEST` — reject each chunk offered while the queue is
+  full and keep everything already queued, so accepted audio is
+  never discarded. Under sustained backpressure the listener can
+  still hear gaps wherever later chunks were rejected. This is the
+  Session default for played-back speech.
+- `BLOCK` — apply backpressure to the producer. Inject it when you
+  want real backpressure on the synthesizer, but if the producer
+  can't slow down (an LLM stream doesn't negotiate), it stalls.
+- `DROP_OLDEST` — shed stale audio first. Wrong for spoken
+  playback: discarding the earliest unsent audio makes the
+  listener hear the utterance jump forward mid-sentence. It suits
+  stale real-time input, such as mic or analysis frames.
 
 ## Sidebar — partials can flap (reprise)
 

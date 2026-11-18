@@ -597,18 +597,19 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "accepted_chunks": sentence_accepted,
                  "rejected_chunks": sentence_rejected,
-@@ -329,33 +305,42 @@
+@@ -329,7 +305,7 @@
      return first_audio_t, accepted_chunks, rejected_chunks
 
 
 -async def run_turn(transport, stt, client, tts, journal) -> None:
 +async def run_turn(transport, stt, client, tts, journal, session_id, estimated_speech_end_t=None):
-     final_text = ""
-     stt_final_t = None
-     async for event in stt.events():
-         if event.type == STTEventType.FINAL:
-             final_text = event.text
+     # A turn can yield several FINAL segments; join them (as chapter 4
+     # does) and stamp the gap start at the last one.
+     finals: list[str] = []
+@@ -340,26 +316,35 @@
+                 finals.append(" ".join(event.text.split()))
              stt_final_t = time.monotonic()
+     final_text = " ".join(finals)
 -
      if not final_text.strip() or stt_final_t is None:
          return
@@ -646,7 +647,7 @@
              "reply_enqueue_gap_ms": reply_enqueue_gap,
              "tts_accepted_chunks": accepted_chunks,
              "tts_rejected_chunks": rejected_chunks,
-@@ -373,9 +358,15 @@
+@@ -377,9 +362,15 @@
              print("  (turn gap unavailable — TTS produced no audio)")
      else:
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
@@ -665,7 +666,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -391,7 +382,15 @@
+@@ -395,7 +386,15 @@
                  stt = None
                  try:
                      await active_stt.end_stream()
@@ -682,7 +683,7 @@
                  finally:
                      await close_if_supported(active_stt)
      finally:
-@@ -403,8 +402,25 @@
+@@ -407,8 +406,25 @@
 
 
  async def main() -> None:
@@ -708,7 +709,7 @@
 
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-@@ -422,9 +438,21 @@
+@@ -426,9 +442,21 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
 
@@ -732,7 +733,7 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
-@@ -433,15 +461,15 @@
+@@ -437,15 +465,15 @@
          )
          resources.push_async_callback(close_if_supported, tts)
 
@@ -759,9 +760,12 @@
 ## VAD silence is a timeout in disguise
 
 Chapter 4's VAD is great at "this frame contains speech." It is
-*not* good at "was that the end of a sentence?" To be safe, a VAD
-pipeline waits ~800 ms of silence before calling the turn over.
-Most of that 800 ms is slack — the user was done 300-500 ms ago.
+*not* good at "was that the end of a sentence?" Chapters 4-7 used
+the `VADConfig()` default of 50 ms silence: fast, but it cuts users
+off at natural mid-sentence pauses. To be safe, a pure-silence
+pipeline waits ~800 ms instead, and this chapter's `vad` backend sets
+that baseline explicitly. Most of that 800 ms is slack — the user
+was done 300-500 ms ago.
 
 Humans don't cue off silence; we cue off **intonation**.
 
@@ -831,8 +835,8 @@ transcription. On `VADStopSpeaking`, we call
 ONNX doesn't block the event loop. Typical cost: 30-50 ms per
 call.
 
-- Probability ≥ threshold → commit: emit `speech_ended` now.
-- Probability < threshold → pending: do **not** emit; keep
+- Probability > threshold → commit: emit `speech_ended` now.
+- Probability ≤ threshold → pending: do **not** emit; keep
   accumulating audio. If a new `VADStartSpeaking` arrives, resume
   the same turn. If no new speech arrives for `SMART_FALLBACK_MS`
   (800 ms), force-commit.
@@ -916,9 +920,11 @@ Smart-turn is a classifier, not an oracle. Expected misfires:
 
 ## Production reference
 
-`TurnManager.on_vad_stop` in `src/easycat/turn_manager.py` wires
-smart-turn through the same 5-state FSM we pointed at in
-chapter 4. The core idea is identical to what we just built;
+`TurnManager` in `src/easycat/turn_manager.py` wires smart-turn
+through the same 5-state FSM we pointed at in chapter 4: VAD events
+enter via `on_vad_event`, a stop goes to `_handle_speech_stop`, and
+the `_silence_timeout` task runs the detector on a bounded trailing
+window (`_detector_audio_window()`) rather than the whole turn. The core idea is identical to what we just built;
 the production version coordinates with barge-in (chapter 9),
 cancel tokens, and the action queue.
 
@@ -939,8 +945,11 @@ cancel tokens, and the action queue.
    missing or unknown sequences are rejected rather than scored partially.
 2. Record *"I was thinking… we should order pizza."* Run
    `--backend smart`. Read the journal. Did smart-turn say done
-   during the "…" pause? (If yes, that's a 300-500 ms latency
-   win. If no, the fallback silence timeout will still commit.)
+   during the "…" pause? (If yes, that is a false positive: the
+   turn committed on half a sentence and the bot cut the user off.
+   The right verdict is "not done": the turn goes pending and the
+   next `VADStartSpeaking` resumes it. The latency win only counts
+   at the real end of the utterance.)
 3. Find an utterance where the `vad` backend gets it right and
    `smart` gets it wrong. Keep the bundle — it's a real-world
    misfire to refer back to when you read

@@ -275,12 +275,16 @@ async def drain_to_speaker(
 
 
 async def run_turn(transport, stt, client, tts, journal) -> None:
-    final_text = ""
+    # A turn can yield several FINAL segments; join them (as chapter 4
+    # does) and stamp the gap start at the last one.
+    finals: list[str] = []
     stt_final_t = None
     async for event in stt.events():
         if event.type == STTEventType.FINAL:
-            final_text = event.text
+            if event.text.strip():
+                finals.append(" ".join(event.text.split()))
             stt_final_t = time.monotonic()
+    final_text = " ".join(finals)
 
     if not final_text.strip() or stt_final_t is None:
         return

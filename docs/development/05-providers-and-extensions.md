@@ -325,11 +325,11 @@ means graceful synthesis stop; `cancel()` means immediate discard. STT
 
 ### Reconnect semantics
 
-Every WebSocket-backed STT/TTS/transport provider shares one reconnect
+Every client-side WebSocket STT/TTS provider shares one reconnect
 implementation:
-[`reconnecting_ws.py`](../../src/easycat/reconnecting_ws.py). Read it before
-writing reconnect logic in a provider — an in-provider retry loop will fight
-this one.
+[`reconnecting_ws.py`](../../src/easycat/reconnecting_ws.py); the built-in
+server-side transports do not use it. Read it before writing reconnect logic
+in a provider — an in-provider retry loop will fight this one.
 
 The pivotal detail is that **the presence of an `on_reconnect` callback is
 itself the policy switch.** Inside `recv_iter`:
@@ -339,10 +339,12 @@ itself the policy switch.** Inside `recv_iter`:
   session, so they surface the error and let the caller restart cleanly.
 - **With `on_reconnect`** — the socket is re-established under the same
   retry/backoff policy as the initial `connect()`, the hook re-primes provider
-  session state, and iteration resumes. `WebSocketSTTBase` therefore passes a
-  deliberately empty `_noop_reconnect` for providers whose whole session
-  travels in the URL query string (Deepgram, Cartesia): without *some* hook
-  they would die silently on any transient drop.
+  session state, and iteration resumes. `WebSocketSTTBase` therefore falls
+  back to a deliberately empty `_noop_reconnect` when a subclass passes no
+  hook, so a provider configured entirely by its URL still reconnects instead
+  of re-raising. Every built-in WebSocket STT provider (Deepgram, Cartesia,
+  ElevenLabs, OpenAI Realtime) passes its own hook to fence or promote state
+  from the dropped socket.
 
 Three consequences follow, and each one is a real bug someone has already hit:
 
@@ -350,7 +352,9 @@ Three consequences follow, and each one is a real bug someone has already hit:
   to the previous socket. Deepgram's `from_finalize` acknowledgements carry no
   request id and are scoped to one physical connection, so its hook closes the
   old audio epoch and promotes the last partial rather than letting a stale
-  ledger suppress the replacement socket's next `Finalize`.
+  ledger suppress the replacement socket's next `Finalize`. Cartesia's
+  `_on_reconnect` likewise promotes its last partial to a non-turn-ending
+  final and fences the dropped socket's audio epoch.
 - Reconnect churn is bounded twice: `_connect_with_retry` caps failed
   *attempts* for one reconnect, and `recv_iter` reuses `max_retries` as a
   per-stream cap on *successful* reconnect cycles, so a peer that accepts and
@@ -430,7 +434,9 @@ in scope.
 For an in-tree STT/TTS provider:
 
 1. add one implementation module and typed config;
-2. add one `ProviderSpec` to the family catalog;
+2. add one `ProviderSpec` to the family catalog and add its config class to
+   the `STTConfig`/`TTSConfig` union in the same factory (pinned by
+   [`test_builtin_config_typing_unions_match_catalog_specs`](../../tests/providers/test_provider_registration.py));
 3. implement `version_info`, teardown, normalized events, and error
    publication;
 4. verify string parsing and config construction;

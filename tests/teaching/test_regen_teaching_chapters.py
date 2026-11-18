@@ -653,7 +653,7 @@ def test_every_exercise_hint_is_revealed_one_at_a_time_between_attempts() -> Non
             assert re.search(r"^\d+\. ", outside_disclosures, re.MULTILINE) is None
 
     assert total_blocks == 72
-    assert total_disclosures == 281
+    assert total_disclosures == 282
 
 
 def test_exercise_completion_is_moved_after_the_self_check() -> None:

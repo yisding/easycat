@@ -131,11 +131,14 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 4</summary>
 
-Doctor's eight check families are Python version, EasyCat version
-   (including an informational list of importable integration extras),
-   provider environment variables, provider reachability,
-   `onnxruntime`, microphone, journal writability, and disk space.
-   `--environment production` omits the local-microphone row. Doctor
+Doctor's always-on check families are Python version, EasyCat
+   version (including an informational list of importable integration
+   extras), provider environment variables, provider reachability,
+   `onnxruntime`, the audio resampling backend (`audio_resampling`:
+   SoXR vs the linear fallback, optional), microphone, journal
+   writability, and disk space. Scaffold/selection rows appear only
+   when a scaffolded app is selected. `--environment production` omits
+   the local-microphone row. Doctor
    does not probe the noise-reduction or echo-cancellation extras.
 
 </details>

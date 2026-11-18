@@ -141,7 +141,10 @@ class MyWorkflow:
         # Toy intent check; a real app would route via tool calls.
         if any(w in text.lower() for w in ("bye", "hang up", "goodbye")):
             # Ask the session to stop after this turn finishes speaking.
-            self._actions.enqueue(EndCallAction(reason="user requested hang-up"))
+            # no_interrupt=True holds barge-in until the hang-up runs.
+            self._actions.enqueue(
+                EndCallAction(reason="user requested hang-up", no_interrupt=True)
+            )
             reply = "Sure, ending the call. Goodbye."
             self._history.append({"role": "assistant", "content": reply})
             yield reply
@@ -177,7 +180,7 @@ class MyWorkflow:
         self.replace_last_assistant_text(f"{delivered_text}{suffix}")
 
     def replace_last_assistant_text(self, text: str) -> None:
-        """Let interruption and Markdown cleanup update private history."""
+        """Let interruption (and EasyConfig strip_markdown cleanup) update private history."""
         for message in reversed(self._history):
             if message["role"] == "assistant":
                 message["content"] = text

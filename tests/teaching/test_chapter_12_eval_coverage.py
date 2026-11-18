@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import sys
 import types
 from pathlib import Path
 
 import pytest
 
+from easycat.debug.testing import load_bundle
 from tests.teaching import _script_runner as script_runner
 
 ROOT = Path(__file__).parents[2]
@@ -122,6 +124,64 @@ def test_barge_f1_is_not_invented_without_positive_examples(capsys, monkeypatch)
     output = capsys.readouterr().out
     assert "TP=0  FP=0  FN=0  TN=3" in output
     assert "precision = n/a   recall = n/a   F1 = n/a" in output
+
+
+def _copy_labeled_set(tmp_path: Path, labels: dict[str, str]) -> tuple[Path, Path]:
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    rows = ["bundle,reference_transcript,had_real_barge_in"]
+    for name, real in labels.items():
+        shutil.copy(CHAPTER / "bundles" / name, bundles / name)
+        records = load_bundle(bundles / name).records()
+        text = next(r["data"]["text"] for r in records if r["name"] == "stt.final")
+        rows.append(f"{name},{text},{real}")
+    csv_path = tmp_path / "ground_truth.csv"
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return bundles, csv_path
+
+
+@pytest.mark.parametrize(
+    ("labels", "matrix", "scores"),
+    [
+        (
+            # Every real barge-in missed: recall is 0, precision has no predictions.
+            {"turn_01_fast.bundle": "1", "turn_05_medium.bundle": "1"},
+            "TP=0  FP=0  FN=2  TN=0",
+            "precision = n/a   recall = 0.00   F1 = 0.00",
+        ),
+        (
+            # Only a ghost interruption: precision is 0, recall has no positives.
+            {"turn_01_fast.bundle": "0", "turn_03_ghost_interrupt.bundle": "0"},
+            "TP=0  FP=1  FN=0  TN=1",
+            "precision = 0.00   recall = n/a   F1 = 0.00",
+        ),
+    ],
+)
+def test_barge_f1_is_zero_when_every_positive_case_is_wrong(
+    tmp_path: Path, capsys, monkeypatch, labels: dict[str, str], matrix: str, scores: str
+) -> None:
+    evals = load_script("evals.py")
+    bundles, csv_path = _copy_labeled_set(tmp_path, labels)
+    monkeypatch.setattr(sys, "argv", ["evals.py", str(bundles), str(csv_path)])
+
+    evals.main()
+    output = capsys.readouterr().out
+    assert matrix in output
+    assert scores in output
+
+
+def test_fixture_timestamps_share_one_turn_clock() -> None:
+    bundles = sorted((CHAPTER / "bundles").rglob("*.bundle"))
+    assert bundles
+    for path in bundles:
+        records = list(load_bundle(path).records())
+        times = {r["name"]: r["data"]["t_ms"] for r in records if "t_ms" in r["data"]}
+        start = times["turn.started"]
+        assert all(start <= t <= start + 10_000 for t in times.values()), path
+        if "interruption.start" in times:
+            assert times["interruption.start"] >= times["tts.first_audio"], path
+        replies = [r["data"]["text"] for r in records if r["name"] == "stage.tts.execute"]
+        assert replies and not any(text.startswith("sentence ") for text in replies), path
 
 
 @pytest.mark.asyncio

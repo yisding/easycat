@@ -128,9 +128,9 @@ async def run_streaming(
                         "event_type": event.type.value,
                         "text": event.text,
                         "offset_ms": offset_ms,
-                        # t_ms mirrors the later chapters' field so downstream
-                        # scripts (ch 12's evals.py, etc.) can read this bundle
-                        # without a translator.
+                        # t_ms is an absolute monotonic timestamp using the
+                        # same field name later chapters use; offset_ms is
+                        # relative to capture start.
                         "t_ms": time.monotonic() * 1000,
                     },
                 )

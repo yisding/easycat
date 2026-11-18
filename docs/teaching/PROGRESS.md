@@ -281,16 +281,17 @@ Score the result against all four criteria below. Mark each criterion **pass** o
 - [ ] **Recall earlier:** before the narrative, retrieve Chapter 8 — Smart-turn in [Recall before
   reading](./10-cleaning-signal/#recall-before-reading); keep the first answer and its
   evidence-backed repair.
-- [ ] **Predict:** What changes with aligned AEC reference audio, and what should fail when
+- [ ] **Predict:** Does every mic frame receive an aligned reference frame, and what must fail when
   reference audio is missing or short?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`
   — enough for this card's hardware-free checkpoint. The chapter's own `main.py` may need more; see
   [its prerequisites](./10-cleaning-signal/#prerequisites).
 - [ ] **Run:** `uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py`.
-- [ ] **Find:** aligned reference audio changes RMS by -12.041 dB; missing or short references
-  fail.
-- [ ] **Reflect:** Tie each failure to the missing replay input and explain what aligned reference
-  changes.
+- [ ] **Find:** both mic frames are fed a reference (`reference_frames_fed` = 2); the -12.041 dB
+  comes from two 0.5x stand-in filters, not echo removal; missing or short references fail before
+  AEC runs.
+- [ ] **Reflect:** Tie each failure to the missing replay input and explain why reference feeding
+  alone cannot prove echo removal.
 - [ ] **Practice:** complete [the chapter exercises](./10-cleaning-signal/EXERCISES.md) and keep an
   attempt record for every task.
 - [ ] **Retrieve:** pass all 4 numbered questions in [the closed-book

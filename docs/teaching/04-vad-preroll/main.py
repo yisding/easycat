@@ -151,12 +151,16 @@ async def parrot(
                 # Drain the event queue until the sentinel from end_stream().
                 # A VADStop before STT saw any speech is harmless — we just
                 # close an empty stream and get no FINAL back.
+                # One VAD turn can yield several FINAL segments; each carries
+                # only its own words, so join them like production does.
                 active_stt = stt
+                finals: list[str] = []
                 try:
                     await active_stt.end_stream()
                     async for event in active_stt.events():
-                        if event.type == STTEventType.FINAL:
-                            collected_final = event.text
+                        if event.type == STTEventType.FINAL and event.text.strip():
+                            finals.append(" ".join(event.text.split()))
+                    collected_final = " ".join(finals)
                 finally:
                     stt = None
                     await close_if_supported(active_stt)

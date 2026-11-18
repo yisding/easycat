@@ -57,10 +57,13 @@ def _write(
 def build_bug_01_empty_final(output_root: Path = HERE) -> None:
     """Turn entered PROCESSING but STT committed an empty final.
 
-    Root cause (in solutions.md): pre-roll off-by-one; the very first
-    speech frame was dropped, STT thought the user trailed off into
-    silence, and emitted `text=""`. The agent stage never fires
-    because ``run_turn`` short-circuits on empty input.
+    Root cause (in solutions.md): no audio reached STT. The turn opened
+    a stream at VAD-on, but neither the cached pre-roll nor the live
+    speech frames were forwarded to it (``stt.input`` reports zero
+    frames), so STT had nothing to transcribe and emitted `text=""`.
+    A lost onset would garble the first word instead (chapter 4). The
+    agent stage never fires because ``run_turn`` short-circuits on
+    empty input.
     """
     j = InMemoryRingBuffer(capacity=1_000)
     sid = "ch11-bug01"
@@ -68,6 +71,14 @@ def build_bug_01_empty_final(output_root: Path = HERE) -> None:
     t = 1_000_000.0
     _emit(j, "turn.started", sid, {"stage": "turn", "t_ms": t}, turn_id=turn_id)
     _emit(j, "stt.partial", sid, {"stage": "stt", "text": ""}, turn_id=turn_id)
+    # Representative synthetic record: what the turn forwarded to STT.
+    _emit(
+        j,
+        "stt.input",
+        sid,
+        {"stage": "stt", "frames_sent": 0, "bytes_sent": 0},
+        turn_id=turn_id,
+    )
     _emit(
         j,
         "stt.final",
@@ -124,7 +135,7 @@ def build_bug_02_tts_stutter(output_root: Path = HERE) -> None:
         {"stage": "agent", "t_ms": 2_001_400.0},
         turn_id=turn_id,
     )
-    # Three sentences; one of them spent ~1.8 s in WS reconnect.
+    # Three sentences; one of them spent ~1.4 s in a WebSocket reconnect.
     _emit(
         j,
         "stage.tts.execute",
@@ -136,28 +147,28 @@ def build_bug_02_tts_stutter(output_root: Path = HERE) -> None:
         j,
         "ws.reconnect.attempt",
         sid,
-        {"stage": "tts", "provider": "openai_tts", "attempt": 1},
+        {"stage": "tts", "provider": "cartesia_tts", "attempt": 1},
         turn_id=turn_id,
     )
     _emit(
         j,
         "ws.reconnect.failure",
         sid,
-        {"stage": "tts", "provider": "openai_tts", "attempt": 1, "error": "conn reset"},
+        {"stage": "tts", "provider": "cartesia_tts", "attempt": 1, "error": "conn reset"},
         turn_id=turn_id,
     )
     _emit(
         j,
         "ws.reconnect.attempt",
         sid,
-        {"stage": "tts", "provider": "openai_tts", "attempt": 2},
+        {"stage": "tts", "provider": "cartesia_tts", "attempt": 2},
         turn_id=turn_id,
     )
     _emit(
         j,
         "ws.reconnect.success",
         sid,
-        {"stage": "tts", "provider": "openai_tts", "attempt": 2, "elapsed_ms": 1400.0},
+        {"stage": "tts", "provider": "cartesia_tts", "attempt": 2, "elapsed_ms": 1400.0},
         turn_id=turn_id,
     )
     _emit(

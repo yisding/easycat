@@ -130,7 +130,11 @@ The test is whether the current response **depends on the result**.
 ## 3. Plug a JSON-leak
 
 **Task.** Make a tool that returns a 5 KB JSON blob (mock weather
-forecast). Verify none of it reaches TTS.
+forecast) whose keys and values include a few distinctive markers
+(for example a key `zz_station_id` and a value `ZZ-MARKER-7`).
+Verify none of it reaches TTS: across all `stage.tts.execute`
+records, no `text` may contain `{`, `}`, or any of those markers, so
+fragments without braces count as leaks too.
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**
@@ -141,30 +145,42 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 3</summary>
 
-The chapter's `run_agent_streaming` already routes tool deltas
-   away from `sentence_queue` — `delta.tool_calls` accumulates
-   into a separate buffer (`tool_calls`), `delta.content` goes to
-   the sentence splitter. Confirm this in the code.
+There are two leak paths. The first is call-argument deltas:
+   `delta.tool_calls` carries the LLM's *arguments* (not the tool's
+   result) and accumulates into a separate buffer (`tool_calls`),
+   while `delta.content` goes to the sentence splitter. Confirm this
+   in the code.
 
 </details>
 
 <details markdown="1">
 <summary>Hint 2 of 3</summary>
 
-If a leak happened in your own code, the symptom would be TTS
-   reading `{ "temperature": 17 }` aloud — curly braces and all.
-   Walk the stream until you find a branch that's accumulating
-   tool deltas into the same buffer as content.
+The second path is the result itself. It never enters a stream
+   delta: it goes into `messages` as a `role="tool"` message. It
+   reaches TTS only if the model repeats the raw JSON in its
+   follow-up reply, and then TTS reads `{ "temperature": 17 }`
+   aloud — curly braces and all. A 5 KB blob makes that echo more
+   likely.
 
 </details>
 
 <details markdown="1">
 <summary>Hint 3 of 3</summary>
 
-The structural defense is `MarkdownStripProcessor` (and friends
-   in chapter 14's output-processor stack) — but the *real*
-   defense is keeping the streams separate at parse time. By the
-   time it's reached TTS it's already too late.
+Defend each path separately. For argument deltas, keep the
+   streams separate at parse time. For the echoed result, use a
+   deterministic defense: return a short plain-sentence summary from
+   the tool so the raw blob never enters `messages`, or validate the
+   text where `main.py` queues it for TTS. Check every streamed
+   sentence and the final reply for braces *and* the blob's markers,
+   and drop or replace any match before it is queued. (This chapter
+   queues replies itself and does not wire `output_processors`.)
+   A system-prompt instruction
+   to speak results in plain sentences helps, but it cannot guarantee
+   the no-leak check on its own.
+   `MarkdownStripProcessor` is not a JSON defense: `strip_markdown`
+   leaves braces and quotes in place.
 
 </details>
 <!-- END auto:exercise-hints -->

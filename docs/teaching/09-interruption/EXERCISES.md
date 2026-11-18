@@ -39,10 +39,11 @@ the next hint; keep each attempt in your evidence record.
 <summary>Hint 1 of 5</summary>
 
 The toy estimator multiplies `bytes_accepted` by ~15 chars / 48000
-   bytes / second (24 kHz × 2 bytes/sample). The constant is an
-   *average* — a fast word like "yes" lasts ~150 ms but the formula
-   assigns it ~500 ms; a slow word like "elephant" lasts ~600 ms
-   and gets the same ~500 ms.
+   bytes / second (24 kHz × 2 bytes/sample), so it charges every
+   character 1/15 s (~67 ms): "yes" gets ~200 ms and "elephant"
+   ~530 ms. Errors come from text whose spoken length differs from its
+   character count ("1999", "Dr.", pauses at commas and full stops) and
+   from each voice's own rate.
 
 </details>
 
@@ -60,8 +61,10 @@ The playback queue also lies: `transport.send_audio=True`
 <details markdown="1">
 <summary>Hint 3 of 5</summary>
 
-Net effect: `heard_text` *usually* overshoots by 0-2 words. On
-   a *slow* word at the start of a sentence it can undershoot.
+Net effect: `heard_text` *usually* overshoots, by however much
+   audio was queued when you interrupted — whole sentences when TTS
+   runs ahead of playback. On a *slow* word at the start of a sentence
+   it can undershoot.
 
 </details>
 
@@ -124,8 +127,12 @@ The bug arises when you append `heard_text` back into the
 <details markdown="1">
 <summary>Hint 3 of 3</summary>
 
-Production `interruption.py` keeps both: stripped for the user
-   model, original for any tool that wants the structured text.
+Production makes the same choice: `TurnRunner` strips markdown,
+   rewrites the agent's last assistant message to the stripped text
+   (`replace_last_assistant_text`), and keeps the original only as a
+   journaled markdown-strip record for debugging. `interruption.py`
+   then estimates heard text over the TTS chunk text actually
+   synthesized.
 
 </details>
 <!-- END auto:exercise-hints -->
@@ -217,9 +224,11 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 3 of 4</summary>
 
-Change the probe's fallthrough condition to act as if the event were
-   consumed. The STT lifecycle disappears, which is the old behavior:
-   the bot stops, but the user must repeat the interruption.
+Temporarily change the final `return` in `cancel.py`'s
+   `route_barge_in` to report `consumed=True`, then rerun the probe (it
+   loads `cancel.py`). The `stt.*` entries disappear, which is the old
+   behavior: the bot stops, but the user must repeat the interruption.
+   Revert the change afterwards.
 
 </details>
 

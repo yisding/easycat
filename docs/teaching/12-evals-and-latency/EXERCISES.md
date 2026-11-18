@@ -78,8 +78,10 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 4</summary>
 
-The rubric lives in `llm_judge.py`. Extend the prompt and
-   `SCORE_KEYS` with a `filler_appropriate: 1-5` field. The
+The rubric lives in `llm_judge.py`. Copy it (for example under
+   `.easycat/`) rather than editing it in place, then extend the
+   copy's prompt and `SCORE_KEYS` with a `filler_appropriate: 1-5`
+   field. The
    judge's evaluation prompt should ask whether filler utterances
    landed at appropriate moments and matched the tool that was
    running.
@@ -109,8 +111,16 @@ LLM-as-judge is most useful when the rubric dimension is
 <details markdown="1">
 <summary>Hint 4 of 4</summary>
 
-Copy a `tools_*.bundle` from chapter 7's runs/ into chapter
-   12's bundles/ for the judge to consume.
+Copy a `ch07-tools-*.bundle` from `docs/teaching/07-tools/runs/`
+   for the judge to consume (`tools_01_weather.bundle` here is a
+   provider-free stand-in whose first sentence is weather filler).
+   A chapter-7 bundle has no `stt.final` (the user text lives in
+   `turn.gap.data.text`), and `extract_transcript` drops tool records,
+   so the judge cannot see which tool a filler preceded. Extend the
+   same copy's `extract_transcript`: fall back to `turn.gap.data.text`, and
+   walk the records in sequence order emitting `tool.call.started`
+   names alongside each `stage.tts.execute` line's `kind` (`filler`
+   or `reply`) and `tool_call_id`.
 
 </details>
 <!-- END auto:exercise-hints -->
@@ -129,9 +139,10 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 4</summary>
 
-Start in `tests/teaching/` with a focused test file, for example
-   `test_latency_budget.py`. Use `easycat.debug.testing.load_bundle` to load
-   each fixture, the same `turn.gap` extraction as `evals.py`, and
+Start a scratch file outside the maintained guard suite, for example
+   `.easycat/teaching/12-evals-and-latency/test_latency_budget.py`, and run
+   it with `uv run pytest <that path>`. Use
+   `easycat.debug.testing.load_bundle` to load each fixture, the same `turn.gap` extraction as `evals.py`, and
    `easycat.validation.latency.LatencyPercentileStats.from_values` for the
    percentile. Reusing the maintained helper keeps the test aligned with the
    debug CLI.
@@ -155,7 +166,10 @@ The six chapter-12 fixtures include `turn_02_slow_agent`, which is
    *deliberately* 2420 ms to first audio. With this small sample, the maintained
    clamped-exclusive P95 is the observed maximum, so your test should flag it.
    That's the right behavior: the test catches the slowdown the fixture was
-   built to represent.
+   built to represent. A test meant to stay green in a guarded suite would
+   instead assert that the gate trips: the budget check fails on the full set
+   (for example under `pytest.raises(AssertionError)`) and passes once
+   `turn_02_slow_agent.bundle` is excluded.
 
 </details>
 
@@ -277,9 +291,12 @@ A candidate comparison needs repeated, representative measurements.
 
 ## 6. (Bonus) Build a real eval set
 
-**Task.** Record 20 of your own chapter-6 or chapter-10 turns,
-hand-type the reference transcripts into a CSV, and run
-`evals.py` against the directory.
+**Task.** Record 20 of your own chapter-6 turns, each as its own
+single-turn session (speak one utterance, then stop the run), so every
+bundle carries exactly one `stt.final` and one `turn.gap` as
+[Coverage before scores](./README.md#coverage-before-scores) requires.
+Hand-type the reference transcripts into a CSV, and run `evals.py`
+against the directory.
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**
@@ -294,7 +311,9 @@ Real numbers feel different. P95 over 6 bundles is too unstable to
    generalize; twenty turns are better than six, but no fixed sample count
    guarantees precision. Report the number of turns and reference words,
    then estimate uncertainty—for example by bootstrapping turns—before
-   claiming a small regression.
+   claiming a small regression. If WER looks high on turns that sounded
+   right, check case and punctuation first: normalise both sides the
+   same way and report the normalisation with the number.
 
 </details>
 

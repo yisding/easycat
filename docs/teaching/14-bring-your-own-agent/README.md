@@ -193,7 +193,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -75,115 +76,192 @@
+@@ -75,115 +76,195 @@
      )
 
 
@@ -305,7 +305,10 @@
 +        # Toy intent check; a real app would route via tool calls.
 +        if any(w in text.lower() for w in ("bye", "hang up", "goodbye")):
 +            # Ask the session to stop after this turn finishes speaking.
-+            self._actions.enqueue(EndCallAction(reason="user requested hang-up"))
++            # no_interrupt=True holds barge-in until the hang-up runs.
++            self._actions.enqueue(
++                EndCallAction(reason="user requested hang-up", no_interrupt=True)
++            )
 +            reply = "Sure, ending the call. Goodbye."
 +            self._history.append({"role": "assistant", "content": reply})
 +            yield reply
@@ -357,7 +360,7 @@
 +        self.replace_last_assistant_text(f"{delivered_text}{suffix}")
 +
 +    def replace_last_assistant_text(self, text: str) -> None:
-+        """Let interruption and Markdown cleanup update private history."""
++        """Let interruption (and EasyConfig strip_markdown cleanup) update private history."""
 +        for message in reversed(self._history):
 +            if message["role"] == "assistant":
 +                message["content"] = text
@@ -550,8 +553,8 @@ workflow object.
 Every `agent=` value the config accepts is routed through
 `auto_adapt_agent()`, which picks the right concrete bridge. EasyCat then wraps
 the result in `AgentRunner` unless wrapping is disabled, so Session can drive it
-through one bridge surface. So the "Session orchestration" in chapters 2-13 has
-always been framework-agnostic; bridges are the seam.
+through one bridge surface. So the Session orchestration you adopted in chapter 13
+is framework-agnostic; bridges are the seam.
 
 ## The three things ch 14's script shows
 
@@ -626,7 +629,10 @@ class MyWorkflow:
         # Toy intent check; a real app would route via tool calls.
         if any(w in text.lower() for w in ("bye", "hang up", "goodbye")):
             # Ask the session to stop after this turn finishes speaking.
-            self._actions.enqueue(EndCallAction(reason="user requested hang-up"))
+            # no_interrupt=True holds barge-in until the hang-up runs.
+            self._actions.enqueue(
+                EndCallAction(reason="user requested hang-up", no_interrupt=True)
+            )
             reply = "Sure, ending the call. Goodbye."
             self._history.append({"role": "assistant", "content": reply})
             yield reply
@@ -662,7 +668,7 @@ class MyWorkflow:
         self.replace_last_assistant_text(f"{delivered_text}{suffix}")
 
     def replace_last_assistant_text(self, text: str) -> None:
-        """Let interruption and Markdown cleanup update private history."""
+        """Let interruption (and EasyConfig strip_markdown cleanup) update private history."""
         for message in reversed(self._history):
             if message["role"] == "assistant":
                 message["content"] = text
@@ -702,8 +708,11 @@ the payload as string representations.
 allowlist: message count, role sequence, last-assistant character count, and
 whether a session action is pending. It omits prompt text, user text, the
 `AsyncOpenAI` client, and the `SessionActions` object. The explicit dictionary
-is author-owned artifact data; do not put credentials or sensitive message
-content in it and assume another redaction pass will rescue it.
+is author-owned artifact data: a sensitive field such as `last_user_text` is
+persisted as-is. The serializer drops obviously credential-named keys such as
+`api_key` only as a backstop; it is not an allowlist, so do not put credentials
+or sensitive message content in the snapshot and expect a later pass to rescue
+it.
 
 Run the provider-free state-boundary probe:
 
@@ -725,8 +734,15 @@ drains the queue after the turn, dispatching each action to the
 first executor that claims it via `supports()`.
 
 ```python
-actions.enqueue(EndCallAction(reason="user requested hang-up"))
+actions.enqueue(EndCallAction(reason="user requested hang-up", no_interrupt=True))
 ```
+
+`no_interrupt=True` suppresses barge-in until the action runs, so a caller
+who talks over the farewell cannot cancel the hang-up. Interruptible actions
+(the dataclass default, `no_interrupt=False`) are fenced instead: when their
+turn is cancelled, the session drops them and writes `session_action_failed`.
+The `actions.end_call(...)` helper defaults to `no_interrupt=True` for this
+reason.
 
 The seven action types:
 
@@ -766,10 +782,12 @@ processors live in `src/easycat/llm_output_processing.py`:
 
 Processors run serially, fail-open: an exception in one is logged
 and the next one still runs. The Session applies the full chain to
-the **TTS payload**. Only `strip_markdown` is also written back to
-the bridge's chat history (via `replace_last_assistant_text`), so
-phonetic replacements and pauses shape what the user *hears* but
-the LLM still sees the original text next turn.
+the **TTS payload** only — `MarkdownStripProcessor` included — so
+markdown stripping, phonetic replacements, and pauses shape what the
+user *hears* but the LLM still sees the original text next turn. The
+separate `EasyConfig(strip_markdown=True)` flag (off by default, unset
+here) is the one path that also rewrites the bridge's chat history,
+via `replace_last_assistant_text`.
 
 `default_pronunciation_processors(...)` is a factory that wires the
 common stack if you don't want to hand-build the list. It always adds
@@ -925,24 +943,34 @@ does not leak the prior list.
 ## Try breaking it
 
 1. Change `on_user_turn` to `async def on_user_turn(self, text)`
-   — drop `recorder` / `cancel_token`. You just demoted to shallow
-   mode. Temporarily comment out `apply_interruption` as well so you
-   exercise the default shallow contract, then interrupt the bot
+   — drop `recorder` / `cancel_token`, and delete the two-line
+   `if cancel_token is not None and cancel_token.is_cancelled: break`
+   check that reads it. You just demoted to shallow mode.
+   Temporarily comment out `apply_interruption` as well so you
+   exercise the default shallow contract, and comment out the
+   `assert bridge.deep_mode` guard in `main()` so the script still
+   starts, then interrupt the bot
    mid-sentence. What stops, and what can no longer be reconciled?
    (Hint: inspect `assistant_interruption_notified` and its `notified`
-   field.)
+   field.) Restore all four edits, including the `assert`, when you
+   are done.
 2. Add a `CustomAction` and a 10-line executor that prints it.
    Trigger it from the workflow. How does the journal record the
    action's lifecycle?
-3. Say "Call me at 555-867-5309," then run the printed
-   `journal grep` command for `tts_payload_prepared`. Which parts of
-   the transformation reached the provider, and which SSML timing
-   guarantee was downgraded? Try `style="ellipsis"` and compare the
-   prepared format.
-4. Run `workflow_state_probe.py`, then temporarily add a harmless
-   `api_key: "demo"` field to `snapshot_state()`. The explicit snapshot is
-   author-owned artifact data, so the probe exposes that field. Remove it;
-   the lesson is to allowlist safe metadata, never to test with a real secret.
+3. Ask the bot to read a number back — *"Repeat this number back to
+   me: 555-867-5309"* — because processors transform only assistant
+   output. Then run the printed `journal grep` command for
+   `tts_payload_prepared`. Which transformation reached the provider,
+   and was anything downgraded? Now pass `phone_pause_style="ssml"` to
+   `default_pronunciation_processors` and compare `prepared_text`,
+   `prepared_format`, and `ssml_downgraded`.
+4. Run `workflow_state_probe.py`, then temporarily add a
+   `"last_user_text": text` field to `snapshot_state()` (read `text` from the
+   last user message). The explicit snapshot is author-owned artifact data, so
+   the field reaches `artifact_payload` unredacted; the serializer's
+   credential-name scrub would drop an `api_key` key, but only as a backstop.
+   Remove it; the lesson is to allowlist safe metadata, never to test with a
+   real secret.
 
 <!-- BEGIN auto:practice-handoff -->
 ## Practice and self-check

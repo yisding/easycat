@@ -103,3 +103,51 @@ def test_replay_journal_retains_more_than_default_capacity() -> None:
     assert records[0].name == "audio.config"
     assert sum(record.name == "replay.frame" for record in records) == frame_count
     assert records[-1].name == "replay.summary"
+
+
+def test_replay_runs_aec_before_nr_and_counts_only_fed_reference(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import asyncio
+
+    replay = load_replay()
+    calls: list[str] = []
+
+    class Stage:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def version_info(self):
+            return {"provider": self.name}
+
+        def feed_reference(self, _chunk) -> None:
+            calls.append(f"{self.name}.feed_reference")
+
+        async def process(self, chunk):
+            calls.append(f"{self.name}.process")
+            return chunk
+
+    class SilentVAD:
+        async def process(self, _chunk):
+            if False:
+                yield None
+
+    audio_format = replay.AudioFormat(sample_rate=16_000, channels=1, sample_width=2)
+    frame = b"\0" * 640
+    monkeypatch.setattr(replay, "_read_wav", lambda _path: (frame, audio_format))
+    monkeypatch.setattr(replay, "create_noise_reducer", lambda _config: Stage("nr"))
+    monkeypatch.setattr(replay, "create_echo_canceller", lambda _config: Stage("aec"))
+    monkeypatch.setattr(replay, "create_vad", lambda _config: SilentVAD())
+    monkeypatch.setattr(replay, "export_debug_bundle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(replay, "RUNS_DIR", tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    summary = asyncio.run(replay.run(Path("mic.wav"), Path("ref.wav"), "on", "on"))
+    assert calls == ["aec.feed_reference", "aec.process", "nr.process"]
+    assert summary["reference_frames_fed"] == 1
+
+    # With --aec off a --ref file is read but never reaches an echo canceller.
+    calls.clear()
+    summary = asyncio.run(replay.run(Path("mic.wav"), Path("ref.wav"), "on", "off"))
+    assert calls == ["nr.process"]
+    assert summary["reference_frames_fed"] == 0

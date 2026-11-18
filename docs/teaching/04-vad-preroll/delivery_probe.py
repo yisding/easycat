@@ -45,7 +45,9 @@ class ScriptedSTT:
         self.events_log.append("stt.end")
 
     async def events(self):
-        yield STTEvent(type=STTEventType.FINAL, text="hello from vad")
+        # Two FINAL segments for one VAD turn: the parrot must join them.
+        yield STTEvent(type=STTEventType.FINAL, text="hello from")
+        yield STTEvent(type=STTEventType.FINAL, text=" vad ")
 
     async def close(self) -> None:
         self.events_log.append("stt.close")

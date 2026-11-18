@@ -56,9 +56,9 @@ the next hint; keep each attempt in your evidence record.
 The deterministic guarantee is frame routing: without pre-roll,
    audio received before `VADStartSpeaking` is absent from the STT
    stream; with pre-roll, up to the configured 300 ms is replayed in
-   order before the trigger frame. How much leading speech VAD misses
-   varies by utterance, backend, and audio conditions—it is not a fixed
-   ~100 ms.
+   order before the trigger frame. VAD misses at least the 250 ms
+   `min_speech_duration_ms` confirmation gate, plus a model-dependent
+   amount when the first soft frames score below threshold.
 
 </details>
 
@@ -139,10 +139,16 @@ Silero is a small neural net trained on speech vs not-speech. A
 <details markdown="1">
 <summary>Hint 3 of 3</summary>
 
-The journal records both backends' verdicts per chunk. If you
-   produce both bundles and overlay them on the same input
-   (recorded `.wav`), you'll see Silero's verdicts arrive 50-100
-   ms later (it needs context) but be vastly more accurate.
+`main.py` journals `turn.started`, `turn.ended`, and
+   `parrot.delivery`; both scripts read the live mic, so these are
+   two separate takes, not a time-aligned overlay of one input.
+   Compare counts, not timestamps: for the keystroke and fan
+   breakers, count how often `naive_vad.classify`'s `decision`
+   flips from `idle` to `speech`, then count `main.py`'s
+   `turn.started` records for the same breakers. Silero should fire
+   far less often. Its start lag is known, not measured here:
+   `VADConfig.min_speech_duration_ms` (default 250) requires speech
+   for at least that long before it confirms a start.
 
 </details>
 <!-- END auto:exercise-hints -->

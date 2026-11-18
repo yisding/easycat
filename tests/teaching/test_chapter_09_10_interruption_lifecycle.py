@@ -327,3 +327,144 @@ async def test_chapter_10_replay_closes_offline_audio_stages(monkeypatch) -> Non
 
     await module.run(Path("mic.wav"), Path("ref.wav"), "on", "on")
     assert closed == ["vad.close", "aec.close", "nr.close"]
+
+
+@pytest.mark.parametrize("path", ALL_SCRIPTS, ids=lambda path: path.parent.name + "-" + path.stem)
+@pytest.mark.asyncio
+async def test_bot_task_waits_for_queued_playout(path: Path, monkeypatch) -> None:
+    module = load_script(path)
+    monkeypatch.setattr(module, "PLAYOUT_POLL_S", 0)
+
+    class PlayingTransport:
+        def __init__(self) -> None:
+            self.pending = [40.0, 20.0, 0.0]
+            self.polls = 0
+
+        def pending_playout_ms(self) -> float:
+            self.polls += 1
+            return self.pending.pop(0)
+
+    transport = PlayingTransport()
+    extra = () if path.stem == "ignore" else (FakeCancel(),)
+    await module.wait_for_playout(transport, *extra)
+    assert transport.polls == 3
+
+    # Probe and test transports without the hook are not waited on.
+    await asyncio.wait_for(module.wait_for_playout(object(), *extra), timeout=1)
+
+
+@pytest.mark.parametrize("path", ALL_SCRIPTS, ids=lambda path: path.parent.name + "-" + path.stem)
+@pytest.mark.asyncio
+async def test_playout_wait_is_bounded_when_preroll_never_fills(path: Path, monkeypatch) -> None:
+    module = load_script(path)
+    monkeypatch.setattr(module, "PLAYOUT_POLL_S", 0.001)
+    monkeypatch.setattr(module, "PLAYOUT_MARGIN_S", 0.05)
+
+    class UnprimedTransport:
+        """Two queued frames below the pre-roll threshold: playback never starts."""
+
+        def __init__(self) -> None:
+            self.queued_ms = 40.0
+            self.clears = 0
+
+        def pending_playout_ms(self) -> float:
+            return self.queued_ms
+
+        async def clear_audio(self) -> None:
+            self.clears += 1
+            self.queued_ms = 0.0
+
+    transport = UnprimedTransport()
+    extra = () if path.stem == "ignore" else (FakeCancel(),)
+    await asyncio.wait_for(module.wait_for_playout(transport, *extra), timeout=1)
+    # The stale frames are discarded, so a later reply cannot prime the
+    # queue and play them first.
+    assert transport.clears == 1
+    assert transport.pending_playout_ms() == 0
+
+
+@pytest.mark.parametrize("path", ALL_SCRIPTS, ids=lambda path: path.parent.name + "-" + path.stem)
+@pytest.mark.asyncio
+async def test_playout_wait_does_not_clear_audio_that_drained(path: Path, monkeypatch) -> None:
+    module = load_script(path)
+    monkeypatch.setattr(module, "PLAYOUT_POLL_S", 0)
+
+    class DrainingTransport:
+        def __init__(self) -> None:
+            self.pending = [40.0, 20.0, 0.0]
+            self.clears = 0
+
+        def pending_playout_ms(self) -> float:
+            return self.pending.pop(0)
+
+        async def clear_audio(self) -> None:
+            self.clears += 1
+
+    transport = DrainingTransport()
+    extra = () if path.stem == "ignore" else (FakeCancel(),)
+    await module.wait_for_playout(transport, *extra)
+    assert transport.clears == 0
+
+
+@pytest.mark.parametrize(
+    "path", CANCEL_SCRIPTS, ids=lambda path: path.parent.name + "-" + path.stem
+)
+@pytest.mark.asyncio
+async def test_speech_during_playout_tail_still_interrupts(path: Path, monkeypatch) -> None:
+    module = load_script(path)
+    journal = FakeJournal()
+
+    class TailTransport(FakeTransport):
+        def pending_playout_ms(self) -> float:
+            # Everything is enqueued, but the speaker is still playing until cleared.
+            return 0.0 if self.clear_calls else 1_000.0
+
+    transport = TailTransport()
+    stts = [
+        FakeSTT("first question", module.STTEventType.FINAL),
+        FakeSTT("interrupting question", module.STTEventType.FINAL),
+    ]
+    bot_starts: asyncio.Queue[None] = asyncio.Queue()
+    drained = asyncio.Event()
+
+    async def fake_run_agent(*args) -> None:
+        bot_starts.put_nowait(None)
+        await args[2].put(None)
+
+    async def fake_drain(*args) -> None:
+        sentence_queue = sentence_queue_from_drain_args(path, args)
+        while await sentence_queue.get() is not None:
+            pass
+        drained.set()
+
+    monkeypatch.setattr(module, "run_agent", fake_run_agent)
+    monkeypatch.setattr(module, "drain_to_speaker", fake_drain)
+    monkeypatch.setattr(module, "CancelToken", FakeCancel)
+    monkeypatch.setattr(module, "PLAYOUT_POLL_S", 0.001)
+
+    queue: asyncio.Queue = asyncio.Queue()
+    iterator = iter(stts)
+    task = asyncio.create_task(
+        module.coordinator(
+            *coordinator_args(path, queue, lambda: next(iterator), transport, journal)
+        )
+    )
+
+    await queue.put(("speech_started", None))
+    await queue.put(("frame", "first"))
+    await queue.put(("speech_ended", None))
+    await asyncio.wait_for(bot_starts.get(), timeout=1)
+    await asyncio.wait_for(drained.wait(), timeout=1)
+
+    await queue.put(("speech_started", None))
+    await queue.put(("frame", "interrupt"))
+    await queue.put(("speech_ended", None))
+    await asyncio.wait_for(bot_starts.get(), timeout=1)
+
+    assert transport.clear_calls == 1
+    assert "interruption.start" in journal.names
+    assert stts[1].calls == ["start", "audio:interrupt", "end", "close"]
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

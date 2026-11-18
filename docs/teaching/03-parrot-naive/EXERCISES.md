@@ -54,8 +54,9 @@ There is no value at which all six combinations succeed. That's
 <summary>Hint 2 of 3</summary>
 
 The closest sweet spot for *your* voice and *your* environment
-   is your personal compromise. Even that compromise is dominated
-   by a real VAD on the same hardware.
+   is your personal compromise. A real VAD improves the signal the
+   compromise rests on: noise and STT event cadence stop driving the
+   decision, but a silence-length threshold still remains.
 
 </details>
 
@@ -64,8 +65,11 @@ The closest sweet spot for *your* voice and *your* environment
 
 The asymmetric pain: false fires interrupt the user (very bad
    UX); sluggish bots just feel slow (bad UX). Voice-product
-   teams skew toward sluggish for that reason — the chapter 4 fix
-   gets you out of the tradeoff entirely.
+   teams skew toward sluggish for that reason. Chapter 4 swaps the
+   *signal* (acoustic speech probability instead of STT event
+   cadence) but still ends the turn after a short silence, so the
+   tradeoff moves rather than disappears; chapter 8's smart-turn is
+   what attacks it.
 
 </details>
 <!-- END auto:exercise-hints -->

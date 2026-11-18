@@ -54,6 +54,8 @@ from easycat.vad.factory import create_vad
 MODEL = "gpt-5.6-luna"
 PREROLL_FRAMES = 15
 RUNS_DIR = Path(__file__).parent / "runs"
+PLAYOUT_POLL_S = 0.02
+PLAYOUT_MARGIN_S = 0.5
 SESSION_ID = f"ch09a-ignore-{int(time.time())}"
 
 
@@ -149,6 +151,37 @@ async def drain_to_speaker(tts, transport, sentence_queue, journal):
         )
 
 
+async def wait_for_playout(transport) -> None:
+    """Keep the bot task alive until queued speaker audio has played.
+
+    ``send_audio`` only enqueues: finished enqueueing is not finished
+    playing, and this version ignores speech until playback ends. There
+    is no playout event to await, so poll the counter. A reply shorter
+    than the transport pre-roll never starts playing, so the wait is
+    bounded by the queued duration plus a margin, as ``await_drain`` is;
+    audio still queued at the deadline is discarded so it cannot play at
+    the start of a later reply.
+    """
+    pending_playout_ms = getattr(transport, "pending_playout_ms", None)
+    if pending_playout_ms is None:
+        return
+    loop = asyncio.get_running_loop()
+    remaining_ms = pending_playout_ms()
+    deadline = loop.time() + remaining_ms / 1000 + PLAYOUT_MARGIN_S
+    while remaining_ms > 0 and loop.time() < deadline:
+        await asyncio.sleep(PLAYOUT_POLL_S)
+        remaining_ms = pending_playout_ms()
+    if remaining_ms > 0:
+        await discard_stale_playout(transport)
+
+
+async def discard_stale_playout(transport) -> None:
+    """Drop audio that missed its playout deadline (e.g. below the pre-roll)."""
+    clear_audio = getattr(transport, "clear_audio", None)
+    if clear_audio is not None:
+        await clear_audio()
+
+
 async def observe_bot_task(bot_task: asyncio.Task, journal) -> None:
     """Retrieve a background result so failures never become orphan warnings."""
     (result,) = await asyncio.gather(bot_task, return_exceptions=True)
@@ -165,11 +198,13 @@ async def finish_stt_turn(stt) -> str:
     """End, drain, and close one completed STT turn."""
     try:
         await stt.end_stream()
-        final_text = ""
+        # A turn can yield several FINAL segments; join them (as chapters
+        # 4-8 do) instead of keeping only the last one.
+        finals: list[str] = []
         async for event in stt.events():
-            if event.type == STTEventType.FINAL:
-                final_text = event.text
-        return final_text
+            if event.type == STTEventType.FINAL and event.text.strip():
+                finals.append(" ".join(event.text.split()))
+        return " ".join(finals)
     finally:
         await close_if_supported(stt)
 
@@ -244,6 +279,7 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
                         run_agent(client, text, q),
                         drain_to_speaker(tts, transport, q, journal),
                     )
+                    await wait_for_playout(transport)
 
                 bot_task = asyncio.create_task(_bot())
     finally:

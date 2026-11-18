@@ -282,6 +282,11 @@ synonymous with WebSockets. It carries **provider observability**:
 - `STTEvent` and `TTSEvent` data still flow from provider async iterators; the
   session bus is not the audio/transcript stream.
 
+In a production bundle these appear as `ws_reconnect_attempt` /
+`ws_reconnect_success` / `ws_reconnect_failure` records versus a plain `error`
+record. Chapter 11's synthetic bundles spelled them `ws.reconnect.*`; grep a
+real bundle with `uv run easycat journal grep PATH --query ws_reconnect`.
+
 When a journal shows a mysterious latency spike, reconnect records can explain
 it—the same pattern as chapter 11's bug 2. When an HTTP TTS request fails, its
 provider `Error` record supplies a different but equally important trail.

@@ -96,10 +96,12 @@ For each chapter:
 2. open the implementation files linked from the chapter in the order they
    appear (chapter 1's “Read the Code in This Order” seeds the wider tour);
 3. locate the linked contract tests and state what failure each one prevents;
-4. run the suggested inspection command from the repository root; and
+4. run the chapter's inspection command where one is given; otherwise run the
+   contract tests you located in step 3 with `uv run pytest <file> -q` from
+   the repository root; and
 5. answer the checkpoint questions without looking back.
 
-Most chapters use read-only commands such as:
+Useful read-only commands include:
 
 ```bash
 rg "class Session|def create_session" src/easycat tests

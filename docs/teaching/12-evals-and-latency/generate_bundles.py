@@ -55,12 +55,19 @@ def _turn(
     sid: str,
     t_start: float,
     stt_text: str,
+    reply_sentences: list[str],
     agent_first_token_delay_ms: float = 350,
     tts_spans_ms: list[float] | None = None,
-    interruption_t_ms: float | None = None,
+    interruption_after_first_audio_ms: float | None = None,
     tool_calls: list[dict[str, object]] | None = None,
 ) -> None:
     """Emit a canonical turn's worth of records.
+
+    ``reply_sentences`` holds the spoken text of each ``stage.tts.execute``
+    record, one per entry in ``tts_spans_ms``; ``llm_judge.py`` reads it.
+
+    ``interruption_after_first_audio_ms`` places ``interruption.start`` on
+    the same clock as the rest of the turn, that many ms after first audio.
 
     ``tool_calls`` is an optional list of ``{"name", "args", "result",
     "elapsed_ms"}`` dicts; each becomes a paired
@@ -69,12 +76,15 @@ def _turn(
     """
     if tts_spans_ms is None:
         tts_spans_ms = [300]
+    if len(reply_sentences) != len(tts_spans_ms):
+        raise ValueError("reply_sentences needs one sentence per tts_spans_ms entry")
     # The first TTS sentence is the first audible reply. On a tool turn
     # it serves as chapter-7-style filler, so tool execution continues
     # after the user has heard the bot respond.
     first_audio_gap_ms = agent_first_token_delay_ms + tts_spans_ms[0]
     stt_final_t = t_start + 1000
     first_token_t = stt_final_t + agent_first_token_delay_ms
+    first_audio_t = stt_final_t + first_audio_gap_ms
     _emit(journal, "turn.started", sid, {"stage": "turn", "t_ms": t_start})
     _emit(
         journal,
@@ -92,13 +102,13 @@ def _turn(
         journal,
         "tts.first_audio",
         sid,
-        {"stage": "tts", "t_ms": stt_final_t + first_audio_gap_ms},
+        {"stage": "tts", "t_ms": first_audio_t},
     )
     _emit(
         journal,
         "stage.tts.execute",
         sid,
-        {"stage": "tts", "text": "sentence 1", "elapsed_ms": tts_spans_ms[0]},
+        {"stage": "tts", "text": reply_sentences[0], "elapsed_ms": tts_spans_ms[0]},
     )
     for tc in tool_calls or ():
         _emit(
@@ -118,19 +128,19 @@ def _turn(
                 "result": tc["result"],
             },
         )
-    for i, ms in enumerate(tts_spans_ms[1:], start=2):
+    for text, ms in zip(reply_sentences[1:], tts_spans_ms[1:], strict=True):
         _emit(
             journal,
             "stage.tts.execute",
             sid,
-            {"stage": "tts", "text": f"sentence {i}", "elapsed_ms": ms},
+            {"stage": "tts", "text": text, "elapsed_ms": ms},
         )
-    if interruption_t_ms is not None:
+    if interruption_after_first_audio_ms is not None:
         _emit(
             journal,
             "interruption.start",
             sid,
-            {"stage": "vad", "t_ms": interruption_t_ms},
+            {"stage": "vad", "t_ms": first_audio_t + interruption_after_first_audio_ms},
         )
     _emit(
         journal,
@@ -154,6 +164,11 @@ def build_all(output_root: Path = HERE) -> list[dict[str, str]]:
             {
                 "t_start": 1_000_000.0,
                 "stt_text": "what time is it",
+                "reply_sentences": [
+                    "It's ten past three.",
+                    "That's in the afternoon.",
+                    "Anything else I can help with?",
+                ],
                 "agent_first_token_delay_ms": 350,
                 "tts_spans_ms": [300, 280, 310],
             },
@@ -164,6 +179,10 @@ def build_all(output_root: Path = HERE) -> list[dict[str, str]]:
             {
                 "t_start": 1_100_000.0,
                 "stt_text": "tell me a joke",
+                "reply_sentences": [
+                    "Why did the scarecrow win an award?",
+                    "Because he was outstanding in his field.",
+                ],
                 "agent_first_token_delay_ms": 2100,
                 "tts_spans_ms": [320, 290],
             },
@@ -174,9 +193,10 @@ def build_all(output_root: Path = HERE) -> list[dict[str, str]]:
             {
                 "t_start": 1_200_000.0,
                 "stt_text": "whats the weather",
+                "reply_sentences": ["It's eighteen degrees with light rain right now."],
                 "agent_first_token_delay_ms": 400,
                 "tts_spans_ms": [310],
-                "interruption_t_ms": 1_200_001_450.0,
+                "interruption_after_first_audio_ms": 240.0,
             },
         ),
         # Normal turn, correctly interrupted by a real user.
@@ -185,9 +205,13 @@ def build_all(output_root: Path = HERE) -> list[dict[str, str]]:
             {
                 "t_start": 1_300_000.0,
                 "stt_text": "stop",
+                "reply_sentences": [
+                    "Okay, I've stopped the music.",
+                    "Want me to play something else instead?",
+                ],
                 "agent_first_token_delay_ms": 380,
                 "tts_spans_ms": [290, 310],
-                "interruption_t_ms": 1_300_001_400.0,
+                "interruption_after_first_audio_ms": 280.0,
             },
         ),
         # Medium-clean turn.
@@ -196,6 +220,12 @@ def build_all(output_root: Path = HERE) -> list[dict[str, str]]:
             {
                 "t_start": 1_400_000.0,
                 "stt_text": "remind me to buy milk",
+                "reply_sentences": [
+                    "Sure.",
+                    "I'll remind you to buy milk.",
+                    "When would you like the reminder?",
+                    "I can do this evening or tomorrow morning.",
+                ],
                 "agent_first_token_delay_ms": 600,
                 "tts_spans_ms": [310, 280, 300, 320],
             },
@@ -208,6 +238,12 @@ def build_all(output_root: Path = HERE) -> list[dict[str, str]]:
             {
                 "t_start": 1_500_000.0,
                 "stt_text": "whats the weather in paris and set a timer for five minutes",
+                # The first sentence is chapter-7-style filler for get_weather.
+                "reply_sentences": [
+                    "Let me check the weather in Paris.",
+                    "It's eighteen degrees with light rain in Paris.",
+                    "Your five-minute timer is set.",
+                ],
                 "agent_first_token_delay_ms": 820,
                 "tts_spans_ms": [340, 310, 290],
                 "tool_calls": [
@@ -297,6 +333,7 @@ def build_golden(output_root: Path = HERE) -> None:
                 "in the park with my dog and friends"
             ),
             "expected_wer_pct": 5.0,
+            "reply": "That sounds like a lovely walk.",
             "note": "1 substitution, 20-word reference",
         },
         {
@@ -307,6 +344,7 @@ def build_golden(output_root: Path = HERE) -> None:
                 "please set a quick timer for eleven minutes starting now"
             ),
             "expected_wer_pct": 10.0,
+            "reply": "Timer set for eleven minutes.",
             "note": "1 substitution, 10-word reference",
         },
         {
@@ -317,6 +355,7 @@ def build_golden(output_root: Path = HERE) -> None:
                 "meeting starts at four in the afternoon"
             ),
             "expected_wer_pct": 25.0,
+            "reply": "Got it, four in the afternoon.",
             "note": "1 substitution + 1 deletion, 8-word reference",
         },
     ]
@@ -331,6 +370,9 @@ def build_golden(output_root: Path = HERE) -> None:
             sid,
             t_start=t,
             stt_text=case["hypothesis"],
+            # The reply follows the STT hypothesis, so a transcription error
+            # becomes a wrong answer the user hears.
+            reply_sentences=[case["reply"]],
         )
         _save(j, sid, case["filename"], into=golden)
         rows.append(

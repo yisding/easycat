@@ -3,14 +3,19 @@
 Real field recordings would be better, but we can reproduce the
 shape of each test condition with pure NumPy:
 
-- ``noisy_alone.wav`` — a sine-wave "voice" at 500 Hz plus wideband
-  white noise. Exercises NR.
+- ``noisy_alone.wav`` — a sine-wave "voice" at 440 Hz plus wideband
+  white noise. Exercises the NR dataflow.
 - ``speakerphone_loop.mic.wav`` + ``speakerphone_loop.ref.wav`` — a
   sine-wave "bot" leaking back into a silent mic with ~30 ms echo
   delay and -18 dB attenuation. Exercises AEC. The mic and ref
   WAVs are sample-aligned; the replay harness feeds them in lockstep.
 - ``hard_mode.mic.wav`` + ``hard_mode.ref.wav`` — both problems
   simultaneously (noise + bot bleed).
+
+The sine fixtures exercise dataflow and AEC subtraction, not VAD or
+speech-preserving NR: Silero VAD does not classify a pure sine as
+speech, and a sine cannot show whether NR keeps a real voice intact.
+Use real speech recordings for those claims.
 
 Run once; fixtures are checked in.
 

@@ -277,9 +277,9 @@ def main() -> None:
             tn += 1
     precision = tp / (tp + fp) if (tp + fp) else None
     recall = tp / (tp + fn) if (tp + fn) else None
-    f1 = None
-    if precision is not None and recall is not None:
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    # F1 = 2TP / (2TP + FP + FN) is defined whenever any label or prediction
+    # is positive, even when precision or recall alone has an empty denominator.
+    f1 = 2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) else None
 
     def display(value: float | None) -> str:
         return "n/a" if value is None else f"{value:.2f}"
