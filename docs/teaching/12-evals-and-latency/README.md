@@ -18,8 +18,8 @@
 >
 > **Answer from memory:**
 >
-> What changes with aligned AEC reference audio, and what should fail when reference audio is
-> missing or short?
+> Does every mic frame receive an aligned reference frame, and what must fail when reference
+> audio is missing or short?
 >
 > After recording your answer, explain one way `NR/AEC replay metrics` changes how you reason
 > about `small-sample P95 sensitivity`. Keep the first answer visible.
@@ -294,8 +294,9 @@ P50 so you know the median, but *target* P95.
 > at the slowest observed turn: 2420 ms. That makes the deliberate slow-agent
 > fixture visible, but it is still a noisy estimate of real tail latency. Real
 > eval sets need dozens of turns for P95 to stabilize; re-run this against a
-> directory full of your own chapter-6 or chapter-10 runs for a number you can
-> trend.
+> directory full of your own single-turn chapter-6 runs (one utterance per
+> session, as described in [Coverage before scores](#coverage-before-scores))
+> for a number you can trend.
 
 #### One turn controls this P95
 
@@ -338,6 +339,16 @@ rather than borrowing a generic threshold.
 > bundle you recorded through a real STT in chapter 6 (plus a
 > hand-typed reference) and it will produce real edits.
 
+`evals.py` compares raw whitespace-separated tokens, so case and
+punctuation count as edits: a perfect transcription returned as
+`What time is it?` scores 50% WER against the reference
+`what time is it`. That is deliberate (see the `_wer_words`
+docstring)—you should see where the errors come from. Before trusting
+WER on real recordings, normalise both sides the same way (for example
+lowercase, strip punctuation, expand contractions) and record the
+normalisation alongside the number, because two WERs computed with
+different canonicalisers are not comparable.
+
 ### Barge-in F1
 
 Treat "did the bot correctly interrupt itself?" as a classification
@@ -353,12 +364,16 @@ problem per turn:
 - **False negatives** (FN) → the user tries to barge in, bot
   plows through.
 
-F1 = 2·P·R / (P+R). Choose a target from the relative cost of false
-stops and missed interruptions, then validate it on a representative
-labeled set. A single universal threshold hides that product tradeoff.
-If the set contains no positive labels or no predicted interruptions,
-the corresponding denominator is empty; the evaluator prints `n/a`
-instead of inventing a zero-valued precision, recall, or F1 score.
+F1 = 2·P·R / (P+R) = 2·TP / (2·TP + FP + FN). Choose a target from the
+relative cost of false stops and missed interruptions, then validate it
+on a representative labeled set. A single universal threshold hides that
+product tradeoff. If the set contains no predicted interruptions
+(TP + FP = 0), precision's denominator is empty; if it contains no real
+barge-ins (TP + FN = 0), recall's is. The evaluator prints `n/a` for that
+ratio instead of inventing a value. F1 is still defined whenever any
+turn is a TP, FP, or FN: a bot that misses every real barge-in scores
+F1 = 0.00, not `n/a`. Only a set with TP = FP = FN = 0—such as the golden
+WER fixtures—prints `n/a` for all three.
 
 ## 3 — LLM as judge
 

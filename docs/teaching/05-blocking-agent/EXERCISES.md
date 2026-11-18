@@ -58,8 +58,9 @@ The one-word system prompt shrinks `tts_enqueue_ms` (less text
 <details markdown="1">
 <summary>Hint 3 of 3</summary>
 
-`asyncio.sleep(0.5)` adds exactly 500 ms to `agent_ms`. Use
-   this to verify your understanding of which code lives in which
+`asyncio.sleep(0.5)` adds at least 500 ms (plus scheduler
+   overshoot, on top of normal LLM variance) to `agent_ms` while
+   the other spans stay put. Use this to verify your understanding of which code lives in which
    span.
 
 </details>
@@ -84,8 +85,11 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 3</summary>
 
-3 s question + ~3 s `turn.gap` + however long the bot speaks =
-   6+ seconds of awkward silence per turn.
+The silence is speech end → first bot audio: the VAD/STT
+   endpoint and finalize wait plus about 3 s of `turn.gap`. The
+   3 s question and the bot's reply add to the total transaction
+   time, but they are speech, not silence. Compare the silence
+   alone with how quickly people take turns in conversation.
 
 </details>
 
@@ -223,7 +227,7 @@ None of these counts proves playback. Chapter 9 adds delivery-progress
 
 1. What are the three first-audio sub-gaps in order, and which measured
    milestones bound each one?
-2. Which sub-gap does chapter 6 reduce, which does chapter 8 reduce, and what
+2. Which span does chapter 6 reduce, which span does chapter 8 reduce, and what
    evidence shows that both fixes matter?
 3. Which accepted/rejected counts distinguish no synthesized audio from audio
    rejected before its first accepted chunk?

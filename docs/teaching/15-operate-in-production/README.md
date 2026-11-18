@@ -87,7 +87,7 @@
   `explain`, `bundles`, `inspect`, `validate`); `latency_gate.py` —
   a captured production-bundle percentile and sample-count gate.
 - **Modified:** the demo runs through `SessionManager.connection`
-  instead of `await session.start()` / `stop()` directly.
+  instead of a bare `async with session:` block.
 
 <!-- BEGIN auto:diff prev=14-bring-your-own-agent src=main.py trim_blank_context=true -->
 <details>
@@ -156,7 +156,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -76,188 +51,96 @@
+@@ -76,191 +51,96 @@
      )
 
 
@@ -238,7 +238,10 @@
 -        # Toy intent check; a real app would route via tool calls.
 -        if any(w in text.lower() for w in ("bye", "hang up", "goodbye")):
 -            # Ask the session to stop after this turn finishes speaking.
--            self._actions.enqueue(EndCallAction(reason="user requested hang-up"))
+-            # no_interrupt=True holds barge-in until the hang-up runs.
+-            self._actions.enqueue(
+-                EndCallAction(reason="user requested hang-up", no_interrupt=True)
+-            )
 -            reply = "Sure, ending the call. Goodbye."
 -            self._history.append({"role": "assistant", "content": reply})
 -            yield reply
@@ -274,7 +277,7 @@
 -        self.replace_last_assistant_text(f"{delivered_text}{suffix}")
 -
 -    def replace_last_assistant_text(self, text: str) -> None:
--        """Let interruption and Markdown cleanup update private history."""
+-        """Let interruption (and EasyConfig strip_markdown cleanup) update private history."""
 -        for message in reversed(self._history):
 -            if message["role"] == "assistant":
 -                message["content"] = text
@@ -663,8 +666,8 @@ Run easycat explain json-schema for CLI JSON.
   (`uv run easycat init --list-templates --json` emits the
   same template catalog and post-scaffold command previews).
 - **`uv run easycat doctor`** — reports Python/EasyCat versions, provider
-  credentials and reachability, optional `onnxruntime`, the dev-profile
-  microphone, journal writability, and disk space
+  credentials and reachability, optional `onnxruntime`, the audio resampling
+  backend, the dev-profile microphone, journal writability, and disk space
   (`src/easycat/cli/diagnose/doctor.py`). Use
   `--environment production` to omit the local-microphone probe and
   `--provider <name>` to require and probe one provider. If a scaffolded app
@@ -793,10 +796,10 @@ use `uv run easycat validate latency --sweep --baseline PATH`.
 ## Telephony deep-cuts, briefly
 
 `src/easycat/telephony/` has a dozen more modules you haven't
-seen: `DTMFAggregator`, `VoicemailDetector`, the `ivr/`,
-`screening/`, and `compliance/` subpackages, plus
+seen: `DTMFAggregator`, `VoicemailDetector`, the `ivr.py`,
+`screening.py`, and `compliance.py` modules, plus
 `TwilioSessionActionExecutor` from ch 14. They're plug-ins to
-the same `Session` you've run since chapter 5.
+the same `Session` you've run since chapter 13.
 
 ## Try breaking it
 

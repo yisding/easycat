@@ -323,11 +323,12 @@ A callback API would look like:
 transport.on_audio(lambda chunk: transport.send_audio(chunk))
 ```
 
-That works for echo. It starts falling over the instant you want
+Even echo breaks: `send_audio` is a coroutine, so the sync lambda
+only creates an un-awaited coroutine — no audio is sent, and the
+acceptance `bool` is lost. It gets worse the instant you want
 to "wait for STT to return, then send the transcript to an LLM,
 then stream the response to TTS, all while still receiving mic
-audio." Callbacks and `await` don't compose nicely; callbacks and
-`async for` do. Every downstream chapter depends on being able to
+audio." Callbacks don't compose with `await`; `async for` does. Every downstream chapter depends on being able to
 write `async for chunk in stream:` — hence the choice at this layer.
 
 ## Architecture diagram
@@ -363,9 +364,10 @@ async for chunk in transport.receive_audio():
 ```
 
 Now you have a delay line. Why does that create the sensation of
-an *echo* rather than just "a delay"? (Hint: your brain is
-comparing direct sound reaching your skull with delayed sound
-reaching your ears.)
+an *echo* rather than just "a delay"? (Hint: compare the gap
+between the direct sound you hear instantly and the delayed copy
+with how far apart two arrivals must be before your brain hears
+them as separate events.)
 
 <!-- BEGIN auto:practice-handoff -->
 ## Practice and self-check

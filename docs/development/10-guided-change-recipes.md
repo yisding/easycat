@@ -102,7 +102,7 @@ flowchart TD
     GROUP["event group / ALL_EVENTS"]
     EMITTER["single owning emitter"]
     SINK["SessionJournalSink projection"]
-    PUBLIC["top-level export?\npublic API docs + snapshot"]
+    PUBLIC["top-level export (required)\npublic API docs + snapshot"]
     REF["events reference"]
     TESTS["event + integration + journal tests"]
 
@@ -121,14 +121,25 @@ Implementation files:
 - [`session/_journal_sink.py`](../../src/easycat/session/_journal_sink.py)
   when durable mirroring is required;
 - [`docs/reference/events.md`](../reference/events.md); and
-- [`_public_api.py`](../../src/easycat/_public_api.py) only if intentionally
-  top-level public.
+- the public-export parity points. Every `Event` subclass defined in
+  `events.py` must appear in `ALL_EVENTS` (usually through its group tuple)
+  and be a top-level `easycat` export, so update
+  [`_public_api.py`](../../src/easycat/_public_api.py), the `TYPE_CHECKING`
+  block in [`__init__.py`](../../src/easycat/__init__.py),
+  `PUBLIC_API_SNAPSHOT` in
+  [`tests/test_public_api.py`](../../tests/test_public_api.py), and the Events
+  list in [`docs/public-api.md`](../public-api.md). A signal that should not be
+  public belongs outside `events.py`, for example as a journal record (§10.8).
 
 Tests:
 
 - [`tests/events/test_events.py`](../../tests/events/test_events.py)
 - [`tests/session/test_journal_sink.py`](../../tests/session/test_journal_sink.py)
+- [`tests/test_public_api.py`](../../tests/test_public_api.py)
+- `tests/docs/test_route_contracts.py::test_events_reference_tracks_public_event_types`
 - one behavior test at the actual emitter.
+
+Finish with `just guard-docs`.
 
 Preserve defaults on added dataclass fields when compatibility permits.
 Provider normal streams should add `STTEvent`/`TTSEvent` metadata rather than
@@ -151,13 +162,16 @@ emitting the new public event themselves.
 Add one `ProviderSpec` in
 [`stt/factory.py`](../../src/easycat/stt/factory.py) or
 [`tts/factory.py`](../../src/easycat/tts/factory.py). Include credential env,
-API domains, probe module, capabilities, and an install-extra name when the
-provider has optional dependencies. Two registration points live outside the
-catalog:
+API domains, probe module, capabilities, and a non-empty install-extra name;
+the catalog contract tests reject a spec without one. Two registration points
+live outside the catalog:
 
-- if the provider has optional dependencies, declare its install extra in
-  `pyproject.toml` `[project.optional-dependencies]` and wire those dependency
-  requirements into the `all` union; do not create empty marker extras; and
+- declare that install extra in `pyproject.toml`
+  `[project.optional-dependencies]`. If the provider has optional
+  dependencies, list them there and wire those requirements into the `all`
+  union; an SDK-free provider gets an empty marker extra with a comment, like
+  `deepgram`, `elevenlabs`, and `cartesia`. An extra, empty or not, is never
+  provider discovery: the catalog is; and
 - add a `ProviderSurfaceContract` row in
   [`tests/contracts/provider_surface_matrix.py`](../../tests/contracts/provider_surface_matrix.py) —
   the matrix tests fail if a registered provider has no row.

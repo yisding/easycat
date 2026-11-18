@@ -24,7 +24,7 @@ transport accepts a complete TTS chunk.
 Dependencies:
     uv sync --extra quickstart --extra deepgram --extra rnnoise --group dev
     RNNoise uses its opt-in extra; Krisp requires its own SDK.
-    For real AEC:  uv sync --extra aec --group dev
+    LiveKit AEC ships with the quickstart extra (standalone: `aec`).
     Missing selected backends fall back to passthrough — the
     journal tells you which backend is live.
 
@@ -78,6 +78,7 @@ from easycat.vad.factory import create_vad
 MODEL = "gpt-5.6-luna"
 PREROLL_FRAMES = 15
 RUNS_DIR = Path(__file__).parent / "runs"
+PLAYOUT_POLL_S = 0.02
 
 
 class _Passthrough:
@@ -98,12 +99,26 @@ class _Passthrough:
 
 
 class MiniTurnDetector:
-    """Unchanged from chapter 4."""
+    """Chapter 4's detector plus ``vad.start`` / ``vad.stop`` journal records.
 
-    def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
+    The records put VAD's decisions in the bundle, so you can compare
+    where VAD fired across ``--nr`` / ``--aec`` runs.
+    """
+
+    def __init__(self, vad, journal, session_id: str, preroll_frames: int = PREROLL_FRAMES):
         self._vad = vad
+        self._journal = journal
+        self._session_id = session_id
         self._preroll: collections.deque[AudioChunk] = collections.deque(maxlen=preroll_frames)
         self._speaking = False
+
+    def _record(self, name: str) -> None:
+        self._journal.append(
+            kind=JournalRecordKind.EVENT,
+            name=name,
+            session_id=self._session_id,
+            data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+        )
 
     async def frames(self, audio_iter):
         async for chunk in audio_iter:
@@ -111,11 +126,13 @@ class MiniTurnDetector:
             for ev in vad_events:
                 if isinstance(ev, VADStartSpeaking):
                     self._speaking = True
+                    self._record("vad.start")
                     yield "speech_started", None
                     while self._preroll:
                         yield "frame", self._preroll.popleft()
                 elif isinstance(ev, VADStopSpeaking):
                     self._speaking = False
+                    self._record("vad.stop")
                     yield "speech_ended", None
             if self._speaking:
                 yield "frame", chunk
@@ -124,15 +141,17 @@ class MiniTurnDetector:
 
 
 async def clean_audio_pipeline(transport, nr, aec):
-    """Pipeline order: transport → NR → AEC → (downstream).
+    """Pipeline order: transport → AEC → NR → (downstream).
 
-    NR runs first so it sees the rawest noise spectrum possible.
-    AEC then subtracts the bot's own voice (reference-fed elsewhere).
-    VAD and STT live downstream in the detector + coordinator.
+    AEC runs first, on the raw mic: its adaptive filter models the
+    echo as a linear function of the reference (fed elsewhere), and
+    NR's per-frame nonlinear gains would break that model. NR then
+    cleans the residual. VAD and STT live downstream in the
+    detector + coordinator.
     """
     async for chunk in transport.receive_audio():
-        chunk = await nr.process(chunk)
         chunk = await aec.process(chunk)
+        chunk = await nr.process(chunk)
         yield chunk
 
 
@@ -193,6 +212,20 @@ async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_
             session_id=session_id,
             data={"stage": "tts", "text": sentence},
         )
+
+
+async def wait_for_playout(transport, cancel: CancelToken) -> None:
+    """Keep the bot task alive until queued speaker audio has played.
+
+    ``send_audio`` only enqueues: finished enqueueing is not finished
+    playing. There is no playout event to await, so poll the counter
+    and the cancel token, which lets barge-in still cut the tail.
+    """
+    pending_playout_ms = getattr(transport, "pending_playout_ms", None)
+    if pending_playout_ms is None:
+        return
+    while not cancel.is_cancelled and pending_playout_ms() > 0:  # noqa: ASYNC110
+        await asyncio.sleep(PLAYOUT_POLL_S)
 
 
 async def observe_bot_task(bot_task: asyncio.Task, journal, session_id: str) -> None:
@@ -316,6 +349,7 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, aec, sessi
                         run_agent(client, text, q, ct),
                         drain_to_speaker(tts, transport, aec, q, ct, session_id, journal),
                     )
+                    await wait_for_playout(transport, ct)
 
                 bot_task = asyncio.create_task(_bot())
     finally:
@@ -376,7 +410,7 @@ async def main() -> None:
 
         vad = create_vad(VADConfig())
         resources.push_async_callback(close_if_supported, vad)
-        detector = MiniTurnDetector(vad)
+        detector = MiniTurnDetector(vad, journal, session_id)
 
         client = AsyncOpenAI()
         resources.push_async_callback(close_if_supported, client)

@@ -40,18 +40,19 @@
 > **Hardware-free checkpoint:** prove `NR/AEC replay metrics` without a microphone,
 > speakers, or provider credentials:
 >
-> **Predict first:** What changes with aligned AEC reference audio, and what should fail when
-> reference audio is missing or short?
+> **Predict first:** Does every mic frame receive an aligned reference frame, and what must fail
+> when reference audio is missing or short?
 >
 > ```bash
 > uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
 > ```
 >
-> **Evidence to find:** aligned reference audio changes RMS by -12.041 dB; missing or short
-> references fail.
+> **Evidence to find:** both mic frames are fed a reference (`reference_frames_fed` = 2); the
+> -12.041 dB comes from two 0.5x stand-in filters, not echo removal; missing or short references
+> fail before AEC runs.
 >
-> **Explain the result:** Tie each failure to the missing replay input and explain what aligned
-> reference changes.
+> **Explain the result:** Tie each failure to the missing replay input and explain why reference
+> feeding alone cannot prove echo removal.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
@@ -65,7 +66,8 @@
   `uv sync --extra quickstart --extra rnnoise --group dev`. The checked-in WAV
   pairs need no microphone or API keys.
 - RNNoise uses the opt-in `rnnoise` extra; Krisp requires its own SDK.
-- For real AEC: `uv sync --extra aec --group dev` (LiveKit APM).
+- Real AEC (LiveKit APM) ships with the `quickstart` extra in the
+  live-pipeline command above; no separate sync is needed.
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
 - Running this chapter makes live provider calls that may incur charges.
   Review your provider billing and usage limits first.
@@ -89,18 +91,19 @@ hearing.
 ## Diff from chapter 9
 
 - **Added:** `create_noise_reducer()` + `create_echo_canceller()`
-  factories; a `clean_audio_pipeline` stage that runs NR → AEC
+  factories; a `clean_audio_pipeline` stage that runs AEC → NR
   before VAD; an `aec.feed_reference(event.audio)` line in the
   TTS drain (the only dual-input thing in the pipeline); an
   `audio.config` journal record naming the live backend;
+  `vad.start` / `vad.stop` journal records from the detector;
   `generate_fixtures.py` + `replay.py` for deterministic offline
   runs; `wrong_order.py` showing what happens with the stages in
   the wrong order.
-- **Modified:** pipeline order becomes mic → NR → AEC → VAD → STT
+- **Modified:** pipeline order becomes mic → AEC → NR → VAD → STT
   → agent (and TTS still feeds AEC's reference).
 - **Removed:** chapter 9c's `TurnLedger` / history-rewrite — this
-  chapter isolates the NR/AEC axis. Merge them yourself in
-  exercise 4 if you want both at once.
+  chapter isolates the NR/AEC axis. Merge them yourself if you want
+  both at once (see the scope note below).
 
 <!-- BEGIN auto:diff prev=09-interruption prev_src=estimate.py src=main.py -->
 <details>
@@ -150,7 +153,7 @@ hearing.
 -    uv sync --extra quickstart --extra deepgram --group dev
 +    uv sync --extra quickstart --extra deepgram --extra rnnoise --group dev
 +    RNNoise uses its opt-in extra; Krisp requires its own SDK.
-+    For real AEC:  uv sync --extra aec --group dev
++    LiveKit AEC ships with the quickstart extra (standalone: `aec`).
 +    Missing selected backends fall back to passthrough — the
 +    journal tells you which backend is live.
 +
@@ -193,10 +196,10 @@ hearing.
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.runtime.capabilities import close_if_supported
  from easycat.session import split_at_sentence_boundaries
-@@ -60,62 +78,23 @@
- MODEL = "gpt-5.6-luna"
+@@ -61,71 +79,46 @@
  PREROLL_FRAMES = 15
  RUNS_DIR = Path(__file__).parent / "runs"
+ PLAYOUT_POLL_S = 0.02
 -SESSION_ID = f"ch09c-estimate-{int(time.time())}"
 -
 -# OpenAI TTS emits PCM16 mono at 24 kHz = 48,000 bytes/second.
@@ -271,22 +274,64 @@ hearing.
  
  
  class MiniTurnDetector:
-@@ -144,16 +123,32 @@
+-    """Unchanged from chapter 4."""
+-
+-    def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
++    """Chapter 4's detector plus ``vad.start`` / ``vad.stop`` journal records.
++
++    The records put VAD's decisions in the bundle, so you can compare
++    where VAD fired across ``--nr`` / ``--aec`` runs.
++    """
++
++    def __init__(self, vad, journal, session_id: str, preroll_frames: int = PREROLL_FRAMES):
+         self._vad = vad
++        self._journal = journal
++        self._session_id = session_id
+         self._preroll: collections.deque[AudioChunk] = collections.deque(maxlen=preroll_frames)
+         self._speaking = False
++
++    def _record(self, name: str) -> None:
++        self._journal.append(
++            kind=JournalRecordKind.EVENT,
++            name=name,
++            session_id=self._session_id,
++            data={"stage": "vad", "t_ms": time.monotonic() * 1000},
++        )
+ 
+     async def frames(self, audio_iter):
+         async for chunk in audio_iter:
+@@ -133,11 +126,13 @@
+             for ev in vad_events:
+                 if isinstance(ev, VADStartSpeaking):
+                     self._speaking = True
++                    self._record("vad.start")
+                     yield "speech_started", None
+                     while self._preroll:
+                         yield "frame", self._preroll.popleft()
+                 elif isinstance(ev, VADStopSpeaking):
+                     self._speaking = False
++                    self._record("vad.stop")
+                     yield "speech_ended", None
+             if self._speaking:
+                 yield "frame", chunk
+@@ -145,16 +140,34 @@
                  self._preroll.append(chunk)
  
  
 -async def mic_producer(detector, transport, queue: asyncio.Queue) -> None:
 -    async for tag, chunk in detector.frames(transport.receive_audio()):
 +async def clean_audio_pipeline(transport, nr, aec):
-+    """Pipeline order: transport → NR → AEC → (downstream).
++    """Pipeline order: transport → AEC → NR → (downstream).
 +
-+    NR runs first so it sees the rawest noise spectrum possible.
-+    AEC then subtracts the bot's own voice (reference-fed elsewhere).
-+    VAD and STT live downstream in the detector + coordinator.
++    AEC runs first, on the raw mic: its adaptive filter models the
++    echo as a linear function of the reference (fed elsewhere), and
++    NR's per-frame nonlinear gains would break that model. NR then
++    cleans the residual. VAD and STT live downstream in the
++    detector + coordinator.
 +    """
 +    async for chunk in transport.receive_audio():
-+        chunk = await nr.process(chunk)
 +        chunk = await aec.process(chunk)
++        chunk = await nr.process(chunk)
 +        yield chunk
 +
 +
@@ -308,7 +353,7 @@ hearing.
          stream=True,
      )
      buffer = ""
-@@ -176,49 +171,38 @@
+@@ -177,38 +190,27 @@
      await sentence_queue.put(None)
  
  
@@ -357,6 +402,10 @@ hearing.
          )
  
  
+@@ -226,14 +228,14 @@
+         await asyncio.sleep(PLAYOUT_POLL_S)
+ 
+ 
 -async def observe_bot_task(bot_task: asyncio.Task, journal) -> None:
 +async def observe_bot_task(bot_task: asyncio.Task, journal, session_id: str) -> None:
      """Retrieve a background result so failures never become orphan warnings."""
@@ -370,7 +419,7 @@ hearing.
              data={"stage": "coordinator", "error": repr(result)},
          )
  
-@@ -244,7 +228,7 @@
+@@ -259,7 +261,7 @@
          await close_if_supported(stt)
  
  
@@ -379,7 +428,7 @@ hearing.
      """Release both possible in-flight owners before shared providers close."""
      try:
          if stt is not None:
-@@ -255,35 +239,35 @@
+@@ -270,35 +272,35 @@
                  active_cancel.cancel()
              if not bot_task.done():
                  bot_task.cancel()
@@ -428,7 +477,7 @@ hearing.
          data={
              "stage": "interruption",
              "cancel_to_clear_audio_return_ms": (clear_returned_at - started_at) * 1000,
-@@ -291,54 +275,20 @@
+@@ -306,54 +308,20 @@
              "t_ms": bot_returned_at * 1000,
          },
      )
@@ -489,7 +538,7 @@ hearing.
              )
              if consumed:
                  continue
-@@ -356,41 +306,34 @@
+@@ -371,42 +339,35 @@
                  if not final_text.strip():
                      continue
                  print(f"  user: {final_text!r}")
@@ -510,6 +559,7 @@ hearing.
 +                        run_agent(client, text, q, ct),
 +                        drain_to_speaker(tts, transport, aec, q, ct, session_id, journal),
                      )
+                     await wait_for_playout(transport, ct)
 -                    if not ct.is_cancelled:
 -                        # Clean completion: record the full reply in history.
 -                        full = " ".join(led.sentences_sent)
@@ -543,7 +593,7 @@ hearing.
  
      def stt_factory():
          return create_stt_provider(
-@@ -405,6 +348,32 @@
+@@ -421,9 +382,35 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
  
@@ -575,8 +625,12 @@ hearing.
 +
          vad = create_vad(VADConfig())
          resources.push_async_callback(close_if_supported, vad)
-         detector = MiniTurnDetector(vad)
-@@ -416,19 +385,22 @@
+-        detector = MiniTurnDetector(vad)
++        detector = MiniTurnDetector(vad, journal, session_id)
+ 
+         client = AsyncOpenAI()
+         resources.push_async_callback(close_if_supported, client)
+@@ -432,19 +419,22 @@
          )
          resources.push_async_callback(close_if_supported, tts)
  
@@ -670,8 +724,11 @@ The fixtures are toy signals (sine-wave "voice," deterministic
 white noise, a 30 ms echo at -18 dB) — enough to exercise the
 lockstep `feed_reference` path and dump bundles the journal can
 compare. They are **not** a substitute for a real speech test
-set. Replace the WAV pairs with your own recordings for a real
-eval.
+set: Silero VAD does not classify the sine "voice" as speech
+(expect `VAD speech-starts: 0`), and a sine cannot show whether NR
+keeps a real voice intact. The fixtures exercise dataflow and AEC
+subtraction only; replace the WAV pairs with your own recordings for
+VAD, NR, or any real eval.
 
 The replay fails closed when `--aec on` has no `--ref`, or when the
 mic and reference contain different numbers of complete 20 ms frames.
@@ -710,8 +767,9 @@ resource-free.
 
 ```mermaid
 flowchart LR
-    Mic[raw mic] --> NR["NR<br/>(fan,<br/>keyboard,<br/>baby)"]
-    NR --> AEC --> VAD --> STT --> Agent[agent]
+    Mic[raw mic] --> AEC
+    AEC --> NR["NR<br/>(fan,<br/>keyboard,<br/>baby)"]
+    NR --> VAD --> STT --> Agent[agent]
     Agent --> TTS
     TTS -- "aec.feed_reference<br/>(what we asked<br/>the speaker to play)" --> AEC
 ```
@@ -731,32 +789,36 @@ flowchart LR
   aec.feed_reference(event.audio)  # ← only AEC needs this
   ```
 
-The `NR → AEC → VAD` stage itself is one short coroutine; the
+The `AEC → NR → VAD` stage itself is one short coroutine; the
 order *is* the lesson:
 
 <!-- BEGIN auto:snippet src=main.py symbol=clean_audio_pipeline -->
 ```python
 async def clean_audio_pipeline(transport, nr, aec):
-    """Pipeline order: transport → NR → AEC → (downstream).
+    """Pipeline order: transport → AEC → NR → (downstream).
 
-    NR runs first so it sees the rawest noise spectrum possible.
-    AEC then subtracts the bot's own voice (reference-fed elsewhere).
-    VAD and STT live downstream in the detector + coordinator.
+    AEC runs first, on the raw mic: its adaptive filter models the
+    echo as a linear function of the reference (fed elsewhere), and
+    NR's per-frame nonlinear gains would break that model. NR then
+    cleans the residual. VAD and STT live downstream in the
+    detector + coordinator.
     """
     async for chunk in transport.receive_audio():
-        chunk = await nr.process(chunk)
         chunk = await aec.process(chunk)
+        chunk = await nr.process(chunk)
         yield chunk
 ```
 <!-- END auto:snippet -->
 
 ### Why this order
 
-1. **NR before AEC.** AEC's adaptive filter still converges
-   because it sees the raw reference on one side and the
-   NR-processed mic on the other — it learns the combined
-   (echo-path ∘ NR) mapping. NR-first lets NR see the rawest
-   possible noise spectrum.
+1. **AEC before NR.** AEC's adaptive filter is linear: it
+   models the echo in the mic as a filtered copy of the reference.
+   NR applies per-frame, signal-dependent gains — a nonlinear,
+   time-varying stage no linear filter can learn — so NR-first
+   breaks AEC convergence. That is why EasyCat's production
+   `AudioStage` runs AEC on the raw mic, then lets NR clean the
+   residual.
 2. **VAD after both.** Before NR, VAD false-triggers on
    stationary noise. Before AEC, VAD false-triggers on the bot's
    own voice. After both, VAD only fires on the user.
@@ -766,13 +828,16 @@ Swap either and something specific breaks. Try it.
 ### Reference-timing caveat
 
 `feed_reference` is called when we *send* a TTS chunk to the
-transport, not when the speaker actually radiates it. The physical
-echo will arrive at the mic tens of milliseconds later. LiveKit
-APM's adaptive filter learns this delay as part of the echo path,
-so small misalignments are fine. A large misalignment — e.g. the
-TTS stream outruns the mic loop by hundreds of ms — breaks
-convergence and you hear audible echo. Production pipelines
-compensate with playback-ack marks.
+transport, not when the speaker actually radiates it — a toy
+simplification. `send_audio` only enqueues, and `LocalTransport`
+buffers up to ~10 s of output, so whenever TTS runs faster than
+real time the reference can lead the echo by seconds. LiveKit
+APM's delay estimator absorbs small offsets, not that; a lead that
+large breaks convergence and you hear audible echo. Production
+feeds the reference at *playback* time instead: `LocalTransport`
+and WebRTC capture each frame in their output path, and the router
+drains `drain_aec_reference_frames()` just before each mic frame
+reaches AEC.
 
 ## What's in the journal
 
@@ -793,7 +858,7 @@ Expect config entries like `{"stage": "audio", "nr": "rnnoise", "aec": "livekit"
 or `{"stage": "audio", "nr": "passthrough", "aec": "off"}` if the
 extras weren't installed — *that* is where you catch the silent
 backend fallback. The summary separately proves how many reference
-frames were fed and how signal energy changed.
+frames reached an active AEC and how signal energy changed.
 
 ## Half-duplex vs. full-duplex
 
@@ -829,12 +894,13 @@ barge-in, viewed from the other side. Tuning is per-deployment.
 ## Try breaking it
 
 1. Type loudly on your keyboard while saying "hello." Run each of
-   the four modes. Where does VAD fire in each?
+   the four modes. Where do the `vad.start` records land in each?
 2. Run on speakerphone (no headphones) with `--aec off`. The bot
    interrupts itself on chapter 9's `cancel.py` style pipeline.
    Then enable AEC. Compare.
-3. Set NR to `off` and AEC to `on` with the `livekit` extra
-   installed. AEC runs, but the signal it sees still has fan
+3. Set NR to `off` and AEC to `on` with LiveKit AEC available
+   (the `quickstart` extra, or the standalone `aec` extra). AEC
+   removes the bot's echo, but nothing downstream removes the fan
    noise. Does the bot sound better, worse, or identical compared
    to NR on + AEC off? Why?
 

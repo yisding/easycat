@@ -32,27 +32,37 @@
 
 ### Evidence in the journal
 
-- `turn.started`
+- `turn.started` — VAD opened a turn, so someone spoke.
 - `stt.partial` with `text=""`
-- `stt.final` with `text=""` (!)
+- `stt.input` with `frames_sent=0`, `bytes_sent=0` (!)
+- `stt.final` with `text=""`
 - `turn.state_changed: SPEAKING → PROCESSING`
 - No `stage.agent.execute`, no `stage.tts.execute`, no `turn.gap`
 
 ### Root cause
 
-Pre-roll off-by-one. The first frame of real speech was dropped
-before STT saw it. STT's commit threshold triggered on what
-looked like trailing silence and emitted `text=""`. The agent
-stage then short-circuited on empty input (see `run_turn`'s
-`if not final_text.strip(): return` in chapters 5-10).
+No audio reached STT. VAD opened the turn, but `stt.input` shows
+that neither the cached pre-roll nor the live speech frames were
+forwarded to the STT stream, so STT had nothing to transcribe and
+committed `text=""`. The agent stage then short-circuited on empty
+input (see `run_turn`'s `if not final_text.strip(): return` in
+chapters 5-10).
+
+Rule out the tempting alternative: a lost speech onset (a pre-roll
+bug) makes STT *mishear* the leading sound — chapter 4's "Hello"
+becoming "Elo" — but it still returns words. An empty final with
+zero frames sent points at the routing between VAD and STT, for
+example frames forwarded before the stream was open and silently
+dropped by a `stt is not None` guard like the one in chapter 4's
+`parrot`.
 
 ### Fix
 
-Audit the flush order in `MiniTurnDetector.frames`: the pre-roll
-buffer must flush **before** the first `speech_started`-tagged
-chunk is yielded, not after. Re-derive the invariant from
-chapter 4: the first frame yielded for a new turn must be the
-first frame containing speech energy.
+Restore chapter 4's order: at VAD-on, open the STT stream, flush
+all cached pre-roll frames in order, then forward live frames until
+VAD-off. Then make the failure loud: count the frames and bytes sent
+to STT per turn, and treat zero at commit as a pipeline bug rather
+than "the user said nothing".
 
 ## Bug 2 — TTS stutter
 
@@ -64,15 +74,16 @@ first frame containing speech energy.
 - Sentence 3: `elapsed_ms = 390`.
 - Between sentences 1 and 2: `ws.reconnect.attempt` ×2,
   `ws.reconnect.failure` ×1, `ws.reconnect.success` ×1.
-- The reconnect's own `elapsed_ms = 1400` lines up neatly with
-  the extra ~1.7 s on sentence 2.
+- The reconnect's own `elapsed_ms = 1400` accounts for most of
+  the extra ~1.7 s on sentence 2; the remainder is the stream
+  restarting on the new socket.
 
 ### Root cause
 
-The TTS provider's WebSocket dropped mid-session. The
-`ReconnectingWebSocket` reconnected silently — correct behaviour
-— but the synth for the second sentence paused until the socket
-was back up. The first attempt failed; the second succeeded.
+The TTS provider's WebSocket (`provider: "cartesia_tts"`) dropped
+mid-session. The reconnect logic recovered silently — correct
+behaviour — but the synth for the second sentence paused until the
+socket was back up. The first attempt failed; the second succeeded.
 
 ### Fix
 

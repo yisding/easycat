@@ -262,9 +262,9 @@
 +                        "event_type": event.type.value,
 +                        "text": event.text,
 +                        "offset_ms": offset_ms,
-+                        # t_ms mirrors the later chapters' field so downstream
-+                        # scripts (ch 12's evals.py, etc.) can read this bundle
-+                        # without a translator.
++                        # t_ms is an absolute monotonic timestamp using the
++                        # same field name later chapters use; offset_ms is
++                        # relative to capture start.
 +                        "t_ms": time.monotonic() * 1000,
 +                    },
 +                )
@@ -457,16 +457,21 @@ caller-supplied provider reports `caller_provider_closed: false`. The logical
 stream ends in both cases. This distinction matters for persistent providers
 such as OpenAI Realtime: ending a turn intentionally keeps its warmed socket
 available, while final provider cleanup closes it. The manual `streaming.py`
-path follows the same rule in its `finally`: end the logical stream, close the
+path follows the same rule through its `AsyncExitStack`, which unwinds
+`end_stream()` → `close()` → `disconnect()`: end the logical stream, close the
 provider it created, then disconnect the transport.
 
 ## A note on which provider you run
 
 `streaming.py` defaults to `"openai"`. The OpenAI STT provider
-**buffers the audio locally and uploads it on `end_stream()`**,
-then streams the *response* back. That means you will see
-partials arrive in a burst *after* the 5-second recording ends,
-not during it. The partials are real; the timing is misleading.
+**buffers the audio locally and uploads it on `end_stream()`**.
+The HTTP response streams back, but the provider holds every parsed
+event until that response completes, then emits them all at once.
+That means you will see every partial and the final arrive in one
+instant *after* the 5-second recording ends, not during it. The
+partials are real text deltas — each one is a growing prefix of the
+final transcript, not a revised guess — and their timing marks when
+the queue drained, not when you spoke.
 
 For truly mid-speech partials — the ones that arrive while you are still
 talking — set `DEEPGRAM_API_KEY` and run:
@@ -502,7 +507,7 @@ provider target rates, and one of these timing contracts:
 
 | `event_timing` | What the offsets mean |
 |---|---|
-| `after_stream_end` | OpenAI buffered the microphone audio and streamed transcription events after `end_stream()`. |
+| `after_stream_end` | OpenAI buffered the microphone audio, uploaded it on `end_stream()`, and emitted all events together after the response completed. |
 | `during_audio` | Deepgram emitted hypotheses while microphone audio was still arriving. |
 
 That record makes a bundle self-describing: a dense cluster of OpenAI offsets
@@ -527,11 +532,14 @@ audio arrives, it revises its guess — producing a sequence of
   t+5200ms  [FINAL] go into town
 ```
 
-For OpenAI (batch audio, streaming response) the timestamps
-cluster at the end because they reflect the response stream, not
-the speech. For Deepgram (mid-speech partials) the same sequence
-spreads across the utterance. The *shape* is what matters: the
-provider revises its guess until it is confident, then commits.
+That revision is what Deepgram's interim results show (`--provider
+deepgram`): the sequence spreads across the utterance, and an earlier
+hypothesis can be replaced. The default OpenAI path shows a narrower
+shape: its partials are growing prefixes of the final text (`go`,
+`going`, `going to`, …), all emitted in the same instant after the
+response completes, so the final equals the last prefix and no
+revision is visible. Either way the contract is the same: partials
+can change until the provider commits.
 
 The **final** is the provider's commitment. The safe rule is narrower than
 "ignore partials": **never commit irreversible work from a partial.** A partial
@@ -591,7 +599,8 @@ has a sequence number, a monotonic-clock timestamp, and a name
 (`stt.partial`, `stt.final`). This is the substrate that
 [chapter 11](../11-journal/) teaches in full.
 
-> **One honesty note up front.** Chapters 2-10 emit *composite*
+> **One honesty note up front.** This chapter's `stt.partial` and
+> `stt.final` are plain event records. Chapters 5-10 emit *composite*
 > journal events of the form `stage.<name>.execute` with a single
 > `elapsed_ms` field. The production journal in
 > `src/easycat/runtime/` instead emits **paired** records

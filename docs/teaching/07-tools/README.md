@@ -600,14 +600,26 @@ queue.
 
 ## A common bug: speaking the tool result
 
-Some agent stacks leak JSON back into the response stream. The
-tool says `{"temp": 17, "sky": "cloudy"}` and the TTS literally
-reads the braces and quote marks. Our `run_agent_streaming` routes
-tool deltas to the journal *only* — they never go through
-`sentence_queue`, which is the TTS pipe. If you hit a leak in your
-own code, walk the stream until you find a `delta.tool_calls`
-branch that accidentally accumulates into the same buffer as
-`delta.content`.
+Some agent stacks leak JSON into speech. The tool says
+`{"temp": 17, "sky": "cloudy"}` and the TTS literally reads the
+braces and quote marks. There are two separate leak paths:
+
+1. **Call-argument deltas.** `delta.tool_calls` carries the LLM's
+   *arguments* for the call, streamed as JSON fragments. Our
+   `run_agent_streaming` accumulates them into the separate
+   `tool_calls` dict — they never go through `sentence_queue`,
+   which is the TTS pipe. If you hit this leak in your own code,
+   walk the stream until you find a `delta.tool_calls` branch that
+   accidentally accumulates into the same buffer as
+   `delta.content`.
+2. **The model echoing the result.** The tool's *result* never
+   enters a stream delta: it goes back into `messages` as a
+   `role="tool"` message. It reaches TTS only if the model repeats
+   the raw JSON in its follow-up reply text. Defend by returning a
+   short summarised result, or by instructing the model in the
+   system prompt to speak results in plain sentences.
+   `strip_markdown` does not help here: it leaves JSON braces and
+   quotes in place.
 
 ## Read the journal
 
@@ -615,7 +627,9 @@ branch that accidentally accumulates into the same buffer as
 from pathlib import Path
 from easycat.debug.testing import load_bundle
 
-b = load_bundle(next(Path("docs/teaching/07-tools/runs/").glob("*.bundle")))
+# blocking_tool.py writes to the same runs/ directory; pick main.py's newest bundle.
+runs = Path("docs/teaching/07-tools/runs/")
+b = load_bundle(max(runs.glob("ch07-tools-*.bundle"), key=lambda p: p.stat().st_mtime))
 for r in b.records():
     if r["name"] in ("tool.call.started", "tool.call.result"):
         print(r["name"], r["data"].get("tool_call_id"), r["data"].get("filler_enqueued"))

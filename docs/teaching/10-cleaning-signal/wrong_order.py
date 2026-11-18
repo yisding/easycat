@@ -24,7 +24,7 @@ otherwise there's no echo to cancel and the mis-wiring is invisible.
 
 Dependencies:
     uv sync --extra quickstart --extra deepgram --extra rnnoise --group dev
-    For real AEC: uv sync --extra aec --group dev
+    LiveKit AEC ships with the quickstart extra (standalone: `aec`).
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
     uv run easycat doctor
@@ -72,6 +72,7 @@ from easycat.vad.factory import create_vad
 MODEL = "gpt-5.6-luna"
 PREROLL_FRAMES = 15
 RUNS_DIR = Path(__file__).parent / "runs"
+PLAYOUT_POLL_S = 0.02
 
 
 class MiniTurnDetector:
@@ -149,12 +150,12 @@ async def wrong_order_pipeline(transport, nr, aec, mode: str, journal, session_i
                 },
             )
     elif mode == "aec-no-reference":
-        # NR runs in its right place. AEC runs in its right place too —
-        # but we deliberately never call feed_reference() from the TTS
-        # drain. AEC's adaptive filter has nothing to subtract.
+        # AEC and NR run in their right places (AEC on the raw mic, then
+        # NR) — but we deliberately never call feed_reference() from the
+        # TTS drain. AEC's adaptive filter has nothing to subtract.
         async for chunk in transport.receive_audio():
-            chunk = await nr.process(chunk)
             chunk = await aec.process(chunk)
+            chunk = await nr.process(chunk)
             yield chunk
     else:
         raise SystemExit(f"unknown --mode {mode!r}")
@@ -224,6 +225,20 @@ async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_
             session_id=session_id,
             data={"stage": "aec", "feed_count": 0, "note": "AEC ran but never saw the TTS audio"},
         )
+
+
+async def wait_for_playout(transport, cancel: CancelToken) -> None:
+    """Keep the bot task alive until queued speaker audio has played.
+
+    ``send_audio`` only enqueues: finished enqueueing is not finished
+    playing. There is no playout event to await, so poll the counter
+    and the cancel token, which lets barge-in still cut the tail.
+    """
+    pending_playout_ms = getattr(transport, "pending_playout_ms", None)
+    if pending_playout_ms is None:
+        return
+    while not cancel.is_cancelled and pending_playout_ms() > 0:  # noqa: ASYNC110
+        await asyncio.sleep(PLAYOUT_POLL_S)
 
 
 async def observe_bot_task(bot_task: asyncio.Task, journal, session_id: str) -> None:
@@ -349,6 +364,7 @@ async def coordinator(
                         run_agent(client, text, q, ct),
                         drain_to_speaker(tts, transport, aec, q, ct, session_id, journal, mode),
                     )
+                    await wait_for_playout(transport, ct)
 
                 bot_task = asyncio.create_task(_bot())
     finally:

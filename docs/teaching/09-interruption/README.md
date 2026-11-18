@@ -298,7 +298,9 @@ uv run python docs/teaching/09-interruption/barge_in_turn_probe.py
 ```
 
 Look for `event_consumed: false`, followed by `stt.start`, `stt.frame`,
-`stt.end`, and `stt.close`. The remaining toy limitation is now stated
+`stt.end`, and `stt.close`. Those `stt.*` entries stand in for the
+coordinator's STT branch: the probe appends them only because the real
+router returned `consumed=False`. The remaining toy limitation is now stated
 accurately: the coordinator awaits cooperative bot shutdown before it
 starts STT, so an unresponsive agent can make the unbounded mic queue
 grow. Production uses bounded audio buffers and stronger cancellation
@@ -312,21 +314,26 @@ the coordinator has stopped using them.
 
 ## Why "bytes accepted" ≠ "bytes heard"
 
-Three reasons, all real:
+Three suspects; two are real error sources:
 
 1. **Playback queues.** A `True` return from `transport.send_audio`
    means the transport accepted the chunk; it does not mean the user
    heard it. `LocalTransport` and PortAudio can still hold queued
    audio that `clear_audio()` drops, so `bytes_accepted` overcounts
-   by the unplayed backlog.
-2. **Markdown + SSML.** `strip_markdown(text)` is shorter than the
-   raw LLM output. TTS synthesises the stripped version. Character
-   counts drift.
+   by the unplayed backlog. Finished enqueueing is not finished
+   playing either, so each bot task waits for `pending_playout_ms()`
+   to reach zero before it counts as done; production waits on
+   `pending_playout_ms` / `await_drain` the same way.
+2. **Markdown.** Not an estimator error in the toy: the ledger
+   stores the stripped text TTS actually spoke, so bytes and
+   characters stay consistent. The real question is which text
+   belongs in history (Exercise 2). SSML timing is a production-only
+   concern.
 3. **Variable speech rate.** Our 15-chars/s constant is an
    average. "Hello" is slower than "uhh".
 
 Production `easycat.session.interruption` has a more careful estimator
-that handles all three and combines the strongest progress evidence a
+that handles these and combines the strongest progress evidence a
 transport exposes. Run the provider-free capability probe:
 
 ```bash

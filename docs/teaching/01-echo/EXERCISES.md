@@ -62,8 +62,11 @@ The delayed copy reaches your *ears* (the speaker) 500 ms after
 <details markdown="1">
 <summary>Hint 3 of 3</summary>
 
-If you played the delayed copy *into your skull* directly, it
-   wouldn't feel like an echo — it would feel like a delay.
+What makes it an echo is the size of the gap, not the path the
+   copy takes. The direct sound (air and bone, effectively instant)
+   and the 500 ms copy are far apart — well beyond the ~50 ms line
+   where the brain fuses arrivals — so they register as two events.
+   A much shorter delay would fuse into coloration or reverb instead.
 
 **Wider points to check yourself on**
 

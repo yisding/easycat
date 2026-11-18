@@ -60,6 +60,7 @@ from easycat.vad.factory import create_vad
 MODEL = "gpt-5.6-luna"
 PREROLL_FRAMES = 15
 RUNS_DIR = Path(__file__).parent / "runs"
+PLAYOUT_POLL_S = 0.02
 SESSION_ID = f"ch09c-estimate-{int(time.time())}"
 
 # OpenAI TTS emits PCM16 mono at 24 kHz = 48,000 bytes/second.
@@ -209,6 +210,20 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journ
                 "cancelled": cancel.is_cancelled,
             },
         )
+
+
+async def wait_for_playout(transport, cancel: CancelToken) -> None:
+    """Keep the bot task alive until queued speaker audio has played.
+
+    ``send_audio`` only enqueues: finished enqueueing is not finished
+    playing. There is no playout event to await, so poll the counter
+    and the cancel token, which lets barge-in still cut the tail.
+    """
+    pending_playout_ms = getattr(transport, "pending_playout_ms", None)
+    if pending_playout_ms is None:
+        return
+    while not cancel.is_cancelled and pending_playout_ms() > 0:  # noqa: ASYNC110
+        await asyncio.sleep(PLAYOUT_POLL_S)
 
 
 async def observe_bot_task(bot_task: asyncio.Task, journal) -> None:
@@ -369,6 +384,7 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
                         run_agent(client, hist, q, ct),
                         drain_to_speaker(tts, transport, q, ct, led, journal),
                     )
+                    await wait_for_playout(transport, ct)
                     if not ct.is_cancelled:
                         # Clean completion: record the full reply in history.
                         full = " ".join(led.sentences_sent)

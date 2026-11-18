@@ -20,10 +20,12 @@
 ## 1. Demote yourself to shallow mode
 
 **Task.** Change `on_user_turn` to `async def on_user_turn(self,
-text)` — drop `recorder` and `cancel_token`. You've just demoted
-to shallow mode. Temporarily comment out `apply_interruption` too;
-that method is an explicit shallow-mode opt-in. Run the script and
-try to interrupt the bot mid-sentence. What stops, and what can no
+text)` — drop `recorder` and `cancel_token`, and delete the two-line
+`if cancel_token is not None and cancel_token.is_cancelled: break`
+check that reads the token. You've just demoted to shallow mode.
+Temporarily comment out `apply_interruption` too; that method is an
+explicit shallow-mode opt-in. Run the script and try to interrupt the
+bot mid-sentence. What stops, and what can no
 longer be reconciled?
 
 <!-- BEGIN auto:exercise-hints -->
@@ -157,8 +159,9 @@ The session dispatches to the *first* executor that returns
 ## 3. Watch the pronunciation pipeline at work
 
 **Task.** The chapter now builds its stack with
-`default_pronunciation_processors()`. Say *"Call me at
-555-867-5309."* After the bundle is written, run the printed
+`default_pronunciation_processors()`. Ask the bot to read a number
+back — *"Repeat this number back to me: 555-867-5309."* — because
+processors transform only assistant output. After the bundle is written, run the printed
 `easycat journal grep ... --query tts_payload_prepared --json`
 command. Which transformation survived into the provider-ready
 payload, and what timing guarantee does the provider-neutral cue make?
@@ -311,8 +314,11 @@ The chapter's hook deliberately reports counts, roles, and booleans. Those
 <summary>Hint 4 of 4</summary>
 
 Treat the explicit dictionary as author-owned persisted data. Temporarily
-   add `"api_key": "demo"` and rerun the probe: the field is visible. Remove
-   it immediately, and never use a real credential for this experiment.
+   add a sensitive but innocuously named field such as `"last_user_text"`
+   (the latest user message) and rerun the probe: it appears unredacted in
+   `artifact_payload`. The serializer drops credential-named keys such as
+   `api_key` only as a backstop, which is why it is not the boundary. Remove
+   the field immediately, and never use a real credential for this experiment.
 
 </details>
 <!-- END auto:exercise-hints -->

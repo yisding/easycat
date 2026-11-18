@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -77,3 +78,28 @@ async def test_gap_probe_restores_chapter_globals_on_success_and_failure(monkeyp
     with pytest.raises(RuntimeError, match="scripted failure"):
         await probe.probe()
     assert (chapter.time.monotonic, chapter.blocking_agent, chapter.speak) == originals
+
+
+async def test_run_turn_joins_every_final_segment(monkeypatch) -> None:
+    probe = load_probe()
+    chapter = probe.chapter
+    prompts: list[str] = []
+
+    class TwoSegmentSTT:
+        async def events(self):
+            final = chapter.STTEventType.FINAL
+            yield SimpleNamespace(type=final, text="What is the capital")
+            yield SimpleNamespace(type=final, text=" of  France? ")
+
+    async def scripted_agent(_client: object, text: str) -> str:
+        prompts.append(text)
+        return "Paris."
+
+    async def scripted_speak(_transport: object, _text: str) -> tuple[int, int]:
+        return 1, 0
+
+    monkeypatch.setattr(chapter, "blocking_agent", scripted_agent)
+    monkeypatch.setattr(chapter, "speak", scripted_speak)
+    await chapter.run_turn(object(), TwoSegmentSTT(), None, probe.ProbeJournal())
+
+    assert prompts == ["What is the capital of France?"]

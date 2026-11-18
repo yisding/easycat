@@ -5,9 +5,11 @@ through EasyCat. Modeled after *Crafting Interpreters*, *Ray
 Tracer in One Weekend*, and the `nanoGPT` tradition.
 
 Each chapter is a **self-contained folder** under `docs/teaching/`
-with a narrative `README.md` and a `main.py` entry point. Chapters
-that demonstrate multiple approaches (2, 9, 11) also include named
-companion scripts; chapter 12 has several standalone analysis scripts
+with a narrative `README.md` and a `main.py` entry point. Every
+chapter also includes named companion scripts: deterministic probes
+(see the checkpoint spine below) and, in several chapters such as 2, 4,
+9, and 10, alternative-approach or wrong-version scripts. Chapter 12
+has several standalone analysis scripts
 and no single `main.py` — its README lists which to run and in what
 order. Chapter `N+1` copies chapter `N`'s code as its starting
 point and evolves from there — so every chapter folder is a frozen,
@@ -59,17 +61,18 @@ After finishing a chapter, replay only the cumulative spine you have completed.
 For example, after Chapter 5:
 
 ```bash
-uv sync --extra quickstart --group dev
 uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --show-evidence
 uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --json
 ```
 
-The setup line matters on the otherwise-offline Chapters 11–12: their own
-scripts need only the dev group, but cumulative replay still imports selected
-probes from earlier provider-backed chapters.
+No resync is needed: every checkpoint runs as a separate script that needs only
+the dev group, so any chapter's prerequisite install already covers the spine.
+From a fresh checkout, `uv sync --group dev` is the minimum. Each listed
+**Setup** line names a sufficient install, not a step to rerun: `uv sync`
+removes extras you leave out, so never run a narrower sync than your current
+chapter's.
 
-After installing the full `quickstart` prerequisites below, execute all 16
-checkpoints as a compact smoke run:
+Execute all 16 checkpoints as a compact smoke run:
 
 ```bash
 uv run python docs/teaching/offline_spine.py --run --jobs 4
@@ -79,7 +82,7 @@ uv run python docs/teaching/offline_spine.py --run --jobs 4 --json
 The runner strips all `*_API_KEY` variables from each child process and
 disables bytecode writes. Its curated probes keep generated artifacts in
 temporary directories, so the full run leaves the checkout unchanged. The
-runner captures successful output; rerun any printed chapter command directly
+runner captures successful output; rerun any printed `Run:` command directly
 to study its full evidence, add `--show-evidence` to a human run, or read each
 row's `observed` value in a JSON run. A pass requires exit code zero, one
 parseable JSON document on stdout, and empty stderr; probes put intentional
@@ -157,11 +160,13 @@ review. Complete each phase gate before starting the next group of chapters.
   the repo root.
 - From chapter 2 onward, use `uv sync --extra quickstart --group dev`
   from the repo root. The `quickstart` extra bundles mic I/O,
-  OpenAI, NumPy, and ONNX Runtime. Chapters 3-10 use Deepgram
+  OpenAI providers, the OpenAI Agents SDK, NumPy, ONNX Runtime, and
+  LiveKit AEC. Chapters 3-10 use Deepgram
   streaming STT by default, so run
   `uv sync --extra quickstart --extra deepgram --group dev` for
   those chapters. Chapter 10 additionally needs `--extra rnnoise`;
-  add `--extra aec` for real echo cancellation. Chapter 13's
+  `quickstart` already includes LiveKit AEC for real echo
+  cancellation. Chapter 13's
   `deepgram-eleven` provider mix additionally needs `--extra
   deepgram --extra elevenlabs`; its WebRTC and Twilio transport
   variants need `--extra webrtc` and `--extra telephony`,
@@ -171,7 +176,8 @@ review. Complete each phase gate before starting the next group of chapters.
   bundles. Those paths need no audio hardware.
 - API keys, set as environment variables:
   - `OPENAI_API_KEY` — default STT / TTS / agent provider.
-  - `DEEPGRAM_API_KEY` — used in chapters 3-10 for streaming STT.
+  - `DEEPGRAM_API_KEY` — streaming STT in chapters 3-10, plus Chapter 2's
+    optional `--provider deepgram` and Chapter 13's `deepgram-eleven` mix.
   - `ELEVENLABS_API_KEY` — used in chapter 13's provider-swap mix.
 - Provider-backed chapters make live API calls that may incur charges.
   Review provider billing and usage limits before running them.

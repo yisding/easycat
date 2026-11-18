@@ -12,8 +12,11 @@ Run every checkpoint (captured output stays quiet unless one fails)::
 
 Replay only the cumulative spine through a completed chapter::
 
-    uv sync --extra quickstart --group dev
     uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --show-evidence
+
+Any chapter's prerequisite install already covers the spine, so no resync is
+needed; from a fresh checkout, ``uv sync --group dev`` is the minimum. ``uv sync``
+removes extras you leave out, so never run a narrower sync than your chapter's.
 
 The runner removes every ``*_API_KEY`` variable from child environments and
 disables bytecode-cache writes. The selected scripts are designed not to open
@@ -175,10 +178,13 @@ CHECKPOINTS = (
         "10-cleaning-signal",
         "replay_metrics_probe.py",
         "NR/AEC replay metrics",
-        "What changes with aligned AEC reference audio, and what should fail when reference "
-        "audio is missing or short?",
-        "aligned reference audio changes RMS by -12.041 dB; missing or short references fail",
-        "Tie each failure to the missing replay input and explain what aligned reference changes",
+        "Does every mic frame receive an aligned reference frame, and what must fail when "
+        "reference audio is missing or short?",
+        "both mic frames are fed a reference (`reference_frames_fed` = 2); the -12.041 dB comes "
+        "from two 0.5x stand-in filters, not echo removal; missing or short references fail "
+        "before AEC runs",
+        "Tie each failure to the missing replay input and explain why reference feeding alone "
+        "cannot prove echo removal",
     ),
     Checkpoint(
         11,
@@ -395,6 +401,7 @@ def main() -> None:
                 print("           Observed:")
                 for line in json.dumps(row["observed"], indent=2, sort_keys=True).splitlines():
                     print(f"             {line}")
+            print(f"           Run: {row['command']}")
             if row["detail"]:
                 print(f"           {row['detail']}")
             else:

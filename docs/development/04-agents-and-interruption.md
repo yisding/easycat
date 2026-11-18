@@ -198,7 +198,7 @@ Two of the wrappers are more than `asyncio.wait_for`:
   not race the agent's own cleanup. `_await_agent_task` sets
   `agent_stream_aborted` and cancels only the agent task on expiry — the TTS
   consumer stays alive so a configured failure fallback can still be spoken
-  (§4.4).
+  (`on_agent_failure`; see the [EasyConfig reference](../reference/easyconfig.md)).
 - `with_tts_timeout` is a **first-byte** deadline over an async iterator, not a
   whole-synthesis budget. It arms until the first *non-empty audio* event;
   marker and empty-audio events are still yielded but neither disarm nor reset
@@ -329,6 +329,7 @@ sequenceDiagram
     participant TTS as TTS + outbound queue
     participant X as Transport
     participant C as CancelOrchestrator
+    participant R as TurnRunner
     participant A as Agent bridge
 
     TM->>S: begin barge-in
@@ -336,15 +337,18 @@ sequenceDiagram
     S->>X: clear retractable playback
     S-->>TM: audible cutoff established
     S->>C: propagate InterruptSignal
-    C->>A: apply interruption using delivered text
-    Note over C,A: cleanup may continue in owned scoped task
+    R->>A: on token cancel, estimate delivered text and apply interruption
+    Note over R,A: cleanup may continue in owned scoped task
     TM->>TM: start successor user turn
 ```
 
 The first responsibility is audible cutoff. Model generation and tool cleanup
 can be slower. [`CancelOrchestrator`](../../src/easycat/session/_cancel_orchestrator.py)
-fans out the observable signal and applies history policy; stage
-`handle_upstream()` methods record the signal but do not perform teardown.
+fans out the observable signal, holds the interruption-mode policy, and
+journals the outcome; `TurnRunner` applies the history change through
+[`session/interruption.py`](../../src/easycat/session/interruption.py) when the
+cancelled streaming turn unwinds. Stage `handle_upstream()` methods record the
+signal but do not perform teardown.
 
 The old-turn cleanup task remains owned by `RuntimeScope` while the new user
 turn begins. Graceful session stop drains that cleanup before closing its

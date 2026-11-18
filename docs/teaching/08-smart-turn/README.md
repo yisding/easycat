@@ -759,9 +759,12 @@
 ## VAD silence is a timeout in disguise
 
 Chapter 4's VAD is great at "this frame contains speech." It is
-*not* good at "was that the end of a sentence?" To be safe, a VAD
-pipeline waits ~800 ms of silence before calling the turn over.
-Most of that 800 ms is slack — the user was done 300-500 ms ago.
+*not* good at "was that the end of a sentence?" Chapters 4-7 used
+the `VADConfig()` default of 50 ms silence: fast, but it cuts users
+off at natural mid-sentence pauses. To be safe, a pure-silence
+pipeline waits ~800 ms instead, and this chapter's `vad` backend sets
+that baseline explicitly. Most of that 800 ms is slack — the user
+was done 300-500 ms ago.
 
 Humans don't cue off silence; we cue off **intonation**.
 
@@ -831,8 +834,8 @@ transcription. On `VADStopSpeaking`, we call
 ONNX doesn't block the event loop. Typical cost: 30-50 ms per
 call.
 
-- Probability ≥ threshold → commit: emit `speech_ended` now.
-- Probability < threshold → pending: do **not** emit; keep
+- Probability > threshold → commit: emit `speech_ended` now.
+- Probability ≤ threshold → pending: do **not** emit; keep
   accumulating audio. If a new `VADStartSpeaking` arrives, resume
   the same turn. If no new speech arrives for `SMART_FALLBACK_MS`
   (800 ms), force-commit.
@@ -916,9 +919,11 @@ Smart-turn is a classifier, not an oracle. Expected misfires:
 
 ## Production reference
 
-`TurnManager.on_vad_stop` in `src/easycat/turn_manager.py` wires
-smart-turn through the same 5-state FSM we pointed at in
-chapter 4. The core idea is identical to what we just built;
+`TurnManager` in `src/easycat/turn_manager.py` wires smart-turn
+through the same 5-state FSM we pointed at in chapter 4: VAD events
+enter via `on_vad_event`, a stop goes to `_handle_speech_stop`, and
+the `_silence_timeout` task runs the detector on a bounded trailing
+window (`_detector_audio_window()`) rather than the whole turn. The core idea is identical to what we just built;
 the production version coordinates with barge-in (chapter 9),
 cancel tokens, and the action queue.
 
@@ -939,8 +944,11 @@ cancel tokens, and the action queue.
    missing or unknown sequences are rejected rather than scored partially.
 2. Record *"I was thinking… we should order pizza."* Run
    `--backend smart`. Read the journal. Did smart-turn say done
-   during the "…" pause? (If yes, that's a 300-500 ms latency
-   win. If no, the fallback silence timeout will still commit.)
+   during the "…" pause? (If yes, that is a false positive: the
+   turn committed on half a sentence and the bot cut the user off.
+   The right verdict is "not done": the turn goes pending and the
+   next `VADStartSpeaking` resumes it. The latency win only counts
+   at the real end of the utterance.)
 3. Find an utterance where the `vad` backend gets it right and
    `smart` gets it wrong. Keep the bundle — it's a real-world
    misfire to refer back to when you read

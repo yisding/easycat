@@ -96,6 +96,7 @@ def test_fixture_generator_keeps_tool_work_off_the_first_audio_path() -> None:
         "tool-turn",
         t_start=10_000.0,
         stt_text="check weather",
+        reply_sentences=["Let me check the weather.", "It's sunny."],
         agent_first_token_delay_ms=500,
         tts_spans_ms=[250, 400],
         tool_calls=[

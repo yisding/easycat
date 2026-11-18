@@ -3,8 +3,9 @@
 The point is the *lockstep* reference feed: AEC is dual-input, so
 a single-track replay would never give the adaptive filter
 anything to subtract against. We march the mic and ref WAVs
-frame-by-frame into ``nr.process(chunk)`` and
-``aec.feed_reference(ref_chunk)`` in matched time.
+frame-by-frame into ``aec.feed_reference(ref_chunk)`` and
+``aec.process(chunk)`` in matched time, then run NR on AEC's output
+(the same AEC → NR order as ``main.py``).
 
     uv run python docs/teaching/10-cleaning-signal/replay.py \\
         --mic docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.mic.wav \\
@@ -215,15 +216,18 @@ async def run(
         ref_iter = _chunks(ref_data, ref_fmt) if ref_path else iter([])
         for mic_chunk in mic_iter:
             ref_chunk = next(ref_iter, None)
-            if ref_chunk is not None:
+            # Only count a reference frame as fed when a real AEC receives it;
+            # with --aec off the passthrough would discard it.
+            ref_fed = aec_flag == "on" and ref_chunk is not None
+            if ref_fed:
                 aec.feed_reference(ref_chunk)
-            cleaned = await nr.process(mic_chunk)
-            cleaned = await aec.process(cleaned)
+            cleaned = await aec.process(mic_chunk)
+            cleaned = await nr.process(cleaned)
             journal.append(
                 kind=JournalRecordKind.EVENT,
                 name="replay.frame",
                 session_id=session_id,
-                data=await metrics.measure_frame(mic_chunk, cleaned, ref_chunk is not None, vad),
+                data=await metrics.measure_frame(mic_chunk, cleaned, ref_fed, vad),
             )
 
     summary = metrics.summary()

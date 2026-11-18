@@ -24,7 +24,8 @@ worked through them.
 ## 1. Three "what could go wrong" hypotheses
 
 **Task.** Pick any bundle from your own `runs/` directories
-(chapter 9 is the richest). Without looking at the source code,
+(chapter 9c is richest for interruption evidence; chapter 6 or 8 for
+timing). Without looking at the source code,
 write down **three** things that *could* go wrong on a flaky day,
 and for each one, name the record you'd query first.
 
@@ -37,8 +38,8 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 5</summary>
 
-"Agent stalled" → compare `stt.final.data.t_ms` with
-   `agent.first_token.data.t_ms`. Anything > 1 s is suspicious; the
+"Agent stalled" (chapter-6 bundles) → compare `stt.final.data.t_ms`
+   with `agent.first_token.data.t_ms`. Anything > 1 s is suspicious; the
    later first-token → audio interval belongs to downstream sentence
    accumulation and TTS.
 
@@ -48,8 +49,9 @@ the next hint; keep each attempt in your evidence record.
 <summary>Hint 2 of 5</summary>
 
 "STT misheard" → look for short or empty `stt.final` text
-   followed by a confused next turn. Pair with `stt.partial`
-   sequence to see if the model wavered.
+   followed by a confused next turn (chapter 6). Pair with the
+   `stt.partial` sequence to see if the model wavered; only the
+   chapter-2 streaming and chapter-3 bundles journal partials.
 
 </details>
 
@@ -67,9 +69,9 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 4 of 5</summary>
 
-"Smart-turn fired wrong" → look for `smart_turn.classify`
-   records where `confirmed=True` but the next event sequence
-   shows the user continued speaking immediately after.
+"Smart-turn fired wrong" (chapter-8 bundles) → look for
+   `smart_turn.classify` records where `confirmed=True` but the next
+   event sequence shows the user continued speaking immediately after.
 
 </details>
 
@@ -176,9 +178,10 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 3 of 3</summary>
 
-`filter_by_stage` and `filter_by_turn` return materialized lists.
-   Stage filtering scans the journal because `stage` lives inside
-   record data; do not mistake the read-only surface for a lazy one.
+`filter_by_stage` and `filter_by_turn` return materialized lists,
+   whatever the backend; do not mistake the read-only surface for a
+   lazy one. How they get there differs: a `RunBundle` or in-memory
+   journal scans, while the live SQL backends use indexed columns.
 
 </details>
 <!-- END auto:exercise-hints -->

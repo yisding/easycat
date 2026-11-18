@@ -88,8 +88,8 @@ The main collaborators have narrow responsibilities:
 | [`AudioRouter`](../../src/easycat/session/_audio_router.py) | ingress, outbound queue drain, transport delivery accounting, AEC reference feed | turn policy or agent history |
 | [`STTCommitter`](../../src/easycat/session/_stt_committer.py) | STT event consumption, segment commits, stream teardown | stream start and pre-roll priming (TurnRunner), or when a user turn semantically ends |
 | [`TTSScheduler`](../../src/easycat/session/_tts_scheduler.py) | TTS payload preparation, synthesis scheduling, TTS cancellation | agent stream grammar |
-| [`TurnRunner`](../../src/easycat/session/_turn_runner.py) | turn-start STT stream priming plus transcript-to-agent-to-TTS orchestration for voice and text turns | raw transport receive loop |
-| [`CancelOrchestrator`](../../src/easycat/session/_cancel_orchestrator.py) | control-signal propagation and interruption-history policy | deciding that speech is a barge-in |
+| [`TurnRunner`](../../src/easycat/session/_turn_runner.py) | turn-start STT stream priming plus transcript-to-agent-to-TTS orchestration for voice and text turns; interruption history application on cancelled-turn unwind | raw transport receive loop |
+| [`CancelOrchestrator`](../../src/easycat/session/_cancel_orchestrator.py) | control-signal propagation; interruption policy settings and journaling | deciding that speech is a barge-in |
 | [`GreetingController`](../../src/easycat/session/_greeting.py) | one first-answer greeting task | general agent turns |
 | [`SessionJournalSink`](../../src/easycat/session/_journal_sink.py) | event-to-record projection | application reaction to events |
 
@@ -324,6 +324,12 @@ A forced stop cancels the outbound drain earlier, during the pipeline
 cancellation step; the later `stop_outbound()` call is idempotent. In both
 modes the outbound drain must be stopped before `transport.disconnect()`, or
 a pending `send_audio()` could hang on a disconnected transport.
+
+The reviewed partial order, including the force/graceful branch differences,
+is pinned by
+[`tests/session/test_session_stop_ordering.py`](../../tests/session/test_session_stop_ordering.py)
+(`test_stop_preserves_reviewed_partial_order`); change that test and this
+diagram together.
 
 Do not move provider or journal teardown earlier to make a timeout look
 bounded. Late cleanup tasks may still need them. Do not detach a

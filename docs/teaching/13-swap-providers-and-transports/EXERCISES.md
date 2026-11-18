@@ -126,7 +126,21 @@ After your first attempt, open Hint 1 only. Close it and try again before openin
 the next hint; keep each attempt in your evidence record.
 
 <details markdown="1">
-<summary>Hint 1 of 4</summary>
+<summary>Hint 1 of 5</summary>
+
+This chapter's `main.py` has no action queue yet. Create
+   `actions = SessionActions()`, pass `session_actions=actions` to
+   `EasyConfig`, and give the agent a `@function_tool` that reaches the
+   queue — for example `RunContextWrapper[SessionActions]` with
+   `agent=OpenAIAgentsBridge(agent, context=actions)` (`EasyConfig`
+   accepts a pre-built bridge), or a closure. Without the queue the
+   session has nothing to drain and the journal stays silent; chapter 14
+   shows the same queue pattern.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
 
 `SendDTMFAction(digits="1")` is dispatched to
    `TwilioSessionActionExecutor`, which calls Twilio's REST API
@@ -140,15 +154,20 @@ the next hint; keep each attempt in your evidence record.
 </details>
 
 <details markdown="1">
-<summary>Hint 2 of 4</summary>
+<summary>Hint 3 of 5</summary>
 
-The user on the phone hears the DTMF tone before the call yields
-   back to the bot's audio.
+The caller hears the tone, but the bot does not resume. The REST
+   update replaces the call's TwiML, so the `<Connect><Stream>` media
+   stream ends; with no further verbs after `<Play>`, Twilio completes
+   the call once the digits play. The `SessionActionResult` keeps
+   `stop_session=False`, so look for the transport's stream stop after
+   `session_action_completed` — resuming would need extra TwiML such as
+   a `<Redirect>`.
 
 </details>
 
 <details markdown="1">
-<summary>Hint 3 of 4</summary>
+<summary>Hint 4 of 5</summary>
 
 On the `local` transport, `CoreSessionActionExecutor` does not
    claim DTMF. The journal records `session_action_requested`
@@ -159,7 +178,7 @@ On the `local` transport, `CoreSessionActionExecutor` does not
 </details>
 
 <details markdown="1">
-<summary>Hint 4 of 4</summary>
+<summary>Hint 5 of 5</summary>
 
 Exercise the executor with a fake Twilio client first, as
    `tests/telephony/test_session_actions.py` does. If you try the

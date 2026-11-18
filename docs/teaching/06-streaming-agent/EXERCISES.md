@@ -99,10 +99,11 @@ You will hear *"asterisk asterisk bold asterisk asterisk"* or
 <details markdown="1">
 <summary>Hint 2 of 3</summary>
 
-The agent's history (`messages`) still contains the original
-   markdown text — only the TTS pipe gets stripped. Why does the
-   chapter wire it this way? (Because the LLM next turn benefits
-   from the structured prior; the user does not.)
+This chapter keeps no conversation history: each turn sends only
+   the system prompt and the current user text. If you add multi-turn
+   history, store the unstripped reply there and strip only the copy
+   bound for TTS. Why? (Because the LLM next turn benefits from the
+   structured prior; the user does not.)
 
 </details>
 
@@ -116,12 +117,14 @@ Production wires this through
 </details>
 <!-- END auto:exercise-hints -->
 
-## 3. Make the unbounded queue bite
+## 3. Find where the audio backlog bites
 
-**Task.** Have the bot answer a long question ("explain the entire
-history of Rome in detail") on a slow speaker — easiest way:
-plug in Bluetooth headphones. Watch the per-sentence latency drift
-over the answer.
+**Task.** The `asyncio.Queue` between the agent and the drain holds
+only text sentences, but audio has to wait somewhere too. Predict what
+happens when the bot answers a long question ("explain the entire
+history of Rome in detail") whose audio runs well past 10 seconds.
+Then run it and check `rejected_chunks` on each `stage.tts.execute`
+record and `tts_rejected_chunks` on `turn.gap`.
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**
@@ -141,10 +144,13 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 2 of 3</summary>
 
-Memory usage of the speaker queue rises linearly during the
-   answer. Production uses `BoundedAudioQueue` with `DROP_OLDEST`
-   to keep this in check during long sessions; the teaching
-   version doesn't.
+TTS synthesizes faster than real time, so the backlog lands in
+   `LocalTransport`'s playback queue, which is capped at
+   `max_pending_out_chunks` (about 10 s of 20 ms frames). Once it is
+   full, `send_audio` drops the frames and returns `False`: memory
+   plateaus, and the overflow shows up as rejected chunks and clipped
+   audio. Production's outbound `BoundedAudioQueue` uses `DROP_NEWEST`
+   so only the tail is trimmed, never the start of the utterance.
 
 </details>
 
@@ -270,8 +276,8 @@ Compare `all_chunks_rejected` with `no_chunks_produced`. Both lack a
    voice stack, and in what order do they close?
 4. Which outcome fields distinguish an empty streamed TTS response from
    transport rejection?
-5. Which production parameter would you pass to `consume_agent_stream`, and
-   what behavior does your attempt evidence show it controls?
+5. Can you name one `consume_agent_stream` parameter and the failure scenario
+   the toy ignores that it defends against?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

@@ -229,8 +229,11 @@ stateDiagram-v2
     task_scheduled --> task_raised
 ```
 
-The turn manager journals every state transition with from-state, to-state,
-reason, and turn id. Agent recorders add framework unit entry/exit, tool
+The turn manager journals each ordinary lifecycle transition with from-state,
+to-state, reason, and turn id. `reset()` and compatibility setup return to
+IDLE silently (`observe=False`), so a turn can end with no closing
+`turn_state_changed` record; corroborate with `turn_ended`, `stt_final`, and
+task terminal records. Agent recorders add framework unit entry/exit, tool
 phases, handoffs, state commits, and cancellation boundaries. Together these
 records let a bundle answer not just “what output appeared?” but “which
 concurrent task and decision caused it?”

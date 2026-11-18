@@ -174,7 +174,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -67,121 +61,172 @@
+@@ -67,125 +61,176 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -258,12 +258,16 @@ build movement (chapters 6-9) exists to close this gap.
 +    The STT stream has been receiving chunks from the parent caller's
 +    VAD loop already — we just close it here and drain the FINAL.
 +    """
-+    final_text = ""
++    # A turn can yield several FINAL segments; join them (as chapter 4
++    # does) and stamp the gap start at the last one.
++    finals: list[str] = []
 +    stt_final_t = None
 +    async for event in stt.events():
 +        if event.type == STTEventType.FINAL:
-+            final_text = event.text
++            if event.text.strip():
++                finals.append(" ".join(event.text.split()))
 +            stt_final_t = time.monotonic()
++    final_text = " ".join(finals)
 +
 +    if not final_text.strip() or stt_final_t is None:
 +        return
@@ -391,12 +395,16 @@ build movement (chapters 6-9) exists to close this gap.
 -                # Drain the event queue until the sentinel from end_stream().
 -                # A VADStop before STT saw any speech is harmless — we just
 -                # close an empty stream and get no FINAL back.
+-                # One VAD turn can yield several FINAL segments; each carries
+-                # only its own words, so join them like production does.
                  active_stt = stt
+-                finals: list[str] = []
                  try:
                      await active_stt.end_stream()
 -                    async for event in active_stt.events():
--                        if event.type == STTEventType.FINAL:
--                            collected_final = event.text
+-                        if event.type == STTEventType.FINAL and event.text.strip():
+-                            finals.append(" ".join(event.text.split()))
+-                    collected_final = " ".join(finals)
 +                    await run_turn(transport, active_stt, client, journal)
                  finally:
                      stt = None
@@ -426,7 +434,7 @@ build movement (chapters 6-9) exists to close this gap.
      finally:
          if stt is not None:
              try:
-@@ -191,22 +236,8 @@
+@@ -195,22 +240,8 @@
  
  
  async def main() -> None:
@@ -451,7 +459,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-@@ -215,7 +246,7 @@
+@@ -219,7 +250,7 @@
          return create_stt_provider(
              STTProviderConfig(
                  provider="deepgram",
@@ -460,7 +468,7 @@ build movement (chapters 6-9) exists to close this gap.
                  params={"sample_rate": 24000, "event_bus": EventBus()},
              )
          )
-@@ -226,16 +257,19 @@
+@@ -230,16 +261,19 @@
  
          vad = create_vad(VADConfig())
          resources.push_async_callback(close_if_supported, vad)
@@ -551,6 +559,10 @@ enqueue finishes later.
 
 The journal records three sub-spans between STT-final and the first
 bot-audio chunk, plus the time required to enqueue the complete reply.
+Before them sits a span `turn.gap` does not include: speech end → STT
+final, which is the VAD stop debounce plus the provider's finalize round
+trip inside `end_stream()`. `main.py` journals no speech-end timestamp,
+so `total_gap_ms` understates the silence the user hears.
 Open the bundle and list them:
 
 ```python
@@ -645,7 +657,7 @@ start the LLM sooner:
 | Chapter | What we attack |
 |---|---|
 | [6](../06-streaming-agent/) | Stream the LLM's tokens; start TTS on the first sentence instead of the last. The `tts.execute` span moves to overlap the `agent.execute` span. |
-| [8](../08-smart-turn/) | Predict end-of-turn earlier than VAD silence. The `turn.gap` starts sooner. |
+| [8](../08-smart-turn/) | Predict end-of-turn earlier than VAD silence. Shrinks speech end → STT final, before `turn.gap` starts; `total_gap_ms` itself does not move. |
 
 ## Try breaking it
 
@@ -665,8 +677,8 @@ You should be able to name the three sub-gaps in order without
 looking them up, and you should actively *want* the streaming
 version. If you don't yet: try the "uh, what was I going to say"
 flow where a user asks a 3-second question and waits 3 seconds
-for an answer. Six seconds of one human standing in the room
-holding their breath.
+for an answer. Three of those six seconds are one human standing
+in the room holding their breath.
 
 <!-- BEGIN auto:practice-handoff -->
 ## Practice and self-check

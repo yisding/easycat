@@ -54,6 +54,7 @@ from easycat.vad.factory import create_vad
 MODEL = "gpt-5.6-luna"
 PREROLL_FRAMES = 15
 RUNS_DIR = Path(__file__).parent / "runs"
+PLAYOUT_POLL_S = 0.02
 SESSION_ID = f"ch09a-ignore-{int(time.time())}"
 
 
@@ -147,6 +148,20 @@ async def drain_to_speaker(tts, transport, sentence_queue, journal):
                 "text": sentence,
             },
         )
+
+
+async def wait_for_playout(transport) -> None:
+    """Keep the bot task alive until queued speaker audio has played.
+
+    ``send_audio`` only enqueues: finished enqueueing is not finished
+    playing, and this version ignores speech until playback ends. There
+    is no playout event to await, so poll the counter.
+    """
+    pending_playout_ms = getattr(transport, "pending_playout_ms", None)
+    if pending_playout_ms is None:
+        return
+    while pending_playout_ms() > 0:  # noqa: ASYNC110
+        await asyncio.sleep(PLAYOUT_POLL_S)
 
 
 async def observe_bot_task(bot_task: asyncio.Task, journal) -> None:
@@ -244,6 +259,7 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
                         run_agent(client, text, q),
                         drain_to_speaker(tts, transport, q, journal),
                     )
+                    await wait_for_playout(transport)
 
                 bot_task = asyncio.create_task(_bot())
     finally:

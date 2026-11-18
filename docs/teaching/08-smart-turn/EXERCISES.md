@@ -44,8 +44,8 @@ the next hint; keep each attempt in your evidence record.
 <details markdown="1">
 <summary>Hint 1 of 4</summary>
 
-The classifier outputs `P(end-of-turn)`. Scores from 0.3 through
-   just below 0.5 are newly accepted by the candidate threshold, but
+The classifier outputs `P(end-of-turn)`. Scores above 0.3 up to
+   and including 0.5 are newly accepted by the candidate threshold, but
    that fact alone says nothing about whether each decision is correct.
 
 </details>

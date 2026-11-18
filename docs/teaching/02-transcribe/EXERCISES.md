@@ -21,8 +21,8 @@
 
 **Task.** Say a word the STT consistently mishears ("bass" vs
 "base", "pear" vs "pair", "their" vs "there"). Re-run
-`streaming.py`, then read the bundle and find the exact partial
-where the wrong guess stuck. Compare it to the final.
+`streaming.py`, then read the bundle and find the first partial
+where the wrong word appeared. Compare it to the final.
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**
@@ -42,8 +42,9 @@ The bundle is `runs/*.bundle`. Open it with
 <summary>Hint 2 of 4</summary>
 
 Filter records by `name == "stt.partial"` and
-   `name == "stt.final"`. You should see the sequence of guesses
-   converging.
+   `name == "stt.final"`. With the default OpenAI provider each
+   partial is a growing prefix of the final text, so look for the
+   first prefix that contains the wrong word.
 
 </details>
 
@@ -54,6 +55,9 @@ The interesting case is when the *final* commits to a wrong
    guess — meaning the provider had a better partial at some
    earlier point and threw it away. That's a recall failure (the
    right hypothesis was on the table; the LM-prior overruled it).
+   You can only observe it with `--provider deepgram`, whose interim
+   results revise earlier words; OpenAI's prefix partials never
+   replace one.
 
 </details>
 
@@ -67,9 +71,10 @@ The opposite case is also interesting: the final is *right* but
 **Wider points to check yourself on**
 
 - Does the OpenAI batch-then-stream pattern make this exercise
-  easier or harder? (Easier: all partials cluster at the end so
-  the sequence is dense. Harder: the timing is misleading — the
-  partials don't reflect when the *audio* was uttered.)
+  easier or harder? (Easier: every event is flushed at once after
+  the response completes, so the sequence is dense. Harder: the
+  timing is misleading — the partials don't reflect when the
+  *audio* was uttered, and no revision is visible.)
 - Try the same exercise with both executable paths:
 
   ```bash
@@ -292,9 +297,11 @@ uv run python docs/teaching/02-transcribe/stream_lifecycle_probe.py
 
 Before reading the JSON, predict which cleanup events appear after a transport
 connect failure, a failure after microphone startup, an STT start failure, and
-an audio-feed failure. Then replace the `TaskGroup` in a scratch copy of
-`streaming.py` with its old `gather()` call. Which ordering guarantee
-disappears?
+an audio-feed failure. Then copy both `streaming.py` and
+`stream_lifecycle_probe.py` into the same scratch directory (the probe imports
+`streaming` from its own directory), replace the `TaskGroup` block in the copy
+with `await asyncio.gather(feed_audio(), consume_events())`, and run the probe
+from there. Which ordering guarantee disappears?
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**
@@ -371,14 +378,16 @@ The propagated feed error is an `ExceptionGroup` because `TaskGroup`
 > passes without looking.
 <!-- END auto:self-check-protocol -->
 
-1. Which envelope fields let you orient an unfamiliar bundle without its
-   chapter README?
+1. Which record (`stt.provider.selected`) and which of its fields (provider,
+   `event_timing`, input and target rates) let you orient an unfamiliar bundle
+   without its chapter README?
 2. Why may a partial transcript drive reversible speculation but not commit an
    irreversible side effect, and which event sequence proves the distinction?
 3. Who ends one logical STT stream, who closes the provider resource, and which
    records prove both actions occurred in order?
-4. Which independent settings control raw-audio retention and transcript
-   retention, and how would you verify each in a bundle?
+4. What deletes the raw WAV, what still retains the transcript, and which
+   records (`recording.complete` `retention`, `recording.cleaned`
+   `data.deleted`, `stt.final` `data.text`) verify each in a bundle?
 5. How can Chapter 2 switch STT providers without editing its consumer loop,
    and how does a provider wire target differ from an upstream input-rate
    restriction?
