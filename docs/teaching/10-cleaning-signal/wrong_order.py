@@ -257,11 +257,13 @@ async def finish_stt_turn(stt) -> str:
     """End, drain, and close one completed STT turn."""
     try:
         await stt.end_stream()
-        final_text = ""
+        # A turn can yield several FINAL segments; join them (as chapters
+        # 4-8 do) instead of keeping only the last one.
+        finals: list[str] = []
         async for event in stt.events():
-            if event.type == STTEventType.FINAL:
-                final_text = event.text
-        return final_text
+            if event.type == STTEventType.FINAL and event.text.strip():
+                finals.append(" ".join(event.text.split()))
+        return " ".join(finals)
     finally:
         await close_if_supported(stt)
 

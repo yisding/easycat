@@ -159,10 +159,12 @@ This chapter's `main.py` has no action queue yet. Create
 The caller hears the tone, but the bot does not resume. The REST
    update replaces the call's TwiML, so the `<Connect><Stream>` media
    stream ends; with no further verbs after `<Play>`, Twilio completes
-   the call once the digits play. The `SessionActionResult` keeps
-   `stop_session=False`, so look for the transport's stream stop after
-   `session_action_completed` — resuming would need extra TwiML such as
-   a `<Redirect>`.
+   the call once the digits play. The executor knows this, so its
+   `SessionActionResult` requests `stop_session=True` and records
+   `media_stream_replaced: true`: look for both in the
+   `session_action_completed` record, followed by the session stopping.
+   Telnyx sends DTMF as a native Call Control command and keeps the
+   stream running.
 
 </details>
 
