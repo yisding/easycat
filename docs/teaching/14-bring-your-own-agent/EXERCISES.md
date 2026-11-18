@@ -28,7 +28,9 @@ explicit shallow-mode opt-in. Also temporarily comment out the
 `assert bridge.deep_mode, ...` line in `main()`, or the script will
 stop before the session starts. Run the script and try to interrupt the
 bot mid-sentence. What stops, and what can no
-longer be reconciled?
+longer be reconciled? Afterwards, restore the signature, the
+cancellation check, `apply_interruption`, and the `assert` so the
+chapter returns to deep mode.
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**

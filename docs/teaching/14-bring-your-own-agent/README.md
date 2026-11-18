@@ -952,7 +952,8 @@ does not leak the prior list.
    starts, then interrupt the bot
    mid-sentence. What stops, and what can no longer be reconciled?
    (Hint: inspect `assistant_interruption_notified` and its `notified`
-   field.)
+   field.) Restore all four edits, including the `assert`, when you
+   are done.
 2. Add a `CustomAction` and a 10-line executor that prints it.
    Trigger it from the workflow. How does the journal record the
    action's lifecycle?
