@@ -49,6 +49,21 @@ class TestOutboundAudioSource:
         source.enqueue(data, original_chunk=AudioChunk(data=data, format=PCM16_MONO_16K))
         assert not source._queue.empty()
 
+    def test_delivered_chunk_keeps_the_dtmf_tone_flag(self):
+        source = OutboundAudioSource()
+        tone = AudioChunk(data=bytes(320), format=PCM16_MONO_16K, _easycat_dtmf_tone=True)
+        plain = AudioChunk(data=bytes(320), format=PCM16_MONO_16K)
+        source.enqueue(bytes(960), original_chunk=tone)
+        source.enqueue(bytes(960), original_chunk=plain)
+
+        first = source._take_audio_slice(960)
+        second = source._take_audio_slice(960)
+
+        assert first is not None and first[1] is not None
+        assert second is not None and second[1] is not None
+        assert first[1][0]._easycat_dtmf_tone is True
+        assert second[1][0]._easycat_dtmf_tone is False
+
     def test_enqueue_overflow(self):
         source = OutboundAudioSource()
         source._queue = asyncio.Queue(maxsize=2)

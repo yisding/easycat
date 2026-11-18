@@ -68,6 +68,21 @@ captured mic signal.
   `session/_session.py`.
 - `session/_audio_router.py` — Routes captured audio through echo cancellation
   / noise reduction and feeds TTS output back as AEC reference audio.
+  `send_protected_sequence()` sends in-band DTMF tone frames for
+  `Session.play_dtmf_tones()` as one runtime-scope task that caller
+  cancellation cannot truncate. It waits for queued TTS to drain, takes the
+  outbound send lock, sends a playout fence mark and arms the transport's
+  `ProtectedPlayback` guard before the first tone frame, then resolves the
+  playback handle from the guard's completion mark. A mark-only transport
+  resolves through a router-local `easycat_dtmf_N` mark waiter, and a bare
+  transport resolves `"estimated"`. Tone frames feed the AEC reference
+  (resampled to the near-end rate), emit `AudioOut` with `turn_id=None`, and
+  never count toward a turn's audio bytes. Under `"pii"` journal redaction,
+  their `AudioOut` and captured copies are silence of the same length.
+- `session/_media_output.py` — `SessionMediaOutput`, a weak-reference
+  adapter exposing `play_dtmf_tones()` and `synthesize_bypass()` to helpers
+  that must not keep a session alive. `wire_outbound_pipeline` binds a
+  per-session `InBandDTMFDelivery` to it.
 - `session/_tts_scheduler.py` — `TTSScheduler.prepare()` builds and
   normalizes TTS payload text before scheduling synthesis/playback.
 - `session/_stt_committer.py` — Commits finalized STT transcripts into the
@@ -101,6 +116,11 @@ captured mic signal.
 - `runtime/` — Journal-based debug-first runtime. `ExecutionJournal` records
   events, spans, and metrics. `JournalView` provides query access. The
   journal is the single source of truth for all observability.
+  `runtime/capabilities.py` holds the duck-typed optional transport
+  capabilities, such as `playback_acknowledgements()` and
+  `protected_playback()`. The `ProtectedPlayback` protocol lets a transport
+  hold a barge-in `clear` until an in-band DTMF burst has played; see
+  [Extending transports](extending/transport.md).
 - `validation/` — Validation report models, redaction, and runner helpers
   behind the `easycat validate` lanes. `validation/_lane_harness.py` holds
   `LaneHarness`, the shared start/finish bookkeeping (run-id allocation,
@@ -139,6 +159,11 @@ captured mic signal.
 - `smart_turn.py` — Optional ONNX-based endpoint detection that classifies
   whether a user has finished speaking, enabling faster turn transitions
   without waiting for silence timeout.
+- `_dtmf_tones.py` (package root) — ITU-T Q.23 DTMF tone rendering
+  (`DTMFToneConfig`, `render_dtmf_pcm16`, `render_dtmf_mulaw`) and the
+  `DTMFTonePlayback` handle. A leaf with no numpy dependency that imports only
+  the stdlib and `transports/_g711.py`, so `session/` can render tones without
+  importing `telephony/`. `easycat.telephony` re-exports its public names.
 - `_turn_context.py` (package root) — `TurnContext` per-turn state (timing,
   playback tracking, cancel token; created fresh each turn) and the
   `TurnHandle` protocol. Lives at the root as a leaf (depends only on

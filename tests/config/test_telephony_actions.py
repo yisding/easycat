@@ -122,3 +122,40 @@ def test_both_action_executors_wire_together():
     assert len(executors) == 2
     assert isinstance(executors[0], TwilioSessionActionExecutor)
     assert isinstance(executors[1], TelnyxSessionActionExecutor)
+
+
+def test_create_session_binds_in_band_ivr_delivery_to_the_session() -> None:
+    from easycat.config import OutboundCallConfig
+    from easycat.session._media_output import SessionMediaOutput
+    from easycat.telephony.ivr import DTMFDelivery, InBandDTMFDelivery, IVRNavigator
+
+    async def press_one(_context: dict[str, object]) -> dict[str, str]:
+        return {"action": "dtmf", "digits": "1"}
+
+    shared = DTMFDelivery()
+    config = EasyConfig(
+        openai_api_key="test-key",
+        agent=_DummyAgent(),
+        telephony=TelephonyConfig(
+            enable_outbound_call_manager=True,
+            outbound=OutboundCallConfig(
+                from_number="+15550000002",
+                ivr_agent_callback=press_one,
+                ivr_dtmf_delivery=shared,
+            ),
+        ),
+    )
+
+    try:
+        session = create_session(config)
+    except RuntimeError as exc:
+        if "No VAD backend available" in str(exc):
+            pytest.skip("No VAD backend available")
+        raise
+
+    navigator = next(h for h in session.telephony.helpers if isinstance(h, IVRNavigator))
+    delivery = navigator._dtmf_delivery
+    assert isinstance(delivery, InBandDTMFDelivery)
+    assert isinstance(delivery._output, SessionMediaOutput)
+    assert delivery._output.session is session
+    assert shared.call_sid == ""

@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from easycat.session._session import Session
     from easycat.telephony.call_state import OutboundCallStateMachine
     from easycat.telephony.compliance import DNCStore
+    from easycat.telephony.ivr import IVRDTMFSender
     from easycat.telephony.screening import CallScreeningDetector
     from easycat.telephony.voicemail import VoicemailDetector
 
@@ -50,6 +51,7 @@ class TelephonyHelpers:
     state_machine: OutboundCallStateMachine | None = None
     screening_detector: CallScreeningDetector | None = None
     voicemail_detector: VoicemailDetector | None = None
+    ivr_delivery: IVRDTMFSender | None = None
 
 
 def create_telephony_helpers(
@@ -115,6 +117,7 @@ def _build_outbound_helpers(
     result.helpers.extend(built.helpers)
     result.state_machine = built.state_machine
     result.screening_detector = built.screening_detector
+    result.ivr_delivery = built.ivr_delivery
     if result.voicemail_detector is not None:
         result.voicemail_detector.set_call_boundary_acceptor(
             built.state_machine.accepts_call_initiation
@@ -241,6 +244,18 @@ class _OutboundPipelineWiring:
             await self._session.synthesize_bypass(event.text)
 
 
+def _bind_in_band_ivr_delivery(session: Session, delivery: object) -> None:
+    """Point a per-session in-band IVR sender at this session's media output."""
+    if delivery is None:
+        return
+    from easycat.telephony.ivr import InBandDTMFDelivery
+
+    if isinstance(delivery, InBandDTMFDelivery):
+        from easycat.session._media_output import SessionMediaOutput
+
+        delivery.bind_output(SessionMediaOutput(session))
+
+
 def wire_outbound_pipeline(
     session: Session,
     helpers: TelephonyHelpers,
@@ -251,7 +266,9 @@ def wire_outbound_pipeline(
     Wires the classification gate flush/hold callbacks and the screening
     response handler so that TTS audio is buffered, replayed, and the bot
     responds to screening prompts. Reads ``helpers.state_machine`` and
-    ``helpers.screening_detector`` directly — no ``isinstance`` re-scan.
+    ``helpers.screening_detector`` directly — no ``isinstance`` re-scan. A
+    per-session in-band IVR sender (``helpers.ivr_delivery``) is bound to this
+    session's media output so IVR key presses play on its live stream.
     """
     sm = helpers.state_machine
     assert sm is not None  # only called when an outbound state machine exists
@@ -264,6 +281,7 @@ def wire_outbound_pipeline(
 
     sm.set_gate_flush_callback(wiring.flush_gated_audio)
     sm.gate.set_hold_audio_callback(wiring.play_hold_audio)
+    _bind_in_band_ivr_delivery(session, helpers.ivr_delivery)
     helpers.helpers.append(wiring)
     session.telephony.helpers.append(wiring)
     return wiring

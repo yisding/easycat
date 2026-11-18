@@ -101,7 +101,10 @@ unrelated event type. Keep the returned subscription and call its idempotent
 - `Interruption` — the user barged in while the bot was speaking; pending
   TTS for the turn is cancelled.
 - `PlaybackMarkAck` — a transport acknowledged that playback reached a
-  previously queued mark (for example a Twilio Media Stream mark).
+  previously queued mark (for example a Twilio Media Stream mark). It also
+  fires for the marks EasyCat sends around in-band DTMF tones
+  (`easycat_dtmf_fence_N` before a burst, `easycat_dtmf_N` after it), which
+  belong to no turn.
 
 ### Agent Tools
 
@@ -127,7 +130,10 @@ unrelated event type. Keep the returned subscription and call its idempotent
 
 ### Telephony Lifecycle
 
-- `DTMF` — one DTMF digit was detected.
+- `DTMF` — one DTMF digit was detected. On Twilio, inbound `dtmf` messages
+  that arrive while EasyCat's own in-band tones play, and for
+  `TwilioTransportConfig.dtmf_echo_suppress_tail_ms` (500 ms) afterwards, are
+  dropped as echo unless `suppress_inbound_dtmf_during_tones=False`.
 - `DTMFAggregated` — the DTMF aggregator completed a multi-digit sequence.
 - `VoicemailDetected` — voicemail/answering-machine detection resolved to
   `human`, `machine`, or `unknown`.

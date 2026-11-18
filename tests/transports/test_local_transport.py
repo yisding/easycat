@@ -422,6 +422,26 @@ class TestLocalTransport:
         assert queued.chunk.data == head
 
     @pytest.mark.asyncio
+    async def test_send_audio_keeps_the_dtmf_tone_flag_on_queued_frames(self):
+        """Delivered tone frames stay out of turn accounting (in-band DTMF)."""
+        transport = LocalTransport(LocalTransportConfig(output_preroll_frames=0))
+        transport._connected = True
+        assert transport.audio_format == transport._audio_format
+        frame_bytes = transport._frame_samples * transport._audio_format.frame_size
+        chunk = AudioChunk(
+            data=bytes(frame_bytes * 2),
+            format=transport.audio_format,
+            _easycat_dtmf_tone=True,
+        )
+        plain = AudioChunk(data=bytes(frame_bytes), format=transport.audio_format)
+
+        assert await transport.send_audio(chunk) is True
+        assert await transport.send_audio(plain) is True
+
+        queued = [transport._out_queue.get_nowait() for _ in range(3)]
+        assert [item.chunk._easycat_dtmf_tone for item in queued] == [True, True, False]
+
+    @pytest.mark.asyncio
     async def test_output_callback_pushes_reference_during_preroll_silence(self):
         """Pre-roll silence still pushes one full-frame reference per callback.
 

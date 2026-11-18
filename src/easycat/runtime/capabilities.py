@@ -6,11 +6,24 @@ without depending on concrete EasyCat implementation classes.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from easycat.audio_format import AudioChunk
 from easycat.runtime.scope import RuntimeScope
+
+if TYPE_CHECKING:
+    from easycat._dtmf_tones import DTMFPlaybackOutcome
+
+PROTECTED_PLAYBACK_CHUNK_ATTR = "_easycat_protected_playback"
+"""Chunk attribute that tags outbound audio with an active protected-playback token.
+
+The router stamps ``setattr(chunk, PROTECTED_PLAYBACK_CHUNK_ATTR, token)`` on
+every frame of a protected sequence (in-band DTMF tones) so a transport
+holding untagged audio behind a deferred ``clear`` still sends those frames
+immediately.
+"""
 
 
 @runtime_checkable
@@ -19,6 +32,56 @@ class PlaybackAcknowledgements(Protocol):
 
     async def send_playback_mark(self, name: str | None = None) -> str:
         """Enqueue a playback mark and return the mark name used."""
+        ...
+
+
+@runtime_checkable
+class ProtectedPlayback(Protocol):
+    """Transport capability for audio that a barge-in ``clear`` must not cut.
+
+    In-band DTMF tones are a key sequence: wiping half of them on the wire
+    turns ``"1234#"`` into ``"12"``. A transport that implements this protocol
+    defers outbound ``clear`` requests while a protected sequence plays, then
+    writes the deferred clear once the far end has played it (so the clear
+    only wipes audio queued *after* the tones).
+
+    The expected call order is::
+
+        await t.wait_playout_fence(timeout_s=...)     # earlier audio played out
+        token = t.begin_protected_playback(max_duration_s=...)  # no await between
+        ...send frames tagged with ``PROTECTED_PLAYBACK_CHUNK_ATTR = token``...
+        done = await t.end_protected_playback(token)  # resolves on far-end ack
+
+    ``abort_protected_playback`` releases the guard early (a rejected frame, or
+    a forced session stop).
+    """
+
+    async def wait_playout_fence(self, *, timeout_s: float) -> bool:
+        """Send a playout fence and wait until the far end echoes it.
+
+        Returns ``True`` once everything queued before the fence has played,
+        ``False`` on timeout or when no stream is active (callers continue).
+        ``clear`` requests issued while waiting are NOT deferred.
+        """
+        ...
+
+    def begin_protected_playback(self, *, max_duration_s: float) -> object:
+        """Arm the clear guard synchronously and return an opaque token.
+
+        Raises :class:`RuntimeError` when no stream is active. The guard
+        self-expires after *max_duration_s* seconds.
+        """
+        ...
+
+    async def end_protected_playback(
+        self,
+        token: object,
+    ) -> asyncio.Future[DTMFPlaybackOutcome]:
+        """Mark the end of the sequence; the future resolves when it was played."""
+        ...
+
+    def abort_protected_playback(self, token: object | None) -> None:
+        """Release one guard early, or every guard when *token* is ``None``."""
         ...
 
 
@@ -63,6 +126,24 @@ def playback_acknowledgements(provider: Any) -> PlaybackAcknowledgements | None:
     """Return the playback-ack capability when supported."""
     if callable(getattr(provider, "send_playback_mark", None)):
         return cast(PlaybackAcknowledgements, provider)
+    return None
+
+
+def protected_playback(provider: Any) -> ProtectedPlayback | None:
+    """Return the protected-playback capability when the transport supports it.
+
+    Duck-typed like :func:`playback_acknowledgements`: every hook must be
+    callable, so a transport that implements only part of the protocol is
+    treated as not supporting it.
+    """
+    hooks = (
+        "wait_playout_fence",
+        "begin_protected_playback",
+        "end_protected_playback",
+        "abort_protected_playback",
+    )
+    if provider is not None and all(callable(getattr(provider, hook, None)) for hook in hooks):
+        return cast(ProtectedPlayback, provider)
     return None
 
 

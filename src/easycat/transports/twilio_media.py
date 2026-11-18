@@ -7,15 +7,18 @@ and emits DTMF / control events into the Session event bus.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import json
 import logging
 import time
 import warnings
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from http import HTTPStatus
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -30,6 +33,7 @@ from easycat.events import (
     EventBus,
     PlaybackMarkAck,
 )
+from easycat.runtime.capabilities import PROTECTED_PLAYBACK_CHUNK_ATTR
 from easycat.telephony._stream_tokens import (
     STREAM_TOKEN_PARAMETER,
     StreamTokenContext,
@@ -63,6 +67,9 @@ from easycat.transports._telephony_media import (
 )
 from easycat.transports._telephony_media import parse_wire_int as _parse_twilio_int
 
+if TYPE_CHECKING:
+    from easycat._dtmf_tones import DTMFPlaybackOutcome
+
 # Shared telephony codecs and stream tokens moved to ``easycat.transports._g711``
 # and ``easycat.telephony._stream_tokens``; these names stay importable from here.
 __all__ = [
@@ -94,6 +101,12 @@ TWILIO_STREAM_TOKEN_PARAMETER = STREAM_TOKEN_PARAMETER
 
 TwilioStreamTokenStore = StreamTokenStore
 
+_MAX_DTMF_ECHO_SUPPRESS_TAIL_MS = 5000
+# Mark-name prefixes for in-band DTMF protected playback (see
+# ``easycat.runtime.capabilities.ProtectedPlayback``).
+_DTMF_FENCE_MARK_PREFIX = "easycat_dtmf_fence_"
+_DTMF_GUARD_MARK_PREFIX = "easycat_dtmf_"
+
 
 def _parse_twilio_message(raw: str) -> dict[str, Any] | None:
     """Parse one Twilio WebSocket message and require a JSON object."""
@@ -117,6 +130,12 @@ class TwilioTransportConfig:
     stream_token_validation_timeout_s: float = 5.0
     unsafe_allow_no_auth: bool = False
     max_pending_bytes: int = DEFAULT_INBOUND_AUDIO_MAX_BYTES
+    # In-band DTMF output: drop inbound ``dtmf`` events while EasyCat's own
+    # tones play, and for this long afterwards, so line echo of the bot's key
+    # presses is never reported as caller input. A real caller key press in
+    # that window is dropped too; disable to always deliver inbound DTMF.
+    suppress_inbound_dtmf_during_tones: bool = True
+    dtmf_echo_suppress_tail_ms: int = 500
 
     def __post_init__(self) -> None:
         if not self.stream_token_parameter:
@@ -124,6 +143,18 @@ class TwilioTransportConfig:
         timeout = self.stream_token_validation_timeout_s
         if not is_finite_number(timeout) or timeout <= 0:
             raise ValueError("stream_token_validation_timeout_s must be a positive finite number")
+        if not isinstance(self.suppress_inbound_dtmf_during_tones, bool):
+            raise TypeError("suppress_inbound_dtmf_during_tones must be a bool")
+        tail_ms = self.dtmf_echo_suppress_tail_ms
+        if (
+            not isinstance(tail_ms, int)
+            or isinstance(tail_ms, bool)
+            or not 0 <= tail_ms <= _MAX_DTMF_ECHO_SUPPRESS_TAIL_MS
+        ):
+            raise ValueError(
+                "dtmf_echo_suppress_tail_ms must be an int between 0 and "
+                f"{_MAX_DTMF_ECHO_SUPPRESS_TAIL_MS}"
+            )
 
 
 def twilio_websocket_signature_process_request(
@@ -473,6 +504,40 @@ async def _emit_parsed_twilio_dtmf(
         await event_bus.emit(replace(event, session_id=session_id))
 
 
+class _ProtectedGuard:
+    """One armed protected-playback (in-band DTMF) clear guard.
+
+    The guard is the opaque token returned by ``begin_protected_playback``.
+    It is keyed by the ``streamSid`` it was armed on, so stream teardown and a
+    replacement ``start`` (gh 1103) only ever resolve their own guards.
+    """
+
+    __slots__ = ("deadline", "future", "mark_name", "owner", "stream_sid", "timer")
+
+    def __init__(
+        self,
+        *,
+        owner: object,
+        stream_sid: str,
+        deadline: float,
+        future: asyncio.Future[DTMFPlaybackOutcome],
+    ) -> None:
+        self.owner = owner
+        self.stream_sid = stream_sid
+        self.deadline = deadline
+        self.future = future
+        self.mark_name: str | None = None
+        self.timer: asyncio.TimerHandle | None = None
+
+
+def _dtmf_clock() -> float:
+    """Return the event-loop clock (the one ``call_at`` deadlines use)."""
+    try:
+        return asyncio.get_running_loop().time()
+    except RuntimeError:
+        return time.monotonic()
+
+
 class _TwilioProtocolMixin:
     """Shared Twilio Media Streams inbound routing + handlers.
 
@@ -494,6 +559,15 @@ class _TwilioProtocolMixin:
 
     The outbound send/mark/clear encoders stay per-class because their
     ``ConnectionClosed`` error-path resets model genuinely different lifecycles.
+
+    The mixin also implements the
+    :class:`~easycat.runtime.capabilities.ProtectedPlayback` capability used
+    for in-band DTMF: while a guard is armed, ``clear_audio`` is deferred (so a
+    barge-in cannot cut a key sequence in half on the wire) and untagged
+    outbound audio is held behind the deferred clear. When the guard's mark is
+    acknowledged the deferred ``clear`` is written first, then held audio
+    flows. Guards self-expire at their deadline and are aborted on stream
+    teardown, keyed by ``streamSid`` so a replacement stream is never touched.
     """
 
     # Base-provided members this mixin relies on (declared for readers/type
@@ -516,6 +590,15 @@ class _TwilioProtocolMixin:
     _call_ended_emitted: bool
     _mark_counter: int
     _inbound_resampler: PCM16StreamResampler
+    _dtmf_guards: deque[_ProtectedGuard]
+    _dtmf_fence_waiters: dict[str, tuple[str, asyncio.Future[bool]]]
+    _clear_deferred: bool
+    _dtmf_releasing: bool
+    _hold_released: asyncio.Event
+    _dtmf_mark_seq: int
+    _dtmf_fence_seq: int
+    _dtmf_echo_suppress_until: float
+    _suppressed_inbound_dtmf: int
 
     # ── Per-class hooks ───────────────────────────────────────────
 
@@ -541,6 +624,16 @@ class _TwilioProtocolMixin:
         self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
         self._mark_counter = 0
         self._inbound_resampler = PCM16StreamResampler(self._audio_format.sample_rate)
+        self._dtmf_guards = deque()
+        self._dtmf_fence_waiters = {}
+        self._clear_deferred = False
+        self._dtmf_releasing = False
+        self._hold_released = asyncio.Event()
+        self._hold_released.set()
+        self._dtmf_mark_seq = 0
+        self._dtmf_fence_seq = 0
+        self._dtmf_echo_suppress_until = 0.0
+        self._suppressed_inbound_dtmf = 0
 
     def _owns_connection(self, ws: ServerConnection) -> bool:
         """Whether *ws* may still tear down the single connection slot.
@@ -560,6 +653,329 @@ class _TwilioProtocolMixin:
     def _reset_connection_state(self) -> None:
         """Reset per-class ownership state inside the guarded finally."""
         raise NotImplementedError
+
+    async def send_mark(self, name: str | None = None) -> str:
+        """Send a playback-position ``mark`` over the wire (per-class encoder)."""
+        raise NotImplementedError
+
+    async def _send_clear_frame(self) -> None:
+        """Write a wire ``clear`` for the active stream (per-class encoder)."""
+        raise NotImplementedError
+
+    # ── Outbound clear ────────────────────────────────────────────
+
+    async def clear_audio(self) -> None:
+        """Send a ``clear`` message to discard queued outbound audio on Twilio's side.
+
+        While in-band DTMF tones are protected the clear is deferred until
+        their mark is acknowledged (or the guard expires), so it only wipes
+        audio queued after the tones.
+        """
+        if await self._defer_clear_if_protected():
+            return
+        await self._send_clear_frame()
+
+    # ── Protected playback (in-band DTMF clear guard) ─────────────
+
+    @property
+    def suppressed_inbound_dtmf(self) -> int:
+        """Inbound ``dtmf`` events dropped as likely echo of EasyCat's own tones."""
+        return self._suppressed_inbound_dtmf
+
+    async def wait_playout_fence(self, *, timeout_s: float) -> bool:
+        """Send a fence mark and wait for Twilio to echo it.
+
+        Returns ``True`` once everything queued before the fence has played;
+        ``False`` on timeout, when no stream is active, or when the stream
+        stopped or was replaced (gh 1103) during the wait. Clears issued
+        during the fence are not deferred, and Twilio echoes pending marks on
+        ``clear``, so a barge-in ends the wait promptly.
+        """
+        if not is_finite_number(timeout_s) or timeout_s <= 0:
+            raise ValueError("timeout_s must be a positive finite number")
+        stream_sid = self._stream_sid
+        if stream_sid is None:
+            return False
+        # A deferred clear left behind by an aborted guard is flushed first so
+        # it cannot be carried into (and delayed by) the next guard.
+        await self._flush_stale_deferred_clear()
+        if self._stream_sid != stream_sid:
+            return False
+        self._dtmf_fence_seq += 1
+        name = f"{_DTMF_FENCE_MARK_PREFIX}{self._dtmf_fence_seq}"
+        waiter: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        self._dtmf_fence_waiters[name] = (stream_sid, waiter)
+        try:
+            try:
+                sent = await self.send_mark(name)
+            except RuntimeError:
+                return False
+            if not sent or self._stream_sid != stream_sid:
+                return False
+            try:
+                echoed = await asyncio.wait_for(asyncio.shield(waiter), timeout_s)
+            except TimeoutError:
+                return False
+            return echoed and self._stream_sid == stream_sid
+        finally:
+            self._dtmf_fence_waiters.pop(name, None)
+
+    def begin_protected_playback(self, *, max_duration_s: float) -> object:
+        """Arm the clear guard synchronously and return its opaque token."""
+        if not is_finite_number(max_duration_s) or max_duration_s <= 0:
+            raise ValueError("max_duration_s must be a positive finite number")
+        stream_sid = self._stream_sid
+        if stream_sid is None or self._current_ws() is None:
+            raise RuntimeError("Cannot protect Twilio playback without an active stream")
+        loop = asyncio.get_running_loop()
+        guard = _ProtectedGuard(
+            owner=self,
+            stream_sid=stream_sid,
+            deadline=loop.time() + max_duration_s,
+            future=loop.create_future(),
+        )
+        guard.timer = loop.call_at(guard.deadline, self._expire_guard, guard)
+        self._dtmf_guards.append(guard)
+        if self._clear_deferred:
+            # A clear deferred by an earlier guard that expired or was aborted
+            # after this burst's fence started is carried into this guard.
+            # Keep the hold invariant (a live guard plus a deferred clear means
+            # the hold is closed) so held sends block instead of busy-spinning.
+            self._hold_released.clear()
+        return guard
+
+    async def end_protected_playback(
+        self,
+        token: object,
+    ) -> asyncio.Future[DTMFPlaybackOutcome]:
+        """Send the guard's ``easycat_dtmf_N`` mark; the future resolves on its ack.
+
+        Because the wire ``clear`` is never written while a guard is pending,
+        a guard-mark ack means the tones were played. The future resolves
+        ``"disconnected"`` when the mark cannot be sent or the stream ends,
+        and ``"timeout"`` when the guard deadline passes first.
+        """
+        if not isinstance(token, _ProtectedGuard) or token.owner is not self:
+            raise ValueError("Unknown Twilio protected-playback token")
+        guard = token
+        if guard.future.done() or guard.mark_name is not None:
+            return guard.future
+        self._dtmf_mark_seq += 1
+        name = f"{_DTMF_GUARD_MARK_PREFIX}{self._dtmf_mark_seq}"
+        guard.mark_name = name
+        if self._stream_sid != guard.stream_sid:
+            self._drop_guard(guard, "disconnected")
+            return guard.future
+        try:
+            sent: str | None = await self.send_mark(name)
+        except RuntimeError:
+            sent = None
+        if not sent and not guard.future.done():
+            self._drop_guard(guard, "disconnected")
+        return guard.future
+
+    def abort_protected_playback(self, token: object | None) -> None:
+        """Release one guard early, or every guard and fence when *token* is ``None``.
+
+        A clear deferred by the aborted guard is not dropped: held audio is
+        woken and writes the deferred ``clear`` before it is sent, so a
+        barge-in still wipes what it was meant to.
+        """
+        if token is None:
+            for _stream_sid, waiter in self._dtmf_fence_waiters.values():
+                if not waiter.done():
+                    waiter.set_result(False)
+            for guard in list(self._dtmf_guards):
+                self._drop_guard(guard, "disconnected")
+            self._hold_released.set()
+            return
+        if not isinstance(token, _ProtectedGuard) or token.owner is not self:
+            logger.debug("Ignoring abort for an unknown Twilio protected-playback token")
+            return
+        self._drop_guard(token, "disconnected")
+
+    def _finish_guard(self, guard: _ProtectedGuard, outcome: DTMFPlaybackOutcome) -> None:
+        """Resolve *guard* once and start the inbound-DTMF echo-suppression tail."""
+        if guard.timer is not None:
+            guard.timer.cancel()
+            guard.timer = None
+        if not guard.future.done():
+            guard.future.set_result(outcome)
+        tail_s = self._config.dtmf_echo_suppress_tail_ms / 1000
+        self._dtmf_echo_suppress_until = max(
+            self._dtmf_echo_suppress_until,
+            _dtmf_clock() + tail_s,
+        )
+
+    def _drop_guard(self, guard: _ProtectedGuard, outcome: DTMFPlaybackOutcome) -> None:
+        """Remove one guard; wake held audio (it flushes any deferred clear)."""
+        with contextlib.suppress(ValueError):
+            self._dtmf_guards.remove(guard)
+        self._finish_guard(guard, outcome)
+        if not self._dtmf_guards:
+            self._hold_released.set()
+
+    def _expire_guard(self, guard: _ProtectedGuard) -> None:
+        """Timer callback: resolve a guard whose deadline passed before its ack."""
+        guard.timer = None
+        if not self._is_live_guard_token(guard):
+            return
+        logger.debug("Twilio protected-playback guard expired before its mark was acknowledged")
+        self._drop_guard(guard, "timeout")
+
+    async def _guard_active(self) -> bool:
+        """Return whether a guard is armed, expiring (and releasing) stale ones."""
+        if not self._dtmf_guards:
+            return False
+        now = _dtmf_clock()
+        expired = [guard for guard in self._dtmf_guards if guard.deadline <= now]
+        for guard in expired:
+            self._dtmf_guards.remove(guard)
+            self._finish_guard(guard, "timeout")
+        if expired and not self._dtmf_guards:
+            await self._release_guards()
+        return bool(self._dtmf_guards)
+
+    async def _release_guards(self) -> None:
+        """Write a deferred ``clear`` (if any), then release held outbound audio.
+
+        The hold stays closed while the clear is written so held media can
+        never overtake it on the wire. Re-entrant callers return immediately
+        and the active releaser loops if a new deferral lands meanwhile.
+        """
+        if self._dtmf_releasing:
+            return
+        self._dtmf_releasing = True
+        try:
+            while self._clear_deferred and not self._dtmf_guards:
+                self._clear_deferred = False
+                self._hold_released.clear()
+                logger.debug("Writing deferred Twilio clear after protected playback")
+                await self._send_clear_frame()
+        finally:
+            self._dtmf_releasing = False
+            if not self._clear_deferred:
+                self._hold_released.set()
+
+    def _abort_guards(self, stream_sid: str | None) -> None:
+        """Resolve *stream_sid*'s guards and fences as ``"disconnected"``.
+
+        Used on stream teardown, so the deferred clear is dropped without being
+        written. Keyed by ``streamSid``: a replacement stream's state is never
+        touched (gh 1103). ``None`` aborts every guard.
+        """
+        for fence_stream_sid, waiter in self._dtmf_fence_waiters.values():
+            if (stream_sid is None or fence_stream_sid == stream_sid) and not waiter.done():
+                waiter.set_result(False)
+        for guard in list(self._dtmf_guards):
+            if stream_sid is None or guard.stream_sid == stream_sid:
+                self._dtmf_guards.remove(guard)
+                self._finish_guard(guard, "disconnected")
+        if not self._dtmf_guards:
+            self._clear_deferred = False
+            self._hold_released.set()
+
+    async def _flush_stale_deferred_clear(self) -> None:
+        """Write a deferred clear whose guard is already gone."""
+        if await self._guard_active():
+            return
+        if self._clear_deferred:
+            await self._release_guards()
+
+    async def _defer_clear_if_protected(self) -> bool:
+        """Return True when this clear is deferred or covered by a pending one."""
+        if await self._guard_active():
+            if not self._clear_deferred:
+                logger.debug("Deferring Twilio clear until in-band DTMF tones finish playing")
+            self._clear_deferred = True
+            self._hold_released.clear()
+            return True
+        if self._clear_deferred and not self._dtmf_releasing:
+            # The leftover deferred clear (from an aborted guard) covers this one.
+            await self._release_guards()
+            return True
+        return False
+
+    def _is_live_guard_token(self, token: object) -> bool:
+        return any(guard is token for guard in self._dtmf_guards)
+
+    def _dead_guard_may_send(self, guard: _ProtectedGuard) -> bool:
+        """Whether a frame of a no-longer-live guard may still go out unprotected.
+
+        A guard that ended normally (acknowledged or expired) on the
+        still-current stream qualifies; its frames are then treated like
+        ordinary audio. A guard that ended ``"disconnected"`` (stream stop,
+        replacement ``start``, abort) or belongs to another stream rejects
+        them.
+        """
+        if guard.stream_sid != self._stream_sid or not guard.future.done():
+            return False
+        if guard.future.cancelled():
+            return False
+        return guard.future.result() != "disconnected"
+
+    async def _await_protected_hold(self, chunk: AudioChunk) -> bool:
+        """Hold untagged outbound audio behind a deferred clear.
+
+        Returns False when the stream ended or was replaced while held, so the
+        held chunk is neither sent on a dead stream nor leaked onto a
+        replacement call (gh 1103). Frames tagged with a live guard token are
+        never held; frames tagged with an aborted guard's token are rejected
+        so the rest of an interrupted key sequence is never sent.
+        """
+        token = getattr(chunk, PROTECTED_PLAYBACK_CHUNK_ATTR, None)
+        if isinstance(token, _ProtectedGuard) and token.owner is self:
+            if self._is_live_guard_token(token):
+                return token.stream_sid == self._stream_sid
+            if not self._dead_guard_may_send(token):
+                # The burst's guard was aborted (stream stop, replacement
+                # ``start``, forced session stop): reject the rest of the
+                # burst so a partial key sequence never reaches another
+                # stream (gh 1103) and the router stops sending.
+                return False
+        stream_sid = self._stream_sid
+        while not self._hold_released.is_set() or self._clear_deferred:
+            if self._stream_sid != stream_sid:
+                return False
+            if await self._guard_active():
+                if self._clear_deferred:
+                    # Restore the hold invariant before waiting: an already-set
+                    # event would return at once and starve the event loop
+                    # (including the receive loop that delivers the ack).
+                    self._hold_released.clear()
+                remaining = min(guard.deadline for guard in self._dtmf_guards) - _dtmf_clock()
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._hold_released.wait(), max(0.0, remaining))
+                continue
+            if self._dtmf_releasing:
+                await self._hold_released.wait()
+                continue
+            await self._release_guards()
+        return self._stream_sid == stream_sid
+
+    async def _resolve_dtmf_mark(self, mark_name: str) -> None:
+        """Resolve a fence waiter or a guard for an acknowledged mark."""
+        fence = self._dtmf_fence_waiters.get(mark_name)
+        if fence is not None:
+            if not fence[1].done():
+                fence[1].set_result(True)
+            return
+        for guard in self._dtmf_guards:
+            if guard.mark_name == mark_name and guard.stream_sid == self._stream_sid:
+                break
+        else:
+            return
+        self._dtmf_guards.remove(guard)
+        self._finish_guard(guard, "played")
+        if not self._dtmf_guards:
+            await self._release_guards()
+
+    async def _suppress_inbound_dtmf(self) -> bool:
+        if not self._config.suppress_inbound_dtmf_during_tones:
+            return False
+        if await self._guard_active():
+            return True
+        return _dtmf_clock() < self._dtmf_echo_suppress_until
 
     # ── Read-only accessors ───────────────────────────────────────
 
@@ -646,12 +1062,15 @@ class _TwilioProtocolMixin:
                 AudioChunk(data=tail, format=self._audio_format),
                 context="Twilio",
             )
+        ended_stream_sid = self._stream_sid
         self._reset_connection_state()
         self._client_connected.clear()
         self._stream_sid = None
         self._call_sid = None
         self._answered_at = None
         self._diagnostics.reset()
+        if ended_stream_sid is not None:
+            self._abort_guards(ended_stream_sid)
         self._enqueue_sentinel()
 
     async def _handle_message(self, raw: str) -> None:
@@ -749,7 +1168,12 @@ class _TwilioProtocolMixin:
                 await ws.close(4003, "Missing or invalid stream token")
             return False
         self._inbound_resampler.reset()
+        previous_stream_sid = self._stream_sid
         self._stream_sid = stream_sid
+        if previous_stream_sid is not None and previous_stream_sid != stream_sid:
+            # A replacement stream (gh 1103): the old stream's DTMF guards can
+            # never be acknowledged, and its held audio must not leak here.
+            self._abort_guards(previous_stream_sid)
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
         self._call_ended_emitted = False
@@ -852,6 +1276,8 @@ class _TwilioProtocolMixin:
         self._call_sid = None
         self._answered_at = None
         self._diagnostics.reset()
+        if stopped_stream_sid is not None:
+            self._abort_guards(stopped_stream_sid)
         self._enqueue_sentinel()
 
     async def _handle_mark(self, msg: dict[str, Any]) -> None:
@@ -871,6 +1297,9 @@ class _TwilioProtocolMixin:
             logger.debug("Ignoring Twilio mark with invalid name")
             return
         logger.debug("Twilio mark acknowledged: %s", mark_name)
+        # Release a protected-playback guard before awaiting the ack emit so a
+        # slow subscriber cannot extend the outbound hold.
+        await self._resolve_dtmf_mark(mark_name)
         if self._event_bus is not None:
             await self._event_bus.emit(
                 PlaybackMarkAck(mark_name=mark_name, session_id=self._easycat_session_id)
@@ -894,17 +1323,23 @@ class _TwilioProtocolMixin:
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
         """Emit a DTMF event for the pressed digit."""
-        if _is_active_twilio_stream_event(
+        if not _is_active_twilio_stream_event(
             msg,
             active_stream_sid=self._stream_sid,
             event_name="dtmf",
         ):
-            self._diagnostics.observe_sequence(msg)
-            await _emit_parsed_twilio_dtmf(
-                msg,
-                self._event_bus,
-                session_id=self._easycat_session_id,
-            )
+            return
+        self._diagnostics.observe_sequence(msg)
+        if await self._suppress_inbound_dtmf():
+            # Likely line echo of EasyCat's own in-band tones.
+            self._suppressed_inbound_dtmf += 1
+            logger.debug("Suppressing inbound Twilio DTMF during in-band tone playback")
+            return
+        await _emit_parsed_twilio_dtmf(
+            msg,
+            self._event_bus,
+            session_id=self._easycat_session_id,
+        )
 
     _MessageHandler = Callable[["_TwilioProtocolMixin", dict[str, Any]], Awaitable[None]]
     _MESSAGE_HANDLERS: ClassVar[dict[str, _MessageHandler]] = {
@@ -994,11 +1429,17 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
         self._call_ended_emitted = False
         self._diagnostics.reset()
         self._inbound_resampler.reset()
+        self._abort_guards(None)
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
+        if self._ws is None or self._stream_sid is None:
+            return False
+        if not await self._await_protected_hold(chunk):
+            return False
         ws = self._ws
-        if ws is None or self._stream_sid is None:
+        stream_sid = self._stream_sid
+        if ws is None or stream_sid is None:
             return False
 
         mulaw_data = pcm16_to_mulaw(chunk.data, chunk.format.sample_rate)
@@ -1007,7 +1448,7 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
         message = json.dumps(
             {
                 "event": "media",
-                "streamSid": self._stream_sid,
+                "streamSid": stream_sid,
                 "media": {"payload": payload},
             }
         )
@@ -1037,6 +1478,7 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
                 self._ws = None
                 self._stream_sid = None
                 self._client_connected.clear()
+                self._abort_guards(stream_sid)
             return False
 
     # ── Mark support ──────────────────────────────────────────────
@@ -1047,7 +1489,8 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
         Returns the mark name used (auto-generated if not provided).
         """
         ws = self._ws
-        if ws is None or self._stream_sid is None:
+        stream_sid = self._stream_sid
+        if ws is None or stream_sid is None:
             logger.debug("Cannot send mark: no active Twilio stream")
             raise RuntimeError("Cannot send Twilio mark without an active stream")
 
@@ -1058,7 +1501,7 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
         message = json.dumps(
             {
                 "event": "mark",
-                "streamSid": self._stream_sid,
+                "streamSid": stream_sid,
                 "mark": {"name": name},
             }
         )
@@ -1075,6 +1518,7 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
                 self._ws = None
                 self._stream_sid = None
                 self._client_connected.clear()
+                self._abort_guards(stream_sid)
             raise RuntimeError("Cannot send Twilio mark: Twilio disconnected") from None
         return name
 
@@ -1082,8 +1526,8 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
         """Compatibility wrapper for generic playback-mark capability."""
         return await self.send_mark(name=name)
 
-    async def clear_audio(self) -> None:
-        """Send a ``clear`` message to discard queued outbound audio on Twilio's side."""
+    async def _send_clear_frame(self) -> None:
+        """Write a wire ``clear`` to discard queued outbound audio on Twilio's side."""
         ws = self._ws
         if ws is None or self._stream_sid is None:
             return
@@ -1173,6 +1617,9 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, TelephonyConnectionTranspo
     def _clear_call_refs(self) -> None:
         self._stream_sid = None
         self._call_sid = None
+        # This transport owns exactly one accepted socket, so connection
+        # teardown ends every protected-playback guard it armed.
+        self._abort_guards(None)
 
     async def _run_receive_loop(self) -> None:
         await self._receive_twilio_messages(self._ws)
@@ -1180,12 +1627,17 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, TelephonyConnectionTranspo
     async def send_audio(self, chunk: AudioChunk) -> bool:
         if self._stream_sid is None:
             return False
+        if not await self._await_protected_hold(chunk):
+            return False
+        stream_sid = self._stream_sid
+        if stream_sid is None:
+            return False
         mulaw_data = pcm16_to_mulaw(chunk.data, chunk.format.sample_rate)
         payload = base64.b64encode(mulaw_data).decode("ascii")
         message = json.dumps(
             {
                 "event": "media",
-                "streamSid": self._stream_sid,
+                "streamSid": stream_sid,
                 "media": {"payload": payload},
             }
         )
@@ -1197,9 +1649,10 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, TelephonyConnectionTranspo
             self._stream_sid = None
             self._connected = False
             self._client_connected.clear()
+            self._abort_guards(stream_sid)
             return False
 
-    async def clear_audio(self) -> None:
+    async def _send_clear_frame(self) -> None:
         if self._stream_sid is None:
             return
         try:
@@ -1208,7 +1661,8 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, TelephonyConnectionTranspo
             logger.debug("Cannot clear audio: Twilio disconnected")
 
     async def send_mark(self, name: str | None = None) -> str:
-        if self._stream_sid is None:
+        stream_sid = self._stream_sid
+        if stream_sid is None:
             logger.debug("Cannot send mark: no active Twilio stream")
             raise RuntimeError("Cannot send Twilio mark without an active stream")
         if name is None:
@@ -1219,7 +1673,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, TelephonyConnectionTranspo
                 json.dumps(
                     {
                         "event": "mark",
-                        "streamSid": self._stream_sid,
+                        "streamSid": stream_sid,
                         "mark": {"name": name},
                     }
                 )
@@ -1229,6 +1683,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, TelephonyConnectionTranspo
             self._stream_sid = None
             self._connected = False
             self._client_connected.clear()
+            self._abort_guards(stream_sid)
             raise RuntimeError("Cannot send Twilio mark: Twilio disconnected") from None
         return name
 

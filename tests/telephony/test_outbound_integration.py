@@ -7,14 +7,18 @@ and DTMF — verifying that all helpers work together without interference.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import math
 import struct
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from easycat.events import (
     DTMF,
+    AudioIn,
     CallAnswered,
     CallEnded,
     CallFailed,
@@ -47,6 +51,8 @@ from easycat.telephony.voicemail import (
     VoicemailPolicyHandler,
     classify_greeting,
 )
+from easycat.transports.twilio_media import mulaw_to_pcm16
+from tests.telephony._dtmf_decoder import decode_dtmf
 from tests.telephony.test_outbound import _make_bare_manager
 
 
@@ -666,3 +672,229 @@ class TestBotToBotDetection:
             "Can you confirm the time please?",
         ]
         assert not check_coherence(callee_texts, bot_texts)
+
+
+# ── In-band IVR on a live Twilio stream (regression for PR #1347) ─────────
+
+
+class _LiveTwilioSocket:
+    """Accepted Twilio socket fed from a queue; echoes marks like Twilio."""
+
+    def __init__(self) -> None:
+        self.inbox: asyncio.Queue[str | None] = asyncio.Queue()
+        self.sent: list[dict[str, Any]] = []
+        self.closed = False
+
+    def __aiter__(self) -> _LiveTwilioSocket:
+        return self
+
+    async def __anext__(self) -> str:
+        message = await self.inbox.get()
+        if message is None:
+            raise StopAsyncIteration
+        return message
+
+    async def send(self, message: str) -> None:
+        frame = json.loads(message)
+        self.sent.append(frame)
+        if frame["event"] == "mark":
+            # Twilio echoes a mark once the audio queued before it has played.
+            self.inbox.put_nowait(
+                json.dumps(
+                    {
+                        "event": "mark",
+                        "streamSid": frame["streamSid"],
+                        "mark": {"name": frame["mark"]["name"]},
+                    }
+                )
+            )
+
+    async def close(self, *_args: object) -> None:
+        self.closed = True
+        self.inbox.put_nowait(None)
+
+    def push(self, payload: dict[str, Any]) -> None:
+        self.inbox.put_nowait(json.dumps(payload))
+
+    def events(self) -> list[str]:
+        return [
+            f"mark:{frame['mark']['name']}" if frame["event"] == "mark" else frame["event"]
+            for frame in self.sent
+        ]
+
+    def media_pcm(self, frames: list[dict[str, Any]] | None = None) -> bytes:
+        source = self.sent if frames is None else frames
+        payload = b"".join(
+            base64.b64decode(frame["media"]["payload"])
+            for frame in source
+            if frame["event"] == "media"
+        )
+        return mulaw_to_pcm16(payload, target_rate=8000)
+
+    def stream_sids(self) -> set[str]:
+        return {frame["streamSid"] for frame in self.sent}
+
+
+_START = {
+    "event": "start",
+    "sequenceNumber": "1",
+    "streamSid": "MZ1",
+    "start": {"streamSid": "MZ1", "callSid": "CA1", "tracks": ["inbound"]},
+}
+
+
+def _inbound_media(sequence: int) -> dict[str, Any]:
+    payload = base64.b64encode(b"\xff" * 160).decode("ascii")
+    return {
+        "event": "media",
+        "sequenceNumber": str(sequence),
+        "streamSid": "MZ1",
+        "media": {"track": "inbound", "chunk": str(sequence), "payload": payload},
+    }
+
+
+async def _wait_for(predicate: Any, timeout_s: float = 5.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not reached in time")
+        await asyncio.sleep(0.005)
+
+
+def transport_is_live(session: Any) -> bool:
+    transport = session.transport
+    return bool(session.is_running and transport.stream_sid == "MZ1" and transport.call_sid)
+
+
+class TestInBandIVROnTwilioStream:
+    async def _session(
+        self,
+        agent: Any,
+        rest_client: MagicMock,
+    ) -> tuple[Any, _LiveTwilioSocket, EventBus, IVRNavigator, list[object]]:
+        from easycat.config._outbound_helpers import build_outbound_helpers
+        from easycat.config._telephony_wiring import TelephonyHelpers, wire_outbound_pipeline
+        from easycat.config.easy import OutboundCallConfig
+        from easycat.session._session import Session
+        from easycat.telephony.ivr import DTMFDelivery
+        from easycat.telephony.outbound import OutboundCallManager
+        from easycat.transports.twilio_media import TwilioConnectionTransport
+        from tests.session._session_core_helpers import _full_config
+
+        bus = EventBus()
+        ws = _LiveTwilioSocket()
+        transport = TwilioConnectionTransport(ws, event_bus=bus)  # type: ignore[arg-type]
+        session = Session(_full_config(transport=transport, event_bus=bus, enable_vad=False))
+        built = build_outbound_helpers(
+            bus,
+            OutboundCallConfig(
+                from_number="+15550000002",
+                ivr_agent_callback=agent,
+                # A stock REST delivery, as PR #1347-era apps configure it.
+                ivr_dtmf_delivery=DTMFDelivery(twilio_client=rest_client, call_sid="CA1"),
+            ),
+            manager_cls=OutboundCallManager,
+        )
+        helpers = TelephonyHelpers(
+            helpers=list(built.helpers),
+            state_machine=built.state_machine,
+            screening_detector=built.screening_detector,
+            ivr_delivery=built.ivr_delivery,
+        )
+        wire_outbound_pipeline(session, helpers, bus)
+        for helper in helpers.helpers:
+            start = getattr(helper, "start", None)
+            if start is not None:
+                start()
+        ws.push(_START)
+        await session.start()
+        await _wait_for(lambda: transport.stream_sid == "MZ1")
+        navigator = next(h for h in helpers.helpers if isinstance(h, IVRNavigator))
+        return session, ws, bus, navigator, helpers.helpers
+
+    async def test_two_menu_levels_on_one_stream_then_human(self) -> None:
+        answers = iter(["1", "3"])
+
+        async def agent(_context: dict[str, object]) -> dict[str, str]:
+            return {"action": "dtmf", "digits": next(answers)}
+
+        rest_client = MagicMock()
+        session, ws, bus, navigator, helpers = await self._session(agent, rest_client)
+        ended: list[CallEnded] = []
+        ivr_actions: list[IVRAction] = []
+        inbound: list[AudioIn] = []
+        bus.subscribe(CallEnded, ended.append)
+        bus.subscribe(IVRAction, ivr_actions.append)
+        bus.subscribe(AudioIn, inbound.append)
+        try:
+            navigator.activate()
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+            await _wait_for(lambda: "mark:easycat_dtmf_1" in ws.events())
+            await bus.emit(STTFinal(text="Press 3 for orders"))
+            await _wait_for(lambda: "mark:easycat_dtmf_2" in ws.events())
+
+            first_end = ws.events().index("mark:easycat_dtmf_1")
+            assert decode_dtmf(ws.media_pcm(ws.sent[: first_end + 1])) == "1"
+            assert decode_dtmf(ws.media_pcm()) == "13"
+
+            await bus.emit(STTFinal(text="Hi, this is Dana, how can I help?"))
+
+            # Inbound audio still flows on the same stream after both bursts.
+            ws.push(_inbound_media(2))
+            await _wait_for(lambda: bool(inbound))
+        finally:
+            for helper in reversed(helpers):
+                stop = getattr(helper, "stop", None)
+                if stop is not None:
+                    stop()
+            stopped_events = list(ws.events())
+            ended_before_stop = list(ended)
+            running_before_stop = transport_is_live(session)
+            await session.stop(force=True)
+
+        assert running_before_stop
+        assert navigator.menu_depth == 2
+        assert any(a.type is IVRActionType.HUMAN_DETECTED for a in ivr_actions)
+        assert not any(a.type is IVRActionType.SPEAK for a in ivr_actions)
+        rest_client.calls.assert_not_called()
+        # No CallEnded until EasyCat itself tears the session down.
+        assert ended_before_stop == []
+        assert "stop" not in stopped_events and "clear" not in stopped_events
+        assert ws.stream_sids() == {"MZ1"}
+
+    async def test_agent_tool_dtmf_then_speech_on_the_same_stream(self) -> None:
+        from easycat.session.actions import SendDTMFAction
+        from easycat.telephony.session_actions import (
+            TwilioSessionActionConfig,
+            TwilioSessionActionExecutor,
+        )
+
+        async def agent(_context: dict[str, object]) -> dict[str, str]:
+            return {"action": "wait"}
+
+        rest_client = MagicMock()
+        session, ws, _bus, _navigator, helpers = await self._session(agent, rest_client)
+        executor = TwilioSessionActionExecutor(TwilioSessionActionConfig(dtmf_mode="in_band"))
+        try:
+            result = await executor.execute(
+                session, SendDTMFAction(digits="12#", inter_digit_delay_ms=0)
+            )
+            tone_end = len(ws.sent)
+            await session.synthesize_bypass("Thanks, I entered your code.")
+            await _wait_for(lambda: len(ws.sent) > tone_end)
+            assert transport_is_live(session)
+        finally:
+            for helper in reversed(helpers):
+                stop = getattr(helper, "stop", None)
+                if stop is not None:
+                    stop()
+            await session.stop(force=True)
+
+        assert result.stop_session is False
+        assert result.metadata["delivery"] == "in_band"
+        assert result.metadata["playback"] == "played"
+        assert result.metadata["playback_mark"] == "easycat_dtmf_1"
+        assert decode_dtmf(ws.media_pcm(ws.sent[:tone_end])) == "12#"
+        assert any(frame["event"] == "media" for frame in ws.sent[tone_end:])
+        rest_client.calls.assert_not_called()
+        assert ws.stream_sids() == {"MZ1"}

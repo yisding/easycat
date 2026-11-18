@@ -67,6 +67,10 @@ class AudioChunk:
     _easycat_turn_id: str | None = field(default=None, repr=False, compare=False)
     _easycat_turn_ref: TurnContext | None = field(default=None, repr=False, compare=False)
     _easycat_capture_allowed: bool | None = field(default=None, repr=False, compare=False)
+    # In-band DTMF tone frame (never turn audio). Reporting transports that
+    # re-chunk outbound audio copy it onto delivered chunks so the router can
+    # keep tones out of turn accounting and mask them under PII redaction.
+    _easycat_dtmf_tone: bool = field(default=False, repr=False, compare=False)
 
     @property
     def num_samples(self) -> int:

@@ -8,6 +8,7 @@ sentence boundaries for low-latency playback.
 
 from __future__ import annotations
 
+import array
 import asyncio
 import hashlib
 import inspect
@@ -25,12 +26,21 @@ from typing import Any, Literal, Self, TypeVar, cast
 from uuid import uuid4
 
 from easycat import _observability as observability
+from easycat._audio_utils import resample
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat._concurrency import RuntimeSupervisor
+from easycat._dtmf_tones import (
+    DTMFToneConfig,
+    DTMFTonePlayback,
+    count_dtmf_keys,
+    dtmf_sequence_duration_ms,
+    render_dtmf_pcm16_async,
+)
 from easycat._health_check import PeriodicHealthChecker
 from easycat._log_context import bind_session, bind_turn, reset_session
 from easycat._provider_helpers import ProviderErrorEmitter
 from easycat._turn_context import TurnContext
+from easycat.audio_format import PCM16_MONO_8K, AudioChunk, AudioFormat
 from easycat.cancel import CancelToken
 from easycat.echo_cancellation import PassthroughAEC
 from easycat.events import (
@@ -83,6 +93,7 @@ from easycat.runtime.journal import JournalView
 from easycat.runtime.record_contracts import BUILTIN_JOURNAL_RECORD_CONTRACTS
 from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeCohortSignal, RuntimeScope, RuntimeTaskAction
+from easycat.session._audio_router import DTMF_TONE_CHUNK_ATTR
 from easycat.session._builder import (
     _OUTBOUND_QUEUE_MAX_SIZE,
     _OUTBOUND_QUEUE_NAME,
@@ -131,6 +142,39 @@ logger = logging.getLogger(__name__)
 _BARGE_IN_CLEANUP_TASK = "barge_in_cleanup"
 _SUPERVISOR_STREAM_COHORT = "supervisor-streams"
 _EventT = TypeVar("_EventT", bound=Event)
+# In-band DTMF frames are 20 ms long (Twilio's media frame size).
+_DTMF_FRAMES_PER_SECOND = 50
+# Bursts longer than this are resampled off the event loop.
+_DTMF_OFFLOAD_RESAMPLE_BYTES = 5 * PCM16_MONO_8K.bytes_per_second
+
+
+def _dtmf_output_format(transport: object) -> AudioFormat:
+    """Return the PCM16 format to send in-band DTMF tones in on *transport*.
+
+    Not every transport honors ``chunk.format`` (``LocalTransport`` plays
+    every frame at its own device rate), so tones are rendered in the
+    transport's preferred TTS output format, else its ``audio_format``, the
+    same contract TTS output is aligned to. Transports that expose neither get
+    8 kHz mono, the native DTMF rendering rate.
+    """
+    for attr in ("preferred_tts_output_format", "audio_format"):
+        fmt = getattr(transport, attr, None)
+        if isinstance(fmt, AudioFormat) and fmt.encoding == "pcm" and fmt.sample_width == 2:
+            return fmt
+    return PCM16_MONO_8K
+
+
+def _convert_dtmf_pcm(pcm: bytes, target: AudioFormat) -> bytes:
+    """Convert 8 kHz mono PCM16 tones to *target*'s rate and channel count."""
+    data = resample(pcm, PCM16_MONO_8K.sample_rate, target.sample_rate)
+    if target.channels == 1:
+        return data
+    mono = array.array("h")
+    mono.frombytes(data)
+    interleaved = array.array("h", bytes(len(data) * target.channels))
+    for channel in range(target.channels):
+        interleaved[channel :: target.channels] = mono
+    return interleaved.tobytes()
 
 
 def _recording_filename_session_id(session_id: str) -> str:
@@ -1273,6 +1317,85 @@ class Session:
         transport even while the gate is closed.
         """
         await self._tts_scheduler.synthesize_bypass(text)
+
+    async def play_dtmf_tones(
+        self,
+        digits: str,
+        *,
+        inter_digit_delay_ms: int = 0,
+        tone_config: DTMFToneConfig | None = None,
+        fence_timeout_s: float = 10.0,
+    ) -> DTMFTonePlayback:
+        """Play DTMF key presses as in-band audio tones on the live stream.
+
+        Renders ITU-T Q.23 dual tones for *digits* (``0-9 * # A-D``, plus
+        ``w``/``W`` pauses of 0.5 s/1 s) and sends them through the outbound
+        audio path after any queued bot speech, without ending the media
+        stream. On transports with protected playback (Twilio Media Streams)
+        a barge-in ``clear`` cannot cut the key sequence; cancelling the
+        caller does not truncate it either.
+
+        Returns once the tone frames were accepted. Await
+        :meth:`DTMFTonePlayback.wait` to learn whether the far end played
+        them (``"played"``, ``"timeout"``, ``"disconnected"``, or
+        ``"estimated"`` when the transport cannot acknowledge playback).
+
+        Raises:
+            RuntimeError: The session is not running, is stopping or closed,
+                runs in ``text_session`` mode, or the transport rejected a
+                tone frame.
+            ValueError: *digits*, *inter_digit_delay_ms* or *fence_timeout_s*
+                is invalid. Error messages never echo the digits.
+            TypeError: An argument has the wrong type.
+        """
+        self._require_dtmf_output()
+        if (
+            isinstance(fence_timeout_s, bool)
+            or not isinstance(fence_timeout_s, (int, float))
+            or not math.isfinite(fence_timeout_s)
+            or fence_timeout_s <= 0
+        ):
+            raise ValueError("fence_timeout_s must be a positive finite number")
+        pcm = await render_dtmf_pcm16_async(
+            digits,
+            inter_digit_delay_ms=inter_digit_delay_ms,
+            config=tone_config,
+        )
+        duration_ms = dtmf_sequence_duration_ms(
+            digits,
+            inter_digit_delay_ms=inter_digit_delay_ms,
+            config=tone_config,
+        )
+        key_count = count_dtmf_keys(digits)
+        target = _dtmf_output_format(self.transport)
+        if target != PCM16_MONO_8K:
+            if len(pcm) > _DTMF_OFFLOAD_RESAMPLE_BYTES:
+                pcm = await asyncio.to_thread(_convert_dtmf_pcm, pcm, target)
+            else:
+                pcm = _convert_dtmf_pcm(pcm, target)
+        # Rendering long bursts runs off-loop; re-check the lifecycle after.
+        self._require_dtmf_output()
+        frame_bytes = (target.sample_rate // _DTMF_FRAMES_PER_SECOND) * target.frame_size
+        chunks: list[AudioChunk] = []
+        for offset in range(0, len(pcm), frame_bytes):
+            chunk = AudioChunk(data=pcm[offset : offset + frame_bytes], format=target)
+            setattr(chunk, DTMF_TONE_CHUNK_ATTR, True)
+            chunks.append(chunk)
+        return await self._audio_router.send_protected_sequence(
+            chunks,
+            key_count=key_count,
+            duration_ms=duration_ms,
+            fence_timeout_s=float(fence_timeout_s),
+        )
+
+    def _require_dtmf_output(self) -> None:
+        """Raise unless the session can play outbound audio right now."""
+        if self._runtime_mode == "text_session":
+            raise RuntimeError("play_dtmf_tones() is unavailable in text_session mode")
+        if self._closed or self._stopping:
+            raise RuntimeError("Session is stopping or has been stopped")
+        if not self._is_running:
+            raise RuntimeError("Session is not running; call start() before play_dtmf_tones()")
 
     # ── Async context manager ────────────────────────────────────
 

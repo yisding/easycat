@@ -11,6 +11,33 @@ versioning contract that begins at 1.0.0 is documented in
 
 - Release-readiness checks, including installed version metadata and strict
   release-tag validation.
+- In-band DTMF output. `Session.play_dtmf_tones(digits, ...)` renders ITU-T
+  Q.23 key tones (`easycat.telephony.DTMFToneConfig`, `render_dtmf_pcm16`,
+  `render_dtmf_mulaw`) and plays them on the live media stream after any queued
+  bot speech, returning a `DTMFTonePlayback` handle whose `wait()` reports
+  `played`, `timeout`, `disconnected` or `estimated`. The session keeps
+  running. The journal records `dtmf_tones_sent` / `dtmf_tones_completed`
+  without the digits, and tone audio is masked under `"pii"` redaction.
+- The optional `ProtectedPlayback` transport capability
+  (`easycat.runtime.capabilities.protected_playback`). Twilio Media Streams
+  implement it: a playout fence mark before the tones, a barge-in `clear`
+  deferred until the tones are acknowledged (at most the tone length plus
+  5 s), and inbound `dtmf` events from the bot's own tones suppressed
+  (`TwilioTransportConfig.suppress_inbound_dtmf_during_tones`,
+  `dtmf_echo_suppress_tail_ms`).
+- Opt-in in-band delivery for Twilio `SendDTMFAction`:
+  `TwilioSessionActionConfig(dtmf_mode="in_band")` (or `"auto"`, or the
+  `TWILIO_DTMF_MODE` env var for `TwilioAppSettings`) plays the digits on the
+  media stream and leaves the session running, with `delivery: "in_band"` and
+  the playback outcome in the result metadata. The default stays `"rest"`.
+- `InBandDTMFDelivery` and the `IVRDTMFSender` protocol for IVR navigation,
+  plus `OutboundCallConfig.ivr_dtmf_mode` (`"auto"`, `"in_band"`, `"rest"`)
+  and `ivr_dtmf_tones`.
+- A billable live loopback test,
+  `tests/telephony/test_twilio_inband_dtmf_live.py`, that checks a Twilio
+  `<Gather>` hears EasyCat's in-band tones and that the stream survives them.
+  In-band DTMF has not yet been verified on live carrier routes; run this test
+  on your own numbers before relying on it.
 
 ### Fixed
 
@@ -19,6 +46,15 @@ versioning contract that begins at 1.0.0 is documented in
   which ends the session's `<Connect><Stream>` media stream and then the call,
   so the result no longer claims the session can keep talking. The result
   metadata carries `media_stream_replaced: true`. Telnyx DTMF is unchanged.
+  This REST path stays the default; set `dtmf_mode="in_band"` or `"auto"` to
+  keep the session running instead.
+- Twilio IVR navigation no longer ends the media stream on the first key
+  press, so multi-level menus work. With the default
+  `OutboundCallConfig.ivr_dtmf_mode="auto"`, a stock Twilio `DTMFDelivery` is
+  replaced by a per-session `InBandDTMFDelivery` that plays the tones and the
+  speak fallback on the live stream instead of replacing the call's TwiML. Set
+  `ivr_dtmf_mode="rest"` to keep the old behaviour. A custom sender is used
+  as given, and Telnyx is unchanged.
 - `EasyConfig(mcp_servers=...)` raises `EasyConfigError` for a bare string,
   a non-iterable, or a non-string item, instead of a raw `AttributeError` or a
   misleading per-character URI error.

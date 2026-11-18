@@ -185,6 +185,15 @@ class LocalTransport(AudioQueueMixin):
             self._audio_format.sample_rate * self._config.frame_duration_ms
         ) // 1000
 
+    @property
+    def audio_format(self) -> AudioFormat:
+        """PCM format of captured and played audio (the device stream format).
+
+        ``send_audio`` plays every frame at this rate regardless of the
+        chunk's own format, so outbound audio must already match it.
+        """
+        return self._audio_format
+
     # ── Transport protocol ────────────────────────────────────────
 
     async def connect(self) -> None:  # noqa: C901, PLR0915
@@ -586,10 +595,16 @@ class LocalTransport(AudioQueueMixin):
         session_id = getattr(chunk, "_easycat_session_id", None)
         turn_id = getattr(chunk, "_easycat_turn_id", None)
         turn_ref = getattr(chunk, "_easycat_turn_ref", None)
+        dtmf_tone = getattr(chunk, "_easycat_dtmf_tone", False) is True
         for piece in slices:
             self._out_queue.put_nowait(
                 _QueuedOutputChunk(
-                    chunk=AudioChunk(data=piece, format=chunk.format, timestamp=chunk.timestamp),
+                    chunk=AudioChunk(
+                        data=piece,
+                        format=chunk.format,
+                        timestamp=chunk.timestamp,
+                        _easycat_dtmf_tone=dtmf_tone,
+                    ),
                     session_id=session_id,
                     turn_id=turn_id,
                     turn_ref=turn_ref,

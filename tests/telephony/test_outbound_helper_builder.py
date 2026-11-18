@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
 
-from easycat.config import OutboundCallConfig
+from easycat._dtmf_tones import DTMFToneConfig
+from easycat.config import OutboundCallConfig, _outbound_helpers
 from easycat.config._outbound_helpers import (
     _IVRCallbackCoordinator,
     build_outbound_helpers,
+    resolve_ivr_dtmf_delivery,
 )
 from easycat.config.easy import VoicemailDetectionConfig
 from easycat.events import (
@@ -26,7 +29,7 @@ from easycat.events import (
     VoicemailDetected,
 )
 from easycat.telephony.call_state import OutboundCallState
-from easycat.telephony.ivr import IVRNavigator
+from easycat.telephony.ivr import DTMFDelivery, InBandDTMFDelivery, IVRNavigator
 from easycat.telephony.outbound import OutboundCallManager, TelnyxOutboundClient
 from easycat.telephony.screening import CallScreeningDetector, ScreeningState
 from easycat.telephony.voicemail import (
@@ -353,3 +356,179 @@ async def test_ivr_call_boundary_resets_navigation_without_dtmf_delivery() -> No
         coordinator.stop()
         navigator.stop()
         built.state_machine.stop()
+
+
+# ── IVR DTMF delivery resolution (ivr_dtmf_mode) ──────────────────────────
+
+
+async def _agent_presses_one(_context: dict[str, object]) -> dict[str, str]:
+    return {"action": "dtmf", "digits": "1"}
+
+
+class _CustomSender:
+    async def send_dtmf_with_retry(self, digits: str, *, should_continue: Any = None) -> bool:
+        return True
+
+    async def send_speech(self, text: str) -> bool:
+        return True
+
+
+def _ivr_config(**overrides: Any) -> OutboundCallConfig:
+    values: dict[str, Any] = {
+        "from_number": "+15550000002",
+        "ivr_agent_callback": _agent_presses_one,
+    }
+    values.update(overrides)
+    return OutboundCallConfig(**values)
+
+
+def _build(config: OutboundCallConfig) -> tuple[Any, IVRNavigator, _IVRCallbackCoordinator]:
+    built = build_outbound_helpers(EventBus(), config, manager_cls=OutboundCallManager)
+    navigator = next(helper for helper in built.helpers if isinstance(helper, IVRNavigator))
+    coordinator = next(
+        helper for helper in built.helpers if isinstance(helper, _IVRCallbackCoordinator)
+    )
+    return built, navigator, coordinator
+
+
+def test_auto_mode_without_a_delivery_stays_emit_only() -> None:
+    built, navigator, coordinator = _build(_ivr_config())
+
+    assert built.ivr_delivery is None
+    assert navigator._dtmf_delivery is None
+    assert coordinator._delivery is None
+
+
+def test_no_ivr_callback_builds_no_delivery() -> None:
+    built = build_outbound_helpers(
+        EventBus(),
+        OutboundCallConfig(from_number="+15550000002", ivr_dtmf_mode="in_band"),
+        manager_cls=OutboundCallManager,
+    )
+
+    assert built.ivr_delivery is None
+
+
+def test_auto_mode_keeps_a_custom_sender() -> None:
+    sender = _CustomSender()
+    built, navigator, coordinator = _build(_ivr_config(ivr_dtmf_delivery=sender))
+
+    assert built.ivr_delivery is sender
+    assert navigator._dtmf_delivery is sender
+    assert coordinator._delivery is sender
+
+
+def test_auto_mode_swaps_stock_twilio_delivery_for_per_session_in_band(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_outbound_helpers, "_logged_notices", set())
+    tones = DTMFToneConfig(tone_ms=120)
+    shared = DTMFDelivery(twilio_client=Mock(), call_sid="")
+    config = _ivr_config(ivr_dtmf_delivery=shared, ivr_dtmf_tones=tones)
+
+    with caplog.at_level(logging.INFO, logger="easycat.config"):
+        first, first_nav, first_coordinator = _build(config)
+        second, _nav, _coordinator = _build(config)
+
+    assert isinstance(first.ivr_delivery, InBandDTMFDelivery)
+    assert isinstance(second.ivr_delivery, InBandDTMFDelivery)
+    assert first.ivr_delivery is not second.ivr_delivery
+    assert first.ivr_delivery._tone_config is tones
+    assert first_nav._dtmf_delivery is first.ivr_delivery
+    assert first_coordinator._delivery is first.ivr_delivery
+    notices = [m for m in caplog.messages if "ivr_dtmf_mode='rest'" in m]
+    assert len(notices) == 1
+
+
+@pytest.mark.parametrize("delivery", [None, "stock"])
+def test_in_band_mode_builds_a_fresh_in_band_delivery(delivery: str | None) -> None:
+    configured = DTMFDelivery() if delivery == "stock" else None
+    built, navigator, _coordinator = _build(
+        _ivr_config(ivr_dtmf_mode="in_band", ivr_dtmf_delivery=configured)
+    )
+
+    assert isinstance(built.ivr_delivery, InBandDTMFDelivery)
+    assert built.ivr_delivery is not configured
+    assert navigator._dtmf_delivery is built.ivr_delivery
+
+
+def test_rest_mode_keeps_the_users_delivery() -> None:
+    shared = DTMFDelivery()
+    built, navigator, coordinator = _build(
+        _ivr_config(ivr_dtmf_mode="rest", ivr_dtmf_delivery=shared)
+    )
+
+    assert built.ivr_delivery is shared
+    assert navigator._dtmf_delivery is shared
+    assert coordinator._delivery is shared
+
+
+def test_telnyx_auto_mode_leaves_delivery_unchanged() -> None:
+    shared = DTMFDelivery()
+    built, navigator, _coordinator = _build(
+        _ivr_config(
+            provider="telnyx",
+            telnyx_api_key="key",
+            telnyx_connection_id="conn",
+            ivr_dtmf_delivery=shared,
+        )
+    )
+
+    assert built.ivr_delivery is shared
+    assert navigator._dtmf_delivery is shared
+
+
+@pytest.mark.asyncio
+async def test_in_band_mode_never_mutates_the_users_call_sid() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    shared = DTMFDelivery(call_sid="")
+    built = build_outbound_helpers(
+        bus, _ivr_config(ivr_dtmf_delivery=shared), manager_cls=OutboundCallManager
+    )
+    _start_helpers(built.helpers)
+    try:
+        await bus.emit(CallInitiated(call_sid="CA1", to="+15550000001", from_="+15550000002"))
+    finally:
+        _stop_helpers(built.helpers)
+
+    assert isinstance(built.ivr_delivery, InBandDTMFDelivery)
+    assert shared.call_sid == ""
+
+
+@pytest.mark.asyncio
+async def test_rest_mode_still_receives_the_call_sid() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    shared = DTMFDelivery(call_sid="")
+    built = build_outbound_helpers(
+        bus,
+        _ivr_config(ivr_dtmf_mode="rest", ivr_dtmf_delivery=shared),
+        manager_cls=OutboundCallManager,
+    )
+    _start_helpers(built.helpers)
+    try:
+        await bus.emit(CallInitiated(call_sid="CA1", to="+15550000001", from_="+15550000002"))
+    finally:
+        _stop_helpers(built.helpers)
+
+    assert shared.call_sid == "CA1"
+
+
+@pytest.mark.asyncio
+async def test_custom_sender_without_call_sid_is_not_mutated() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    sender = _CustomSender()
+    built = build_outbound_helpers(
+        bus, _ivr_config(ivr_dtmf_delivery=sender), manager_cls=OutboundCallManager
+    )
+    _start_helpers(built.helpers)
+    try:
+        await bus.emit(CallInitiated(call_sid="CA1", to="+15550000001", from_="+15550000002"))
+    finally:
+        _stop_helpers(built.helpers)
+
+    assert not hasattr(sender, "call_sid")
+
+
+def test_resolution_matrix_is_exposed_for_reuse() -> None:
+    assert resolve_ivr_dtmf_delivery(_ivr_config()) is None

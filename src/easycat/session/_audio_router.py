@@ -21,12 +21,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
+from easycat._audio_utils import resample_chunk
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat._concurrency import SurvivorCapacityError
+from easycat._dtmf_tones import DTMFPlaybackOutcome, DTMFTonePlayback
 from easycat._env import is_truthy
 from easycat._log_context import bind_turn
 from easycat.audio_format import AudioChunk
@@ -43,10 +47,13 @@ from easycat.events import (
 )
 from easycat.providers import Transport
 from easycat.runtime.capabilities import (
+    PROTECTED_PLAYBACK_CHUNK_ATTR,
     PlaybackAcknowledgements,
+    ProtectedPlayback,
     drain_aec_reference_frames,
     pending_playout_ms,
     playback_acknowledgements,
+    protected_playback,
     transport_reports_audio_delivery,
 )
 from easycat.runtime.context import RunContext
@@ -61,7 +68,7 @@ from easycat.session.text import _chunk_has_speech_energy
 from easycat.stages.audio import AudioStage
 from easycat.stages.base import audio_capture_allowed
 from easycat.stages.stt import STTStage
-from easycat.stages.transport import TransportStage
+from easycat.stages.transport import REDACT_CAPTURE_CHUNK_ATTR, TransportStage
 from easycat.stages.vad import VADStage
 from easycat.teardown_budgets import (
     SESSION_AUDIO_DRAIN_TIMEOUT_S as _AUDIO_DRAIN_TIMEOUT_S,
@@ -88,6 +95,16 @@ logger = logging.getLogger(__name__)
 # pipeline produces ~50 frames/sec, so 1-in-50 lands close to 1 Hz; the exact
 # rate is approximate because real frames vary in size.
 _AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES = 50
+
+DTMF_TONE_CHUNK_ATTR = "_easycat_dtmf_tone"
+"""Chunk attribute marking an in-band DTMF tone frame (set by ``Session``).
+
+Tone frames are never turn audio: they skip turn byte/mark accounting, and
+under ``journal_redaction="pii"`` their AudioOut and capture copies are
+replaced with equal-length silence because the tones encode the digits.
+"""
+
+_DTMF_MARK_PREFIX = "easycat_dtmf_"
 
 
 def _aec_reference_env_override() -> bool | None:
@@ -154,6 +171,7 @@ class AudioRouter:
     _OUTBOUND_TASK_NAME = "audio_outbound_drain"
     _INLINE_SEND_TASK_NAME = "audio_inline_send"
     _AEC_DEGRADED_EMIT_TASK_NAME = "aec_reference_degraded_emit"
+    _DTMF_SEND_TASK_NAME = "dtmf_tone_playback"
     # The first-frame fast path preserves an in-progress transport write across
     # caller cancellation so a frame is never half-submitted. Keep that shield
     # bounded: a half-open transport must not make barge-in or force-stop
@@ -307,6 +325,33 @@ class AudioRouter:
         self._outbound_idle: asyncio.Event = asyncio.Event()
         self._outbound_idle.set()
         self._outbound_send_lock = asyncio.Lock()
+        # Task currently inside ``_send_outbound_chunk`` (it holds the send
+        # lock there).  ``stop_outbound`` uses it to avoid joining a DTMF burst
+        # that waits for the lock its own caller holds.
+        self._outbound_send_owner: asyncio.Task[Any] | None = None
+        self._init_dtmf_state()
+
+    def _init_dtmf_state(self) -> None:
+        """Initialise in-band DTMF (``send_protected_sequence``) state.
+
+        One burst at a time per session; the router-local waiters resolve
+        completion marks on transports that only offer ``send_playback_mark``
+        (no clear guard), and the pending map lets teardown settle every
+        outstanding handle.
+        """
+        self._dtmf_lock = asyncio.Lock()
+        self._dtmf_mark_seq: int = 0
+        self._dtmf_mark_waiters: dict[str, asyncio.Future[DTMFPlaybackOutcome]] = {}
+        self._dtmf_pending: dict[
+            asyncio.Future[DTMFPlaybackOutcome], asyncio.TimerHandle | None
+        ] = {}
+        # Upper bound (seconds) on how long each queued burst task may run;
+        # a graceful ``stop_outbound`` joins bursts only within these budgets.
+        self._dtmf_task_budgets: dict[asyncio.Task[Any], float] = {}
+        # Raw inbound PCM rate (the AEC near-end rate).  Tone frames are 8 kHz;
+        # their AEC reference copy is resampled to this rate so a rate mismatch
+        # cannot latch the canceller off for the rest of the call.
+        self._aec_near_rate: int | None = None
 
     def _update_outbound_idle(self) -> None:
         """Set/clear the idle event based on queue depth and in-flight sends."""
@@ -364,13 +409,32 @@ class AudioRouter:
         self._pipeline_task = None
 
     async def stop_outbound(self, *, force: bool = False) -> None:
-        """Cancel the outbound drain task and wait for it to exit."""
+        """Cancel the outbound drain task and wait for it to exit.
+
+        In-band DTMF: a graceful stop lets an in-progress tone burst finish
+        sending within its time budget (drain wait + fence timeout + tone
+        duration + guard margin); a forced stop first releases every
+        transport clear guard, so a send held behind a deferred ``clear``
+        cannot pin the send lock until the guard deadline, then cancels the
+        burst.  A stop issued from a task that holds the outbound send lock
+        (an ``AudioOut``/``Error`` handler on the drain task) cancels pending
+        bursts instead of joining them: they wait for that very lock.
+        Outstanding playback handles resolve ``"disconnected"``.
+        """
         task = self._outbound_task
         current = asyncio.current_task()
+        if force:
+            self._abort_protected_playback()
+            await self._runtime_scope.cancel_and_drain(self._DTMF_SEND_TASK_NAME)
+        elif current is not None and (current is task or current is self._outbound_send_owner):
+            await self._runtime_scope.cancel_and_drain(self._DTMF_SEND_TASK_NAME)
+        else:
+            await self._drain_dtmf_sends()
         if current is not None and task is current:
             self._runtime_scope.discard(task)
         else:
             await self._runtime_scope.cancel_and_drain(self._OUTBOUND_TASK_NAME)
+        self._settle_pending_dtmf("disconnected")
         await self._runtime_scope.cancel_and_drain(self._AEC_DEGRADED_EMIT_TASK_NAME)
         # Graceful shutdown joins the transport write before reporting idle.
         # Force shutdown uses the owned task's hard deadline and leaves a
@@ -389,6 +453,26 @@ class AudioRouter:
         else:
             await self._inline_send_scope.cancel_and_drain()
         self._outbound_task = None
+
+    async def _drain_dtmf_sends(self) -> None:
+        """Join pending DTMF bursts within their budget, then cancel stragglers."""
+        current = asyncio.current_task()
+        pending = [
+            burst
+            for burst in self._runtime_scope.tasks(self._DTMF_SEND_TASK_NAME)
+            if burst is not current and not burst.done()
+        ]
+        if pending:
+            # Bursts are serialized, so the budget for the whole batch is the
+            # sum of their individual budgets.
+            budget = sum(self._dtmf_task_budgets.get(burst, 0.0) for burst in pending)
+            _done, still_pending = await asyncio.wait(pending, timeout=budget + 1.0)
+            if still_pending:
+                logger.warning("In-band DTMF burst did not finish during stop; cancelling it")
+                self._abort_protected_playback()
+                await self._runtime_scope.cancel_and_drain(self._DTMF_SEND_TASK_NAME)
+                return
+        await self._runtime_scope.drain(self._DTMF_SEND_TASK_NAME, suppress_errors=True)
 
     async def await_drain(self, timeout: float = _AUDIO_DRAIN_TIMEOUT_S) -> None:
         """Wait for outbound audio to fully drain, with a timeout.
@@ -596,6 +680,291 @@ class AudioRouter:
         except Exception:
             logger.exception("Transport disconnect failed while cancelling inline audio")
 
+    # ── In-band DTMF (protected sequences) ─────────────────────
+
+    async def send_protected_sequence(
+        self,
+        chunks: Sequence[AudioChunk],
+        *,
+        key_count: int,
+        duration_ms: int,
+        fence_timeout_s: float,
+        guard_margin_s: float = 5.0,
+    ) -> DTMFTonePlayback:
+        """Send a contiguous in-band DTMF burst that a barge-in must not split.
+
+        The burst runs as a runtime-scope task awaited through
+        :func:`asyncio.shield`: cancelling the caller (a barge-in cancelling
+        the turn that asked for the tones) never truncates the key sequence on
+        the wire, while ``stop(force=True)`` still cancels the scope.  Bursts
+        are serialized per session.  Steps:
+
+        1. wait for queued TTS to drain, so the tones follow it;
+        2. take the outbound send lock, so no other audio interleaves;
+        3. on a :class:`~easycat.runtime.capabilities.ProtectedPlayback`
+           transport, send a playout fence (bounded by *fence_timeout_s*;
+           a clear during the fence still passes through) and arm the clear
+           guard with no await in between, tagging every frame with its token;
+        4. send every frame (a rejected frame aborts the guard and raises
+           :class:`RuntimeError`), feeding the AEC reference and emitting
+           ``AudioOut(turn_id=None)``;
+        5. finish with the guard's completion mark, a router-local
+           ``easycat_dtmf_N`` playback mark, or (with neither) an estimated
+           completion after *duration_ms*.
+
+        Returns once the frames were accepted; the handle's ``wait()``
+        reports whether the far end played them.  Digits are never logged or
+        journaled here.
+        """
+        if not chunks:
+            raise ValueError("A protected sequence needs at least one audio chunk")
+        if not math.isfinite(fence_timeout_s) or fence_timeout_s <= 0:
+            raise ValueError("fence_timeout_s must be a positive finite number")
+        if not math.isfinite(guard_margin_s) or guard_margin_s < 0:
+            raise ValueError("guard_margin_s must be a non-negative finite number")
+        task: asyncio.Task[DTMFTonePlayback] = self._runtime_scope.create_task(
+            self._DTMF_SEND_TASK_NAME,
+            self._send_protected_sequence_owned(
+                tuple(chunks),
+                key_count=key_count,
+                duration_ms=duration_ms,
+                fence_timeout_s=fence_timeout_s,
+                guard_margin_s=guard_margin_s,
+            ),
+        )
+        self._dtmf_task_budgets[task] = (
+            _AUDIO_DRAIN_TIMEOUT_S + fence_timeout_s + duration_ms / 1000 + guard_margin_s
+        )
+        task.add_done_callback(_consume_dtmf_task_result)
+        task.add_done_callback(self._forget_dtmf_task)
+        return await asyncio.shield(task)
+
+    def _forget_dtmf_task(self, task: asyncio.Task[Any]) -> None:
+        """Drop a finished burst's stop budget."""
+        self._dtmf_task_budgets.pop(task, None)
+
+    async def _send_protected_sequence_owned(
+        self,
+        chunks: tuple[AudioChunk, ...],
+        *,
+        key_count: int,
+        duration_ms: int,
+        fence_timeout_s: float,
+        guard_margin_s: float,
+    ) -> DTMFTonePlayback:
+        """Scope-owned body of :meth:`send_protected_sequence`."""
+        async with self._dtmf_lock:
+            await self.await_drain()
+            async with self._outbound_send_lock:
+                guard = protected_playback(self._transport)
+                fenced = False
+                token: object | None = None
+                if guard is not None:
+                    fenced = await guard.wait_playout_fence(timeout_s=fence_timeout_s)
+                    if not fenced:
+                        logger.debug("DTMF playout fence not confirmed; sending tones anyway")
+                    # No await between arming the guard and the first frame:
+                    # a clear issued from here on is deferred past the tones.
+                    token = guard.begin_protected_playback(
+                        max_duration_s=duration_ms / 1000 + guard_margin_s
+                    )
+                completed = False
+                try:
+                    mask = self._journal_sink.redaction == "pii"
+                    for chunk in chunks:
+                        self._tag_tone_chunk(chunk, token=token, mask=mask)
+                    for chunk in chunks:
+                        await self._send_tone_chunk(chunk)
+                    mark_name, done = await self._complete_protected_sequence(
+                        guard,
+                        token,
+                        duration_ms=duration_ms,
+                        guard_margin_s=guard_margin_s,
+                    )
+                    completed = True
+                finally:
+                    if not completed and guard is not None and token is not None:
+                        guard.abort_protected_playback(token)
+        try:
+            self._journal_sink.append_record(
+                name="dtmf_tones_sent",
+                data={
+                    "tone_count": key_count,
+                    "duration_ms": duration_ms,
+                    "mark_name": mark_name,
+                    "transport_kind": str(getattr(self._transport, "transport_kind", "unknown")),
+                    "fence": fenced,
+                },
+                turn_id=None,
+                inherit_turn_id=False,
+            )
+        except Exception:
+            logger.debug("Failed to journal dtmf_tones_sent", exc_info=True)
+        done.add_done_callback(lambda fut: self._on_dtmf_done(fut, mark_name))
+        return DTMFTonePlayback(
+            key_count=key_count,
+            duration_ms=duration_ms,
+            mark_name=mark_name,
+            _done=done,
+        )
+
+    def _tag_tone_chunk(self, chunk: AudioChunk, *, token: object | None, mask: bool) -> None:
+        """Stamp a tone frame with its guard token and capture-mask flag."""
+        try:
+            setattr(chunk, DTMF_TONE_CHUNK_ATTR, True)
+            if token is not None:
+                setattr(chunk, PROTECTED_PLAYBACK_CHUNK_ATTR, token)
+            if mask:
+                setattr(chunk, REDACT_CAPTURE_CHUNK_ATTR, True)
+        except Exception as exc:
+            # The tag is load-bearing: an untagged tone frame would be held
+            # behind a deferred clear like ordinary TTS.
+            raise RuntimeError("DTMF tone frame could not be tagged") from exc
+
+    async def _send_tone_chunk(self, chunk: AudioChunk) -> None:
+        """Deliver one tone frame (caller holds the outbound send lock)."""
+        self._claim_outbound_send()
+        try:
+            bind_turn(None)
+            self._stamp_outbound_chunk(chunk, None)
+            delivered = await self._transport_stage.execute(chunk, self._run_ctx, self._no_turn)
+            if not delivered:
+                raise RuntimeError("transport rejected DTMF audio")
+            if not self._transport_reports_audio_delivery:
+                await self._deliver_tone_chunk(chunk)
+        finally:
+            await self._finish_outbound_send(replayed_chunk=False)
+
+    async def _deliver_tone_chunk(self, chunk: AudioChunk) -> None:
+        """AEC reference + ``AudioOut`` for a delivered tone frame (no turn)."""
+        # Decided from the sink as well as the frame flag: a reporting
+        # transport's delivered chunk need not carry the capture flag.
+        mask = (
+            getattr(chunk, REDACT_CAPTURE_CHUNK_ATTR, False)
+            or self._journal_sink.redaction == "pii"
+        )
+        masked = AudioChunk(data=bytes(len(chunk.data)), format=chunk.format) if mask else None
+        skip_feed = self._aec_reference_failed or self._transport_has_aec_drain
+        if self._enable_aec() and not skip_feed:
+            reference = chunk
+            near_rate = self._aec_near_rate
+            if near_rate is not None and near_rate != chunk.format.sample_rate:
+                reference = resample_chunk(chunk, near_rate)
+            capture = (
+                AudioChunk(data=bytes(len(reference.data)), format=reference.format)
+                if masked is not None
+                else None
+            )
+            await self._report_degraded_aec_reference_once()
+            await self._feed_reference_or_disable(reference, None, capture_chunk=capture)
+        # Bypass turn correlation: tone frames belong to the session, not to
+        # whichever turn is active while they play.
+        session_id, _ = self._correlation_ids()
+        await self._event_bus.emit(
+            AudioOut(chunk=masked or chunk, session_id=session_id, turn_id=None)
+        )
+
+    async def _complete_protected_sequence(
+        self,
+        guard: ProtectedPlayback | None,
+        token: object | None,
+        *,
+        duration_ms: int,
+        guard_margin_s: float,
+    ) -> tuple[str | None, asyncio.Future[DTMFPlaybackOutcome]]:
+        """Send the completion mark and return ``(mark_name, outcome future)``."""
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[DTMFPlaybackOutcome] = loop.create_future()
+        if guard is not None and token is not None:
+            transport_future = await guard.end_protected_playback(token)
+            mark_name = getattr(token, "mark_name", None)
+            self._dtmf_pending[done] = None
+            transport_future.add_done_callback(
+                lambda fut: self._resolve_dtmf(done, _transport_outcome(fut))
+            )
+            return (mark_name if isinstance(mark_name, str) else None), done
+        ack_transport = self._playback_ack_transport
+        if ack_transport is not None:
+            self._dtmf_mark_seq += 1
+            requested = f"{_DTMF_MARK_PREFIX}{self._dtmf_mark_seq}"
+            self._dtmf_mark_waiters[requested] = done
+            self._dtmf_pending[done] = None
+            try:
+                mark_name = await ack_transport.send_playback_mark(name=requested)
+            except Exception:
+                logger.debug("Failed to send DTMF completion mark", exc_info=True)
+                self._dtmf_mark_waiters.pop(requested, None)
+                self._resolve_dtmf(done, "disconnected")
+                return requested, done
+            if mark_name != requested and self._dtmf_mark_waiters.pop(requested, None) is not None:
+                self._dtmf_mark_waiters[mark_name] = done
+            self._dtmf_pending[done] = loop.call_later(
+                duration_ms / 1000 + guard_margin_s,
+                self._expire_dtmf_mark,
+                mark_name,
+            )
+            return mark_name, done
+        self._dtmf_pending[done] = loop.call_later(
+            duration_ms / 1000,
+            self._resolve_dtmf,
+            done,
+            "estimated",
+        )
+        return None, done
+
+    def _expire_dtmf_mark(self, mark_name: str) -> None:
+        """Resolve an unacknowledged router-local DTMF mark as ``"timeout"``."""
+        waiter = self._dtmf_mark_waiters.pop(mark_name, None)
+        if waiter is not None:
+            self._resolve_dtmf(waiter, "timeout")
+
+    def _resolve_dtmf(
+        self,
+        done: asyncio.Future[DTMFPlaybackOutcome],
+        outcome: DTMFPlaybackOutcome,
+    ) -> None:
+        """Resolve one playback outcome once and drop its pending timer."""
+        timer = self._dtmf_pending.pop(done, None)
+        if timer is not None:
+            timer.cancel()
+        if not done.done():
+            done.set_result(outcome)
+
+    def _settle_pending_dtmf(self, outcome: DTMFPlaybackOutcome) -> None:
+        """Resolve every outstanding DTMF playback handle (teardown)."""
+        self._dtmf_mark_waiters.clear()
+        for done in list(self._dtmf_pending):
+            self._resolve_dtmf(done, outcome)
+
+    def _abort_protected_playback(self) -> None:
+        """Release every transport clear guard (force stop), best-effort."""
+        guard = protected_playback(self._transport)
+        if guard is None:
+            return
+        try:
+            guard.abort_protected_playback(None)
+        except Exception:
+            logger.debug("Failed to abort protected playback", exc_info=True)
+
+    def _on_dtmf_done(
+        self,
+        done: asyncio.Future[DTMFPlaybackOutcome],
+        mark_name: str | None,
+    ) -> None:
+        """Journal the final outcome of one DTMF burst."""
+        outcome: DTMFPlaybackOutcome = (
+            "disconnected" if done.cancelled() else _transport_outcome(done)
+        )
+        try:
+            self._journal_sink.append_record(
+                name="dtmf_tones_completed",
+                data={"mark_name": mark_name, "outcome": outcome},
+                turn_id=None,
+                inherit_turn_id=False,
+            )
+        except Exception:
+            logger.debug("Failed to journal dtmf_tones_completed", exc_info=True)
+
     def reset_speech_detection(self) -> None:
         """Reset the auto-turn speech-energy counter.
 
@@ -693,6 +1062,12 @@ class AudioRouter:
 
     def on_playback_ack(self, event: PlaybackMarkAck) -> None:
         """Track acknowledged playout byte positions for the active turn."""
+        waiter = self._dtmf_mark_waiters.pop(event.mark_name, None)
+        if waiter is not None:
+            # In-band DTMF completion mark on a mark-only transport: tone
+            # marks never carry turn byte positions, so stop here.
+            self._resolve_dtmf(waiter, "played")
+            return
         turn = self._current_turn()
         if not turn:
             return
@@ -713,6 +1088,17 @@ class AudioRouter:
             and session_id is not None
             and event.session_id != session_id
         ):
+            return
+
+        if getattr(event.chunk, DTMF_TONE_CHUNK_ATTR, False):
+            # Tone frames belong to the session, never to whichever turn is
+            # active.  Ownership comes from the event's session stamp (or the
+            # chunk's, when the transport forwards the original chunk).
+            owner = event.session_id or getattr(event.chunk, "_easycat_session_id", None)
+            if (owner is not None and owner == session_id) or (
+                owner is None and self._accept_unscoped_audio_delivery()
+            ):
+                await self._deliver_tone_chunk(event.chunk)
             return
 
         active = self._current_turn()
@@ -849,6 +1235,8 @@ class AudioRouter:
         self,
         chunk: AudioChunk,
         turn: TurnContext | None,
+        *,
+        capture_chunk: AudioChunk | None = None,
     ) -> None:
         """Feed one far-end reference frame into AEC, latching off on failure.
 
@@ -863,7 +1251,8 @@ class AudioRouter:
         attempted for the rest of the session.  On a successful feed it
         journals the decimated reference frame when capture is opted in and
         an artifact store is present — the far-end leg is the one AEC track
-        the pipeline never journals on its own.
+        the pipeline never journals on its own.  *capture_chunk* replaces the
+        journaled copy (used to journal silence for PII-masked DTMF tones).
         """
         if self._aec_reference_failed:
             return
@@ -887,7 +1276,7 @@ class AudioRouter:
                 or self._run_ctx.audio_capture_enabled()
             )
         ):
-            await self._maybe_record_aec_reference(chunk, turn)
+            await self._maybe_record_aec_reference(capture_chunk or chunk, turn)
 
     async def _feed_transport_aec_reference(
         self, mic_chunk: AudioChunk, turn: TurnContext | None
@@ -938,6 +1327,7 @@ class AudioRouter:
         # Decide at ingress so pre-roll and smart-turn buffers cannot later
         # inherit a newly granted consent decision.
         audio_capture_allowed(self._run_ctx, chunk)
+        self._aec_near_rate = chunk.format.sample_rate
 
         # Snapshot the active turn once so all stage calls operate on the
         # same context.
@@ -1096,6 +1486,8 @@ class AudioRouter:
     ) -> None:
         """Deliver one claimed chunk and apply shared accounting/error policy."""
         bind_turn(turn.id if turn is not None else None)
+        owner = asyncio.current_task()
+        self._outbound_send_owner = owner
         try:
             self._stamp_outbound_chunk(chunk, turn)
             delivered = await self._transport_stage.execute(
@@ -1115,6 +1507,9 @@ class AudioRouter:
                     await self._emit(Error(exception=exc, stage=ErrorStage.TTS))
                 except Exception:
                     logger.debug("Failed to emit outbound send Error", exc_info=True)
+        finally:
+            if self._outbound_send_owner is owner:
+                self._outbound_send_owner = None
 
     async def _finish_outbound_send(self, *, replayed_chunk: bool) -> None:
         """Release one claimed chunk after send and delivery accounting finish."""
@@ -1288,4 +1683,23 @@ class AudioRouter:
             logger.debug("Failed to send playback mark", exc_info=True)
 
 
-__all__ = ["AudioRouter"]
+def _transport_outcome(future: asyncio.Future[Any]) -> DTMFPlaybackOutcome:
+    """Map a transport playback future to an outcome (failures = disconnected)."""
+    if future.cancelled() or future.exception() is not None:
+        return "disconnected"
+    result = future.result()
+    if result in ("played", "timeout", "disconnected", "estimated"):
+        return result
+    return "disconnected"
+
+
+def _consume_dtmf_task_result(task: asyncio.Task[Any]) -> None:
+    """Retrieve a DTMF burst failure whose caller was cancelled before it."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug("In-band DTMF burst failed: %s", type(exc).__name__)
+
+
+__all__ = ["DTMF_TONE_CHUNK_ATTR", "AudioRouter"]

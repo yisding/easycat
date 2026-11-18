@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
+from easycat._dtmf_tones import DTMFToneConfig, DTMFTonePlayback
 from easycat.config import (
     OutboundCallConfig,
     TelephonyConfig,
     VoicemailDetectionConfig,
     _create_telephony_helpers,
 )
+from easycat.errors import EasyConfigError
 from easycat.events import (
     CallAnswered,
     CallEnded,
@@ -23,8 +27,10 @@ from easycat.events import (
     VADStopSpeaking,
     VoicemailDetected,
 )
+from easycat.session._media_output import SessionMediaOutput
 from easycat.telephony.call_state import OutboundCallStateMachine
 from easycat.telephony.compliance import DNCList
+from easycat.telephony.ivr import DTMFDelivery, InBandDTMFDelivery
 from easycat.telephony.number_health import CallDispositionTracker
 from easycat.telephony.screening import CallScreeningDetector
 
@@ -754,3 +760,213 @@ class TestOutboundPipelineWiring:
 
         assert session.replayed == []
         wiring.stop()
+
+
+class _CustomIVRSender:
+    async def send_dtmf_with_retry(self, digits: str, *, should_continue: object = None) -> bool:
+        return True
+
+    async def send_speech(self, text: str) -> bool:
+        return True
+
+
+async def _press_one(_context: dict[str, object]) -> dict[str, str]:
+    return {"action": "dtmf", "digits": "1"}
+
+
+class TestIVRDTMFModeConfig:
+    def test_defaults(self) -> None:
+        cfg = OutboundCallConfig(from_number="+1555")
+
+        assert cfg.ivr_dtmf_mode == "auto"
+        assert cfg.ivr_dtmf_tones is None
+        assert cfg.ivr_dtmf_delivery is None
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"ivr_dtmf_mode": "auto", "ivr_dtmf_delivery": None},
+            {"ivr_dtmf_mode": "auto", "ivr_dtmf_delivery": DTMFDelivery()},
+            {"ivr_dtmf_mode": "auto", "ivr_dtmf_delivery": _CustomIVRSender()},
+            {"ivr_dtmf_mode": "in_band", "ivr_dtmf_delivery": None},
+            {"ivr_dtmf_mode": "in_band", "ivr_dtmf_delivery": DTMFDelivery()},
+            {"ivr_dtmf_mode": "rest", "ivr_dtmf_delivery": DTMFDelivery()},
+            {"ivr_dtmf_tones": DTMFToneConfig(tone_ms=150)},
+        ],
+    )
+    def test_accepted_combinations(self, overrides: dict[str, object]) -> None:
+        OutboundCallConfig(from_number="+1555", **overrides)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        ("overrides", "match"),
+        [
+            ({"ivr_dtmf_mode": "rfc2833"}, "Invalid ivr_dtmf_mode"),
+            ({"ivr_dtmf_mode": None}, "Invalid ivr_dtmf_mode"),
+            ({"ivr_dtmf_mode": "rest"}, "requires ivr_dtmf_delivery to be a DTMFDelivery"),
+            (
+                {"ivr_dtmf_mode": "rest", "ivr_dtmf_delivery": _CustomIVRSender()},
+                "requires ivr_dtmf_delivery to be a DTMFDelivery",
+            ),
+            (
+                {"ivr_dtmf_mode": "in_band", "ivr_dtmf_delivery": _CustomIVRSender()},
+                "cannot be combined with a custom",
+            ),
+            ({"ivr_dtmf_tones": {"tone_ms": 80}}, "ivr_dtmf_tones must be a DTMFToneConfig"),
+            ({"ivr_dtmf_delivery": object()}, "send_dtmf_with_retry"),
+        ],
+    )
+    def test_rejected_combinations(self, overrides: dict[str, object], match: str) -> None:
+        with pytest.raises(EasyConfigError, match=match):
+            OutboundCallConfig(from_number="+1555", **overrides)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("mode", ["in_band", "rest"])
+    def test_explicit_modes_require_twilio(self, mode: str) -> None:
+        with pytest.raises(EasyConfigError, match="only for provider='twilio'"):
+            OutboundCallConfig(
+                from_number="+1555",
+                provider="telnyx",
+                telnyx_api_key="key",
+                telnyx_connection_id="conn",
+                ivr_dtmf_mode=mode,  # type: ignore[arg-type]
+                ivr_dtmf_delivery=DTMFDelivery(),
+            )
+
+    def test_validate_rechecks_mutated_mode(self) -> None:
+        cfg = OutboundCallConfig(from_number="+1555")
+        cfg.ivr_dtmf_mode = "rest"
+
+        with pytest.raises(EasyConfigError, match="requires ivr_dtmf_delivery"):
+            cfg.validate()
+
+    def test_plain_config_does_not_import_the_ivr_module(self) -> None:
+        import json
+        import subprocess
+        import sys
+
+        code = (
+            "import json, sys\n"
+            "from easycat.config import OutboundCallConfig\n"
+            "OutboundCallConfig(from_number='+1555')\n"
+            "print(json.dumps('easycat.telephony.ivr' in sys.modules))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        )
+        assert json.loads(result.stdout) is False
+
+
+class TestInBandIVRWiring:
+    @pytest.mark.asyncio
+    async def test_wire_outbound_pipeline_binds_a_session_media_output(self) -> None:
+        from easycat.config._telephony_wiring import wire_outbound_pipeline
+
+        class _FakeSession:
+            def __init__(self) -> None:
+                self.telephony = SimpleNamespace(helpers=[])
+                self.tones: list[str] = []
+
+            async def play_dtmf_tones(self, digits: str, **_kwargs: object) -> DTMFTonePlayback:
+                self.tones.append(digits)
+                done: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                done.set_result("played")
+                return DTMFTonePlayback(
+                    key_count=len(digits), duration_ms=1, mark_name=None, _done=done
+                )
+
+        bus = EventBus()
+        helpers = _create_telephony_helpers(
+            bus,
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(
+                    from_number="+1555",
+                    ivr_agent_callback=_press_one,
+                    ivr_dtmf_delivery=DTMFDelivery(),
+                ),
+            ),
+        )
+        delivery = helpers.ivr_delivery
+        assert isinstance(delivery, InBandDTMFDelivery)
+        assert delivery.bound is False
+
+        session = _FakeSession()
+        wire_outbound_pipeline(session, helpers, bus)  # type: ignore[arg-type]
+
+        output = delivery._output
+        assert isinstance(output, SessionMediaOutput)
+        assert output.session is session
+        assert await delivery.send_dtmf("42") is True
+        assert session.tones == ["42"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["auto", "in_band"])
+    async def test_shared_in_band_template_gets_one_sender_per_session(self, mode: str) -> None:
+        """Two sessions built from one config never share an in-band sender."""
+        from easycat.config._telephony_wiring import wire_outbound_pipeline
+
+        class _FakeSession:
+            def __init__(self) -> None:
+                self.telephony = SimpleNamespace(helpers=[])
+                self.tones: list[str] = []
+
+            async def play_dtmf_tones(self, digits: str, **kwargs: object) -> DTMFTonePlayback:
+                self.tones.append(digits)
+                assert kwargs["tone_config"] is tones
+                assert kwargs["inter_digit_delay_ms"] == 250
+                done: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                done.set_result("played")
+                return DTMFTonePlayback(
+                    key_count=len(digits), duration_ms=1, mark_name=None, _done=done
+                )
+
+        tones = DTMFToneConfig(tone_ms=120)
+        template = InBandDTMFDelivery(tone_config=tones, inter_digit_delay_ms=250)
+        config = TelephonyConfig(
+            enable_outbound_call_manager=True,
+            outbound=OutboundCallConfig(
+                from_number="+1555",
+                ivr_agent_callback=_press_one,
+                ivr_dtmf_mode=mode,  # type: ignore[arg-type]
+                ivr_dtmf_delivery=template,
+            ),
+        )
+        first_bus, second_bus = EventBus(), EventBus()
+        first_helpers = _create_telephony_helpers(first_bus, config)
+        second_helpers = _create_telephony_helpers(second_bus, config)
+        first_session, second_session = _FakeSession(), _FakeSession()
+        wire_outbound_pipeline(first_session, first_helpers, first_bus)  # type: ignore[arg-type]
+        wire_outbound_pipeline(second_session, second_helpers, second_bus)  # type: ignore[arg-type]
+
+        first, second = first_helpers.ivr_delivery, second_helpers.ivr_delivery
+        assert isinstance(first, InBandDTMFDelivery)
+        assert isinstance(second, InBandDTMFDelivery)
+        assert first is not template and second is not template and first is not second
+        assert template.bound is False
+
+        assert await first.send_dtmf("1") is True
+        assert await second.send_dtmf("2") is True
+        assert first_session.tones == ["1"]
+        assert second_session.tones == ["2"]
+
+    def test_wire_outbound_pipeline_leaves_rest_delivery_unbound(self) -> None:
+        from easycat.config._telephony_wiring import wire_outbound_pipeline
+
+        shared = DTMFDelivery()
+        bus = EventBus()
+        helpers = _create_telephony_helpers(
+            bus,
+            TelephonyConfig(
+                enable_outbound_call_manager=True,
+                outbound=OutboundCallConfig(
+                    from_number="+1555",
+                    ivr_agent_callback=_press_one,
+                    ivr_dtmf_mode="rest",
+                    ivr_dtmf_delivery=shared,
+                ),
+            ),
+        )
+        session = SimpleNamespace(telephony=SimpleNamespace(helpers=[]))
+
+        wire_outbound_pipeline(session, helpers, bus)  # type: ignore[arg-type]
+
+        assert helpers.ivr_delivery is shared

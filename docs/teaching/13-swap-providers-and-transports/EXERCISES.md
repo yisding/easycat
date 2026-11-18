@@ -163,8 +163,12 @@ The caller hears the tone, but the bot does not resume. The REST
    `SessionActionResult` requests `stop_session=True` and records
    `media_stream_replaced: true`: look for both in the
    `session_action_completed` record, followed by the session stopping.
-   Telnyx sends DTMF as a native Call Control command and keeps the
-   stream running.
+   That is the default `TwilioSessionActionConfig(dtmf_mode="rest")`.
+   With `dtmf_mode="in_band"` the session plays the key tones as audio
+   on the same stream instead: the result has `stop_session=False` and
+   `delivery: "in_band"`, the journal adds `dtmf_tones_sent` and
+   `dtmf_tones_completed`, and the bot keeps talking. Telnyx sends DTMF
+   as a native Call Control command and keeps the stream running.
 
 </details>
 

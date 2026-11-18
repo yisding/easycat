@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import logging
 import math
+import weakref
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from easycat._dtmf_tones import DTMFToneConfig, DTMFTonePlayback
 from easycat.events import EventBus, STTFinal
+from easycat.session._media_output import SessionMediaOutput
 from easycat.telephony.ivr import (
     DTMFDelivery,
+    InBandDTMFDelivery,
     IVRAction,
     IVRActionType,
+    IVRDTMFSender,
     IVRNavigator,
     IVRNavigatorConfig,
     classify_ivr_prompt,
@@ -782,3 +789,206 @@ class TestIVRDTMFDelivery:
             assert len(speak_actions) >= 1
         finally:
             nav.stop()
+
+
+class _FakeMediaOutput:
+    """Stand-in for ``SessionMediaOutput`` recording tone and speech calls."""
+
+    def __init__(self, outcome: str | None = "played", *, error: Exception | None = None) -> None:
+        self._outcome = outcome
+        self._error = error
+        self.tone_calls: list[tuple[str, dict[str, Any]]] = []
+        self.speech: list[str] = []
+        self.speech_error: Exception | None = None
+
+    async def play_dtmf_tones(self, digits: str, **kwargs: Any) -> DTMFTonePlayback:
+        self.tone_calls.append((digits, kwargs))
+        if self._error is not None:
+            raise self._error
+        done: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        if self._outcome is not None:
+            done.set_result(self._outcome)
+        return DTMFTonePlayback(key_count=len(digits), duration_ms=1, mark_name=None, _done=done)
+
+    async def synthesize_bypass(self, text: str) -> None:
+        if self.speech_error is not None:
+            raise self.speech_error
+        self.speech.append(text)
+
+
+def _bound(output: _FakeMediaOutput, **kwargs: Any) -> InBandDTMFDelivery:
+    delivery = InBandDTMFDelivery(**kwargs)
+    delivery.bind_output(output)  # type: ignore[arg-type]
+    return delivery
+
+
+class TestInBandDTMFDelivery:
+    def test_both_senders_satisfy_the_protocol(self) -> None:
+        assert isinstance(DTMFDelivery(), IVRDTMFSender)
+        assert isinstance(InBandDTMFDelivery(), IVRDTMFSender)
+
+    @pytest.mark.parametrize(
+        ("kwargs", "error"),
+        [
+            ({"tone_config": {"tone_ms": 80}}, TypeError),
+            ({"inter_digit_delay_ms": 1.5}, TypeError),
+            ({"inter_digit_delay_ms": True}, TypeError),
+            ({"inter_digit_delay_ms": -1}, ValueError),
+            ({"wait_for_playback": "yes"}, TypeError),
+            ({"ack_timeout_margin_s": 0}, ValueError),
+            ({"ack_timeout_margin_s": math.nan}, ValueError),
+        ],
+    )
+    def test_constructor_validation(self, kwargs: dict[str, Any], error: type[Exception]) -> None:
+        with pytest.raises(error):
+            InBandDTMFDelivery(**kwargs)
+
+    def test_clone_copies_settings_but_not_the_binding(self) -> None:
+        tones = DTMFToneConfig(tone_ms=60)
+        original = _bound(
+            _FakeMediaOutput(outcome=None),
+            tone_config=tones,
+            inter_digit_delay_ms=200,
+            wait_for_playback=True,
+            ack_timeout_margin_s=2.5,
+        )
+
+        copy = original.clone()
+
+        assert copy is not original
+        assert original.bound is True
+        assert copy.bound is False
+        assert copy._tone_config is tones
+        assert copy._inter_digit_delay_ms == 200
+        assert copy._wait_for_playback is True
+        assert copy._ack_timeout_margin_s == 2.5
+
+    async def test_accepted_tones_return_true_without_waiting(self) -> None:
+        tones = DTMFToneConfig(tone_ms=60)
+        output = _FakeMediaOutput(outcome=None)
+        delivery = _bound(output, tone_config=tones, inter_digit_delay_ms=200)
+
+        assert await delivery.send_dtmf("1#") is True
+        assert output.tone_calls == [
+            ("1#", {"inter_digit_delay_ms": 200, "tone_config": tones}),
+        ]
+
+    @pytest.mark.parametrize(
+        ("outcome", "expected"),
+        [("played", True), ("estimated", True), ("timeout", True), ("disconnected", False)],
+    )
+    async def test_waiting_maps_playback_outcomes(self, outcome: str, expected: bool) -> None:
+        delivery = _bound(_FakeMediaOutput(outcome), wait_for_playback=True)
+
+        assert await delivery.send_dtmf("2") is expected
+
+    async def test_unconfirmed_wait_counts_as_sent(self) -> None:
+        delivery = _bound(
+            _FakeMediaOutput(outcome=None), wait_for_playback=True, ack_timeout_margin_s=0.01
+        )
+
+        assert await delivery.send_dtmf("3") is True
+
+    async def test_output_errors_return_false_without_logging_digits(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        delivery = _bound(_FakeMediaOutput(error=RuntimeError("transport rejected DTMF audio")))
+
+        with caplog.at_level(logging.WARNING, logger="easycat.telephony.ivr"):
+            assert await delivery.send_dtmf("4321") is False
+
+        assert any("RuntimeError" in message for message in caplog.messages)
+        assert not any("4321" in message for message in caplog.messages)
+
+    @pytest.mark.parametrize("digits", ['1"/><Say>hacked</Say>', "", "a", "١٢"])
+    async def test_invalid_digits_never_reach_the_output(self, digits: str) -> None:
+        output = _FakeMediaOutput()
+        delivery = _bound(output)
+
+        assert await delivery.send_dtmf(digits) is False
+        assert output.tone_calls == []
+
+    async def test_unbound_delivery_returns_false(self) -> None:
+        delivery = InBandDTMFDelivery()
+
+        assert delivery.bound is False
+        assert await delivery.send_dtmf("1") is False
+        assert await delivery.send_speech("one") is False
+
+    async def test_send_speech_uses_session_tts(self) -> None:
+        output = _FakeMediaOutput()
+        delivery = _bound(output)
+
+        assert await delivery.send_speech("sales") is True
+        assert output.speech == ["sales"]
+
+        output.speech_error = RuntimeError("tts down")
+        assert await delivery.send_speech("support") is False
+
+    async def test_unbind_stops_delivery(self) -> None:
+        output = _FakeMediaOutput()
+        delivery = _bound(output)
+        delivery.bind_output(None)
+
+        assert await delivery.send_dtmf("1") is False
+        assert output.tone_calls == []
+
+    async def test_collected_session_returns_false(self) -> None:
+        class _Session:
+            async def play_dtmf_tones(self, digits: str, **kwargs: Any) -> DTMFTonePlayback:
+                raise AssertionError("collected session must not be reached")
+
+        session = _Session()
+        output = SessionMediaOutput(session)  # type: ignore[arg-type]
+        delivery = InBandDTMFDelivery()
+        delivery.bind_output(output)
+        ref = weakref.ref(session)
+        del session
+        gc.collect()
+
+        assert ref() is None
+        assert await delivery.send_dtmf("1") is False
+        assert await delivery.send_speech("hello") is False
+
+    async def test_retry_then_speak_fallback_on_failure(self) -> None:
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+        output = _FakeMediaOutput("disconnected")
+        delivery = _bound(output, wait_for_playback=True)
+
+        async def agent(ctx: dict) -> dict:
+            return {"action": "dtmf", "digits": "7"}
+
+        nav = IVRNavigator(bus, agent_callback=agent, dtmf_delivery=delivery)
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 7 for billing"))
+        finally:
+            nav.stop()
+
+        assert [digits for digits, _ in output.tone_calls] == ["7", "7"]
+        speak = [a for a in actions if a.type == IVRActionType.SPEAK]
+        assert len(speak) == 1 and speak[0].text == "7"
+
+    async def test_navigator_advances_through_two_menus_in_band(self) -> None:
+        bus = EventBus()
+        output = _FakeMediaOutput(outcome=None)
+        delivery = _bound(output)
+        answers = iter(["1", "3"])
+
+        async def agent(ctx: dict) -> dict:
+            return {"action": "dtmf", "digits": next(answers)}
+
+        nav = IVRNavigator(bus, agent_callback=agent, dtmf_delivery=delivery)
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+            await bus.emit(STTFinal(text="Press 3 for orders"))
+        finally:
+            nav.stop()
+
+        assert nav.menu_depth == 2
+        assert [digits for digits, _ in output.tone_calls] == ["1", "3"]

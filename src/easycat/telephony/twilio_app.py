@@ -7,7 +7,7 @@ import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from hmac import compare_digest
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from easycat.events import CallAnswered, CallEnded, CallFailed, EventBus
 from easycat.teardown_budgets import (
@@ -17,7 +17,11 @@ from easycat.teardown_budgets import (
 
 if TYPE_CHECKING:
     from easycat.telephony.outbound import OutboundCallManager
-    from easycat.telephony.session_actions import TwilioSessionActionConfig
+    from easycat.telephony.session_actions import TwilioDTMFMode, TwilioSessionActionConfig
+
+# Mirrors ``session_actions.TWILIO_DTMF_MODES`` without importing the executor
+# module at settings-load time; a drift test keeps the two in step.
+_TWILIO_DTMF_MODES: tuple[str, ...] = ("rest", "in_band", "auto")
 
 
 def _settings_value(value: str | None) -> str:
@@ -73,6 +77,13 @@ def _positive_int_setting(
     return value
 
 
+def _dtmf_mode_setting(env: Mapping[str, str]) -> TwilioDTMFMode:
+    raw = _settings_value(env.get("TWILIO_DTMF_MODE")).lower() or "rest"
+    if raw not in _TWILIO_DTMF_MODES:
+        raise RuntimeError(f"TWILIO_DTMF_MODE must be one of {', '.join(_TWILIO_DTMF_MODES)}")
+    return cast("TwilioDTMFMode", raw)
+
+
 @dataclass(frozen=True, slots=True)
 class TwilioAppSettings:
     """Environment-derived settings for a Twilio Media Streams app."""
@@ -91,6 +102,10 @@ class TwilioAppSettings:
     public_twiml_url: str = ""
     drain_timeout_s: float = SERVER_DRAIN_TIMEOUT_S
     force_shutdown_timeout_s: float = SERVER_FORCE_SHUTDOWN_TIMEOUT_S
+    # How ``SendDTMFAction`` reaches the far end; see ``TwilioDTMFMode``.
+    # ``"rest"`` (default) ends the media stream, ``"in_band"`` / ``"auto"``
+    # play tones on the live stream so the session keeps running.
+    dtmf_mode: TwilioDTMFMode = "rest"
 
     @property
     def stream_token_secret_or_auth_token(self) -> str | None:
@@ -114,6 +129,7 @@ class TwilioAppSettings:
             account_sid=self.account_sid,
             auth_token=self.auth_token,
             sms_from_number=self.sms_from,
+            dtmf_mode=self.dtmf_mode,
         )
 
     def start_outbound_manager(self, event_bus: EventBus) -> OutboundCallManager | None:
@@ -247,6 +263,7 @@ def twilio_app_settings_from_env(
             "TWILIO_FORCE_SHUTDOWN_TIMEOUT_S",
             default=SERVER_FORCE_SHUTDOWN_TIMEOUT_S,
         ),
+        dtmf_mode=_dtmf_mode_setting(env),
     )
 
 
