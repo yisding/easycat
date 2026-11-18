@@ -433,10 +433,10 @@
 
  async def run_turn(transport, stt, client, tts, journal) -> None:
 -    """STT-final → fan out to LLM-stream → sentence-queue → TTS-drain."""
-     final_text = ""
-     stt_final_t = None
-     async for event in stt.events():
-@@ -207,16 +340,10 @@
+     # A turn can yield several FINAL segments; join them (as chapter 4
+     # does) and stamp the gap start at the last one.
+     finals: list[str] = []
+@@ -211,16 +344,10 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -455,7 +455,7 @@
          drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
      )
      first_audio_t, accepted_chunks, rejected_chunks = delivery
-@@ -306,7 +433,7 @@
+@@ -310,7 +437,7 @@
          )
          resources.push_async_callback(close_if_supported, tts)
 

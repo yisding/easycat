@@ -140,7 +140,7 @@
 
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -76,112 +82,145 @@
+@@ -76,51 +82,121 @@
                  self._preroll.append(chunk)
 
 
@@ -253,9 +253,6 @@
 +    enqueued for playback, the next ``tts.synthesize`` can start while
 +    the current sentence is still audible. That is the pipeline overlap.
      """
--    # A turn can yield several FINAL segments; join them (as chapter 4
--    # does) and stamp the gap start at the last one.
--    finals: list[str] = []
 +    first_audio_t: float | None = None
 +    accepted_chunks = rejected_chunks = 0
 +    while True:
@@ -299,16 +296,10 @@
 +
 +async def run_turn(transport, stt, client, tts, journal) -> None:
 +    """STT-final → fan out to LLM-stream → sentence-queue → TTS-drain."""
-+    final_text = ""
-     stt_final_t = None
-     async for event in stt.events():
-         if event.type == STTEventType.FINAL:
--            if event.text.strip():
--                finals.append(" ".join(event.text.split()))
-+            final_text = event.text
-             stt_final_t = time.monotonic()
--    final_text = " ".join(finals)
-
+     # A turn can yield several FINAL segments; join them (as chapter 4
+     # does) and stamp the gap start at the last one.
+     finals: list[str] = []
+@@ -135,53 +211,20 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -374,7 +365,7 @@
      total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-@@ -190,13 +229,10 @@
+@@ -190,13 +233,10 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
@@ -390,7 +381,7 @@
          },
      )
      if total_gap is None:
-@@ -212,7 +248,7 @@
+@@ -212,7 +252,7 @@
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
 
 
@@ -399,7 +390,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -225,11 +261,11 @@
+@@ -225,11 +265,11 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  active_stt = stt
@@ -413,7 +404,7 @@
                      await close_if_supported(active_stt)
      finally:
          if stt is not None:
-@@ -265,10 +301,15 @@
+@@ -265,10 +305,15 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)

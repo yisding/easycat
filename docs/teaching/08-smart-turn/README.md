@@ -597,18 +597,19 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "accepted_chunks": sentence_accepted,
                  "rejected_chunks": sentence_rejected,
-@@ -329,33 +305,42 @@
+@@ -329,7 +305,7 @@
      return first_audio_t, accepted_chunks, rejected_chunks
 
 
 -async def run_turn(transport, stt, client, tts, journal) -> None:
 +async def run_turn(transport, stt, client, tts, journal, session_id, estimated_speech_end_t=None):
-     final_text = ""
-     stt_final_t = None
-     async for event in stt.events():
-         if event.type == STTEventType.FINAL:
-             final_text = event.text
+     # A turn can yield several FINAL segments; join them (as chapter 4
+     # does) and stamp the gap start at the last one.
+     finals: list[str] = []
+@@ -340,26 +316,35 @@
+                 finals.append(" ".join(event.text.split()))
              stt_final_t = time.monotonic()
+     final_text = " ".join(finals)
 -
      if not final_text.strip() or stt_final_t is None:
          return
@@ -646,7 +647,7 @@
              "reply_enqueue_gap_ms": reply_enqueue_gap,
              "tts_accepted_chunks": accepted_chunks,
              "tts_rejected_chunks": rejected_chunks,
-@@ -373,9 +358,15 @@
+@@ -377,9 +362,15 @@
              print("  (turn gap unavailable — TTS produced no audio)")
      else:
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio accepted)")
@@ -665,7 +666,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -391,7 +382,15 @@
+@@ -395,7 +386,15 @@
                  stt = None
                  try:
                      await active_stt.end_stream()
@@ -682,7 +683,7 @@
                  finally:
                      await close_if_supported(active_stt)
      finally:
-@@ -403,8 +402,25 @@
+@@ -407,8 +406,25 @@
 
 
  async def main() -> None:
@@ -708,7 +709,7 @@
 
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-@@ -422,9 +438,21 @@
+@@ -426,9 +442,21 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
 
@@ -732,7 +733,7 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
-@@ -433,15 +461,15 @@
+@@ -437,15 +465,15 @@
          )
          resources.push_async_callback(close_if_supported, tts)
 
