@@ -105,6 +105,10 @@ replaced with equal-length silence because the tones encode the digits.
 """
 
 _DTMF_MARK_PREFIX = "easycat_dtmf_"
+# How long after a tone frame's nominal playout drained AEC reference captures
+# stay masked under "pii" redaction: covers device/playout buffering between
+# the delivery report and the frame reaching the reference queue.
+_TONE_CAPTURE_MASK_TAIL_S = 1.0
 
 
 def _aec_reference_env_override() -> bool | None:
@@ -348,6 +352,13 @@ class AudioRouter:
         # Upper bound (seconds) on how long each queued burst task may run;
         # a graceful ``stop_outbound`` joins bursts only within these budgets.
         self._dtmf_task_budgets: dict[asyncio.Task[Any], float] = {}
+        # Under ``"pii"`` redaction, drained AEC reference frames journaled
+        # while a burst is sending, or until this loop time (extended per
+        # delivered tone frame), are captured as silence.  The local
+        # transport reslices playout into bare bytes, so its drained frames
+        # cannot carry the per-frame tone flag.
+        self._dtmf_bursts_sending: int = 0
+        self._tone_capture_mask_until: float = 0.0
         # Raw inbound PCM rate (the AEC near-end rate).  Tone frames are 8 kHz;
         # their AEC reference copy is resampled to this rate so a rate mismatch
         # cannot latch the canceller off for the rest of the call.
@@ -769,6 +780,7 @@ class AudioRouter:
                         max_duration_s=duration_ms / 1000 + guard_margin_s
                     )
                 completed = False
+                self._dtmf_bursts_sending += 1
                 try:
                     mask = self._journal_sink.redaction == "pii"
                     for chunk in chunks:
@@ -783,6 +795,8 @@ class AudioRouter:
                     )
                     completed = True
                 finally:
+                    self._dtmf_bursts_sending -= 1
+                    self._extend_tone_capture_mask(0.0)
                     if not completed and guard is not None and token is not None:
                         guard.abort_protected_playback(token)
         try:
@@ -844,6 +858,7 @@ class AudioRouter:
             or self._journal_sink.redaction == "pii"
         )
         masked = AudioChunk(data=bytes(len(chunk.data)), format=chunk.format) if mask else None
+        self._extend_tone_capture_mask(chunk.duration_ms / 1000)
         skip_feed = self._aec_reference_failed or self._transport_has_aec_drain
         if self._enable_aec() and not skip_feed:
             reference = chunk
@@ -863,6 +878,27 @@ class AudioRouter:
         await self._event_bus.emit(
             AudioOut(chunk=masked or chunk, session_id=session_id, turn_id=None)
         )
+
+    def _extend_tone_capture_mask(self, playout_s: float) -> None:
+        """Keep drained AEC reference captures masked past a tone frame."""
+        try:
+            now = asyncio.get_running_loop().time()
+        except RuntimeError:
+            return
+        self._tone_capture_mask_until = max(
+            self._tone_capture_mask_until,
+            now + playout_s + _TONE_CAPTURE_MASK_TAIL_S,
+        )
+
+    def _mask_drained_reference_capture(self, reference: AudioChunk) -> bool:
+        """Whether a drained AEC reference frame must be journaled as silence."""
+        if self._journal_sink.redaction != "pii":
+            return False
+        if getattr(reference, DTMF_TONE_CHUNK_ATTR, False) is True:
+            return True
+        if self._dtmf_bursts_sending > 0:
+            return True
+        return asyncio.get_running_loop().time() < self._tone_capture_mask_until
 
     async def _complete_protected_sequence(
         self,
@@ -1315,7 +1351,14 @@ class AudioRouter:
                 if isinstance(reference, AudioChunk)
                 else AudioChunk(data=reference, format=mic_chunk.format)
             )
-            await self._feed_reference_or_disable(ref_chunk, turn)
+            # AEC always gets the real far-end audio; only the journaled copy
+            # of an in-band DTMF frame is silenced under "pii" redaction.
+            capture = (
+                AudioChunk(data=bytes(len(ref_chunk.data)), format=ref_chunk.format)
+                if self._mask_drained_reference_capture(ref_chunk)
+                else None
+            )
+            await self._feed_reference_or_disable(ref_chunk, turn, capture_chunk=capture)
 
     async def _process_chunk(self, chunk: AudioChunk) -> None:
         """Run a single received frame through the stage pipeline.

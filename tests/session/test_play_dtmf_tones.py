@@ -492,6 +492,75 @@ async def test_reporting_transport_keeps_tones_out_of_the_turn_and_masks_them() 
     assert transport.tone_pcm() == tone_pcm
 
 
+class _DrainingTransport(_ReportingTransport):
+    """Reporting transport with an AEC reference drain queue.
+
+    ``flag_frames=False`` mimics LocalTransport, whose playout callback
+    reslices audio into bare bytes, so drained frames lose the tone flag.
+    """
+
+    def __init__(self, *, flag_frames: bool, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._flag_frames = flag_frames
+        self.reference_queue: list[AudioChunk] = []
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        accepted = await super().send_audio(chunk)
+        flag = self._flag_frames and getattr(chunk, "_easycat_dtmf_tone", False) is True
+        self.reference_queue.append(
+            AudioChunk(data=chunk.data, format=chunk.format, _easycat_dtmf_tone=flag)
+        )
+        return accepted
+
+    def drain_aec_reference_frames(self) -> list[AudioChunk]:
+        frames, self.reference_queue = self.reference_queue, []
+        return frames
+
+
+@pytest.mark.parametrize("flag_frames", [True, False], ids=["webrtc-like", "local-like"])
+@pytest.mark.parametrize("redaction", ["pii", "secrets"])
+async def test_drained_aec_reference_capture_is_masked_under_pii(
+    flag_frames: bool, redaction: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Journal every drained frame, not the decimated one-per-second sample.
+    monkeypatch.setattr("easycat.session._audio_router._AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES", 1)
+    aec = _RecordingAEC()
+    transport = _DrainingTransport(flag_frames=flag_frames)
+    session = _session(
+        transport,
+        echo_canceller=aec,
+        enable_echo_cancellation=True,
+        artifact_store=InMemoryArtifactStore(),
+        capture_aec_reference=True,
+        journal_redaction=redaction,
+    )
+    transport.bus = session.event_bus
+    captured: list[AudioChunk] = []
+    async with session:
+        router = session._audio_router
+
+        async def _record(chunk: AudioChunk, *_args: Any) -> None:
+            captured.append(chunk)
+
+        router._audio_stage.record_reference = _record  # type: ignore[method-assign]
+        await session.play_dtmf_tones("5")
+        tone_frames = list(transport.reference_queue)
+        mic = AudioChunk(data=bytes(320), format=PCM16_MONO_8K)
+        await router._feed_transport_aec_reference(mic, None)
+
+    tone_pcm = render_dtmf_pcm16("5")
+    # The canceller always receives the real far-end tones.
+    assert b"".join(ref.data for ref in aec.references) == tone_pcm
+    assert tone_frames and captured
+    for chunk in captured:
+        if redaction == "pii":
+            assert chunk.data == bytes(len(chunk.data))
+        else:
+            assert chunk.data in {frame.data for frame in tone_frames}
+    if redaction != "pii":
+        assert any(chunk.data != bytes(len(chunk.data)) for chunk in captured)
+
+
 class _Fixed16kTransport(_RecordingTransport):
     """Plays every frame at its own 16 kHz rate, ignoring ``chunk.format``."""
 
