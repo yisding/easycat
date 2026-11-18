@@ -157,6 +157,26 @@ async def test_twilio_dtmf_action_inserts_delays() -> None:
     assert 'digits="1W2W3"' in client.calls.updater.updates[0]["twiml"]
 
 
+@pytest.mark.asyncio
+async def test_twilio_dtmf_action_requests_stop_because_update_ends_the_stream() -> None:
+    """A Twilio call update replaces ``<Connect><Stream>``: the session must stop.
+
+    Twilio cannot send outbound DTMF over a bidirectional Media Stream, so the
+    executor plays the tones by replacing the call's TwiML. That ends the media
+    stream (and the call, once the tones finish), so reporting the session as
+    still active would leave it running on a dead transport.
+    """
+    client = _FakeTwilioClient()
+    executor = TwilioSessionActionExecutor(TwilioSessionActionConfig(client=client))
+
+    result = await executor.execute(_FakeSession(), SendDTMFAction(digits="1"))
+
+    assert result.stop_session is True
+    assert result.metadata["media_stream_replaced"] is True
+    twiml = client.calls.updater.updates[0]["twiml"]
+    assert "<Stream" not in twiml
+
+
 def test_apply_inter_digit_delay_clamps_large_delay() -> None:
     digits = _apply_inter_digit_delay("12", MAX_DTMF_INTER_DIGIT_DELAY_MS * 1000)
 

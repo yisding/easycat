@@ -70,9 +70,23 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
             )
 
         if isinstance(action, SendDTMFAction):
+            # Twilio cannot send outbound DTMF over a bidirectional Media
+            # Stream, so the tones go out as a REST call update. That update
+            # *replaces* the call's executing TwiML, which ends this session's
+            # ``<Connect><Stream>``; once ``<Play digits>`` finishes the call has
+            # no further TwiML and Twilio hangs up. The session cannot keep
+            # talking on a stream that no longer exists, so request a stop the
+            # same way transfer does instead of leaving it on a dead transport.
             digits = _apply_inter_digit_delay(action.digits, action.inter_digit_delay_ms)
             await self._update_call(client, call_sid, twiml=twiml_play_digits(digits))
-            return SessionActionResult(metadata={"call_sid": call_sid, "digits": digits})
+            return SessionActionResult(
+                stop_session=True,
+                metadata={
+                    "call_sid": call_sid,
+                    "digits": digits,
+                    "media_stream_replaced": True,
+                },
+            )
 
         if isinstance(action, SendSMSAction):
             if not self._config.sms_from_number:
