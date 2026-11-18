@@ -826,27 +826,25 @@ async def test_a_transport_clear_forgets_unplayed_tone_frames() -> None:
         assert waits and waits[0] == 25
 
 
-async def test_a_pacing_stall_drops_the_stale_bookings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Audio that never reports played (an outside clear) costs one stall, not one per frame."""
+async def test_a_pacing_stall_stops_the_burst_and_keeps_the_bookings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stall does not prove queued frames were discarded: stop, never overrun."""
     monkeypatch.setattr("easycat.session._audio_router._TONE_PACING_STALL_S", 0)
-    transport = _ManualPlayoutTransport(capacity=60)  # never plays
+    transport = _ManualPlayoutTransport(capacity=30)  # stalled: never plays
     session = _session(transport)
     transport.bus = session.event_bus
-    waits = 0
     async with session:
         router = session._audio_router
-        original_wait = router._tone_progress.wait
-
-        def counting_wait() -> Any:
-            nonlocal waits
-            waits += 1
-            return original_wait()
-
-        router._tone_progress.wait = counting_wait
-        # Four keys are 43 frames: one stall at frame 26, then a fresh window.
-        await asyncio.wait_for(session.play_dtmf_tones("1234"), _WAIT_S)
-    assert waits == 1
-    assert decode_dtmf(transport.tone_pcm()) == "1234"
+        # Four keys are 43 frames; the 500 ms window fills at 25 queued frames.
+        with pytest.raises(RuntimeError, match="playout stalled"):
+            await asyncio.wait_for(session.play_dtmf_tones("1234"), _WAIT_S)
+        assert transport.rejected == 0
+        assert len(transport.queue) == 25
+        # The 25 queued frames stay booked until a clear actually drops them.
+        assert router._tone_ms_in_flight >= 500
+        await session.cancel_tts_playback()
+        assert router._tone_ms_in_flight == 0
 
 
 class _Fixed16kTransport(_RecordingTransport):

@@ -1009,10 +1009,12 @@ class AudioRouter:
         burst at once would overrun those queues and reject its tail after
         part of the key sequence was already queued.  The count spans bursts:
         a burst starts with the earlier bursts' unplayed frames still booked.
-        Without delivery progress for ``_TONE_PACING_STALL_S`` the booked
-        audio is presumed discarded (a clear the session did not issue) and
-        the frame is submitted anyway, so a stalled transport surfaces as a
-        rejection rather than a hang.
+        Without delivery progress for ``_TONE_PACING_STALL_S`` the burst is
+        stopped with ``RuntimeError`` instead of submitting more frames: a
+        stall does not prove the queued frames were discarded, so their
+        bookings are kept (only a transport clear, through
+        :meth:`forget_unplayed_tones`, releases them).  A stalled transport
+        therefore surfaces as an error rather than a hang or an overrun.
         """
         if not self._transport_reports_audio_delivery:
             return
@@ -1021,8 +1023,9 @@ class AudioRouter:
             try:
                 await asyncio.wait_for(self._tone_progress.wait(), _TONE_PACING_STALL_S)
             except TimeoutError:
-                self._tone_ms_in_flight = 0.0
-                return
+                raise RuntimeError(
+                    "transport playout stalled; in-band DTMF burst stopped"
+                ) from None
 
     def forget_unplayed_tones(self) -> None:
         """Drop tone pacing bookings after the transport discarded queued audio.
