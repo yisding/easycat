@@ -168,7 +168,10 @@ async def check_call_control() -> None:
     assert 'digits="1W2W#"' in updates[0]["twiml"]
     assert "Connecting you now." in updates[1]["twiml"]
     assert updates[2] == {"status": "completed"}
-    assert dtmf_result.stop_session is False
+    # Twilio DTMF replaces the call's <Connect><Stream> TwiML, so it ends the
+    # media stream and, like transfer and hangup, requests session stop.
+    assert dtmf_result.stop_session is True
+    assert dtmf_result.metadata["media_stream_replaced"] is True
     assert transfer_result.stop_session is end_result.stop_session is True
     print("PASS actions: DTMF, transfer, and hangup mapped to Twilio updates")
 
