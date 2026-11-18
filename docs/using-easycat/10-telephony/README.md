@@ -182,12 +182,15 @@ then speak, or navigate several menu levels. `DTMFToneConfig` sets the shape:
 levels (+2 dB twist), and `w`/`W` pauses of 0.5 s and 1 s. On Twilio the
 transport protects the burst:
 
-- A playout fence mark waits until earlier speech has played (bounded by
-  `fence_timeout_s`, 10 s), so a barge-in before the tones still clears that
-  speech.
+- A playout fence mark waits until earlier speech has left Twilio's buffer
+  (bounded by `fence_timeout_s`, 10 s), so a barge-in before the tones still
+  clears that speech. The fence acknowledgement means the speech was played
+  or discarded by such a `clear`, not that the far end heard it.
 - While the tones play, a barge-in `clear` is deferred until Twilio
-  acknowledges the completion mark (at most the tone length plus 5 s). Then
-  the clear removes only audio queued after the tones.
+  acknowledges the completion mark. Then the clear removes only audio queued
+  after the tones. The deferral lasts at most the tone length plus 5 s: if the
+  acknowledgement has not arrived by then, the deferred clear is sent anyway
+  and also discards any tones Twilio has not played yet.
 - Inbound `dtmf` messages during the tones and for 500 ms afterwards are
   dropped as echo of the bot's own key presses
   (`TwilioTransportConfig.suppress_inbound_dtmf_during_tones`,
@@ -201,7 +204,7 @@ or the `TWILIO_DTMF_MODE` environment variable for `TwilioAppSettings`:
 | --- | --- |
 | `"rest"` (default) | REST `<Play digits>`; the result has `stop_session=True`, `delivery: "rest"`, and `media_stream_replaced: true`. |
 | `"in_band"` | Tones on the stream; the result has `stop_session=False`, `delivery: "in_band"`, and the playback outcome. Fails if the session cannot play tones. |
-| `"auto"` | In-band, except that it falls back to REST (which ends the stream) with a warning when the session has no `play_dtmf_tones` or the sequence is longer than the tone config's `max_total_ms` (60 s by default). |
+| `"auto"` | In-band, except that it falls back to REST (which ends the stream) with a warning when the session has no callable `play_dtmf_tones` or the sequence is longer than the tone config's `max_total_ms` (60 s by default). |
 
 `"auto"` falls back only in cases where it knows no tone was sent. An error
 from in-band playback itself, such as a session that is not running or a
@@ -234,9 +237,15 @@ The public URL must forward to local port 8766 (`EASYCAT_DTMF_LOOPBACK_PORT`).
 The test points the `TO` number's voice URL at itself for the run and restores
 it afterwards, so use a dedicated non-production number that routes voice
 through its webhook URL; the test refuses a number attached to a TwiML App or
-SIP trunk, where Twilio ignores the voice URL. If tones are not detected on your route, keep
-`dtmf_mode="rest"` (or `ivr_dtmf_mode="rest"`) or move the call to Elastic SIP
-Trunking, which can carry RFC 2833 events.
+SIP trunk, where Twilio ignores the voice URL. Before the run, save the
+number's voice URL and voice method from the Twilio Console or API. The test
+restores both even when the override request itself fails, and adds a note to
+the test error when the restore fails too. After a failed or interrupted run
+(for example a second Ctrl-C or a lost network), check that the number no
+longer points at the tunnel's `/loopback/answer` URL with method `GET`, and
+set the saved URL and method back if it does. If tones are not detected on
+your route, keep `dtmf_mode="rest"` (or `ivr_dtmf_mode="rest"`) or move the
+call to Elastic SIP Trunking, which can carry RFC 2833 events.
 
 Never concatenate model output into TwiML. Use the typed action and TwiML
 helpers, which validate or escape values.
@@ -275,9 +284,11 @@ the given `DTMFDelivery`, whose first key press ends the stream. A custom
 sender that implements `IVRDTMFSender`, including a `DTMFDelivery` subclass,
 is used as given in `"auto"` mode, and Telnyx IVR delivery is unchanged. Its
 `send_dtmf_with_retry` must accept the `should_continue` keyword (or
-`**kwargs`); configuration rejects one that does not. `ivr_dtmf_tones` takes a
-`DTMFToneConfig`; to customize an `InBandDTMFDelivery` you pass yourself, set
-its `tone_config` instead, because setting both is rejected. Unlike
+`**kwargs`); configuration rejects one that does not. Both sender methods must
+be async (return an awaitable). `ivr_dtmf_tones` takes a `DTMFToneConfig`; to
+customize an `InBandDTMFDelivery` you pass yourself, set its `tone_config`
+instead, because setting both is rejected. Such an instance is a template:
+each session gets its own unbound copy, which keeps a subclass's overrides. Unlike
 `DTMFDelivery`, `InBandDTMFDelivery` does not retry a failed key press: some
 tones may already have played, so the navigator falls back to a `speak`
 action instead of pressing the keys again.

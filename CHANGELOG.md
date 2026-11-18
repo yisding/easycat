@@ -30,20 +30,32 @@ versioning contract that begins at 1.0.0 is documented in
   bot's own key presses (`TwilioTransportConfig.suppress_inbound_dtmf_during_tones`,
   `dtmf_echo_suppress_tail_ms`). A real caller key press in that window is
   dropped too; disable suppression to receive every inbound key.
+  A transport may also expose an optional `protected_playback_stream_id()`
+  hook (Twilio returns its `streamSid`); a burst queued behind earlier audio
+  is then called off before any fence or tone if the stream was replaced.
+- `PlaybackMarkAck.retired`, `True` when a transport retired a pending mark
+  locally instead of receiving a far-end response (Telnyx after a `clear`,
+  stop or close). An in-band DTMF burst whose completion mark was retired
+  reports `"disconnected"`, not `"played"`.
 - Opt-in in-band delivery for Twilio `SendDTMFAction`:
   `TwilioSessionActionConfig(dtmf_mode="in_band")` (or `"auto"`, or the
   `TWILIO_DTMF_MODE` env var for `TwilioAppSettings`) plays the digits on the
   media stream and leaves the session running, with `delivery: "in_band"` and
   the playback outcome in the result metadata. The default stays `"rest"`.
-  `"auto"` falls back to REST only when no tone can have been sent (the
-  session cannot play tones, or the sequence exceeds the tone config's
-  `max_total_ms`); that fallback ends the stream like `"rest"`.
+  `"auto"` falls back to REST only when no tone can have been sent: the
+  session has no callable `play_dtmf_tones`, or the sequence exceeds the tone
+  config's `max_total_ms`. That fallback ends the stream like `"rest"`. An
+  error raised by `play_dtmf_tones` itself (for example a session whose audio
+  output is not running) fails the action without a REST retry.
   `TWILIO_DTMF_MODE=in_band` needs no REST credentials.
 - `InBandDTMFDelivery` and the `IVRDTMFSender` protocol for IVR navigation,
   plus the keyword-only `OutboundCallConfig.ivr_dtmf_mode` (`"auto"`,
   `"in_band"`, `"rest"`) and `ivr_dtmf_tones`. `InBandDTMFDelivery` does not
   retry a failed key press, since part of the sequence may already have
-  played.
+  played. A configured `InBandDTMFDelivery` (or subclass) is a template: each
+  session gets its own unbound shallow copy, which keeps the subclass's
+  overrides. A sender method that returns a non-awaitable raises a
+  `TypeError` naming the async contract.
 - A billable live loopback test,
   `tests/telephony/test_twilio_inband_dtmf_live.py`, that checks a Twilio
   `<Gather>` hears EasyCat's in-band tones and that the stream survives them.

@@ -94,7 +94,11 @@ Between start and stop, the session exposes turn-level controls:
   `"estimated"` (the transport cannot acknowledge playback). Cancelling the
   caller, for example by a barge-in, does not cut the sequence short. On a
   transport with the `ProtectedPlayback` capability (Twilio Media Streams), a
-  barge-in `clear` waits until the tones have played. A `should_continue`
+  barge-in `clear` is deferred until the far end acknowledges the tones'
+  completion mark or the guard expires (the burst's duration plus a 5 s
+  margin), whichever comes first. Expiry does not confirm playback: the
+  released `clear` can discard tones the far end still has buffered, and
+  `playback.wait()` then reports `"timeout"`. A `should_continue`
   predicate is checked after rendering, after queued speech drains, and
   after the playout fence; if it returns `False` before the first tone frame
   is sent, nothing is sent and `DTMFPlaybackCancelled` (a `RuntimeError`) is

@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
+    BotStoppedSpeaking,
     Event,
     STTEvent,
     STTEventType,
@@ -95,6 +96,21 @@ def _silent_chunk() -> AudioChunk:
     return AudioChunk(data=bytes(320), format=PCM16_MONO_16K)
 
 
+async def run_one_turn_then_stop(session: Session, *, timeout_s: float = 5.0) -> None:
+    """Start *session*, wait until the bot finished its reply, then stop it.
+
+    Waits on ``BotStoppedSpeaking`` instead of a wall-clock sleep: a graceful
+    ``stop()`` that lands while the turn's STT commit is still in flight (a
+    loaded CI worker can stall a fixed sleep) races the provider end-stream
+    and raises instead of producing the bundle the test inspects.
+    """
+    reply_finished = asyncio.Event()
+    session.subscribe_event(BotStoppedSpeaking, lambda _event: reply_finished.set())
+    await session.start()
+    await asyncio.wait_for(reply_finished.wait(), timeout_s)
+    await session.stop()
+
+
 async def _build_voice_bundle(tmp_path: pathlib.Path) -> pathlib.Path:
     """Drive a real Session through a turn and write its bundle."""
     artifact_store = InMemoryArtifactStore()
@@ -115,9 +131,7 @@ async def _build_voice_bundle(tmp_path: pathlib.Path) -> pathlib.Path:
             session_id="debug-ui-test",
         )
     )
-    await session.start()
-    await asyncio.sleep(0.3)
-    await session.stop()
+    await run_one_turn_then_stop(session)
 
     bundle_path = tmp_path / "ui.zip"
     session.export_debug_bundle(str(bundle_path))

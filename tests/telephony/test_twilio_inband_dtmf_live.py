@@ -12,17 +12,22 @@ far end that detects them. This test is that oracle:
    valid ``X-Twilio-Signature``.
 2. For the duration of the test, the voice URL of the dedicated loopback
    number ``EASYCAT_DTMF_LOOPBACK_TO`` (number B) points at this server, which
-   answers with ``<Gather input="dtmf" finishOnKey="#">``. The previous voice
-   URL and method are restored afterwards. Use a dedicated, non-production
+   answers with ``<Gather input="dtmf" finishOnKey="">`` sized to the burst, so
+   ``#`` is collected as a digit instead of ending the gather. The previous
+   voice URL and method are restored afterwards, also when the update itself
+   fails; if restoring fails too, the error says so and the number must be
+   restored by hand. Use a dedicated, non-production
    number that serves nothing else and routes voice through its webhook URL:
    the test refuses a number with a TwiML App (``voice_application_sid``) or a
    SIP trunk (``trunk_sid``), because Twilio ignores ``voice_url`` on those.
 3. Twilio places a call from ``EASYCAT_DTMF_LOOPBACK_FROM`` (number A) to
    number B whose leg runs ``<Connect><Stream>`` into a real EasyCat
    :class:`~easycat.session.Session`. The session plays ``1234#`` in-band;
-   B's ``<Gather>`` must report ``Digits=1234``. Then the same stream plays
-   ``56#`` and B must report ``Digits=56``, which proves the media stream
-   survived the first burst (multi-level IVR navigation).
+   B's ``<Gather>`` must report ``Digits=1234#``. Then the same stream plays
+   ``56#`` and B must report ``Digits=56#``, which proves the media stream
+   survived the first burst (multi-level IVR navigation). B answers the last
+   gather with a bounded ``<Pause>``, so the call stays up until the second
+   playback mark arrives; the test then ends the call.
 
 Run it explicitly (it places one short call per tone variant)::
 
@@ -83,6 +88,13 @@ _GATHER_TIMEOUT_S = 30.0
 # B's <Gather> starts listening once its answer TwiML runs; give the far end a
 # moment after the media stream opens before the first key press.
 _GATHER_SETTLE_S = 1.5
+# The bursts B's <Gather> verbs expect, in order. ``#`` is a digit, not a
+# finish key, so a dropped ``#`` fails the comparison instead of passing
+# after the gather timeout.
+_BURSTS = ("1234#", "56#")
+# B holds the call this long after the last gather so the second playback
+# mark can reach EasyCat; the test hangs up once it has checked both.
+_FINAL_PAUSE_S = 15
 
 
 @dataclass(frozen=True)
@@ -113,7 +125,7 @@ class _LoopbackState:
     answered: asyncio.Event = field(default_factory=asyncio.Event)
     finished: asyncio.Event = field(default_factory=asyncio.Event)
     sessions: asyncio.Queue[Session] = field(default_factory=asyncio.Queue)
-    expected_gathers: int = 2
+    gathers_done: int = 0
     rejected_requests: int = 0
 
 
@@ -161,13 +173,23 @@ def _voice_routing_problem(number: Any) -> str | None:
     return None
 
 
-def _gather_twiml(env: _LoopbackEnv) -> str:
+def _gather_twiml(env: _LoopbackEnv, burst: str) -> str:
+    """Collect exactly ``len(burst)`` keys, ``#`` included."""
     action = quoteattr(env.https(_GATHERED_PATH))
     return (
         '<?xml version="1.0" encoding="UTF-8"?><Response>'
-        f'<Gather input="dtmf" finishOnKey="#" timeout="20" method="GET" action={action}/>'
+        f'<Gather input="dtmf" finishOnKey="" numDigits="{len(burst)}" timeout="20" '
+        f'method="GET" action={action}/>'
         "<Hangup/></Response>"
     )
+
+
+def _gathered_twiml(env: _LoopbackEnv, state: _LoopbackState) -> str:
+    """The next gather, or a bounded pause after the last one."""
+    state.gathers_done += 1
+    if state.gathers_done < len(_BURSTS):
+        return _gather_twiml(env, _BURSTS[state.gathers_done])
+    return f'<Response><Pause length="{_FINAL_PAUSE_S}"/><Hangup/></Response>'
 
 
 def _xml_response(connection: ServerConnection, body: str) -> Response:
@@ -206,14 +228,11 @@ def _process_request(
             return None
         if path == _ANSWER_PATH:
             state.answered.set()
-            return _xml_response(connection, _gather_twiml(env))
+            return _xml_response(connection, _gather_twiml(env, _BURSTS[0]))
         if path == _GATHERED_PATH:
             digits = parse_qs(urlsplit(request.path).query).get("Digits", [""])[0]
             state.gathers.put_nowait(digits)
-            state.expected_gathers -= 1
-            if state.expected_gathers > 0:
-                return _xml_response(connection, _gather_twiml(env))
-            return _xml_response(connection, "<Response><Hangup/></Response>")
+            return _xml_response(connection, _gathered_twiml(env, state))
         return connection.respond(HTTPStatus.NOT_FOUND, "not found\n")
 
     return process_request
@@ -267,19 +286,33 @@ async def _loopback_voice_url(client: Any, env: _LoopbackEnv) -> AsyncIterator[N
             "webhook voice routing"
         )
     previous_url, previous_method = number.voice_url, number.voice_method
-    await asyncio.to_thread(
-        client.incoming_phone_numbers(number.sid).update,
-        voice_url=env.https(_ANSWER_PATH),
-        voice_method="GET",
-    )
-    try:
-        yield
-    finally:
+
+    async def restore() -> None:
         await asyncio.to_thread(
             client.incoming_phone_numbers(number.sid).update,
             voice_url=previous_url or "",
             voice_method=previous_method or "POST",
         )
+
+    # The override is inside the restore scope: Twilio may apply it even when
+    # the client never sees the response.
+    try:
+        await asyncio.to_thread(
+            client.incoming_phone_numbers(number.sid).update,
+            voice_url=env.https(_ANSWER_PATH),
+            voice_method="GET",
+        )
+        yield
+    except BaseException as exc:
+        try:
+            await restore()
+        except Exception as restore_exc:  # noqa: BLE001 keep the original error primary
+            exc.add_note(
+                f"Restoring the voice URL of {number.sid} also failed "
+                f"({type(restore_exc).__name__}); restore its voice URL and method by hand."
+            )
+        raise
+    await restore()
 
 
 @pytest.mark.integration_live
@@ -325,16 +358,16 @@ async def test_inband_dtmf_reaches_twilio_gather_and_stream_survives(
             await asyncio.wait_for(state.answered.wait(), _CALL_SETUP_TIMEOUT_S)
             await asyncio.sleep(_GATHER_SETTLE_S)
 
-            first = await session.play_dtmf_tones("1234#", tone_config=tone_config)
+            first = await session.play_dtmf_tones(_BURSTS[0], tone_config=tone_config)
             assert first.mark_name is not None
             assert await first.wait(first.duration_ms / 1000 + 10.0) == "played"
-            assert await asyncio.wait_for(state.gathers.get(), _GATHER_TIMEOUT_S) == "1234"
+            assert await asyncio.wait_for(state.gathers.get(), _GATHER_TIMEOUT_S) == _BURSTS[0]
             assert session.is_running, "the media stream must survive in-band DTMF"
 
             await asyncio.sleep(_GATHER_SETTLE_S)
-            second = await session.play_dtmf_tones("56#", tone_config=tone_config)
+            second = await session.play_dtmf_tones(_BURSTS[1], tone_config=tone_config)
             assert await second.wait(second.duration_ms / 1000 + 10.0) == "played"
-            assert await asyncio.wait_for(state.gathers.get(), _GATHER_TIMEOUT_S) == "56"
+            assert await asyncio.wait_for(state.gathers.get(), _GATHER_TIMEOUT_S) == _BURSTS[1]
         finally:
             try:
                 if session is not None:
@@ -374,3 +407,95 @@ def test_voice_routing_problem_rejects_app_and_trunk_routing(
         assert problem is None
     else:
         assert problem is not None and expected in problem
+
+
+def _offline_env() -> _LoopbackEnv:
+    return _LoopbackEnv(
+        account_sid="AC0",
+        auth_token="token",
+        from_number="+15550000001",
+        to_number="+15550000002",
+        public_url="https://loopback.example",
+        port=0,
+    )
+
+
+def test_gathers_collect_the_whole_burst_including_hash() -> None:
+    env = _offline_env()
+    state = _LoopbackState()
+
+    first = _gather_twiml(env, _BURSTS[0])
+    second = _gathered_twiml(env, state)
+    final = _gathered_twiml(env, state)
+
+    assert 'finishOnKey=""' in first and 'numDigits="5"' in first
+    assert 'finishOnKey=""' in second and 'numDigits="3"' in second
+    # The last gather holds the call open for the second playback mark.
+    assert "<Pause" in final and "<Gather" not in final
+
+
+class _FakeIncomingNumbers:
+    """``client.incoming_phone_numbers`` recording updates, with injected failures."""
+
+    def __init__(self, *, fail_override: bool = False, fail_restore: bool = False) -> None:
+        self.fail_override = fail_override
+        self.fail_restore = fail_restore
+        self.updates: list[dict[str, str]] = []
+        self.number = SimpleNamespace(
+            sid="PN0",
+            voice_url="https://prod.example/voice",
+            voice_method="POST",
+            voice_application_sid=None,
+            trunk_sid=None,
+        )
+
+    def list(self, **_: object) -> list[SimpleNamespace]:
+        return [self.number]
+
+    def __call__(self, sid: str) -> SimpleNamespace:
+        assert sid == self.number.sid
+        return SimpleNamespace(update=self._update)
+
+    def _update(self, **fields: str) -> None:
+        self.updates.append(fields)
+        if fields["voice_method"] == "GET" and self.fail_override:
+            raise ConnectionError("response lost after Twilio applied the update")
+        if fields["voice_method"] == "POST" and self.fail_restore:
+            raise RuntimeError("restore failed")
+
+
+_RESTORED = {"voice_url": "https://prod.example/voice", "voice_method": "POST"}
+
+
+async def test_voice_url_is_restored_when_the_override_request_fails() -> None:
+    numbers = _FakeIncomingNumbers(fail_override=True)
+    client = SimpleNamespace(incoming_phone_numbers=numbers)
+
+    with pytest.raises(ConnectionError):
+        async with _loopback_voice_url(client, _offline_env()):
+            pytest.fail("the body must not run when the override failed")
+
+    assert numbers.updates[-1] == _RESTORED
+    assert len(numbers.updates) == 2
+
+
+async def test_voice_url_restore_failure_keeps_the_original_error() -> None:
+    numbers = _FakeIncomingNumbers(fail_restore=True)
+    client = SimpleNamespace(incoming_phone_numbers=numbers)
+
+    with pytest.raises(AssertionError) as excinfo:
+        async with _loopback_voice_url(client, _offline_env()):
+            raise AssertionError("gather mismatch")
+
+    assert str(excinfo.value) == "gather mismatch"
+    assert any("restore its voice URL" in note for note in excinfo.value.__notes__)
+
+
+async def test_voice_url_is_restored_after_a_clean_run() -> None:
+    numbers = _FakeIncomingNumbers()
+    client = SimpleNamespace(incoming_phone_numbers=numbers)
+
+    async with _loopback_voice_url(client, _offline_env()):
+        assert numbers.updates[-1]["voice_method"] == "GET"
+
+    assert numbers.updates[-1] == _RESTORED

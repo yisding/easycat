@@ -16,11 +16,13 @@ __all__ = [
 ]
 
 import asyncio
+import copy
+import inspect
 import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 from easycat._dtmf_tones import DTMFPlaybackCancelled, DTMFToneConfig
 from easycat._epoch import Epoch, Lease
@@ -105,6 +107,22 @@ def _validate_positive_number(name: str, value: float) -> None:
 def _validate_non_negative_number(name: str, value: float) -> None:
     if not is_finite_number(value) or value < 0:
         raise ValueError(f"{name} must be a non-negative number")
+
+
+async def _await_ivr_sender_call(result: object, method: str) -> Any:
+    """Await what an :class:`IVRDTMFSender` method returned.
+
+    The protocol's methods are coroutines, but a runtime-checkable protocol
+    and a signature check cannot tell a plain ``def`` from a wrapper that
+    returns a coroutine. A plain ``def`` that returns ``True`` would otherwise
+    fail with an opaque ``await`` error, so name the broken contract instead.
+    """
+    if not inspect.isawaitable(result):
+        raise TypeError(
+            f"IVR DTMF sender's {method}() must be async (return an awaitable); "
+            f"it returned {type(result).__name__}"
+        )
+    return await result
 
 
 @runtime_checkable
@@ -283,19 +301,18 @@ class InBandDTMFDelivery:
         """Whether a session output is bound."""
         return self._output is not None
 
-    def clone(self) -> InBandDTMFDelivery:
-        """Return a new, unbound sender with the same settings.
+    def clone(self) -> Self:
+        """Return a new, unbound sender with the same settings and class.
 
         Used to give every session its own sender when one configured
         instance is shared by many sessions, so one call's keys and speech
-        can never play on another call's stream.
+        can never play on another call's stream. The clone is a shallow copy,
+        so a subclass keeps its overrides and attributes; a subclass that
+        holds per-session mutable state should override this method.
         """
-        return InBandDTMFDelivery(
-            tone_config=self._tone_config,
-            inter_digit_delay_ms=self._inter_digit_delay_ms,
-            wait_for_playback=self._wait_for_playback,
-            ack_timeout_margin_s=self._ack_timeout_margin_s,
-        )
+        clone = copy.copy(self)
+        clone._output = None
+        return clone
 
     def bind_output(self, output: SessionMediaOutput | None) -> None:
         """Bind (or with ``None`` unbind) the session output tones play on."""
@@ -577,9 +594,12 @@ class IVRNavigator:
             or self._dtmf_delivery is None
         ):
             return
-        delivered = await self._dtmf_delivery.send_dtmf_with_retry(
-            decision.payload,
-            should_continue=lambda: self._is_current_activation(activation),
+        delivered = await _await_ivr_sender_call(
+            self._dtmf_delivery.send_dtmf_with_retry(
+                decision.payload,
+                should_continue=lambda: self._is_current_activation(activation),
+            ),
+            "send_dtmf_with_retry",
         )
         if not self._is_current_activation(activation) or delivered:
             return

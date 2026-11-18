@@ -479,7 +479,61 @@ async def test_auto_mode_uses_the_configured_tone_limit() -> None:
 
     assert result.metadata["delivery"] == "in_band"
     assert len(session.calls) == 1
+    # The real session enforces the default limit unless it gets this config.
+    assert session.calls[0][1]["tone_config"] is tones
     assert client.calls.updater.updates == []
+
+
+class _RenderCheckingSession(_FakeToneSession):
+    """Applies the real tone renderer's argument checks, like :class:`Session`."""
+
+    async def play_dtmf_tones(self, digits: str, **kwargs: Any) -> DTMFTonePlayback:
+        dtmf_sequence_duration_ms(
+            digits,
+            inter_digit_delay_ms=kwargs["inter_digit_delay_ms"],
+            config=kwargs["tone_config"],
+        )
+        return await super().play_dtmf_tones(digits, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["in_band", "auto"])
+async def test_in_band_dtmf_rounds_a_float_delay_the_renderer_would_reject(mode: str) -> None:
+    """``SendDTMFAction`` accepts ``1000.0``; the REST path rounds it, so in-band must too."""
+    client = _FakeTwilioClient()
+    executor = TwilioSessionActionExecutor(
+        TwilioSessionActionConfig(client=client, dtmf_mode=mode)  # type: ignore[arg-type]
+    )
+    session = _RenderCheckingSession()
+
+    result = await executor.execute(
+        session,
+        SendDTMFAction(digits="12", inter_digit_delay_ms=1000.0),  # type: ignore[arg-type]
+    )
+
+    assert result.metadata["delivery"] == "in_band"
+    delay = session.calls[0][1]["inter_digit_delay_ms"]
+    assert delay == 1000 and type(delay) is int
+    assert result.metadata["inter_digit_delay_ms"] == 1000
+    assert client.calls.updater.updates == []
+
+
+@pytest.mark.asyncio
+async def test_auto_mode_checks_the_tone_limit_for_a_float_delay() -> None:
+    client = _FakeTwilioClient()
+    executor = TwilioSessionActionExecutor(
+        TwilioSessionActionConfig(client=client, dtmf_mode="auto")
+    )
+    session = _RenderCheckingSession()
+
+    result = await executor.execute(
+        session,
+        SendDTMFAction(digits="1" * 56, inter_digit_delay_ms=1000.0),  # type: ignore[arg-type]
+    )
+
+    assert session.calls == []
+    assert result.metadata["delivery"] == "rest"
+    assert len(client.calls.updater.updates) == 1
 
 
 @pytest.mark.asyncio

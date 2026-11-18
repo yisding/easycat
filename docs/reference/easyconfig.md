@@ -169,10 +169,14 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   `ivr_dtmf_tones` takes a `DTMFToneConfig` for the in-band tone length,
   gaps and levels. An `InBandDTMFDelivery` passed as `ivr_dtmf_delivery`
   (with `"auto"` or `"in_band"`) is used as a settings template: each session
-  gets its own clone, so one call's keys never play on another call's stream.
+  gets its own unbound `clone()`, so one call's keys never play on another
+  call's stream. The clone is a shallow copy of the same class, so a subclass
+  keeps its overrides; override `clone()` if the subclass holds per-session
+  mutable state.
   Set its `tone_config` rather than `ivr_dtmf_tones`; setting both is
   rejected. A custom sender's `send_dtmf_with_retry` must accept the
-  `should_continue` keyword (or `**kwargs`). `ivr_dtmf_mode` and
+  `should_continue` keyword (or `**kwargs`), and both of its methods must
+  return an awaitable; a plain return value raises `TypeError` when called. `ivr_dtmf_mode` and
   `ivr_dtmf_tones` are keyword-only. Invalid combinations raise
   `EasyConfigError`. Agent-tool
   `SendDTMFAction` on Twilio is configured separately, with

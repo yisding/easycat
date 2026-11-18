@@ -291,9 +291,10 @@ async def test_cancel_tts_playback_on_plain_transport_still_submits_every_tone()
 
     This covers submission only: a plain transport has no ``ProtectedPlayback``
     guard, so its ``clear`` (recorded mid-sequence here) may still discard
-    tone frames it had buffered. Only a protected-playback transport (see
+    tone frames it had buffered. A protected-playback transport (see
     ``test_barge_in_and_caller_cancellation_do_not_split_the_sequence``)
-    guarantees that the far end hears the whole sequence.
+    instead defers the ``clear`` until the tones are acknowledged or the
+    guard expires; neither test proves what the far end actually heard.
     """
     transport = _RecordingTransport(pause_after_tone_frames=2)
     async with _session(transport) as session:
@@ -858,6 +859,23 @@ async def test_mark_only_transport_resolves_through_router_waiter() -> None:
         assert await playback.wait(_WAIT_S) == "played"
 
 
+async def test_mark_only_transport_locally_retired_mark_is_not_played() -> None:
+    """A mark the transport expired itself (clear/stop/close) confirms nothing."""
+    transport = _MarkOnlyTransport()
+    async with _session(transport) as session:
+        playback = await session.play_dtmf_tones("3")
+        assert playback.mark_name is not None
+        await session.event_bus.emit(
+            PlaybackMarkAck(
+                mark_name=playback.mark_name,
+                session_id=session.session_id,
+                retired=True,
+            )
+        )
+        assert await playback.wait(_WAIT_S) == "disconnected"
+        assert session._audio_router._dtmf_mark_waiters == {}
+
+
 async def test_mark_only_transport_times_out_without_ack() -> None:
     transport = _MarkOnlyTransport()
     config = DTMFToneConfig(tone_ms=40, gap_ms=40, lead_in_ms=0, tail_ms=0)
@@ -1007,21 +1025,116 @@ async def test_in_band_ivr_sender_called_off_during_fence_sends_no_tone(
     assert not any("4321" in message for message in caplog.messages)
 
 
+def _gate_drain(router: Any) -> tuple[asyncio.Event, asyncio.Event]:
+    """Make the router's drain wait signal entry and block until released."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = router.await_drain
+
+    async def gated_drain(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+
+    router.await_drain = gated_drain
+    return entered, release
+
+
 async def test_called_off_during_drain_skips_the_fence() -> None:
-    transport = _GuardTransport(tts_send_delay_s=0.01)
+    transport = _GuardTransport()
     active = True
     async with _session(transport) as session:
-        for _ in range(5):
-            await session._audio_router.queue_outbound(_make_chunk())
+        entered, release = _gate_drain(session._audio_router)
         playing = asyncio.create_task(session.play_dtmf_tones("9", should_continue=lambda: active))
-        await asyncio.sleep(0.01)
+        # The session-level check has passed once the burst waits on the drain.
+        await asyncio.wait_for(entered.wait(), _WAIT_S)
         active = False
+        release.set()
         with pytest.raises(DTMFPlaybackCancelled) as excinfo:
             await asyncio.wait_for(playing, _WAIT_S)
     assert "9" not in str(excinfo.value)
     kinds = transport.kinds()
     assert "fence" not in kinds
+    assert "begin" not in kinds
     assert "tone" not in kinds
+
+
+class _StreamGuardTransport(_BlockingFenceTransport):
+    """Guard transport that names its active stream, like Twilio's streamSid."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.stream_id: str | None = "MZ-first"
+
+    def protected_playback_stream_id(self) -> str | None:
+        return self.stream_id
+
+
+async def test_burst_queued_across_a_stream_replacement_is_called_off() -> None:
+    transport = _StreamGuardTransport()
+    transport.fence_release.set()
+    async with _session(transport) as session:
+        entered, release = _gate_drain(session._audio_router)
+        playing = asyncio.create_task(session.play_dtmf_tones("7"))
+        await asyncio.wait_for(entered.wait(), _WAIT_S)
+        transport.stream_id = "MZ-replacement"
+        release.set()
+        with pytest.raises(DTMFPlaybackCancelled) as excinfo:
+            await asyncio.wait_for(playing, _WAIT_S)
+    assert "7" not in str(excinfo.value)
+    kinds = transport.kinds()
+    assert "fence" not in kinds
+    assert "begin" not in kinds
+    assert "tone" not in kinds
+
+
+@pytest.mark.parametrize("replaced", [True, False], ids=["replaced", "same-stream"])
+async def test_stream_replacement_during_the_fence_sends_no_tone(replaced: bool) -> None:
+    transport = _StreamGuardTransport()
+    async with _session(transport) as session:
+        playing = asyncio.create_task(session.play_dtmf_tones("7"))
+        await asyncio.wait_for(transport.fence_started.wait(), _WAIT_S)
+        if replaced:
+            transport.stream_id = "MZ-replacement"
+        transport.fence_release.set()
+        if replaced:
+            with pytest.raises(DTMFPlaybackCancelled):
+                await asyncio.wait_for(playing, _WAIT_S)
+        else:
+            await asyncio.wait_for(playing, _WAIT_S)
+    kinds = transport.kinds()
+    if replaced:
+        assert "begin" not in kinds
+        assert "tone" not in kinds
+    else:
+        assert decode_dtmf(transport.tone_pcm()) == "7"
+
+
+async def test_inline_delivery_report_does_not_inflate_tone_pacing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A frame reported delivered inside ``send_audio`` is not counted as queued."""
+    # Keep a regression fast: a stall would otherwise wait 2 s per frame.
+    monkeypatch.setattr("easycat.session._audio_router._TONE_PACING_STALL_S", 0.01)
+    transport = _ReportingTransport()
+    session = _session(transport)
+    transport.bus = session.event_bus
+    stalls = 0
+    async with session:
+        router = session._audio_router
+        original_wait = router._tone_progress.wait
+
+        async def counting_wait() -> bool:
+            nonlocal stalls
+            stalls += 1
+            return await original_wait()
+
+        router._tone_progress.wait = counting_wait  # type: ignore[method-assign]
+        # Four keys at the default timing is well over the 500 ms pacing window.
+        await session.play_dtmf_tones("1234")
+        assert router._tone_ms_in_flight == 0.0
+    assert stalls == 0
+    assert decode_dtmf(transport.tone_pcm()) == "1234"
 
 
 async def test_predicate_is_ignored_once_the_first_frame_is_sent() -> None:

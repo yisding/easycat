@@ -700,6 +700,15 @@ class _TwilioProtocolMixin:
         """Inbound ``dtmf`` events dropped as likely echo of EasyCat's own tones."""
         return self._suppressed_inbound_dtmf
 
+    def protected_playback_stream_id(self) -> str | None:
+        """Return the ``streamSid`` of the active stream, or ``None``.
+
+        The session binds an in-band DTMF burst to this identity when the
+        burst is submitted, and calls the burst off before any fence or tone
+        if a replacement stream became active while it waited.
+        """
+        return self._stream_sid
+
     async def wait_playout_fence(self, *, timeout_s: float) -> bool:
         """Send a fence mark and wait for Twilio to echo it.
 
@@ -823,7 +832,7 @@ class _TwilioProtocolMixin:
                     waiter.set_result(False)
             for guard in list(self._dtmf_guards):
                 self._drop_guard(guard, "disconnected")
-            self._hold_released.set()
+            self._open_hold_unless_releasing()
             return
         if not isinstance(token, _ProtectedGuard) or token.owner is not self:
             logger.debug("Ignoring abort for an unknown Twilio protected-playback token")
@@ -855,6 +864,18 @@ class _TwilioProtocolMixin:
             self._dtmf_guards.remove(guard)
         self._finish_guard(guard, outcome)
         if not self._dtmf_guards:
+            self._open_hold_unless_releasing()
+
+    def _open_hold_unless_releasing(self) -> None:
+        """Wake held audio unless a deferred clear is being written.
+
+        While :meth:`_release_guards` writes a clear it owns the hold: it loops
+        over any clear deferred meanwhile and opens the hold only after the
+        last one is on the wire. Opening it here instead would let held sends
+        overtake that clear, and leave them polling an already-set event that
+        never yields to the task finishing the write.
+        """
+        if not self._dtmf_releasing:
             self._hold_released.set()
 
     def _expire_guard(self, guard: _ProtectedGuard) -> None:
@@ -1014,6 +1035,9 @@ class _TwilioProtocolMixin:
                     await asyncio.wait_for(self._hold_released.wait(), max(0.0, remaining))
                 continue
             if self._dtmf_releasing:
+                # The releaser opens the hold once its last clear is written;
+                # never wait on an already-set event, which would not yield.
+                self._hold_released.clear()
                 await self._hold_released.wait()
                 continue
             await self._release_guards()

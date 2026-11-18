@@ -791,6 +791,62 @@ class TestIVRDTMFDelivery:
             nav.stop()
 
 
+class TestSenderAsyncContract:
+    async def test_navigator_names_a_non_awaitable_send_dtmf_with_retry(self) -> None:
+        class _SyncSender:
+            def send_dtmf_with_retry(self, digits: str, *, should_continue: Any = None) -> bool:
+                return True
+
+            async def send_speech(self, text: str) -> bool:
+                return True
+
+        bus = EventBus(handler_error_policy="raise")
+
+        async def press_one(ctx: dict) -> dict:
+            return {"action": "dtmf", "digits": "1"}
+
+        nav = IVRNavigator(bus, agent_callback=press_one, dtmf_delivery=_SyncSender())
+        nav.start()
+        nav.activate()
+        try:
+            with pytest.raises(TypeError, match=r"send_dtmf_with_retry\(\) must be async"):
+                await bus.emit(STTFinal(text="Press 1 for sales"))
+        finally:
+            nav.stop()
+
+    async def test_a_wrapper_returning_a_coroutine_still_works(self) -> None:
+        sent: list[str] = []
+
+        class _WrappedSender:
+            def send_dtmf_with_retry(self, digits: str, *, should_continue: Any = None) -> Any:
+                async def run() -> bool:
+                    sent.append(digits)
+                    return True
+
+                return run()
+
+            async def send_speech(self, text: str) -> bool:
+                return True
+
+        bus = EventBus(handler_error_policy="raise")
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+
+        async def press_one(ctx: dict) -> dict:
+            return {"action": "dtmf", "digits": "1"}
+
+        nav = IVRNavigator(bus, agent_callback=press_one, dtmf_delivery=_WrappedSender())
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+        finally:
+            nav.stop()
+
+        assert sent == ["1"]
+        assert not [a for a in actions if a.type == IVRActionType.SPEAK]
+
+
 class _FakeMediaOutput:
     """Stand-in for ``SessionMediaOutput`` recording tone and speech calls."""
 
@@ -862,6 +918,33 @@ class TestInBandDTMFDelivery:
         assert copy._inter_digit_delay_ms == 200
         assert copy._wait_for_playback is True
         assert copy._ack_timeout_margin_s == 2.5
+
+    async def test_clone_keeps_a_subclass_and_its_overrides(self) -> None:
+        class _StarRejectingDelivery(InBandDTMFDelivery):
+            def __init__(self, *, blocked: str, **kwargs: Any) -> None:
+                super().__init__(**kwargs)
+                self.blocked = blocked
+
+            async def send_dtmf_with_retry(
+                self, digits: str, *, should_continue: Any = None
+            ) -> bool:
+                if self.blocked in digits:
+                    return False
+                return await super().send_dtmf_with_retry(digits, should_continue=should_continue)
+
+        template = _StarRejectingDelivery(blocked="*", inter_digit_delay_ms=200)
+        template.bind_output(_FakeMediaOutput())  # type: ignore[arg-type]
+
+        copy = template.clone()
+
+        assert type(copy) is _StarRejectingDelivery
+        assert copy.blocked == "*" and copy._inter_digit_delay_ms == 200
+        assert copy.bound is False and template.bound is True
+        output = _FakeMediaOutput()
+        copy.bind_output(output)  # type: ignore[arg-type]
+        assert await copy.send_dtmf_with_retry("*1") is False
+        assert await copy.send_dtmf_with_retry("1") is True
+        assert [digits for digits, _ in output.tone_calls] == ["1"]
 
     async def test_accepted_tones_return_true_without_waiting(
         self, monkeypatch: pytest.MonkeyPatch

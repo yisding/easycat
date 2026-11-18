@@ -24,7 +24,7 @@ import logging
 import math
 import os
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from easycat import _observability as observability
 from easycat._audio_utils import resample_chunk
@@ -112,6 +112,8 @@ jitter-buffer pre-roll, so a burst shorter than the pre-roll still plays.
 """
 
 _DTMF_MARK_PREFIX = "easycat_dtmf_"
+# A burst on a transport that cannot name its active stream is not bound to one.
+_NO_STREAM_BINDING: Final = object()
 # How long after a tone frame's nominal playout drained AEC reference captures
 # stay masked under "pii" redaction: covers device/playout buffering between
 # the delivery report and the frame reaching the reference queue.
@@ -775,6 +777,11 @@ class AudioRouter:
         is armed and :class:`~easycat._dtmf_tones.DTMFPlaybackCancelled` is
         raised.  Once the first frame is sent the predicate is ignored, so a
         started burst keeps its protection.
+
+        The burst is bound to the stream active when this method is called,
+        when the transport names it (``protected_playback_stream_id()``): if a
+        replacement stream is active at either check above, the burst is
+        called off the same way, before any fence or frame reaches it.
         """
         if not chunks:
             raise ValueError("A protected sequence needs at least one audio chunk")
@@ -783,6 +790,9 @@ class AudioRouter:
             raise ValueError("fence_timeout_s must be a positive finite number")
         if not math.isfinite(guard_margin_s) or guard_margin_s < 0:
             raise ValueError("guard_margin_s must be a non-negative finite number")
+        # Bind the burst to the stream active now: it may wait behind an earlier
+        # burst or queued speech while the transport accepts a replacement.
+        bound_stream = self._protected_playback_stream()
         task: asyncio.Task[DTMFTonePlayback] = self._runtime_scope.create_task(
             self._DTMF_SEND_TASK_NAME,
             self._send_protected_sequence_owned(
@@ -792,6 +802,7 @@ class AudioRouter:
                 fence_timeout_s=fence_timeout_s,
                 guard_margin_s=guard_margin_s,
                 should_continue=should_continue,
+                bound_stream=bound_stream,
             ),
         )
         self._dtmf_task_budgets[task] = (
@@ -800,6 +811,37 @@ class AudioRouter:
         task.add_done_callback(_consume_dtmf_task_result)
         task.add_done_callback(self._forget_dtmf_task)
         return await asyncio.shield(task)
+
+    def _protected_playback_stream(self) -> object:
+        """Identity of the protected-playback transport's active stream.
+
+        Read through the optional ``protected_playback_stream_id()`` hook of a
+        :class:`~easycat.runtime.capabilities.ProtectedPlayback` transport.
+        Returns :data:`_NO_STREAM_BINDING` when the transport has no such hook
+        (the burst is then not bound to a stream), or when the hook raises.
+        """
+        probe = getattr(self._transport, "protected_playback_stream_id", None)
+        if protected_playback(self._transport) is None or not callable(probe):
+            return _NO_STREAM_BINDING
+        try:
+            return probe()
+        except Exception:
+            logger.debug("Failed to read the protected-playback stream", exc_info=True)
+            return _NO_STREAM_BINDING
+
+    def _raise_if_protected_stream_changed(self, bound_stream: object) -> None:
+        """Call a burst off when its stream was replaced before the first frame.
+
+        A burst waits for earlier bursts and queued speech before it sends a
+        fence or a tone; if the transport accepted a replacement stream
+        meanwhile, the key sequence must not be pressed on that stream.
+        """
+        if bound_stream is _NO_STREAM_BINDING:
+            return
+        if self._protected_playback_stream() != bound_stream:
+            raise DTMFPlaybackCancelled(
+                "In-band DTMF burst cancelled: the media stream changed before any tone was sent"
+            )
 
     def _forget_dtmf_task(self, task: asyncio.Task[Any]) -> None:
         """Drop a finished burst's stop budget."""
@@ -814,6 +856,7 @@ class AudioRouter:
         fence_timeout_s: float,
         guard_margin_s: float,
         should_continue: Callable[[], bool] | None = None,
+        bound_stream: object = _NO_STREAM_BINDING,
     ) -> DTMFTonePlayback:
         """Scope-owned body of :meth:`send_protected_sequence`."""
         async with self._dtmf_lock:
@@ -821,6 +864,7 @@ class AudioRouter:
             try:
                 await self.await_drain()
                 _raise_if_dtmf_cancelled(should_continue)
+                self._raise_if_protected_stream_changed(bound_stream)
                 async with self._outbound_send_lock:
                     guard = protected_playback(self._transport)
                     fenced = False
@@ -832,6 +876,7 @@ class AudioRouter:
                     # Last chance to call the burst off: nothing is sent and no
                     # guard is armed yet, and no await follows before arming.
                     _raise_if_dtmf_cancelled(should_continue)
+                    self._raise_if_protected_stream_changed(bound_stream)
                     if guard is not None:
                         # No await between arming the guard and the first frame:
                         # a clear issued from here on is deferred past the tones.
@@ -907,17 +952,26 @@ class AudioRouter:
     async def _send_tone_chunk(self, chunk: AudioChunk) -> None:
         """Deliver one tone frame (caller holds the outbound send lock)."""
         self._claim_outbound_send()
+        reporting = self._transport_reports_audio_delivery
+        # Book the frame before the transport sees it: a reporting transport
+        # may report it delivered before ``send_audio`` returns, and that
+        # report must find the frame already counted as in flight.
+        if reporting:
+            self._tone_ms_in_flight += chunk.duration_ms
+        accepted = False
         try:
             bind_turn(None)
             self._stamp_outbound_chunk(chunk, None)
             delivered = await self._transport_stage.execute(chunk, self._run_ctx, self._no_turn)
             if not delivered:
                 raise RuntimeError("transport rejected DTMF audio")
-            if self._transport_reports_audio_delivery:
-                self._tone_ms_in_flight += chunk.duration_ms
-            else:
+            accepted = True
+            if not reporting:
                 await self._deliver_tone_chunk(chunk)
         finally:
+            if reporting and not accepted:
+                # Return only this frame's booking; earlier frames stay queued.
+                self._tone_ms_in_flight = max(0.0, self._tone_ms_in_flight - chunk.duration_ms)
             await self._finish_outbound_send(replayed_chunk=False)
 
     async def _pace_tone_submission(self) -> None:
@@ -1201,8 +1255,10 @@ class AudioRouter:
         waiter = self._dtmf_mark_waiters.pop(event.mark_name, None)
         if waiter is not None:
             # In-band DTMF completion mark on a mark-only transport: tone
-            # marks never carry turn byte positions, so stop here.
-            self._resolve_dtmf(waiter, "played")
+            # marks never carry turn byte positions, so stop here.  A mark the
+            # transport retired itself (a clear, stop or close discarded what
+            # was queued before it) confirms nothing, so it is not "played".
+            self._resolve_dtmf(waiter, "disconnected" if event.retired else "played")
             return
         turn = self._current_turn()
         if not turn:

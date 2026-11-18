@@ -47,13 +47,23 @@ class ProtectedPlayback(Protocol):
 
     The expected call order is::
 
-        await t.wait_playout_fence(timeout_s=...)     # earlier audio played out
+        # True: earlier audio left the buffer (played or discarded by a clear);
+        # False: timed out, so earlier audio may still be queued.
+        await t.wait_playout_fence(timeout_s=...)
         token = t.begin_protected_playback(max_duration_s=...)  # no await between
         ...send frames tagged with ``PROTECTED_PLAYBACK_CHUNK_ATTR = token``...
         done = await t.end_protected_playback(token)  # resolves on far-end ack
 
     ``abort_protected_playback`` releases the guard early (a rejected frame, or
     a forced session stop).
+
+    A transport may also implement the OPTIONAL synchronous hook
+    ``protected_playback_stream_id() -> object | None``, which returns the
+    identity of the active stream (``None`` when no stream is active). It is
+    not part of the required hooks checked by :func:`protected_playback`. When
+    present, a burst is cancelled before any fence or frame if the identity
+    changes between submission and arming the guard, so a burst queued behind
+    earlier audio is never pressed on a replacement stream.
     """
 
     async def wait_playout_fence(self, *, timeout_s: float) -> bool:
@@ -83,7 +93,14 @@ class ProtectedPlayback(Protocol):
         self,
         token: object,
     ) -> asyncio.Future[DTMFPlaybackOutcome]:
-        """Mark the end of the sequence; the future resolves when it was played."""
+        """Mark the end of the sequence and return a future for its outcome.
+
+        The future resolves ``"played"`` once the far end acknowledges the
+        whole sequence. It can also resolve with a non-played outcome:
+        ``"timeout"`` when the guard's *max_duration_s* deadline passes first,
+        or ``"disconnected"`` when the end marker cannot be sent, the stream
+        ends or is replaced, or the guard is aborted.
+        """
         ...
 
     def abort_protected_playback(self, token: object | None) -> None:

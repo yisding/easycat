@@ -106,7 +106,11 @@ unrelated event type. Keep the returned subscription and call its idempotent
   returns pending marks when a `clear` discards buffered audio, for example
   a barge-in while a DTMF fence is pending. It also fires for the marks
   EasyCat sends around in-band DTMF tones (`easycat_dtmf_fence_N` before a
-  burst, `easycat_dtmf_N` after it), which belong to no turn.
+  burst, `easycat_dtmf_N` after it), which belong to no turn. It also fires
+  when a transport retires a pending mark locally with no far-end response
+  (Telnyx after a `clear`, a stream stop, or a close); such events carry
+  `retired=True`. EasyCat reports an in-band DTMF burst whose completion mark
+  was retired as `"disconnected"`, not `"played"`.
 
 ### Agent Tools
 

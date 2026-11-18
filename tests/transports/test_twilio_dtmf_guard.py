@@ -191,6 +191,15 @@ async def _fence(transport: TwilioAny, ws: _RecordingTwilioWebSocket) -> None:
     assert await waiting is True
 
 
+def _expire_now(transport: TwilioAny, guard: object) -> None:
+    """Fire *guard*'s expiry timer now, under test control instead of wall time."""
+    assert isinstance(guard, _ProtectedGuard)
+    assert guard.timer is not None
+    guard.timer.cancel()
+    guard.deadline = asyncio.get_running_loop().time()
+    transport._expire_guard(guard)
+
+
 @pytest.mark.parametrize("kind", _KINDS)
 class TestTwilioProtectedPlayback:
     async def test_capability_is_exposed(self, kind: str) -> None:
@@ -597,14 +606,19 @@ class TestTwilioProtectedPlayback:
     ) -> None:
         """Speech queued after the tones is cleared at expiry, not on the next send."""
         transport, ws = await _started(kind)
-        token = transport.begin_protected_playback(max_duration_s=0.05)
+        # A long guard cannot expire during setup; the test expires it below.
+        token = transport.begin_protected_playback(max_duration_s=30.0)
+        assert isinstance(token, _ProtectedGuard)
         await _send_all(transport, _tone_frames("7", token))
         done = await transport.end_protected_playback(token)
         assert await transport.send_audio(_speech_chunk()) is True
         await transport.clear_audio()  # barge-in, deferred behind the guard
         assert ws.kinds()[-1] == "media"
 
-        await asyncio.sleep(0.1)  # the guard's timer fires; nothing else is sent
+        _expire_now(transport, token)  # the guard's timer fires; nothing else is sent
+        release = transport._dtmf_release_task
+        assert release is not None
+        await asyncio.wait_for(release, timeout=1.0)
 
         assert done.result() == "timeout"
         assert ws.kinds() == ["media", "mark:easycat_dtmf_1", "media", "clear"]
@@ -617,14 +631,14 @@ class TestTwilioProtectedPlayback:
     ) -> None:
         """A clear request stays bound to the stream active when it began."""
         transport, ws = await _started(kind)
-        token = transport.begin_protected_playback(max_duration_s=0.05)
+        token = transport.begin_protected_playback(max_duration_s=30.0)
         assert isinstance(token, _ProtectedGuard)
         await transport.clear_audio()  # deferred behind the guard
         # The deadline passes before the guard's timer runs, so the next
         # clear request expires the guard and writes its deferred clear.
         assert token.timer is not None
         token.timer.cancel()
-        await asyncio.sleep(0.08)
+        token.deadline = asyncio.get_running_loop().time() - 1.0
         ws.gate_event = "clear"
         clearing = asyncio.create_task(transport.clear_audio())
         await asyncio.wait_for(ws.gate_reached.wait(), timeout=1.0)
@@ -635,6 +649,50 @@ class TestTwilioProtectedPlayback:
 
         assert ws.events() == [("clear", "MZ1")]
         assert token.future.result() == "timeout"
+
+    async def test_guard_expiring_during_a_deferred_clear_write_keeps_the_hold(
+        self,
+        kind: str,
+    ) -> None:
+        """A second expiry while the first clear is on the wire must not open the hold."""
+        transport, ws = await _started(kind)
+        first = transport.begin_protected_playback(max_duration_s=30.0)
+        assert isinstance(first, _ProtectedGuard)
+        await transport.clear_audio()  # deferred behind the first guard
+        ws.gate_event = "clear"
+        _expire_now(transport, first)  # its deferred clear write now suspends
+        await asyncio.wait_for(ws.gate_reached.wait(), timeout=1.0)
+
+        second = transport.begin_protected_playback(max_duration_s=30.0)
+        assert isinstance(second, _ProtectedGuard)
+        await transport.clear_audio()  # deferred behind the second guard
+        _expire_now(transport, second)
+        # The first clear is still being written: the releaser owns the hold.
+        assert not transport._hold_released.is_set()
+        assert transport._clear_deferred
+        ticks = 0
+
+        async def ticker() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0)
+                ticks += 1
+
+        ticking = asyncio.create_task(ticker())
+        held = asyncio.create_task(transport.send_audio(_speech_chunk()))
+        await _settle()
+        # The loop keeps running while the send is held behind both clears.
+        assert ticks >= 3
+        assert not held.done()
+
+        ws.gate_open.set()
+        assert await asyncio.wait_for(held, timeout=1.0) is True
+        ticking.cancel()
+
+        assert second.future.result() == "timeout"
+        assert ws.kinds() == ["clear", "clear", "media"]
+        assert not transport._clear_deferred
+        assert transport._hold_released.is_set()
 
     async def test_tagged_frames_after_replacement_start_are_rejected(self, kind: str) -> None:
         """gh 1103: an aborted burst's remaining frames never reach the new stream."""
@@ -722,3 +780,92 @@ def test_protected_playback_lookup_requires_every_hook() -> None:
     assert protected_playback(None) is None
     assert protected_playback(object()) is None
     assert protected_playback(_Partial()) is None
+
+
+# ── Burst bound to the stream it was submitted on ────────────
+
+
+@pytest.mark.parametrize("kind", _KINDS)
+async def test_stream_id_hook_tracks_the_active_stream(kind: str) -> None:
+    transport, _ws = await _started(kind)
+
+    assert transport.protected_playback_stream_id() == "MZ1"
+    await transport._handle_message(_start_msg("MZ2", "CA2"))
+    assert transport.protected_playback_stream_id() == "MZ2"
+    await transport._handle_message(_stop_msg("MZ2"))
+    assert transport.protected_playback_stream_id() is None
+
+
+class _StreamingTwilioWebSocket(_RecordingTwilioWebSocket):
+    """Recording socket whose inbound side is a queue the test feeds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.inbound: asyncio.Queue[str | None] = asyncio.Queue()
+
+    def __aiter__(self) -> _StreamingTwilioWebSocket:
+        return self
+
+    async def __anext__(self) -> str:
+        raw = await self.inbound.get()
+        if raw is None:
+            raise StopAsyncIteration
+        return raw
+
+
+def _signal_handled_messages(transport: TwilioAny) -> asyncio.Queue[None]:
+    """Return a queue that receives one item per inbound message handled."""
+    handled: asyncio.Queue[None] = asyncio.Queue()
+    original = transport._handle_message
+
+    async def handle(raw: Any) -> None:
+        await original(raw)
+        handled.put_nowait(None)
+
+    transport._handle_message = handle  # type: ignore[method-assign]
+    return handled
+
+
+async def test_burst_queued_behind_speech_is_never_sent_on_a_replacement_stream() -> None:
+    """A replacement ``start`` while a burst waits for speech gets no fence or tone."""
+    from easycat._dtmf_tones import DTMFPlaybackCancelled
+    from easycat.session._session import Session
+    from tests.session._session_core_helpers import _full_config, _make_chunk
+
+    ws = _StreamingTwilioWebSocket()
+    transport = TwilioConnectionTransport(ws)  # type: ignore[arg-type]
+    handled = _signal_handled_messages(transport)
+    ws.inbound.put_nowait(_start_msg("MZ1", "CA1"))
+    async with Session(_full_config(transport=transport, enable_vad=False)) as session:
+        await asyncio.wait_for(handled.get(), 5.0)
+        assert transport.stream_sid == "MZ1"
+        router = session._audio_router
+        # Queued speech blocks mid-write on the old stream, so the burst
+        # waits behind it in the drain.
+        ws.gate_event = "media"
+        await router.queue_outbound(_make_chunk())
+        await asyncio.wait_for(ws.gate_reached.wait(), 5.0)
+        drain_entered = asyncio.Event()
+        original_drain = router.await_drain
+
+        async def observed_drain(*args: Any, **kwargs: Any) -> Any:
+            drain_entered.set()
+            return await original_drain(*args, **kwargs)
+
+        router.await_drain = observed_drain
+        playing = asyncio.create_task(session.play_dtmf_tones("7"))
+        await asyncio.wait_for(drain_entered.wait(), 5.0)
+
+        ws.inbound.put_nowait(_start_msg("MZ2", "CA2"))
+        await asyncio.wait_for(handled.get(), 5.0)
+        assert transport.stream_sid == "MZ2"
+        ws.gate_open.set()
+
+        with pytest.raises(DTMFPlaybackCancelled):
+            await asyncio.wait_for(playing, 5.0)
+        ws.inbound.put_nowait(None)
+
+    marks = [detail for event, detail in ws.events() if event == "mark"]
+    assert not any(name.startswith("easycat_dtmf") for name in marks)
+    assert not any(sid == "MZ2" for event, sid in ws.events() if event != "mark")
+    assert decode_dtmf(ws.media_pcm()) == ""

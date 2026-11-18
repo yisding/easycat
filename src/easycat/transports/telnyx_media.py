@@ -920,11 +920,13 @@ class _TelnyxProtocolMixin:
             )
 
     async def _expire_pending_marks(self) -> None:
-        """Acknowledge outstanding marks locally after a clear/stop/close.
+        """Retire outstanding marks locally after a clear/stop/close.
 
         Telnyx under-documents whether queued marks echo after ``clear``;
         playback bookkeeping must not depend on it. Expiring locally keeps
-        barge-in tracking correct even if acks never arrive.
+        barge-in tracking correct even if acks never arrive. Each expired mark
+        is emitted with ``retired=True``: no far-end response proves the audio
+        before it was played.
         """
         if not self._pending_marks:
             return
@@ -935,7 +937,11 @@ class _TelnyxProtocolMixin:
             return
         for mark_name in expired:
             await bus.emit(
-                PlaybackMarkAck(mark_name=mark_name, session_id=self._easycat_session_id)
+                PlaybackMarkAck(
+                    mark_name=mark_name,
+                    session_id=self._easycat_session_id,
+                    retired=True,
+                )
             )
 
     def _claim_call_ended(self) -> _TelnyxCallEnd | None:

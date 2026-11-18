@@ -365,6 +365,26 @@ async def _agent_presses_one(_context: dict[str, object]) -> dict[str, str]:
     return {"action": "dtmf", "digits": "1"}
 
 
+@pytest.mark.asyncio
+async def test_ivr_callback_coordinator_names_a_non_awaitable_send_speech() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    state_machine = Mock(state=OutboundCallState.IVR, call_sid="CA123")
+    delivery = Mock(call_sid="")
+    delivery.send_speech = Mock(return_value=True)
+    coordinator = _IVRCallbackCoordinator(
+        bus,
+        state_machine,  # type: ignore[arg-type]
+        Mock(),  # type: ignore[arg-type]
+        delivery,  # type: ignore[arg-type]
+    )
+    coordinator.start()
+    try:
+        with pytest.raises(TypeError, match=r"send_speech\(\) must be async"):
+            await bus.emit(IVRAction(type=IVRActionType.SPEAK, text="one moment"))
+    finally:
+        coordinator.stop()
+
+
 class _CustomSender:
     async def send_dtmf_with_retry(self, digits: str, *, should_continue: Any = None) -> bool:
         return True
@@ -587,3 +607,24 @@ async def test_custom_sender_with_read_only_call_sid_still_resets_the_navigator(
 
 def test_resolution_matrix_is_exposed_for_reuse() -> None:
     assert resolve_ivr_dtmf_delivery(_ivr_config()) is None
+
+
+class _AllowListDelivery(InBandDTMFDelivery):
+    """An in-band sender whose override must survive the per-session copy."""
+
+    async def send_dtmf_with_retry(self, digits: str, *, should_continue: Any = None) -> bool:
+        if digits != "1":
+            return False
+        return await super().send_dtmf_with_retry(digits, should_continue=should_continue)
+
+
+@pytest.mark.parametrize("mode", ["auto", "in_band"])
+def test_in_band_template_subclass_is_copied_per_session_with_its_class(mode: str) -> None:
+    template = _AllowListDelivery()
+    config = _ivr_config(ivr_dtmf_delivery=template, ivr_dtmf_mode=mode)
+
+    first = resolve_ivr_dtmf_delivery(config)
+    second = resolve_ivr_dtmf_delivery(config)
+
+    assert type(first) is _AllowListDelivery and type(second) is _AllowListDelivery
+    assert first is not template and second is not template and first is not second

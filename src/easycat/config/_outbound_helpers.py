@@ -21,6 +21,7 @@ from easycat.telephony.ivr import (
     IVRActionType,
     IVRDTMFSender,
     IVRNavigator,
+    _await_ivr_sender_call,
 )
 from easycat.telephony.number_health import CallDispositionTracker, NumberHealthMonitor
 from easycat.telephony.outbound import OutboundCallManager
@@ -129,7 +130,7 @@ class _IVRCallbackCoordinator:
         elif event.type == IVRActionType.HANGUP:
             await self._transition_from_ivr(OutboundCallState.ENDED)
         elif event.type == IVRActionType.SPEAK and self._delivery is not None:
-            await self._delivery.send_speech(event.text)
+            await _await_ivr_sender_call(self._delivery.send_speech(event.text), "send_speech")
 
     async def _transition_from_ivr(self, target: OutboundCallState) -> None:
         if self._state_machine.state == OutboundCallState.IVR:

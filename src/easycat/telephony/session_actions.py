@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 
 from easycat._dtmf_tones import DTMFToneConfig, dtmf_sequence_duration_ms
-from easycat._numeric import is_finite_number
+from easycat._numeric import is_finite_number, is_finite_real
 from easycat.session.actions import (
     MAX_DTMF_INTER_DIGIT_DELAY_MS,
     EndCallAction,
@@ -33,10 +33,11 @@ TwilioDTMFMode = Literal["rest", "in_band", "auto"]
 * ``"in_band"``: ITU-T Q.23 tones on the live media stream through
   ``Session.play_dtmf_tones``; the session keeps running. Fails closed when the
   session cannot play tones.
-* ``"auto"``: in-band when the session can play tones, else REST with a
-  warning. It falls back to REST only when in-band playback is known not to
-  have started: the session has no ``play_dtmf_tones``, or the sequence is
-  longer than the tone config's ``max_total_ms``. An error raised by in-band
+* ``"auto"``: in-band when the session has a callable ``play_dtmf_tones``,
+  else REST with a warning. It falls back to REST only when in-band playback
+  is known not to have started: the session has no callable
+  ``play_dtmf_tones``, or the sequence is longer than the tone config's
+  ``max_total_ms``. An error raised by in-band
   playback itself propagates without a REST retry, because tone frames may
   already have been sent.
 """
@@ -189,7 +190,7 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
         try:
             duration_ms = dtmf_sequence_duration_ms(
                 action.digits,
-                inter_digit_delay_ms=action.inter_digit_delay_ms,
+                inter_digit_delay_ms=_tone_delay_ms(action.inter_digit_delay_ms),
                 config=tones,
             )
         except (TypeError, ValueError):
@@ -228,9 +229,10 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
         action: SendDTMFAction,
     ) -> SessionActionResult:
         config = self._config
+        inter_digit_delay_ms = _tone_delay_ms(action.inter_digit_delay_ms)
         playback = await play(
             action.digits,
-            inter_digit_delay_ms=action.inter_digit_delay_ms,
+            inter_digit_delay_ms=inter_digit_delay_ms,
             tone_config=config.dtmf_tones,
             fence_timeout_s=config.dtmf_fence_timeout_s,
         )
@@ -259,7 +261,7 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
                 "duration_ms": playback.duration_ms,
                 "playback_mark": playback.mark_name,
                 "playback": outcome,
-                "inter_digit_delay_ms": action.inter_digit_delay_ms,
+                "inter_digit_delay_ms": inter_digit_delay_ms,
             },
         )
 
@@ -296,6 +298,20 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
     async def close(self) -> None:
         """Release no shared resources; present for executor lifecycle parity."""
         return
+
+
+def _tone_delay_ms(inter_digit_delay_ms: int) -> int:
+    """Round a numeric ``SendDTMFAction`` delay to the int the tone renderer takes.
+
+    ``SendDTMFAction`` checks only the delay's range, so ``1000.0`` is a valid
+    action that the REST path already rounds. Normalize it the same way for
+    the in-band path (and the ``auto`` length check) instead of letting the
+    renderer reject it. Booleans and non-numbers pass through so the renderer
+    still rejects them.
+    """
+    if isinstance(inter_digit_delay_ms, int) or not is_finite_real(inter_digit_delay_ms):
+        return inter_digit_delay_ms
+    return round(float(inter_digit_delay_ms))
 
 
 def _apply_inter_digit_delay(digits: str, inter_digit_delay_ms: int) -> str:
