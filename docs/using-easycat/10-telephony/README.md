@@ -165,6 +165,12 @@ digits="...">`. `SendDTMFAction` applies a bounded inter-digit delay and
 rejects any digits outside `0-9`, `*`, `#`, `A-D`, and the `w`/`W` pause
 characters at construction, before XML rendering.
 
+On Twilio that update is terminal for the conversation. New TwiML replaces the
+call's executing `<Connect><Stream>`, so the media stream ends, and once the
+tones finish the call has no TwiML left and Twilio hangs up. Treat Twilio DTMF
+as a final hand-off, like transfer. Telnyx sends DTMF with a native Call
+Control command, which leaves the media stream running.
+
 Never concatenate model output into TwiML. Use the typed action and TwiML
 helpers, which validate or escape values.
 
@@ -212,8 +218,11 @@ from the transport's `call_control_id`, with `call_sid` as a fallback. It uses
 native Telnyx Call Control commands: `transfer`, `send_dtmf`, and `hangup`;
 SMS uses Telnyx's messaging endpoint.
 
-For both providers, transfer and hangup results request session stop, while
-SMS and DTMF results leave the session active. Treat tool success as the
+For both providers, transfer and hangup results request session stop and SMS
+results leave the session active. DTMF differs by provider: Telnyx leaves the
+session active, while Twilio requests session stop (with
+`media_stream_replaced: true` in the result metadata) because its call update
+ends the media stream. Treat tool success as the
 provider request being accepted, not proof that a human received the transfer;
 observe later status callbacks for the final disposition.
 

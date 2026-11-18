@@ -14,6 +14,11 @@ versioning contract that begins at 1.0.0 is documented in
 
 ### Fixed
 
+- `TwilioSessionActionExecutor` now requests session stop after a
+  `SendDTMFAction`. Twilio plays outbound DTMF by replacing the call's TwiML,
+  which ends the session's `<Connect><Stream>` media stream and then the call,
+  so the result no longer claims the session can keep talking. The result
+  metadata carries `media_stream_replaced: true`. Telnyx DTMF is unchanged.
 - `EasyConfig(mcp_servers=...)` raises `EasyConfigError` for a bare string,
   a non-iterable, or a non-string item, instead of a raw `AttributeError` or a
   misleading per-character URI error.
