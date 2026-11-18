@@ -171,9 +171,12 @@ The second path is the result itself. It never enters a stream
 Defend each path separately. For argument deltas, keep the
    streams separate at parse time. For the echoed result, use a
    deterministic defense: return a short plain-sentence summary from
-   the tool so the raw blob never enters `messages`, or add a custom
-   `LLMOutputProcessor` (via `output_processors`) that rejects or
-   rewrites JSON-looking text before TTS. A system-prompt instruction
+   the tool so the raw blob never enters `messages`, or validate the
+   text where `main.py` queues it for TTS. Check every streamed
+   sentence and the final reply for braces *and* the blob's markers,
+   and drop or replace any match before it is queued. (This chapter
+   queues replies itself and does not wire `output_processors`.)
+   A system-prompt instruction
    to speak results in plain sentences helps, but it cannot guarantee
    the no-leak check on its own.
    `MarkdownStripProcessor` is not a JSON defense: `strip_markdown`

@@ -363,11 +363,47 @@ async def test_playout_wait_is_bounded_when_preroll_never_fills(path: Path, monk
     class UnprimedTransport:
         """Two queued frames below the pre-roll threshold: playback never starts."""
 
-        def pending_playout_ms(self) -> float:
-            return 40.0
+        def __init__(self) -> None:
+            self.queued_ms = 40.0
+            self.clears = 0
 
+        def pending_playout_ms(self) -> float:
+            return self.queued_ms
+
+        async def clear_audio(self) -> None:
+            self.clears += 1
+            self.queued_ms = 0.0
+
+    transport = UnprimedTransport()
     extra = () if path.stem == "ignore" else (FakeCancel(),)
-    await asyncio.wait_for(module.wait_for_playout(UnprimedTransport(), *extra), timeout=1)
+    await asyncio.wait_for(module.wait_for_playout(transport, *extra), timeout=1)
+    # The stale frames are discarded, so a later reply cannot prime the
+    # queue and play them first.
+    assert transport.clears == 1
+    assert transport.pending_playout_ms() == 0
+
+
+@pytest.mark.parametrize("path", ALL_SCRIPTS, ids=lambda path: path.parent.name + "-" + path.stem)
+@pytest.mark.asyncio
+async def test_playout_wait_does_not_clear_audio_that_drained(path: Path, monkeypatch) -> None:
+    module = load_script(path)
+    monkeypatch.setattr(module, "PLAYOUT_POLL_S", 0)
+
+    class DrainingTransport:
+        def __init__(self) -> None:
+            self.pending = [40.0, 20.0, 0.0]
+            self.clears = 0
+
+        def pending_playout_ms(self) -> float:
+            return self.pending.pop(0)
+
+        async def clear_audio(self) -> None:
+            self.clears += 1
+
+    transport = DrainingTransport()
+    extra = () if path.stem == "ignore" else (FakeCancel(),)
+    await module.wait_for_playout(transport, *extra)
+    assert transport.clears == 0
 
 
 @pytest.mark.parametrize(

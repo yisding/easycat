@@ -222,17 +222,28 @@ async def wait_for_playout(transport, cancel: CancelToken) -> None:
     playing. There is no playout event to await, so poll the counter
     and the cancel token, which lets barge-in still cut the tail. A reply
     shorter than the transport pre-roll never starts playing, so the wait
-    is bounded by the queued duration plus a margin, as ``await_drain`` is.
+    is bounded by the queued duration plus a margin, as ``await_drain`` is;
+    audio still queued at the deadline is discarded so it cannot play at
+    the start of a later reply.
     """
     pending_playout_ms = getattr(transport, "pending_playout_ms", None)
     if pending_playout_ms is None:
         return
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + pending_playout_ms() / 1000 + PLAYOUT_MARGIN_S
-    while (  # noqa: ASYNC110
-        not cancel.is_cancelled and pending_playout_ms() > 0 and loop.time() < deadline
-    ):
+    remaining_ms = pending_playout_ms()
+    deadline = loop.time() + remaining_ms / 1000 + PLAYOUT_MARGIN_S
+    while not cancel.is_cancelled and remaining_ms > 0 and loop.time() < deadline:
         await asyncio.sleep(PLAYOUT_POLL_S)
+        remaining_ms = pending_playout_ms()
+    if not cancel.is_cancelled and remaining_ms > 0:
+        await discard_stale_playout(transport)
+
+
+async def discard_stale_playout(transport) -> None:
+    """Drop audio that missed its playout deadline (e.g. below the pre-roll)."""
+    clear_audio = getattr(transport, "clear_audio", None)
+    if clear_audio is not None:
+        await clear_audio()
 
 
 async def observe_bot_task(bot_task: asyncio.Task, journal, session_id: str) -> None:

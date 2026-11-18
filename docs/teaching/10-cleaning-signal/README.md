@@ -402,8 +402,8 @@ hearing.
          )
  
  
-@@ -233,14 +235,14 @@
-         await asyncio.sleep(PLAYOUT_POLL_S)
+@@ -244,14 +246,14 @@
+         await clear_audio()
  
  
 -async def observe_bot_task(bot_task: asyncio.Task, journal) -> None:
@@ -419,7 +419,7 @@ hearing.
              data={"stage": "coordinator", "error": repr(result)},
          )
  
-@@ -268,7 +270,7 @@
+@@ -279,7 +281,7 @@
          await close_if_supported(stt)
  
  
@@ -428,7 +428,7 @@ hearing.
      """Release both possible in-flight owners before shared providers close."""
      try:
          if stt is not None:
-@@ -279,35 +281,35 @@
+@@ -290,35 +292,35 @@
                  active_cancel.cancel()
              if not bot_task.done():
                  bot_task.cancel()
@@ -477,7 +477,7 @@ hearing.
          data={
              "stage": "interruption",
              "cancel_to_clear_audio_return_ms": (clear_returned_at - started_at) * 1000,
-@@ -315,54 +317,20 @@
+@@ -326,54 +328,20 @@
              "t_ms": bot_returned_at * 1000,
          },
      )
@@ -538,7 +538,7 @@ hearing.
              )
              if consumed:
                  continue
-@@ -380,42 +348,35 @@
+@@ -391,42 +359,35 @@
                  if not final_text.strip():
                      continue
                  print(f"  user: {final_text!r}")
@@ -593,7 +593,7 @@ hearing.
  
      def stt_factory():
          return create_stt_provider(
-@@ -430,9 +391,35 @@
+@@ -441,9 +402,35 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
  
@@ -630,7 +630,7 @@ hearing.
  
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
-@@ -441,19 +428,22 @@
+@@ -452,19 +439,22 @@
          )
          resources.push_async_callback(close_if_supported, tts)
  
