@@ -71,6 +71,10 @@ class AudioChunk:
     # re-chunk outbound audio copy it onto delivered chunks so the router can
     # keep tones out of turn accounting and mask them under PII redaction.
     _easycat_dtmf_tone: bool = field(default=False, repr=False, compare=False)
+    # Last frame of an in-band DTMF burst: a buffering transport may start
+    # playout below its jitter-buffer pre-roll so a short burst is not held
+    # until unrelated later audio arrives.
+    _easycat_dtmf_burst_end: bool = field(default=False, repr=False, compare=False)
 
     @property
     def num_samples(self) -> int:

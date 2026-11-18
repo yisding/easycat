@@ -12,7 +12,12 @@ from unittest.mock import patch
 
 import pytest
 
-from easycat._dtmf_tones import DTMFToneConfig, DTMFTonePlayback, count_dtmf_keys
+from easycat._dtmf_tones import (
+    DTMFToneConfig,
+    DTMFTonePlayback,
+    count_dtmf_keys,
+    dtmf_sequence_duration_ms,
+)
 from easycat.session.actions import (
     MAX_DTMF_INTER_DIGIT_DELAY_MS,
     EndCallAction,
@@ -433,6 +438,89 @@ async def test_auto_mode_falls_back_to_rest_with_a_warning(
 
 
 @pytest.mark.asyncio
+async def test_auto_mode_sends_an_over_long_sequence_over_rest(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A sequence the tone renderer would reject never reaches in-band playback."""
+    client = _FakeTwilioClient()
+    executor = TwilioSessionActionExecutor(
+        TwilioSessionActionConfig(client=client, dtmf_mode="auto")
+    )
+    session = _FakeToneSession()
+    digits = "1" * 56
+    duration_ms = dtmf_sequence_duration_ms(digits, inter_digit_delay_ms=1000)
+    assert duration_ms > DTMFToneConfig().max_total_ms
+
+    with caplog.at_level(logging.WARNING, logger="easycat.telephony.session_actions"):
+        result = await executor.execute(
+            session, SendDTMFAction(digits=digits, inter_digit_delay_ms=1000)
+        )
+
+    assert session.calls == []
+    assert result.stop_session is True
+    assert result.metadata["delivery"] == "rest"
+    assert len(client.calls.updater.updates) == 1
+    assert "falling back to REST" in caplog.text
+    assert digits not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_auto_mode_uses_the_configured_tone_limit() -> None:
+    tones = DTMFToneConfig(max_total_ms=600_000)
+    client = _FakeTwilioClient()
+    executor = TwilioSessionActionExecutor(
+        TwilioSessionActionConfig(client=client, dtmf_mode="auto", dtmf_tones=tones)
+    )
+    session = _FakeToneSession()
+
+    result = await executor.execute(
+        session, SendDTMFAction(digits="1" * 56, inter_digit_delay_ms=1000)
+    )
+
+    assert result.metadata["delivery"] == "in_band"
+    assert len(session.calls) == 1
+    assert client.calls.updater.updates == []
+
+
+@pytest.mark.asyncio
+async def test_auto_mode_does_not_retry_over_rest_after_a_play_error() -> None:
+    """Playback errors may follow sent frames, so auto never re-sends over REST."""
+
+    class _RejectingSession(_FakeToneSession):
+        async def play_dtmf_tones(self, digits: str, **kwargs: Any) -> DTMFTonePlayback:
+            raise RuntimeError("transport rejected DTMF audio")
+
+    client = _FakeTwilioClient()
+    executor = TwilioSessionActionExecutor(
+        TwilioSessionActionConfig(client=client, dtmf_mode="auto")
+    )
+
+    with pytest.raises(RuntimeError, match="transport rejected"):
+        await executor.execute(_RejectingSession(), SendDTMFAction(digits="1"))
+
+    assert client.calls.updater.updates == []
+
+
+@pytest.mark.asyncio
+async def test_in_band_mode_still_fails_closed_on_an_over_long_sequence() -> None:
+    class _RenderingSession(_FakeToneSession):
+        async def play_dtmf_tones(self, digits: str, **kwargs: Any) -> DTMFTonePlayback:
+            raise ValueError("DTMF sequence would last too long")
+
+    client = _FakeTwilioClient()
+    executor = TwilioSessionActionExecutor(
+        TwilioSessionActionConfig(client=client, dtmf_mode="in_band")
+    )
+
+    with pytest.raises(ValueError, match="too long"):
+        await executor.execute(
+            _RenderingSession(), SendDTMFAction(digits="1" * 56, inter_digit_delay_ms=1000)
+        )
+
+    assert client.calls.updater.updates == []
+
+
+@pytest.mark.asyncio
 async def test_in_band_dtmf_propagates_play_errors() -> None:
     class _RejectingSession(_FakeToneSession):
         async def play_dtmf_tones(self, digits: str, **kwargs: Any) -> DTMFTonePlayback:
@@ -493,6 +581,24 @@ def test_twilio_app_settings_dtmf_mode_env() -> None:
     assert actions is not None and actions.dtmf_mode == "in_band"
     with pytest.raises(RuntimeError, match="TWILIO_DTMF_MODE"):
         twilio_app_settings_from_env(environ={**env, "TWILIO_DTMF_MODE": "rfc2833"})
+
+
+@pytest.mark.parametrize(("mode", "configured"), [("in_band", True), ("auto", False)])
+def test_twilio_app_settings_in_band_mode_needs_no_rest_credentials(
+    mode: str, configured: bool
+) -> None:
+    env = {"TWILIO_STREAM_URL": "wss://voice.example.test/media", "TWILIO_DTMF_MODE": mode}
+
+    settings = twilio_app_settings_from_env(environ=env)
+    actions = settings.twilio_session_actions()
+
+    assert settings.twilio_actions_enabled is False
+    if not configured:
+        assert actions is None
+        return
+    assert actions is not None
+    assert actions.dtmf_mode == "in_band"
+    assert actions.account_sid == "" and actions.auth_token == ""
 
 
 def test_twilio_app_settings_dtmf_modes_match_the_executor() -> None:

@@ -621,6 +621,34 @@ class VoicemailDetectionConfig:
         return {"answering_machine_detection": telnyx_mode}
 
 
+def _accepts_ivr_sender_calls(delivery: object) -> bool:
+    """Whether *delivery*'s methods accept the calls :class:`IVRNavigator` makes.
+
+    A runtime-checkable protocol checks only that the attributes exist, so a
+    ``send_dtmf_with_retry(self, digits)`` without ``should_continue`` would
+    pass and then raise ``TypeError`` on the first key press. ``**kwargs``
+    implementations are accepted; a signature that cannot be inspected is
+    given the benefit of the doubt.
+    """
+    calls: tuple[tuple[str, tuple[object, ...], dict[str, object]], ...] = (
+        ("send_dtmf_with_retry", ("1",), {"should_continue": None}),
+        ("send_speech", ("text",), {}),
+    )
+    for name, args, kwargs in calls:
+        method = getattr(delivery, name, None)
+        if not callable(method):
+            return False
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            continue
+        try:
+            signature.bind(*args, **kwargs)
+        except TypeError:
+            return False
+    return True
+
+
 @dataclass
 class OutboundCallConfig:
     """Configuration for outbound call manager."""
@@ -662,9 +690,11 @@ class OutboundCallConfig:
     # as-is, and leaves ``None`` as emit-only. ``"in_band"`` always uses
     # in-band tones (Twilio only). ``"rest"`` keeps the supplied
     # ``DTMFDelivery``, whose REST ``<Play digits>`` update ends the stream.
+    # The two new fields are keyword-only so positional arguments written for
+    # the fields below (``enable_number_health`` onward) keep their meaning.
     ivr_dtmf_delivery: IVRDTMFSender | None = None
-    ivr_dtmf_mode: Literal["auto", "in_band", "rest"] = "auto"
-    ivr_dtmf_tones: DTMFToneConfig | None = None
+    ivr_dtmf_mode: Literal["auto", "in_band", "rest"] = field(default="auto", kw_only=True)
+    ivr_dtmf_tones: DTMFToneConfig | None = field(default=None, kw_only=True)
 
     # Observability / reliability extras.  All default to on — they're
     # pure event-bus listeners with no external dependencies and give
@@ -741,6 +771,11 @@ class OutboundCallConfig:
             if not isinstance(self.ivr_dtmf_tones, DTMFToneConfig):
                 raise EasyConfigError("ivr_dtmf_tones must be a DTMFToneConfig instance or None.")
         kind = self._validate_ivr_dtmf_delivery()
+        if kind == "in_band" and self.ivr_dtmf_tones is not None:
+            raise EasyConfigError(
+                "ivr_dtmf_tones cannot be combined with an InBandDTMFDelivery in "
+                "ivr_dtmf_delivery; set tone_config on the InBandDTMFDelivery instead."
+            )
         self._validate_ivr_dtmf_combination(
             mode,
             is_rest_delivery=kind == "rest",
@@ -756,10 +791,11 @@ class OutboundCallConfig:
         # config never loads the IVR runtime module.
         from easycat.telephony.ivr import DTMFDelivery, InBandDTMFDelivery, IVRDTMFSender
 
-        if not isinstance(delivery, IVRDTMFSender):
+        if not isinstance(delivery, IVRDTMFSender) or not _accepts_ivr_sender_calls(delivery):
             raise EasyConfigError(
-                "ivr_dtmf_delivery must provide async send_dtmf_with_retry() and "
-                "send_speech() (an IVRDTMFSender such as DTMFDelivery)."
+                "ivr_dtmf_delivery must provide async send_dtmf_with_retry(digits, *, "
+                "should_continue=None) and send_speech(text) (an IVRDTMFSender such "
+                "as DTMFDelivery)."
             )
         if isinstance(delivery, DTMFDelivery):
             return "rest"

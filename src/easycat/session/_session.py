@@ -30,6 +30,7 @@ from easycat._audio_utils import resample
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat._concurrency import RuntimeSupervisor
 from easycat._dtmf_tones import (
+    DTMFPlaybackCancelled,
     DTMFToneConfig,
     DTMFTonePlayback,
     count_dtmf_keys,
@@ -1325,6 +1326,7 @@ class Session:
         inter_digit_delay_ms: int = 0,
         tone_config: DTMFToneConfig | None = None,
         fence_timeout_s: float = 10.0,
+        should_continue: Callable[[], bool] | None = None,
     ) -> DTMFTonePlayback:
         """Play DTMF key presses as in-band audio tones on the live stream.
 
@@ -1340,15 +1342,28 @@ class Session:
         them (``"played"``, ``"timeout"``, ``"disconnected"``, or
         ``"estimated"`` when the transport cannot acknowledge playback).
 
+        *should_continue*, when given, is a synchronous predicate checked
+        after rendering, after queued speech has drained and after the
+        playout fence. If it returns ``False`` before the first tone frame is
+        sent, nothing is sent and
+        :class:`~easycat._dtmf_tones.DTMFPlaybackCancelled` (a
+        :class:`RuntimeError`) is raised. Once a frame is sent the burst
+        finishes regardless.
+
         Raises:
             RuntimeError: The session is not running, is stopping or closed,
-                runs in ``text_session`` mode, or the transport rejected a
-                tone frame.
+                runs in ``text_session`` mode, the transport rejected a tone
+                frame, or the call was awaited from an ``AudioOut``/``Error``
+                handler running on the outbound send path (the burst would
+                wait for the send lock that handler's task holds). From such
+                a handler, schedule the follow-up burst instead:
+                ``asyncio.create_task(session.play_dtmf_tones(...))``.
             ValueError: *digits*, *inter_digit_delay_ms* or *fence_timeout_s*
                 is invalid. Error messages never echo the digits.
             TypeError: An argument has the wrong type.
         """
         self._require_dtmf_output()
+        self._audio_router.reject_reentrant_protected_sequence()
         if (
             isinstance(fence_timeout_s, bool)
             or not isinstance(fence_timeout_s, (int, float))
@@ -1375,6 +1390,8 @@ class Session:
                 pcm = _convert_dtmf_pcm(pcm, target)
         # Rendering long bursts runs off-loop; re-check the lifecycle after.
         self._require_dtmf_output()
+        if should_continue is not None and not should_continue():
+            raise DTMFPlaybackCancelled("In-band DTMF burst cancelled before any tone was sent")
         frame_bytes = (target.sample_rate // _DTMF_FRAMES_PER_SECOND) * target.frame_size
         chunks: list[AudioChunk] = []
         for offset in range(0, len(pcm), frame_bytes):
@@ -1386,6 +1403,7 @@ class Session:
             key_count=key_count,
             duration_ms=duration_ms,
             fence_timeout_s=float(fence_timeout_s),
+            should_continue=should_continue,
         )
 
     def _require_dtmf_output(self) -> None:

@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from easycat._dtmf_tones import DTMFToneConfig
+from easycat._dtmf_tones import DTMFPlaybackCancelled, DTMFToneConfig
 from easycat._epoch import Epoch, Lease
 from easycat._numeric import is_finite_number
 from easycat.events import EventBus, IVRAction, IVRActionType, STTFinal
@@ -114,6 +114,10 @@ class IVRDTMFSender(Protocol):
     :class:`DTMFDelivery` (REST ``<Play digits>``) and
     :class:`InBandDTMFDelivery` (tones on the live media stream) both conform;
     any object with these two coroutines can be passed as ``dtmf_delivery``.
+    ``send_dtmf_with_retry`` must accept the ``should_continue`` keyword (or
+    ``**kwargs``). The outbound helpers assign the accepted call SID to a
+    sender's ``call_sid`` attribute when it has a writable one; a read-only
+    ``call_sid`` is left alone.
     """
 
     async def send_dtmf_with_retry(
@@ -297,8 +301,18 @@ class InBandDTMFDelivery:
         """Bind (or with ``None`` unbind) the session output tones play on."""
         self._output = output
 
-    async def send_dtmf(self, digits: str) -> bool:
-        """Play *digits* in-band. Returns True once the tones were accepted."""
+    async def send_dtmf(
+        self,
+        digits: str,
+        *,
+        should_continue: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Play *digits* in-band. Returns True once the tones were accepted.
+
+        *should_continue* is forwarded to ``play_dtmf_tones``: if it returns
+        ``False`` while the tones wait behind queued speech or the playout
+        fence, no tone is sent and this returns ``False``.
+        """
         # Same all-or-nothing whitelist as the REST path, checked before any
         # output access. Never log the digits themselves.
         if not isinstance(digits, str) or not is_valid_dtmf_output(digits):
@@ -313,10 +327,14 @@ class InBandDTMFDelivery:
                 digits,
                 inter_digit_delay_ms=self._inter_digit_delay_ms,
                 tone_config=self._tone_config,
+                should_continue=should_continue,
             )
             if not self._wait_for_playback:
                 return True
             outcome = await playback.wait(playback.duration_ms / 1000 + self._ack_timeout_margin_s)
+        except DTMFPlaybackCancelled:
+            logger.debug("In-band DTMF delivery called off before any tone was sent")
+            return False
         except Exception as exc:  # noqa: BLE001 intentional boundary: report failure
             logger.warning("In-band DTMF delivery failed (%s)", type(exc).__name__)
             return False
@@ -333,16 +351,19 @@ class InBandDTMFDelivery:
         *,
         should_continue: Callable[[], bool] | None = None,
     ) -> bool:
-        """Send DTMF with one delayed retry, mirroring :class:`DTMFDelivery`."""
+        """Send DTMF once; unlike :class:`DTMFDelivery`, never retry.
+
+        A failed in-band send can follow tone frames that were already
+        accepted and will play (a later frame was rejected, or the stream
+        ended during playback), so resending the whole string could press the
+        first keys twice. The failures known to happen before any frame is
+        sent (invalid digits, no bound output, a stopped session) do not clear
+        up on a retry either. On ``False`` the navigator falls back to a SPEAK
+        action.
+        """
         if should_continue is not None and not should_continue():
             return False
-        success = await self.send_dtmf(digits)
-        if not success and (should_continue is None or should_continue()):
-            await asyncio.sleep(0.5)
-            if should_continue is not None and not should_continue():
-                return False
-            success = await self.send_dtmf(digits)
-        return success
+        return await self.send_dtmf(digits, should_continue=should_continue)
 
     async def send_speech(self, text: str) -> bool:
         """Speak *text* on the live stream through the session's TTS."""

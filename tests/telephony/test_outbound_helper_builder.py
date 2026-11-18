@@ -530,5 +530,60 @@ async def test_custom_sender_without_call_sid_is_not_mutated() -> None:
     assert not hasattr(sender, "call_sid")
 
 
+class _OverridingDTMFDelivery(DTMFDelivery):
+    """A REST delivery subclass with its own retry policy."""
+
+    async def send_dtmf_with_retry(
+        self, digits: str, *, should_continue: Any = None
+    ) -> bool:  # pragma: no cover - identity is what the tests check
+        return True
+
+
+def test_auto_mode_keeps_a_dtmf_delivery_subclass() -> None:
+    sender = _OverridingDTMFDelivery()
+    built, navigator, coordinator = _build(_ivr_config(ivr_dtmf_delivery=sender))
+
+    assert built.ivr_delivery is sender
+    assert navigator._dtmf_delivery is sender
+    assert coordinator._delivery is sender
+
+
+def test_in_band_mode_still_replaces_a_dtmf_delivery_subclass() -> None:
+    sender = _OverridingDTMFDelivery()
+    built, _navigator, _coordinator = _build(
+        _ivr_config(ivr_dtmf_mode="in_band", ivr_dtmf_delivery=sender)
+    )
+
+    assert isinstance(built.ivr_delivery, InBandDTMFDelivery)
+
+
+class _ReadOnlySidSender(_CustomSender):
+    """A custom sender that tracks the call itself and exposes a read-only SID."""
+
+    @property
+    def call_sid(self) -> str:
+        return "CA-own"
+
+
+@pytest.mark.asyncio
+async def test_custom_sender_with_read_only_call_sid_still_resets_the_navigator() -> None:
+    bus = EventBus(handler_error_policy="raise")
+    sender = _ReadOnlySidSender()
+    built = build_outbound_helpers(
+        bus, _ivr_config(ivr_dtmf_delivery=sender), manager_cls=OutboundCallManager
+    )
+    navigator = next(h for h in built.helpers if isinstance(h, IVRNavigator))
+    _start_helpers(built.helpers)
+    try:
+        with patch.object(navigator, "reset_for_call", wraps=navigator.reset_for_call) as reset:
+            await bus.emit(CallInitiated(call_sid="CA1", to="+15550000001", from_="+15550000002"))
+    finally:
+        _stop_helpers(built.helpers)
+
+    assert built.ivr_delivery is sender
+    assert sender.call_sid == "CA-own"
+    reset.assert_called_once_with()
+
+
 def test_resolution_matrix_is_exposed_for_reuse() -> None:
     assert resolve_ivr_dtmf_delivery(_ivr_config()) is None

@@ -110,7 +110,12 @@ class _IVRCallbackCoordinator:
             and not isinstance(delivery, InBandDTMFDelivery)
             and hasattr(delivery, "call_sid")
         ):
-            delivery.call_sid = event.call_sid
+            try:
+                delivery.call_sid = event.call_sid
+            except AttributeError:
+                # A custom sender may expose a read-only ``call_sid`` because
+                # it tracks the call itself; SID binding is optional for it.
+                logger.debug("IVR DTMF sender's call_sid is read-only; not rebinding it")
 
     def _on_state_changed(self, event: CallStateChanged) -> None:
         if event.new == OutboundCallState.IVR:
@@ -330,8 +335,9 @@ def resolve_ivr_dtmf_delivery(config: OutboundCallConfig) -> IVRDTMFSender | Non
 
     * ``"rest"``: the configured ``DTMFDelivery`` (REST, ends the stream).
     * ``"in_band"``: a new :class:`InBandDTMFDelivery`, one per session.
-    * ``"auto"``: ``None`` stays ``None`` (emit-only); a custom sender is used
-      as-is; a stock ``DTMFDelivery`` on Twilio becomes a per-session
+    * ``"auto"``: ``None`` stays ``None`` (emit-only); a custom sender,
+      including a ``DTMFDelivery`` subclass, is used as-is; a stock
+      ``DTMFDelivery`` on Twilio becomes a per-session
       :class:`InBandDTMFDelivery`; anything else is unchanged.
 
     A configured :class:`InBandDTMFDelivery` (in ``"auto"`` or ``"in_band"``)
@@ -348,7 +354,10 @@ def resolve_ivr_dtmf_delivery(config: OutboundCallConfig) -> IVRDTMFSender | Non
         return delivery.clone()
     if mode == "in_band":
         return InBandDTMFDelivery(tone_config=config.ivr_dtmf_tones)
-    if isinstance(delivery, DTMFDelivery) and config.provider == "twilio":
+    # Only the stock class is swapped: a subclass may override
+    # ``send_dtmf_with_retry`` and is kept as given (``"in_band"`` above still
+    # replaces it on request).
+    if type(delivery) is DTMFDelivery and config.provider == "twilio":
         if "auto_in_band" not in _logged_notices:
             _logged_notices.add("auto_in_band")
             logger.info(

@@ -17,6 +17,7 @@ from easycat.telephony.session_actions import (
 )
 from tests.config._helpers import (
     _DummyAgent,
+    _stub_audio_backends,
 )
 
 
@@ -124,7 +125,9 @@ def test_both_action_executors_wire_together():
     assert isinstance(executors[1], TelnyxSessionActionExecutor)
 
 
-def test_create_session_binds_in_band_ivr_delivery_to_the_session() -> None:
+def test_create_session_binds_in_band_ivr_delivery_to_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from easycat.config import OutboundCallConfig
     from easycat.session._media_output import SessionMediaOutput
     from easycat.telephony.ivr import DTMFDelivery, InBandDTMFDelivery, IVRNavigator
@@ -132,6 +135,8 @@ def test_create_session_binds_in_band_ivr_delivery_to_the_session() -> None:
     async def press_one(_context: dict[str, object]) -> dict[str, str]:
         return {"action": "dtmf", "digits": "1"}
 
+    # Factory wiring only: stub audio backends keep this off optional VAD extras.
+    _stub_audio_backends(monkeypatch)
     shared = DTMFDelivery()
     config = EasyConfig(
         openai_api_key="test-key",
@@ -145,13 +150,9 @@ def test_create_session_binds_in_band_ivr_delivery_to_the_session() -> None:
             ),
         ),
     )
+    config.smart_turn.enabled = False
 
-    try:
-        session = create_session(config)
-    except RuntimeError as exc:
-        if "No VAD backend available" in str(exc):
-            pytest.skip("No VAD backend available")
-        raise
+    session = create_session(config)
 
     navigator = next(h for h in session.telephony.helpers if isinstance(h, IVRNavigator))
     delivery = navigator._dtmf_delivery

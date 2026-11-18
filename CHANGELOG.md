@@ -18,26 +18,38 @@ versioning contract that begins at 1.0.0 is documented in
   `played`, `timeout`, `disconnected` or `estimated`. The session keeps
   running. The journal records `dtmf_tones_sent` / `dtmf_tones_completed`
   without the digits, and tone audio is masked under `"pii"` redaction.
+  An optional `should_continue` predicate calls the burst off before its
+  first frame (raising `DTMFPlaybackCancelled`, a `RuntimeError`), so an IVR
+  navigator that hands off to a human mid-fence never presses the key.
 - The optional `ProtectedPlayback` transport capability
   (`easycat.runtime.capabilities.protected_playback`). Twilio Media Streams
   implement it: a playout fence mark before the tones, a barge-in `clear`
   deferred until the tones are acknowledged (at most the tone length plus
-  5 s), and inbound `dtmf` events from the bot's own tones suppressed
-  (`TwilioTransportConfig.suppress_inbound_dtmf_during_tones`,
-  `dtmf_echo_suppress_tail_ms`).
+  5 s), no guard armed on a stream that replaced the fenced one, and inbound
+  `dtmf` events suppressed during the tones and a short tail as echo of the
+  bot's own key presses (`TwilioTransportConfig.suppress_inbound_dtmf_during_tones`,
+  `dtmf_echo_suppress_tail_ms`). A real caller key press in that window is
+  dropped too; disable suppression to receive every inbound key.
 - Opt-in in-band delivery for Twilio `SendDTMFAction`:
   `TwilioSessionActionConfig(dtmf_mode="in_band")` (or `"auto"`, or the
   `TWILIO_DTMF_MODE` env var for `TwilioAppSettings`) plays the digits on the
   media stream and leaves the session running, with `delivery: "in_band"` and
   the playback outcome in the result metadata. The default stays `"rest"`.
+  `"auto"` falls back to REST only when no tone can have been sent (the
+  session cannot play tones, or the sequence exceeds the tone config's
+  `max_total_ms`); that fallback ends the stream like `"rest"`.
+  `TWILIO_DTMF_MODE=in_band` needs no REST credentials.
 - `InBandDTMFDelivery` and the `IVRDTMFSender` protocol for IVR navigation,
-  plus `OutboundCallConfig.ivr_dtmf_mode` (`"auto"`, `"in_band"`, `"rest"`)
-  and `ivr_dtmf_tones`.
+  plus the keyword-only `OutboundCallConfig.ivr_dtmf_mode` (`"auto"`,
+  `"in_band"`, `"rest"`) and `ivr_dtmf_tones`. `InBandDTMFDelivery` does not
+  retry a failed key press, since part of the sequence may already have
+  played.
 - A billable live loopback test,
   `tests/telephony/test_twilio_inband_dtmf_live.py`, that checks a Twilio
   `<Gather>` hears EasyCat's in-band tones and that the stream survives them.
   In-band DTMF has not yet been verified on live carrier routes; run this test
-  on your own numbers before relying on it.
+  before relying on it, with a dedicated non-production destination number
+  that uses webhook voice routing, since the test repoints its voice URL.
 
 ### Fixed
 
@@ -46,15 +58,16 @@ versioning contract that begins at 1.0.0 is documented in
   which ends the session's `<Connect><Stream>` media stream and then the call,
   so the result no longer claims the session can keep talking. The result
   metadata carries `media_stream_replaced: true`. Telnyx DTMF is unchanged.
-  This REST path stays the default; set `dtmf_mode="in_band"` or `"auto"` to
-  keep the session running instead.
+  This REST path stays the default; set `dtmf_mode="in_band"` (or `"auto"`,
+  when the session can play the tones) to keep the session running instead.
 - Twilio IVR navigation no longer ends the media stream on the first key
   press, so multi-level menus work. With the default
   `OutboundCallConfig.ivr_dtmf_mode="auto"`, a stock Twilio `DTMFDelivery` is
   replaced by a per-session `InBandDTMFDelivery` that plays the tones and the
   speak fallback on the live stream instead of replacing the call's TwiML. Set
-  `ivr_dtmf_mode="rest"` to keep the old behaviour. A custom sender is used
-  as given, and Telnyx is unchanged.
+  `ivr_dtmf_mode="rest"` to keep the old behaviour. A custom sender,
+  including a `DTMFDelivery` subclass, is used as given, and Telnyx is
+  unchanged.
 - `EasyConfig(mcp_servers=...)` raises `EasyConfigError` for a bare string,
   a non-iterable, or a non-string item, instead of a raw `AttributeError` or a
   misleading per-character URI error.

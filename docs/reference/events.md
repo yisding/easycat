@@ -100,11 +100,13 @@ unrelated event type. Keep the returned subscription and call its idempotent
 
 - `Interruption` — the user barged in while the bot was speaking; pending
   TTS for the turn is cancelled.
-- `PlaybackMarkAck` — a transport acknowledged that playback reached a
-  previously queued mark (for example a Twilio Media Stream mark). It also
-  fires for the marks EasyCat sends around in-band DTMF tones
-  (`easycat_dtmf_fence_N` before a burst, `easycat_dtmf_N` after it), which
-  belong to no turn.
+- `PlaybackMarkAck` — the transport received the far end's response to a
+  previously queued mark (for example a Twilio Media Stream mark). It does
+  not by itself prove the audio before the mark was heard: Twilio also
+  returns pending marks when a `clear` discards buffered audio, for example
+  a barge-in while a DTMF fence is pending. It also fires for the marks
+  EasyCat sends around in-band DTMF tones (`easycat_dtmf_fence_N` before a
+  burst, `easycat_dtmf_N` after it), which belong to no turn.
 
 ### Agent Tools
 

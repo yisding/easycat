@@ -770,6 +770,27 @@ class _CustomIVRSender:
         return True
 
 
+class _NoShouldContinueSender:
+    async def send_dtmf_with_retry(self, digits: str) -> bool:
+        return True
+
+    async def send_speech(self, text: str) -> bool:
+        return True
+
+
+class _NoTextSpeechSender(_CustomIVRSender):
+    async def send_speech(self) -> bool:  # type: ignore[override]
+        return True
+
+
+class _KwargsIVRSender:
+    async def send_dtmf_with_retry(self, digits: str, **kwargs: object) -> bool:
+        return True
+
+    async def send_speech(self, text: str) -> bool:
+        return True
+
+
 async def _press_one(_context: dict[str, object]) -> dict[str, str]:
     return {"action": "dtmf", "digits": "1"}
 
@@ -792,6 +813,8 @@ class TestIVRDTMFModeConfig:
             {"ivr_dtmf_mode": "in_band", "ivr_dtmf_delivery": DTMFDelivery()},
             {"ivr_dtmf_mode": "rest", "ivr_dtmf_delivery": DTMFDelivery()},
             {"ivr_dtmf_tones": DTMFToneConfig(tone_ms=150)},
+            {"ivr_dtmf_delivery": _KwargsIVRSender()},
+            {"ivr_dtmf_delivery": InBandDTMFDelivery(tone_config=DTMFToneConfig(tone_ms=120))},
         ],
     )
     def test_accepted_combinations(self, overrides: dict[str, object]) -> None:
@@ -813,6 +836,25 @@ class TestIVRDTMFModeConfig:
             ),
             ({"ivr_dtmf_tones": {"tone_ms": 80}}, "ivr_dtmf_tones must be a DTMFToneConfig"),
             ({"ivr_dtmf_delivery": object()}, "send_dtmf_with_retry"),
+            ({"ivr_dtmf_delivery": _NoShouldContinueSender()}, "should_continue"),
+            ({"ivr_dtmf_delivery": _NoTextSpeechSender()}, "send_speech"),
+            (
+                {
+                    "ivr_dtmf_delivery": InBandDTMFDelivery(),
+                    "ivr_dtmf_tones": DTMFToneConfig(tone_ms=150),
+                },
+                "set tone_config on the InBandDTMFDelivery",
+            ),
+            (
+                {
+                    "ivr_dtmf_mode": "in_band",
+                    "ivr_dtmf_delivery": InBandDTMFDelivery(
+                        tone_config=DTMFToneConfig(tone_ms=120)
+                    ),
+                    "ivr_dtmf_tones": DTMFToneConfig(tone_ms=150),
+                },
+                "set tone_config on the InBandDTMFDelivery",
+            ),
         ],
     )
     def test_rejected_combinations(self, overrides: dict[str, object], match: str) -> None:
@@ -830,6 +872,25 @@ class TestIVRDTMFModeConfig:
                 ivr_dtmf_mode=mode,  # type: ignore[arg-type]
                 ivr_dtmf_delivery=DTMFDelivery(),
             )
+
+    def test_new_ivr_fields_keep_existing_positional_arguments(self) -> None:
+        """Positional callers written before ``ivr_dtmf_mode`` keep their meaning."""
+        import inspect
+
+        params = list(inspect.signature(OutboundCallConfig).parameters.values())
+        names = [p.name for p in params]
+        for name in ("ivr_dtmf_mode", "ivr_dtmf_tones"):
+            assert params[names.index(name)].kind is inspect.Parameter.KEYWORD_ONLY
+        positional = [p.name for p in params if p.kind is not inspect.Parameter.KEYWORD_ONLY]
+        after = positional[positional.index("ivr_dtmf_delivery") + 1]
+        assert after == "enable_number_health"
+
+        args = [p.default for p in params[: positional.index("enable_number_health")]]
+        args[0] = "+1555"
+        args[names.index("voicemail_detection")] = VoicemailDetectionConfig()
+        cfg = OutboundCallConfig(*args, False)  # type: ignore[arg-type]
+        assert cfg.enable_number_health is False
+        assert cfg.ivr_dtmf_mode == "auto"
 
     def test_validate_rechecks_mutated_mode(self) -> None:
         cfg = OutboundCallConfig(from_number="+1555")

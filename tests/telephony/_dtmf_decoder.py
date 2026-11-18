@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from easycat._dtmf_tones import DTMF_FREQUENCIES, DTMF_SAMPLE_RATE
+from easycat._dtmf_tones import DTMF_SAMPLE_RATE
 
 BLOCK_SAMPLES = 205
 HOP_SAMPLES = 40
@@ -28,7 +28,27 @@ MIN_TONE_MS = 40
 
 _LOW_HZ = (697, 770, 852, 941)
 _HIGH_HZ = (1209, 1336, 1477, 1633)
-_KEY_BY_PAIR = {pair: key for key, pair in DTMF_FREQUENCIES.items()}
+# Spelled out independently of the renderer's ``DTMF_FREQUENCIES`` so a swapped
+# pair in the renderer cannot be mirrored (and hidden) by the decoder.
+EXPECTED_Q23_PAIRS: dict[str, tuple[int, int]] = {
+    "1": (697, 1209),
+    "2": (697, 1336),
+    "3": (697, 1477),
+    "A": (697, 1633),
+    "4": (770, 1209),
+    "5": (770, 1336),
+    "6": (770, 1477),
+    "B": (770, 1633),
+    "7": (852, 1209),
+    "8": (852, 1336),
+    "9": (852, 1477),
+    "C": (852, 1633),
+    "*": (941, 1209),
+    "0": (941, 1336),
+    "#": (941, 1477),
+    "D": (941, 1633),
+}
+_KEY_BY_PAIR = {pair: key for key, pair in EXPECTED_Q23_PAIRS.items()}
 
 _MIN_BLOCK_RMS = 50.0
 _MIN_TONE_FRACTION = 0.6

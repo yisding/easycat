@@ -172,7 +172,8 @@ executing `<Connect><Stream>`, so the media stream ends, and once the tones
 finish the call has no TwiML left and Twilio hangs up. Treat REST DTMF as a
 final hand-off, like transfer.
 
-**In-band tones (opt-in for `SendDTMFAction`, default for IVR navigation).**
+**In-band tones (opt-in for `SendDTMFAction`, the IVR default for a stock
+Twilio `DTMFDelivery`).**
 `Session.play_dtmf_tones()` renders ITU-T Q.23 dual tones and sends them
 through the normal outbound audio path after any queued bot speech. The call
 keeps its TwiML and the session keeps talking, so an agent can press a key and
@@ -200,10 +201,18 @@ or the `TWILIO_DTMF_MODE` environment variable for `TwilioAppSettings`:
 | --- | --- |
 | `"rest"` (default) | REST `<Play digits>`; the result has `stop_session=True`, `delivery: "rest"`, and `media_stream_replaced: true`. |
 | `"in_band"` | Tones on the stream; the result has `stop_session=False`, `delivery: "in_band"`, and the playback outcome. Fails if the session cannot play tones. |
-| `"auto"` | In-band when the session can play tones, otherwise REST with a warning. |
+| `"auto"` | In-band, except that it falls back to REST (which ends the stream) with a warning when the session has no `play_dtmf_tones` or the sequence is longer than the tone config's `max_total_ms` (60 s by default). |
 
-In-band delivery needs no Twilio REST client or credentials. A playback
-`"timeout"` still counts as success, so a retry never presses the keys twice.
+`"auto"` falls back only in cases where it knows no tone was sent. An error
+from in-band playback itself, such as a session that is not running or a
+transport that rejected a tone frame, fails the action without a REST retry,
+because earlier tone frames may already have been sent.
+
+In-band delivery needs no Twilio REST client or credentials, so
+`TWILIO_DTMF_MODE=in_band` configures the executor even without
+`TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`; hangup, transfer, and SMS still need
+them. A playback `"timeout"` still counts as success, so a retry never presses
+the keys twice.
 Telnyx sends DTMF with a native Call Control command, which leaves the media
 stream running whichever mode you choose.
 
@@ -222,8 +231,10 @@ uv run pytest tests/telephony/test_twilio_inband_dtmf_live.py -m integration_liv
 ```
 
 The public URL must forward to local port 8766 (`EASYCAT_DTMF_LOOPBACK_PORT`).
-The test points the dedicated `TO` number's voice URL at itself for the run
-and restores it afterwards. If tones are not detected on your route, keep
+The test points the `TO` number's voice URL at itself for the run and restores
+it afterwards, so use a dedicated non-production number that routes voice
+through its webhook URL; the test refuses a number attached to a TwiML App or
+SIP trunk, where Twilio ignores the voice URL. If tones are not detected on your route, keep
 `dtmf_mode="rest"` (or `ivr_dtmf_mode="rest"`) or move the call to Elastic SIP
 Trunking, which can carry RFC 2833 events.
 
@@ -250,16 +261,26 @@ call forever.
 and a DTMF whitelist. The callback result is untrusted even when produced by
 your model. EasyCat parses it into a constrained decision before acting.
 
-On Twilio, the navigator presses keys with in-band tones by default.
-`OutboundCallConfig.ivr_dtmf_mode="auto"` replaces a stock `DTMFDelivery` in
+On Twilio, the navigator presses keys only when it has a sender. With the
+default `OutboundCallConfig.ivr_dtmf_delivery=None`, `"auto"` mode leaves it
+emit-only: it publishes `IVRAction` decisions and presses no keys. Set
+`ivr_dtmf_mode="in_band"` to press keys in-band without configuring a sender.
+`ivr_dtmf_mode="auto"` (the default) replaces a stock `DTMFDelivery` in
 `ivr_dtmf_delivery` with a per-session `InBandDTMFDelivery`. It plays each
 `dtmf` decision as tones and each `speak` fallback as TTS on the same stream,
 so a call can descend several menu levels and still reach a human. It returns
 once the tones are accepted, without waiting for playback, so transcription is
 not stalled. `ivr_dtmf_mode="in_band"` always builds one, and `"rest"` keeps
 the given `DTMFDelivery`, whose first key press ends the stream. A custom
-sender that implements `IVRDTMFSender` is used as given, and Telnyx IVR
-delivery is unchanged. `ivr_dtmf_tones` takes a `DTMFToneConfig`.
+sender that implements `IVRDTMFSender`, including a `DTMFDelivery` subclass,
+is used as given in `"auto"` mode, and Telnyx IVR delivery is unchanged. Its
+`send_dtmf_with_retry` must accept the `should_continue` keyword (or
+`**kwargs`); configuration rejects one that does not. `ivr_dtmf_tones` takes a
+`DTMFToneConfig`; to customize an `InBandDTMFDelivery` you pass yourself, set
+its `tone_config` instead, because setting both is rejected. Unlike
+`DTMFDelivery`, `InBandDTMFDelivery` does not retry a failed key press: some
+tones may already have played, so the navigator falls back to a `speak`
+action instead of pressing the keys again.
 
 Inbound spam or routing policy belongs in your `/twiml` webhook, before a media
 stream token is minted. Use `twiml_reject()` to decline an inbound call or
@@ -435,17 +456,21 @@ design a production call policy.
 
 > Why are both webhook signatures and stream tokens needed?
 
-They establish different properties, at different boundaries. The signature
-authenticates Twilio's **HTTP** request — Twilio does not sign the media
-WebSocket handshake, so a signature cannot cover it. The one-time stream token
-is the media-WebSocket boundary: it proves the connection came from TwiML this
-app accepted, and blocks replay when the `start` frame arrives.
+They protect different steps. Twilio signs both its webhook **HTTP**
+requests and the media WebSocket handshake with `X-Twilio-Signature`.
+Validating the handshake signature against the exact public `wss://` URL
+(`twilio_websocket_signature_process_request`) proves Twilio opened the
+socket and rejects the upgrade before a session is built. The one-time stream
+token is checked later, when the `start` frame arrives: it proves the stream
+came from TwiML this app issued, and consuming it blocks replay of that
+stream.
 
 > Can outbound DTMF be written into the Media Stream?
 
 Not as a DTMF message: Media Streams have none. EasyCat can play the key tones
-as in-band audio on the stream, which keeps the session running (the IVR
-default, opt-in for `SendDTMFAction`), or update the call over REST with
+as in-band audio on the stream, which keeps the session running (opt-in for
+`SendDTMFAction`; for IVR navigation, the `"auto"` default for a stock
+`DTMFDelivery`, or `ivr_dtmf_mode="in_band"`), or update the call over REST with
 sanitized `<Play digits>` TwiML, which ends the stream.
 
 > Is a successful transfer action the final call disposition?

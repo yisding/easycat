@@ -863,15 +863,25 @@ class TestInBandDTMFDelivery:
         assert copy._wait_for_playback is True
         assert copy._ack_timeout_margin_s == 2.5
 
-    async def test_accepted_tones_return_true_without_waiting(self) -> None:
+    async def test_accepted_tones_return_true_without_waiting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        waits: list[float | None] = []
+
+        async def spy_wait(self: DTMFTonePlayback, timeout: float | None = None) -> str:
+            waits.append(timeout)
+            return "played"
+
+        monkeypatch.setattr(DTMFTonePlayback, "wait", spy_wait)
         tones = DTMFToneConfig(tone_ms=60)
         output = _FakeMediaOutput(outcome=None)
         delivery = _bound(output, tone_config=tones, inter_digit_delay_ms=200)
 
         assert await delivery.send_dtmf("1#") is True
         assert output.tone_calls == [
-            ("1#", {"inter_digit_delay_ms": 200, "tone_config": tones}),
+            ("1#", {"inter_digit_delay_ms": 200, "tone_config": tones, "should_continue": None}),
         ]
+        assert waits == [], "the default sender must not wait for playback"
 
     @pytest.mark.parametrize(
         ("outcome", "expected"),
@@ -892,13 +902,16 @@ class TestInBandDTMFDelivery:
     async def test_output_errors_return_false_without_logging_digits(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        delivery = _bound(_FakeMediaOutput(error=RuntimeError("transport rejected DTMF audio")))
+        delivery = _bound(
+            _FakeMediaOutput(error=RuntimeError("transport rejected DTMF audio for 4321"))
+        )
 
         with caplog.at_level(logging.WARNING, logger="easycat.telephony.ivr"):
             assert await delivery.send_dtmf("4321") is False
 
         assert any("RuntimeError" in message for message in caplog.messages)
         assert not any("4321" in message for message in caplog.messages)
+        assert "4321" not in caplog.text
 
     @pytest.mark.parametrize("digits", ['1"/><Say>hacked</Say>', "", "a", "١٢"])
     async def test_invalid_digits_never_reach_the_output(self, digits: str) -> None:
@@ -950,11 +963,21 @@ class TestInBandDTMFDelivery:
         assert await delivery.send_dtmf("1") is False
         assert await delivery.send_speech("hello") is False
 
-    async def test_retry_then_speak_fallback_on_failure(self) -> None:
+    @pytest.mark.parametrize(
+        "output",
+        [
+            # The stream ended while the accepted tones were playing.
+            _FakeMediaOutput("disconnected"),
+            # A later tone frame was rejected after earlier frames were queued.
+            _FakeMediaOutput(error=RuntimeError("transport rejected DTMF audio")),
+        ],
+        ids=["disconnected", "partial-send"],
+    )
+    async def test_failed_send_is_not_retried_then_speaks(self, output: _FakeMediaOutput) -> None:
+        """A failed in-band send may have played a prefix; never resend it."""
         bus = EventBus()
         actions: list[IVRAction] = []
         bus.subscribe(IVRAction, actions.append)
-        output = _FakeMediaOutput("disconnected")
         delivery = _bound(output, wait_for_playback=True)
 
         async def agent(ctx: dict) -> dict:
@@ -968,7 +991,7 @@ class TestInBandDTMFDelivery:
         finally:
             nav.stop()
 
-        assert [digits for digits, _ in output.tone_calls] == ["7", "7"]
+        assert [digits for digits, _ in output.tone_calls] == ["7"]
         speak = [a for a in actions if a.type == IVRActionType.SPEAK]
         assert len(speak) == 1 and speak[0].text == "7"
 

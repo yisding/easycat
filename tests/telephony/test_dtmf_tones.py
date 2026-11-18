@@ -32,7 +32,7 @@ from easycat._dtmf_tones import (
 from easycat.session import actions as session_actions
 from easycat.telephony.dtmf import VALID_DTMF_DIGITS, VALID_DTMF_OUTPUT_CHARS
 from easycat.transports._g711 import mulaw_to_pcm16, pcm16_to_mulaw
-from tests.telephony._dtmf_decoder import decode_dtmf, decode_segments
+from tests.telephony._dtmf_decoder import EXPECTED_Q23_PAIRS, decode_dtmf, decode_segments
 
 ALL_KEYS = "123A456B789C*0#D"
 SPS = DTMF_SAMPLE_RATE // 1000  # samples per millisecond
@@ -361,6 +361,9 @@ class TestToneConfig:
             {"ramp_ms": 10.0, "tone_ms": 40, "gap_ms": 39},
             {"max_total_ms": 99},
             {"max_total_ms": 600_001},
+            {"ramp_ms": 10**400},
+            {"low_level_dbm0": -(10**400)},
+            {"high_level_dbm0": 10**400},
         ],
     )
     def test_rejects_out_of_bounds(self, kwargs: dict[str, Any]) -> None:
@@ -414,6 +417,14 @@ class TestDrift:
         assert DTMF_FREQUENCIES["#"] == (941, 1477)
         assert DTMF_FREQUENCIES["0"] == (941, 1336)
         assert DTMF_FREQUENCIES["*"] == (941, 1209)
+        assert dict(DTMF_FREQUENCIES) == EXPECTED_Q23_PAIRS
+
+    @pytest.mark.parametrize("key", ALL_KEYS)
+    def test_rendered_key_carries_its_q23_pair(self, key: str) -> None:
+        samples = _samples(render_dtmf_pcm16(key, config=DTMFToneConfig(**BARE)))
+        low_hz, high_hz = EXPECTED_Q23_PAIRS[key]
+        assert _component_amplitude(samples, low_hz) > 5000
+        assert _component_amplitude(samples, high_hz) > 5000
 
     def test_telephony_package_re_exports(self) -> None:
         assert telephony.DTMFToneConfig is DTMFToneConfig
@@ -502,6 +513,8 @@ class TestTonePlayback:
         future: asyncio.Future[DTMFPlaybackOutcome] = asyncio.get_running_loop().create_future()
         with pytest.raises(ValueError):
             await _playback(future).wait(-1.0)
+        with pytest.raises(ValueError):
+            await _playback(future).wait(10**400)
         future.cancel()
 
     async def test_repr_and_equality_ignore_future(self) -> None:

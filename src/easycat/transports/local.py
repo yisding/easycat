@@ -610,6 +610,10 @@ class LocalTransport(AudioQueueMixin):
                     turn_ref=turn_ref,
                 )
             )
+        if dtmf_tone and getattr(chunk, "_easycat_dtmf_burst_end", False) is True:
+            # A complete in-band DTMF burst may be shorter than the pre-roll;
+            # start playout now instead of waiting for unrelated later audio.
+            self._primed = True
         # ``False`` when any frame was dropped (the queue lacked capacity for the
         # full chunk), matching the docstring so the drop metric stays honest.
         return not truncated

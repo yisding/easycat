@@ -1,8 +1,9 @@
 """In-band DTMF tone synthesis (ITU-T Q.23) for telephony media streams.
 
-This is a root leaf module: it depends only on the standard library and the
-shared G.711 codec in :mod:`easycat.transports._g711`, so the session layer can
-render key presses without importing :mod:`easycat.telephony`.
+This is a root leaf module: it depends only on the standard library, the
+shared numeric predicates in :mod:`easycat._numeric` and the G.711 codec in
+:mod:`easycat.transports._g711`, so the session layer can render key presses
+without importing :mod:`easycat.telephony`.
 
 The renderer produces 8 kHz little-endian PCM16 (or G.711 mu-law) with a
 lead-in, raised-cosine ramped dual tones, inter-key gaps, optional ``w``/``W``
@@ -30,6 +31,7 @@ from functools import lru_cache
 from types import MappingProxyType
 from typing import Literal
 
+from easycat._numeric import is_finite_number
 from easycat.transports._g711 import pcm16_to_mulaw
 
 __all__ = [
@@ -38,6 +40,7 @@ __all__ = [
     "DTMF_SAMPLE_RATE",
     "MAX_DTMF_DIGITS",
     "MAX_DTMF_INTER_DIGIT_DELAY_MS",
+    "DTMFPlaybackCancelled",
     "DTMFPlaybackOutcome",
     "DTMFToneConfig",
     "DTMFTonePlayback",
@@ -95,6 +98,16 @@ DTMFPlaybackOutcome = Literal["played", "timeout", "disconnected", "estimated"]
 """
 
 
+class DTMFPlaybackCancelled(RuntimeError):
+    """An in-band DTMF burst was called off before its first frame was sent.
+
+    Raised when the caller's ``should_continue`` predicate returns ``False``
+    while the burst waits for queued speech to drain or for the playout
+    fence. No tone frame was sent and no clear guard was armed. The message
+    never echoes the digits.
+    """
+
+
 def _require_int(name: str, value: object, low: int, high: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer")
@@ -106,9 +119,11 @@ def _require_int(name: str, value: object, low: int, high: int) -> int:
 def _require_float(name: str, value: object, low: float, high: float) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise TypeError(f"{name} must be a number")
-    number = float(value)
-    if not math.isfinite(number):
+    # ``is_finite_number`` also rejects integers too large for a C double,
+    # which ``float()`` would otherwise surface as ``OverflowError``.
+    if not is_finite_number(value):
         raise ValueError(f"{name} must be finite")
+    number = float(value)
     if not low <= number <= high:
         raise ValueError(f"{name} must be between {low:g} and {high:g}")
     return number

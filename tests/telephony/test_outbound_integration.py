@@ -761,6 +761,13 @@ async def _wait_for(predicate: Any, timeout_s: float = 5.0) -> None:
         await asyncio.sleep(0.005)
 
 
+def _stop_helpers(helpers: list[object]) -> None:
+    for helper in reversed(helpers):
+        stop = getattr(helper, "stop", None)
+        if stop is not None:
+            stop()
+
+
 def transport_is_live(session: Any) -> bool:
     transport = session.transport
     return bool(session.is_running and transport.stream_sid == "MZ1" and transport.call_sid)
@@ -802,15 +809,50 @@ class TestInBandIVROnTwilioStream:
             ivr_delivery=built.ivr_delivery,
         )
         wire_outbound_pipeline(session, helpers, bus)
-        for helper in helpers.helpers:
-            start = getattr(helper, "start", None)
-            if start is not None:
-                start()
-        ws.push(_START)
-        await session.start()
-        await _wait_for(lambda: transport.stream_sid == "MZ1")
+        try:
+            for helper in helpers.helpers:
+                start = getattr(helper, "start", None)
+                if start is not None:
+                    start()
+            ws.push(_START)
+            await session.start()
+            await _wait_for(lambda: transport.stream_sid == "MZ1")
+        except BaseException:
+            # The tests' own teardown only runs once setup returns.
+            _stop_helpers(helpers.helpers)
+            await session.stop(force=True)
+            raise
         navigator = next(h for h in helpers.helpers if isinstance(h, IVRNavigator))
         return session, ws, bus, navigator, helpers.helpers
+
+    async def test_setup_timeout_stops_the_started_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+
+        from easycat.session._session import Session
+
+        started: list[Session] = []
+        original_start = Session.start
+
+        async def recording_start(session: Session) -> None:
+            started.append(session)
+            await original_start(session)
+
+        async def never_live(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("condition not reached in time")
+
+        async def agent(_context: dict[str, object]) -> dict[str, str]:
+            return {"action": "wait"}
+
+        monkeypatch.setattr(Session, "start", recording_start)
+        monkeypatch.setattr(sys.modules[__name__], "_wait_for", never_live)
+
+        with pytest.raises(AssertionError, match="not reached"):
+            await self._session(agent, MagicMock())
+
+        assert len(started) == 1
+        assert not started[0].is_running
 
     async def test_two_menu_levels_on_one_stream_then_human(self) -> None:
         answers = iter(["1", "3"])
@@ -843,10 +885,7 @@ class TestInBandIVROnTwilioStream:
             ws.push(_inbound_media(2))
             await _wait_for(lambda: bool(inbound))
         finally:
-            for helper in reversed(helpers):
-                stop = getattr(helper, "stop", None)
-                if stop is not None:
-                    stop()
+            _stop_helpers(helpers)
             stopped_events = list(ws.events())
             ended_before_stop = list(ended)
             running_before_stop = transport_is_live(session)
@@ -884,10 +923,7 @@ class TestInBandIVROnTwilioStream:
             await _wait_for(lambda: len(ws.sent) > tone_end)
             assert transport_is_live(session)
         finally:
-            for helper in reversed(helpers):
-                stop = getattr(helper, "stop", None)
-                if stop is not None:
-                    stop()
+            _stop_helpers(helpers)
             await session.stop(force=True)
 
         assert result.stop_session is False

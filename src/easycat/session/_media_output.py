@@ -13,6 +13,8 @@ import weakref
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from easycat._dtmf_tones import DTMFToneConfig, DTMFTonePlayback
     from easycat.session._session import Session
 
@@ -50,6 +52,7 @@ class SessionMediaOutput:
         inter_digit_delay_ms: int = 0,
         tone_config: DTMFToneConfig | None = None,
         fence_timeout_s: float = 10.0,
+        should_continue: Callable[[], bool] | None = None,
     ) -> DTMFTonePlayback:
         """Delegate to :meth:`Session.play_dtmf_tones` on the bound session."""
         return await self._require_session().play_dtmf_tones(
@@ -57,6 +60,7 @@ class SessionMediaOutput:
             inter_digit_delay_ms=inter_digit_delay_ms,
             tone_config=tone_config,
             fence_timeout_s=fence_timeout_s,
+            should_continue=should_continue,
         )
 
     async def synthesize_bypass(self, text: str) -> None:

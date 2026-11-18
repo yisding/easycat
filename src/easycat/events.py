@@ -228,7 +228,11 @@ class Interruption(Event):
 
 @dataclass(frozen=True)
 class PlaybackMarkAck(Event):
-    """Transport acknowledged playback reaching a previously queued mark."""
+    """Transport received the far end's response to a previously queued mark.
+
+    Not by itself proof the audio before the mark was heard: Twilio also
+    returns pending marks when a ``clear`` discards buffered audio.
+    """
 
     mark_name: str
 

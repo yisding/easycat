@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 
-from easycat._dtmf_tones import DTMFToneConfig
+from easycat._dtmf_tones import DTMFToneConfig, dtmf_sequence_duration_ms
 from easycat._numeric import is_finite_number
 from easycat.session.actions import (
     MAX_DTMF_INTER_DIGIT_DELAY_MS,
@@ -34,7 +34,11 @@ TwilioDTMFMode = Literal["rest", "in_band", "auto"]
   ``Session.play_dtmf_tones``; the session keeps running. Fails closed when the
   session cannot play tones.
 * ``"auto"``: in-band when the session can play tones, else REST with a
-  warning.
+  warning. It falls back to REST only when in-band playback is known not to
+  have started: the session has no ``play_dtmf_tones``, or the sequence is
+  longer than the tone config's ``max_total_ms``. An error raised by in-band
+  playback itself propagates without a REST retry, because tone frames may
+  already have been sent.
 """
 
 TWILIO_DTMF_MODES: tuple[str, ...] = get_args(TwilioDTMFMode)
@@ -160,7 +164,7 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
         if mode == "rest":
             return await self._send_dtmf_rest(call_sid, action)
         play = getattr(session, "play_dtmf_tones", None)
-        if callable(play):
+        if callable(play) and (mode == "in_band" or self._fits_tone_limit(action)):
             return await self._send_dtmf_in_band(play, call_sid, action)
         if mode == "in_band":
             raise RuntimeError(
@@ -168,11 +172,29 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
                 "dtmf_mode='rest' for the stream-ending call-update path"
             )
         logger.warning(
-            "Twilio dtmf_mode='auto': the session cannot play in-band DTMF tones, "
-            "falling back to REST <Play digits>; this ends the media stream and "
-            "stops the session"
+            "Twilio dtmf_mode='auto': the session cannot play this DTMF sequence "
+            "in-band, falling back to REST <Play digits>; this ends the media "
+            "stream and stops the session"
         )
         return await self._send_dtmf_rest(call_sid, action)
+
+    def _fits_tone_limit(self, action: SendDTMFAction) -> bool:
+        """Whether *action* renders within the tone config's ``max_total_ms``.
+
+        ``auto`` checks this before any audio is rendered or sent, so a
+        sequence the renderer would reject still falls back to REST. Invalid
+        digits are left to the in-band path, which rejects them.
+        """
+        tones = self._config.dtmf_tones or DTMFToneConfig()
+        try:
+            duration_ms = dtmf_sequence_duration_ms(
+                action.digits,
+                inter_digit_delay_ms=action.inter_digit_delay_ms,
+                config=tones,
+            )
+        except (TypeError, ValueError):
+            return True
+        return duration_ms <= tones.max_total_ms
 
     async def _send_dtmf_rest(
         self,

@@ -120,8 +120,14 @@ class TwilioAppSettings:
         return bool(self.account_sid and self.auth_token)
 
     def twilio_session_actions(self) -> TwilioSessionActionConfig | None:
-        """Return Twilio session-action config when credentials are available."""
-        if not self.twilio_actions_enabled:
+        """Return Twilio session-action config when it can execute anything.
+
+        REST credentials enable every action. Without them, an explicit
+        ``TWILIO_DTMF_MODE=in_band`` still returns a config, because in-band
+        DTMF plays on the media stream and needs no REST client; hangup,
+        transfer and SMS then fail with a missing-credentials error.
+        """
+        if not self.twilio_actions_enabled and self.dtmf_mode != "in_band":
             return None
         from easycat.telephony.session_actions import TwilioSessionActionConfig
 

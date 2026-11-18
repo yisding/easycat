@@ -530,6 +530,12 @@ class _ProtectedGuard:
         self.timer: asyncio.TimerHandle | None = None
 
 
+def _log_deferred_clear_failure(task: asyncio.Task[None]) -> None:
+    """Consume a failed scheduled deferred-clear write (best effort)."""
+    if not task.cancelled() and task.exception() is not None:
+        logger.debug("Writing an expired guard's deferred Twilio clear failed")
+
+
 def _dtmf_clock() -> float:
     """Return the event-loop clock (the one ``call_at`` deadlines use)."""
     try:
@@ -597,7 +603,9 @@ class _TwilioProtocolMixin:
     _hold_released: asyncio.Event
     _dtmf_mark_seq: int
     _dtmf_fence_seq: int
-    _dtmf_echo_suppress_until: float
+    _dtmf_fence_stream_sid: str | None
+    _dtmf_echo_suppress_until: dict[str, float]
+    _dtmf_release_task: asyncio.Task[None] | None
     _suppressed_inbound_dtmf: int
 
     # ── Per-class hooks ───────────────────────────────────────────
@@ -632,7 +640,9 @@ class _TwilioProtocolMixin:
         self._hold_released.set()
         self._dtmf_mark_seq = 0
         self._dtmf_fence_seq = 0
-        self._dtmf_echo_suppress_until = 0.0
+        self._dtmf_fence_stream_sid = None
+        self._dtmf_echo_suppress_until = {}
+        self._dtmf_release_task = None
         self._suppressed_inbound_dtmf = 0
 
     def _owns_connection(self, ws: ServerConnection) -> bool:
@@ -668,10 +678,18 @@ class _TwilioProtocolMixin:
         """Send a ``clear`` message to discard queued outbound audio on Twilio's side.
 
         While in-band DTMF tones are protected the clear is deferred until
-        their mark is acknowledged (or the guard expires), so it only wipes
-        audio queued after the tones.
+        their mark is acknowledged. A guard that expires first releases the
+        deferred clear at its deadline, and that clear also wipes any tones
+        Twilio has not played yet.
+
+        The request is bound to the stream that was active when it began: if
+        that stream ends or is replaced while an earlier deferred clear is
+        written, the request is dropped instead of clearing the new stream.
         """
+        stream_sid = self._stream_sid
         if await self._defer_clear_if_protected():
+            return
+        if self._stream_sid != stream_sid:
             return
         await self._send_clear_frame()
 
@@ -685,15 +703,23 @@ class _TwilioProtocolMixin:
     async def wait_playout_fence(self, *, timeout_s: float) -> bool:
         """Send a fence mark and wait for Twilio to echo it.
 
-        Returns ``True`` once everything queued before the fence has played;
+        Returns ``True`` once everything queued before the fence has left
+        Twilio's buffer, either played or discarded by a ``clear``: the echo
+        proves the audio is no longer queued, not that it was heard. Returns
         ``False`` on timeout, when no stream is active, or when the stream
         stopped or was replaced (gh 1103) during the wait. Clears issued
         during the fence are not deferred, and Twilio echoes pending marks on
         ``clear``, so a barge-in ends the wait promptly.
+
+        The stream active when the fence starts is recorded before any early
+        return; :meth:`begin_protected_playback` refuses to arm a guard on a
+        different stream, so a fence that ended because the stream was
+        replaced never protects tones on the replacement.
         """
         if not is_finite_number(timeout_s) or timeout_s <= 0:
             raise ValueError("timeout_s must be a positive finite number")
         stream_sid = self._stream_sid
+        self._dtmf_fence_stream_sid = stream_sid
         if stream_sid is None:
             return False
         # A deferred clear left behind by an aborted guard is flushed first so
@@ -721,12 +747,22 @@ class _TwilioProtocolMixin:
             self._dtmf_fence_waiters.pop(name, None)
 
     def begin_protected_playback(self, *, max_duration_s: float) -> object:
-        """Arm the clear guard synchronously and return its opaque token."""
+        """Arm the clear guard synchronously and return its opaque token.
+
+        Raises :class:`RuntimeError` when no stream is active, or when the
+        stream the preceding :meth:`wait_playout_fence` started on is no
+        longer the active one (it stopped or was replaced during the fence).
+        Each fence's recorded stream is consumed by the next call.
+        """
         if not is_finite_number(max_duration_s) or max_duration_s <= 0:
             raise ValueError("max_duration_s must be a positive finite number")
+        fence_stream_sid = self._dtmf_fence_stream_sid
+        self._dtmf_fence_stream_sid = None
         stream_sid = self._stream_sid
         if stream_sid is None or self._current_ws() is None:
             raise RuntimeError("Cannot protect Twilio playback without an active stream")
+        if fence_stream_sid is not None and fence_stream_sid != stream_sid:
+            raise RuntimeError("Twilio stream changed during the DTMF playout fence")
         loop = asyncio.get_running_loop()
         guard = _ProtectedGuard(
             owner=self,
@@ -795,17 +831,23 @@ class _TwilioProtocolMixin:
         self._drop_guard(token, "disconnected")
 
     def _finish_guard(self, guard: _ProtectedGuard, outcome: DTMFPlaybackOutcome) -> None:
-        """Resolve *guard* once and start the inbound-DTMF echo-suppression tail."""
+        """Resolve *guard* once and start the inbound-DTMF echo-suppression tail.
+
+        The tail is keyed by the guard's ``streamSid`` so ending a replaced
+        stream's guard never drops caller keys on the replacement stream.
+        """
         if guard.timer is not None:
             guard.timer.cancel()
             guard.timer = None
         if not guard.future.done():
             guard.future.set_result(outcome)
-        tail_s = self._config.dtmf_echo_suppress_tail_ms / 1000
-        self._dtmf_echo_suppress_until = max(
-            self._dtmf_echo_suppress_until,
-            _dtmf_clock() + tail_s,
-        )
+        now = _dtmf_clock()
+        tails = {
+            sid: until for sid, until in self._dtmf_echo_suppress_until.items() if until > now
+        }
+        until = now + self._config.dtmf_echo_suppress_tail_ms / 1000
+        tails[guard.stream_sid] = max(tails.get(guard.stream_sid, 0.0), until)
+        self._dtmf_echo_suppress_until = tails
 
     def _drop_guard(self, guard: _ProtectedGuard, outcome: DTMFPlaybackOutcome) -> None:
         """Remove one guard; wake held audio (it flushes any deferred clear)."""
@@ -822,6 +864,22 @@ class _TwilioProtocolMixin:
             return
         logger.debug("Twilio protected-playback guard expired before its mark was acknowledged")
         self._drop_guard(guard, "timeout")
+        if not self._dtmf_guards and self._clear_deferred:
+            # Nothing else may arrive to flush the barge-in clear deferred
+            # behind this guard, and Twilio could keep playing the speech it
+            # was meant to wipe. Held sends still wait for the clear (the hold
+            # loop re-checks ``_clear_deferred``), and stream teardown drops
+            # the deferral, so the clear stays scoped to this stream.
+            self._schedule_deferred_clear()
+
+    def _schedule_deferred_clear(self) -> None:
+        """Write a pending deferred clear from a task the transport owns."""
+        task = self._dtmf_release_task
+        if task is not None and not task.done():
+            return
+        task = asyncio.get_running_loop().create_task(self._release_guards())
+        task.add_done_callback(_log_deferred_clear_failure)
+        self._dtmf_release_task = task
 
     async def _guard_active(self) -> bool:
         """Return whether a guard is armed, expiring (and releasing) stale ones."""
@@ -883,8 +941,16 @@ class _TwilioProtocolMixin:
             await self._release_guards()
 
     async def _defer_clear_if_protected(self) -> bool:
-        """Return True when this clear is deferred or covered by a pending one."""
-        if await self._guard_active():
+        """Return True when this clear is deferred, covered, or now stale.
+
+        Expiring an overdue guard can await writing its deferred clear; a
+        clear whose stream ended or was replaced meanwhile is dropped.
+        """
+        stream_sid = self._stream_sid
+        active = await self._guard_active()
+        if self._stream_sid != stream_sid:
+            return True
+        if active:
             if not self._clear_deferred:
                 logger.debug("Deferring Twilio clear until in-band DTMF tones finish playing")
             self._clear_deferred = True
@@ -973,9 +1039,14 @@ class _TwilioProtocolMixin:
     async def _suppress_inbound_dtmf(self) -> bool:
         if not self._config.suppress_inbound_dtmf_during_tones:
             return False
-        if await self._guard_active():
+        stream_sid = self._stream_sid
+        if stream_sid is None:
+            return False
+        if await self._guard_active() and any(
+            guard.stream_sid == stream_sid for guard in self._dtmf_guards
+        ):
             return True
-        return _dtmf_clock() < self._dtmf_echo_suppress_until
+        return _dtmf_clock() < self._dtmf_echo_suppress_until.get(stream_sid, 0.0)
 
     # ── Read-only accessors ───────────────────────────────────────
 

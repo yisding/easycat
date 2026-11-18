@@ -13,8 +13,10 @@ far end that detects them. This test is that oracle:
 2. For the duration of the test, the voice URL of the dedicated loopback
    number ``EASYCAT_DTMF_LOOPBACK_TO`` (number B) points at this server, which
    answers with ``<Gather input="dtmf" finishOnKey="#">``. The previous voice
-   URL and method are restored afterwards. Use a number that serves nothing
-   else.
+   URL and method are restored afterwards. Use a dedicated, non-production
+   number that serves nothing else and routes voice through its webhook URL:
+   the test refuses a number with a TwiML App (``voice_application_sid``) or a
+   SIP trunk (``trunk_sid``), because Twilio ignores ``voice_url`` on those.
 3. Twilio places a call from ``EASYCAT_DTMF_LOOPBACK_FROM`` (number A) to
    number B whose leg runs ``<Connect><Stream>`` into a real EasyCat
    :class:`~easycat.session.Session`. The session plays ``1234#`` in-band;
@@ -30,8 +32,9 @@ Run it explicitly (it places one short call per tone variant)::
     uv run pytest tests/telephony/test_twilio_inband_dtmf_live.py \\
         -m "integration_live and provider and surface_transport" -v
 
-The test is skipped when any variable is missing or the ``twilio`` SDK is not
-installed.
+The live test is skipped when any variable is missing or the ``twilio`` SDK
+is not installed. The offline checks at the end of this module (no marks, no
+network) keep the loopback session config and routing guard honest.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ import os
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from http import HTTPStatus
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 from xml.sax.saxutils import quoteattr
@@ -52,8 +56,9 @@ from websockets.asyncio.server import ServerConnection
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
+from easycat.providers import Transport
 from easycat.session import Session, SessionConfig
-from easycat.stubs import NoopAgent, NoopSTT, NoopTTS, NoopVAD
+from easycat.stubs import NoopAgent
 from easycat.telephony import DTMFToneConfig
 from easycat.telephony.twiml import validate_twilio_webhook_signature
 from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
@@ -61,15 +66,7 @@ from easycat.transports.twilio_media import (
     TwilioConnectionTransport,
     twiml_connect_stream,
 )
-
-pytestmark = [
-    pytest.mark.integration_live,
-    pytest.mark.provider("twilio"),
-    pytest.mark.surface_transport,
-    # One real PSTN loopback call per variant: ringing, answer and two
-    # gathers take far longer than the suite's 60 s default.
-    pytest.mark.timeout(240),
-]
+from tests._fakes import FakeSTT, FakeTransport, FakeTTS
 
 _REQUIRED_ENV = (
     "TWILIO_ACCOUNT_SID",
@@ -136,6 +133,32 @@ def _loopback_env() -> _LoopbackEnv:
         public_url=public_url,
         port=int(os.environ.get("EASYCAT_DTMF_LOOPBACK_PORT", "8766")),
     )
+
+
+def _loopback_session_config(transport: Transport) -> SessionConfig:
+    """An audio-mode session that only plays tones.
+
+    ``Session`` rejects passthrough STT/TTS (and VAD when enabled) in audio
+    mode, so this uses the shared non-passthrough fakes and turns VAD off: the
+    loopback never needs a caller turn, only the outbound media path.
+    """
+    return SessionConfig(
+        transport=transport,
+        stt=FakeSTT(transcript=""),
+        tts=FakeTTS(),
+        agent=NoopAgent(),
+        enable_vad=False,
+        enable_noise_reduction=False,
+    )
+
+
+def _voice_routing_problem(number: Any) -> str | None:
+    """Why Twilio would not route calls on *number* to its ``voice_url``."""
+    if getattr(number, "voice_application_sid", None):
+        return "a TwiML App (voice_application_sid)"
+    if getattr(number, "trunk_sid", None):
+        return "a SIP trunk (trunk_sid)"
+    return None
 
 
 def _gather_twiml(env: _LoopbackEnv) -> str:
@@ -206,16 +229,7 @@ async def _loopback_server(env: _LoopbackEnv, state: _LoopbackState) -> AsyncIte
         )
         if not await transport.wait_for_start(timeout_s=_CALL_SETUP_TIMEOUT_S):
             return
-        session = Session(
-            SessionConfig(
-                transport=transport,
-                stt=NoopSTT(),
-                tts=NoopTTS(),
-                vad=NoopVAD(),
-                agent=NoopAgent(),
-                enable_noise_reduction=False,
-            )
-        )
+        session = Session(_loopback_session_config(transport))
         await session.start()
         state.sessions.put_nowait(session)
         # Keep the socket open until the test has stopped the session.
@@ -245,6 +259,13 @@ async def _loopback_voice_url(client: Any, env: _LoopbackEnv) -> AsyncIterator[N
     if not numbers:
         pytest.fail("EASYCAT_DTMF_LOOPBACK_TO is not a number on this Twilio account")
     number = numbers[0]
+    problem = _voice_routing_problem(number)
+    if problem is not None:
+        pytest.fail(
+            "EASYCAT_DTMF_LOOPBACK_TO routes voice through "
+            f"{problem}, which overrides voice_url; use a dedicated number with "
+            "webhook voice routing"
+        )
     previous_url, previous_method = number.voice_url, number.voice_method
     await asyncio.to_thread(
         client.incoming_phone_numbers(number.sid).update,
@@ -261,6 +282,12 @@ async def _loopback_voice_url(client: Any, env: _LoopbackEnv) -> AsyncIterator[N
         )
 
 
+@pytest.mark.integration_live
+@pytest.mark.provider("twilio")
+@pytest.mark.surface_transport
+# One real PSTN loopback call per variant: ringing, answer and two gathers take
+# far longer than the suite's 60 s default.
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize(
     "tone_config",
     [
@@ -274,9 +301,10 @@ async def _loopback_voice_url(client: Any, env: _LoopbackEnv) -> AsyncIterator[N
 async def test_inband_dtmf_reaches_twilio_gather_and_stream_survives(
     tone_config: DTMFToneConfig | None,
 ) -> None:
+    env = _loopback_env()
+    # After the skip check: the SDK is an optional extra.
     from twilio.rest import Client
 
-    env = _loopback_env()
     client = Client(env.account_sid, env.auth_token)
     state = _LoopbackState()
     call_sid: str | None = None
@@ -308,9 +336,41 @@ async def test_inband_dtmf_reaches_twilio_gather_and_stream_survives(
             assert await second.wait(second.duration_ms / 1000 + 10.0) == "played"
             assert await asyncio.wait_for(state.gathers.get(), _GATHER_TIMEOUT_S) == "56"
         finally:
-            if session is not None:
-                await session.stop(force=True)
-            state.finished.set()
-            if call_sid is not None:
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(client.calls(call_sid).update, status="completed")
+            try:
+                if session is not None:
+                    await session.stop(force=True)
+            finally:
+                # Release the socket handler and end the call even if stop()
+                # raised or was cancelled; server.wait_closed() waits on it.
+                state.finished.set()
+                if call_sid is not None:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(client.calls(call_sid).update, status="completed")
+
+
+# ── Offline checks (no marks, no network) ─────────────────────────
+
+
+def test_loopback_session_config_passes_audio_provider_validation() -> None:
+    config = _loopback_session_config(FakeTransport())
+    assert config.runtime_mode != "text_session"
+    Session(config)
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"voice_application_sid": "AP123", "trunk_sid": None}, "TwiML App"),
+        ({"voice_application_sid": None, "trunk_sid": "TK123"}, "SIP trunk"),
+        ({"voice_application_sid": "", "trunk_sid": ""}, None),
+        ({}, None),
+    ],
+)
+def test_voice_routing_problem_rejects_app_and_trunk_routing(
+    fields: dict[str, str | None], expected: str | None
+) -> None:
+    problem = _voice_routing_problem(SimpleNamespace(**fields))
+    if expected is None:
+        assert problem is None
+    else:
+        assert problem is not None and expected in problem

@@ -442,6 +442,39 @@ class TestLocalTransport:
         assert [item.chunk._easycat_dtmf_tone for item in queued] == [True, True, False]
 
     @pytest.mark.asyncio
+    async def test_complete_dtmf_burst_shorter_than_preroll_starts_playout(self):
+        """A short tone burst plays at once; speech still waits for the pre-roll."""
+        np = pytest.importorskip("numpy")
+        frame_samples = LocalTransport()._frame_samples
+        loud = (1000).to_bytes(2, "little", signed=True) * frame_samples
+
+        speech_only = LocalTransport()
+        speech_only._connected = True
+        speech = AudioChunk(data=loud * 2, format=speech_only.audio_format)
+        assert await speech_only.send_audio(speech) is True
+        assert speech_only._primed is False
+
+        transport = LocalTransport()
+        transport._connected = True
+        assert transport._config.output_preroll_frames == 3
+        first = AudioChunk(data=loud, format=transport.audio_format, _easycat_dtmf_tone=True)
+        assert await transport.send_audio(first) is True
+        assert transport._primed is False  # mid-burst frames keep the pre-roll
+        last = AudioChunk(
+            data=loud,
+            format=transport.audio_format,
+            _easycat_dtmf_tone=True,
+            _easycat_dtmf_burst_end=True,
+        )
+        assert await transport.send_audio(last) is True
+        assert transport._out_queue.qsize() < transport._config.output_preroll_frames
+        assert transport._primed is True
+
+        outdata = np.zeros((frame_samples, 1), dtype=np.float32)
+        transport._output_callback(np, outdata, frame_samples, None, None)
+        assert np.any(outdata)
+
+    @pytest.mark.asyncio
     async def test_output_callback_pushes_reference_during_preroll_silence(self):
         """Pre-roll silence still pushes one full-frame reference per callback.
 

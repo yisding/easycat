@@ -158,7 +158,8 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
     is swapped for a per-session `InBandDTMFDelivery`, which plays the tones
     and the speak fallback on the live media stream, so multi-level menus
     work. `None` stays `None` (the navigator only emits `IVRAction` events), a
-    custom `IVRDTMFSender` is used as given, and Telnyx is unchanged.
+    custom `IVRDTMFSender` (including a `DTMFDelivery` subclass) is used as
+    given, and Telnyx is unchanged.
   - `"in_band"`: always build a per-session `InBandDTMFDelivery`. Twilio only;
     a custom sender in `ivr_dtmf_delivery` is rejected as ambiguous.
   - `"rest"`: use the given `DTMFDelivery` as is. Its REST `<Play digits>`
@@ -169,7 +170,11 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   gaps and levels. An `InBandDTMFDelivery` passed as `ivr_dtmf_delivery`
   (with `"auto"` or `"in_band"`) is used as a settings template: each session
   gets its own clone, so one call's keys never play on another call's stream.
-  Invalid combinations raise `EasyConfigError`. Agent-tool
+  Set its `tone_config` rather than `ivr_dtmf_tones`; setting both is
+  rejected. A custom sender's `send_dtmf_with_retry` must accept the
+  `should_continue` keyword (or `**kwargs`). `ivr_dtmf_mode` and
+  `ivr_dtmf_tones` are keyword-only. Invalid combinations raise
+  `EasyConfigError`. Agent-tool
   `SendDTMFAction` on Twilio is configured separately, with
   `TwilioSessionActionConfig.dtmf_mode` (default `"rest"`).
 - `strip_markdown` — strip markdown formatting from agent output before

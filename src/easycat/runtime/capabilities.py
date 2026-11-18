@@ -59,17 +59,23 @@ class ProtectedPlayback(Protocol):
     async def wait_playout_fence(self, *, timeout_s: float) -> bool:
         """Send a playout fence and wait until the far end echoes it.
 
-        Returns ``True`` once everything queued before the fence has played,
-        ``False`` on timeout or when no stream is active (callers continue).
-        ``clear`` requests issued while waiting are NOT deferred.
+        Returns ``True`` once everything queued before the fence has left the
+        far end's buffer, either played or discarded by a ``clear`` (Twilio
+        echoes pending marks when it clears), so ``True`` means the audio is no
+        longer queued, not that it was heard. Returns ``False`` on timeout or
+        when no stream is active (callers continue). ``clear`` requests issued
+        while waiting are NOT deferred.
         """
         ...
 
     def begin_protected_playback(self, *, max_duration_s: float) -> object:
         """Arm the clear guard synchronously and return an opaque token.
 
-        Raises :class:`RuntimeError` when no stream is active. The guard
-        self-expires after *max_duration_s* seconds.
+        Raises :class:`RuntimeError` when no stream is active, and when the
+        stream the preceding :meth:`wait_playout_fence` targeted is no longer
+        the active one (it ended or was replaced during the fence), so a guard
+        is never armed, and tones never sent, on a replacement stream. The
+        guard self-expires after *max_duration_s* seconds.
         """
         ...
 
