@@ -95,6 +95,14 @@ lean alternative makes the Silero VAD and AEC3 model dependencies explicit.
 Commands below are for this repository. In an application, use the equivalent
 `uv add 'easycat[<extra>]'` form.
 
+`uv sync` is exact: it installs the extras you name and removes packages that
+only other extras provided. Each row below therefore installs that capability
+on its own. To add a capability to an existing setup, repeat the extras you
+already use, for example
+`uv sync --extra quickstart --extra rnnoise --group dev`. Some rows are
+already covered by `quickstart`: it includes `local`, `openai`,
+`openai-agents`, and LiveKit AEC3 (`aec`).
+
 | Capability | Repository install |
 | --- | --- |
 | Local audio | `uv sync --extra local --group dev` |
