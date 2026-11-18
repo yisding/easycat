@@ -1348,7 +1348,11 @@ class Session:
         sent, nothing is sent and
         :class:`~easycat._dtmf_tones.DTMFPlaybackCancelled` (a
         :class:`RuntimeError`) is raised. Once a frame is sent the burst
-        finishes regardless.
+        finishes regardless. On a transport that names its media stream
+        (Twilio's ``streamSid``), the burst is bound to the stream active when
+        this method is called and is called off the same way if a replacement
+        stream becomes active, or the stream cannot be identified, before the
+        first tone frame.
 
         Raises:
             RuntimeError: The session is not running, is stopping or closed,
@@ -1371,6 +1375,9 @@ class Session:
             or fence_timeout_s <= 0
         ):
             raise ValueError("fence_timeout_s must be a positive finite number")
+        # Bind the burst to the stream active at the call, before rendering
+        # yields: a stream replaced meanwhile calls the burst off.
+        bound_stream = self._audio_router.protected_playback_stream()
         pcm = await render_dtmf_pcm16_async(
             digits,
             inter_digit_delay_ms=inter_digit_delay_ms,
@@ -1404,6 +1411,7 @@ class Session:
             duration_ms=duration_ms,
             fence_timeout_s=float(fence_timeout_s),
             should_continue=should_continue,
+            bound_stream=bound_stream,
         )
 
     def _require_dtmf_output(self) -> None:
@@ -2165,6 +2173,7 @@ class Session:
         try:
             async with asyncio.timeout(_BARGE_IN_CUTOFF_TIMEOUT_S):
                 await clear_audio_if_supported(self.transport)
+            self._audio_router.forget_unplayed_tones()
         except TimeoutError:
             logger.warning(
                 "Transport playback clear exceeded %.0f ms%s",
@@ -2322,6 +2331,7 @@ class Session:
         # cancel synthesis that belongs to the newly installed turn.
         await self._tts_scheduler.synthesizer.cancel()
         await clear_audio_if_supported(self.transport)
+        self._audio_router.forget_unplayed_tones()
         # A VAD barge-in can install a successor while a delayed transport
         # clear is in flight. Its shared TTS provider and BOT_SPEAKING state
         # belong to that successor, so this stale playback-only cancellation
@@ -2345,6 +2355,7 @@ class Session:
         self._audio_router.reset_replay_chunks()
         await self._tts_scheduler.synthesizer.cancel()
         await clear_audio_if_supported(self.transport)
+        self._audio_router.forget_unplayed_tones()
 
     async def reset_state(self) -> None:
         """Cancel everything and return to idle/listening state.
@@ -2361,6 +2372,7 @@ class Session:
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
         await clear_audio_if_supported(self.transport)
+        self._audio_router.forget_unplayed_tones()
         await self._turn_runner.cancel_preemptive_generation()
         stt_cleanup_complete = await self._stt_committer.cancel(turn)
         await self._tts_scheduler.finish_turn_cancel(tts_task)

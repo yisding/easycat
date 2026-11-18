@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Literal, get_args
 
 from easycat._dtmf_tones import DTMFToneConfig, dtmf_sequence_duration_ms
@@ -306,9 +307,13 @@ def _tone_delay_ms(inter_digit_delay_ms: int) -> int:
     ``SendDTMFAction`` checks only the delay's range, so ``1000.0`` is a valid
     action that the REST path already rounds. Normalize it the same way for
     the in-band path (and the ``auto`` length check) instead of letting the
-    renderer reject it. Booleans and non-numbers pass through so the renderer
-    still rejects them.
+    renderer reject it. A finite :class:`~decimal.Decimal` (not a
+    :class:`numbers.Real`, but accepted by the action's range check) is
+    rounded too. Booleans and non-numbers pass through so the renderer still
+    rejects them.
     """
+    if isinstance(inter_digit_delay_ms, Decimal) and inter_digit_delay_ms.is_finite():
+        return int(inter_digit_delay_ms.to_integral_value())
     if isinstance(inter_digit_delay_ms, int) or not is_finite_real(inter_digit_delay_ms):
         return inter_digit_delay_ms
     return round(float(inter_digit_delay_ms))

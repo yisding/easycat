@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import pathlib
 from collections.abc import AsyncIterator
 
@@ -105,10 +106,19 @@ async def run_one_turn_then_stop(session: Session, *, timeout_s: float = 5.0) ->
     and raises instead of producing the bundle the test inspects.
     """
     reply_finished = asyncio.Event()
-    session.subscribe_event(BotStoppedSpeaking, lambda _event: reply_finished.set())
-    await session.start()
-    await asyncio.wait_for(reply_finished.wait(), timeout_s)
-    await session.stop()
+    subscription = session.subscribe_event(BotStoppedSpeaking, lambda _event: reply_finished.set())
+    try:
+        await session.start()
+        await asyncio.wait_for(reply_finished.wait(), timeout_s)
+    except BaseException:
+        # Close the started session, but keep the original failure.
+        with contextlib.suppress(Exception):
+            await session.stop(force=True)
+        raise
+    else:
+        await session.stop()
+    finally:
+        subscription.unsubscribe()
 
 
 async def _build_voice_bundle(tmp_path: pathlib.Path) -> pathlib.Path:

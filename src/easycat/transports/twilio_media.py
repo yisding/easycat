@@ -106,6 +106,9 @@ _MAX_DTMF_ECHO_SUPPRESS_TAIL_MS = 5000
 # ``easycat.runtime.capabilities.ProtectedPlayback``).
 _DTMF_FENCE_MARK_PREFIX = "easycat_dtmf_fence_"
 _DTMF_GUARD_MARK_PREFIX = "easycat_dtmf_"
+# Twilio echoes only the mark name, so a caller-supplied mark in this
+# namespace could resolve a fence or guard; ``send_mark`` rejects it.
+_RESERVED_MARK_PREFIX = _DTMF_GUARD_MARK_PREFIX
 
 
 def _parse_twilio_message(raw: str) -> dict[str, Any] | None:
@@ -665,6 +668,22 @@ class _TwilioProtocolMixin:
         raise NotImplementedError
 
     async def send_mark(self, name: str | None = None) -> str:
+        """Send a ``mark`` message so Twilio acknowledges playback position.
+
+        Returns the mark name used (auto-generated if not provided). Names
+        starting with ``easycat_dtmf_`` are reserved for the in-band DTMF
+        fence and completion marks and raise :class:`ValueError`: Twilio
+        echoes only the name, so such a mark could release a clear guard
+        while protected tones are still queued.
+        """
+        if isinstance(name, str) and name.startswith(_RESERVED_MARK_PREFIX):
+            raise ValueError(
+                f"Twilio mark names starting with {_RESERVED_MARK_PREFIX!r} are reserved "
+                "for in-band DTMF playback"
+            )
+        return await self._send_mark_frame(name)
+
+    async def _send_mark_frame(self, name: str | None = None) -> str:
         """Send a playback-position ``mark`` over the wire (per-class encoder)."""
         raise NotImplementedError
 
@@ -742,7 +761,7 @@ class _TwilioProtocolMixin:
         self._dtmf_fence_waiters[name] = (stream_sid, waiter)
         try:
             try:
-                sent = await self.send_mark(name)
+                sent = await self._send_mark_frame(name)
             except RuntimeError:
                 return False
             if not sent or self._stream_sid != stream_sid:
@@ -812,7 +831,7 @@ class _TwilioProtocolMixin:
             self._drop_guard(guard, "disconnected")
             return guard.future
         try:
-            sent: str | None = await self.send_mark(name)
+            sent: str | None = await self._send_mark_frame(name)
         except RuntimeError:
             sent = None
         if not sent and not guard.future.done():
@@ -1578,11 +1597,8 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
 
     # ── Mark support ──────────────────────────────────────────────
 
-    async def send_mark(self, name: str | None = None) -> str:
-        """Send a ``mark`` message so Twilio acknowledges playback position.
-
-        Returns the mark name used (auto-generated if not provided).
-        """
+    async def _send_mark_frame(self, name: str | None = None) -> str:
+        """Write a ``mark`` frame; returns the mark name used (auto-generated if not provided)."""
         ws = self._ws
         stream_sid = self._stream_sid
         if ws is None or stream_sid is None:
@@ -1755,7 +1771,7 @@ class TwilioConnectionTransport(_TwilioProtocolMixin, TelephonyConnectionTranspo
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot clear audio: Twilio disconnected")
 
-    async def send_mark(self, name: str | None = None) -> str:
+    async def _send_mark_frame(self, name: str | None = None) -> str:
         stream_sid = self._stream_sid
         if stream_sid is None:
             logger.debug("Cannot send mark: no active Twilio stream")

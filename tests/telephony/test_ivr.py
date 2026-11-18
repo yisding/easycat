@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import inspect
 import logging
 import math
+import typing
 import weakref
+from collections.abc import Awaitable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -882,6 +885,17 @@ class TestInBandDTMFDelivery:
     def test_both_senders_satisfy_the_protocol(self) -> None:
         assert isinstance(DTMFDelivery(), IVRDTMFSender)
         assert isinstance(InBandDTMFDelivery(), IVRDTMFSender)
+
+    @pytest.mark.parametrize("method", ["send_dtmf_with_retry", "send_speech"])
+    def test_protocol_methods_declare_any_awaitable(self, method: str) -> None:
+        """A sender returning ``asyncio.Future[bool]`` type-checks, not only ``async def``.
+
+        An ``async def`` protocol method is typed as returning a ``Coroutine``,
+        which rejects a future-returning sender the runtime awaits fine.
+        """
+        declared = getattr(IVRDTMFSender, method)
+        assert not inspect.iscoroutinefunction(declared)
+        assert typing.get_type_hints(declared)["return"] == Awaitable[bool]
 
     @pytest.mark.parametrize(
         ("kwargs", "error"),

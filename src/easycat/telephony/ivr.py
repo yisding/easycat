@@ -112,7 +112,7 @@ def _validate_non_negative_number(name: str, value: float) -> None:
 async def _await_ivr_sender_call(result: object, method: str) -> Any:
     """Await what an :class:`IVRDTMFSender` method returned.
 
-    The protocol's methods are coroutines, but a runtime-checkable protocol
+    The protocol's methods return awaitables, but a runtime-checkable protocol
     and a signature check cannot tell a plain ``def`` from a wrapper that
     returns a coroutine. A plain ``def`` that returns ``True`` would otherwise
     fail with an opaque ``await`` error, so name the broken contract instead.
@@ -131,21 +131,22 @@ class IVRDTMFSender(Protocol):
 
     :class:`DTMFDelivery` (REST ``<Play digits>``) and
     :class:`InBandDTMFDelivery` (tones on the live media stream) both conform;
-    any object with these two coroutines can be passed as ``dtmf_delivery``.
-    ``send_dtmf_with_retry`` must accept the ``should_continue`` keyword (or
-    ``**kwargs``). The outbound helpers assign the accepted call SID to a
-    sender's ``call_sid`` attribute when it has a writable one; a read-only
-    ``call_sid`` is left alone.
+    any object whose two methods return an awaitable of ``bool`` (an
+    ``async def``, or a ``def`` returning an :class:`asyncio.Future`) can be
+    passed as ``dtmf_delivery``. ``send_dtmf_with_retry`` must accept the
+    ``should_continue`` keyword (or ``**kwargs``). The outbound helpers
+    assign the accepted call SID to a sender's ``call_sid`` attribute when it
+    has a writable one; a read-only ``call_sid`` is left alone.
     """
 
-    async def send_dtmf_with_retry(
+    def send_dtmf_with_retry(
         self,
         digits: str,
         *,
         should_continue: Callable[[], bool] | None = None,
-    ) -> bool: ...
+    ) -> Awaitable[bool]: ...
 
-    async def send_speech(self, text: str) -> bool: ...
+    def send_speech(self, text: str) -> Awaitable[bool]: ...
 
 
 class DTMFDelivery:

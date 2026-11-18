@@ -48,11 +48,17 @@ class ProtectedPlayback(Protocol):
     The expected call order is::
 
         # True: earlier audio left the buffer (played or discarded by a clear);
-        # False: timed out, so earlier audio may still be queued.
+        # False: not confirmed (timed out, no stream is active, the stream
+        # stopped or was replaced during the fence, or the fence mark could
+        # not be sent), so earlier audio may still be queued.
         await t.wait_playout_fence(timeout_s=...)
         token = t.begin_protected_playback(max_duration_s=...)  # no await between
         ...send frames tagged with ``PROTECTED_PLAYBACK_CHUNK_ATTR = token``...
-        done = await t.end_protected_playback(token)  # resolves on far-end ack
+        done = await t.end_protected_playback(token)
+        # done resolves "played" on the far-end ack of the completion mark,
+        # "timeout" when the guard deadline passes first, or "disconnected"
+        # when the mark cannot be sent, the stream ends or is replaced, or
+        # the guard is aborted.
 
     ``abort_protected_playback`` releases the guard early (a rejected frame, or
     a forced session stop).
@@ -72,9 +78,10 @@ class ProtectedPlayback(Protocol):
         Returns ``True`` once everything queued before the fence has left the
         far end's buffer, either played or discarded by a ``clear`` (Twilio
         echoes pending marks when it clears), so ``True`` means the audio is no
-        longer queued, not that it was heard. Returns ``False`` on timeout or
-        when no stream is active (callers continue). ``clear`` requests issued
-        while waiting are NOT deferred.
+        longer queued, not that it was heard. Returns ``False`` on timeout,
+        when no stream is active, or when the stream stopped or was replaced
+        during the wait (callers continue). ``clear`` requests issued while
+        waiting are NOT deferred.
         """
         ...
 

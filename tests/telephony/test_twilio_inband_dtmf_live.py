@@ -295,13 +295,24 @@ async def _loopback_voice_url(client: Any, env: _LoopbackEnv) -> AsyncIterator[N
         )
 
     # The override is inside the restore scope: Twilio may apply it even when
-    # the client never sees the response.
-    try:
-        await asyncio.to_thread(
+    # the client never sees the response. Its worker thread keeps running when
+    # this caller is cancelled, so it must land before the restore does, or it
+    # would leave the number pointing at the tunnel.
+    override = asyncio.ensure_future(
+        asyncio.to_thread(
             client.incoming_phone_numbers(number.sid).update,
             voice_url=env.https(_ANSWER_PATH),
             voice_method="GET",
         )
+    )
+    try:
+        try:
+            await asyncio.shield(override)
+        except asyncio.CancelledError:
+            await asyncio.wait({override})
+            if not override.cancelled():
+                override.exception()  # retrieved; the cancellation stays primary
+            raise
         yield
     except BaseException as exc:
         try:
@@ -489,6 +500,44 @@ async def test_voice_url_restore_failure_keeps_the_original_error() -> None:
 
     assert str(excinfo.value) == "gather mismatch"
     assert any("restore its voice URL" in note for note in excinfo.value.__notes__)
+
+
+async def test_voice_url_is_restored_after_an_override_cancelled_mid_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancelled caller waits for the running override worker before restoring."""
+    numbers = _FakeIncomingNumbers()
+    client = SimpleNamespace(incoming_phone_numbers=numbers)
+    override_running = asyncio.Event()
+    release_override = asyncio.Event()
+
+    async def fake_to_thread(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("voice_method") != "GET":
+            return fn(*args, **kwargs)
+
+        async def worker() -> Any:
+            # A worker thread: it finishes even when its caller is cancelled.
+            override_running.set()
+            await release_override.wait()
+            return fn(*args, **kwargs)
+
+        return await asyncio.shield(asyncio.ensure_future(worker()))
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    async def run() -> None:
+        async with _loopback_voice_url(client, _offline_env()):
+            pytest.fail("the body must not run before the override returned")
+
+    running = asyncio.create_task(run())
+    await asyncio.wait_for(override_running.wait(), 5.0)
+    running.cancel()
+    release_override.set()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    assert [update["voice_method"] for update in numbers.updates] == ["GET", "POST"]
+    assert numbers.updates[-1] == _RESTORED
 
 
 async def test_voice_url_is_restored_after_a_clean_run() -> None:

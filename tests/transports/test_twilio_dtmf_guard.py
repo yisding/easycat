@@ -227,6 +227,34 @@ class TestTwilioProtectedPlayback:
         assert "clear" not in ws.kinds()
         assert transport._hold_released.is_set()
 
+    @pytest.mark.parametrize("name", ["easycat_dtmf_1", "easycat_dtmf_fence_1"])
+    async def test_public_marks_cannot_use_the_protected_mark_names(
+        self, kind: str, name: str
+    ) -> None:
+        """An ordinary mark echoing a guard name would release its deferred clear early."""
+        transport, ws = await _started(kind)
+
+        with pytest.raises(ValueError, match="reserved"):
+            await transport.send_mark(name)
+        with pytest.raises(ValueError, match="reserved"):
+            await transport.send_playback_mark(name)
+        assert ws.sent == []
+
+        # Ordinary names, and the fence and completion marks, still go out.
+        assert await transport.send_playback_mark("easycat_turn_1") == "easycat_turn_1"
+        await _fence(transport, ws)
+        token = transport.begin_protected_playback(max_duration_s=5.0)
+        await _send_all(transport, _tone_frames("1", token))
+        done = await transport.end_protected_playback(token)
+        assert ws.kinds() == [
+            "mark:easycat_turn_1",
+            "mark:easycat_dtmf_fence_1",
+            "media",
+            "mark:easycat_dtmf_1",
+        ]
+        await transport._handle_message(_mark_msg("easycat_dtmf_1"))
+        assert done.result() == "played"
+
     async def test_clear_during_fence_goes_to_the_wire_immediately(self, kind: str) -> None:
         transport, ws = await _started(kind)
 

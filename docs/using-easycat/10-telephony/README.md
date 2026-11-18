@@ -182,10 +182,12 @@ then speak, or navigate several menu levels. `DTMFToneConfig` sets the shape:
 levels (+2 dB twist), and `w`/`W` pauses of 0.5 s and 1 s. On Twilio the
 transport protects the burst:
 
-- A playout fence mark waits until earlier speech has left Twilio's buffer
-  (bounded by `fence_timeout_s`, 10 s), so a barge-in before the tones still
-  clears that speech. The fence acknowledgement means the speech was played
-  or discarded by such a `clear`, not that the far end heard it.
+- A playout fence mark waits until earlier speech has left Twilio's buffer,
+  so a barge-in before the tones still clears that speech. `fence_timeout_s`
+  (10 s) bounds only the wait for Twilio's acknowledgement: the timer starts
+  once the mark is written, so a stalled WebSocket write can make the fence
+  take longer. The fence acknowledgement means the speech was played or
+  discarded by such a `clear`, not that the far end heard it.
 - While the tones play, a barge-in `clear` is deferred until Twilio
   acknowledges the completion mark. Then the clear removes only audio queued
   after the tones. The deferral lasts at most the tone length plus 5 s: if the

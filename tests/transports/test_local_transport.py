@@ -477,14 +477,23 @@ class TestLocalTransport:
     @pytest.mark.asyncio
     async def test_long_preroll_lets_a_paced_dtmf_burst_start(self):
         """Tones start inside the router's 500 ms pacing window; speech keeps its pre-roll."""
+        np = pytest.importorskip("numpy")
         config = LocalTransportConfig(output_preroll_frames=40)
-        frame_bytes = LocalTransport(config)._frame_samples * 2
+        frame_samples = LocalTransport(config)._frame_samples
+        frame_bytes = frame_samples * 2
+        loud = (1000).to_bytes(2, "little", signed=True) * frame_samples
 
         speech_only = LocalTransport(config)
         speech_only._connected = True
         for _ in range(30):
-            plain = AudioChunk(data=bytes(frame_bytes), format=speech_only.audio_format)
+            plain = AudioChunk(data=loud, format=speech_only.audio_format)
             assert await speech_only.send_audio(plain) is True
+        # The playout callback decides priming: below the pre-roll it emits
+        # silence and leaves the queued speech in place.
+        outdata = np.ones((frame_samples, 1), dtype=np.float32)
+        speech_only._output_callback(np, outdata, frame_samples, None, None)
+        assert not np.any(outdata)
+        assert speech_only._out_queue.qsize() == 30
         assert speech_only._primed is False
 
         transport = LocalTransport(config)

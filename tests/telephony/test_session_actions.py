@@ -7,6 +7,7 @@ import base64
 import hashlib
 import hmac
 import logging
+from decimal import Decimal
 from typing import Any
 from unittest.mock import patch
 
@@ -497,9 +498,16 @@ class _RenderCheckingSession(_FakeToneSession):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("delay", [1000.0, Decimal(1000)], ids=["float", "decimal"])
 @pytest.mark.parametrize("mode", ["in_band", "auto"])
-async def test_in_band_dtmf_rounds_a_float_delay_the_renderer_would_reject(mode: str) -> None:
-    """``SendDTMFAction`` accepts ``1000.0``; the REST path rounds it, so in-band must too."""
+async def test_in_band_dtmf_rounds_a_float_delay_the_renderer_would_reject(
+    mode: str, delay: object
+) -> None:
+    """``SendDTMFAction`` accepts ``1000.0``; the REST path rounds it, so in-band must too.
+
+    ``Decimal`` is not a :class:`numbers.Real` but passes the action's range
+    check, so it is normalized the same way.
+    """
     client = _FakeTwilioClient()
     executor = TwilioSessionActionExecutor(
         TwilioSessionActionConfig(client=client, dtmf_mode=mode)  # type: ignore[arg-type]
@@ -508,7 +516,7 @@ async def test_in_band_dtmf_rounds_a_float_delay_the_renderer_would_reject(mode:
 
     result = await executor.execute(
         session,
-        SendDTMFAction(digits="12", inter_digit_delay_ms=1000.0),  # type: ignore[arg-type]
+        SendDTMFAction(digits="12", inter_digit_delay_ms=delay),  # type: ignore[arg-type]
     )
 
     assert result.metadata["delivery"] == "in_band"
@@ -519,7 +527,8 @@ async def test_in_band_dtmf_rounds_a_float_delay_the_renderer_would_reject(mode:
 
 
 @pytest.mark.asyncio
-async def test_auto_mode_checks_the_tone_limit_for_a_float_delay() -> None:
+@pytest.mark.parametrize("delay", [1000.0, Decimal(1000)], ids=["float", "decimal"])
+async def test_auto_mode_checks_the_tone_limit_for_a_float_delay(delay: object) -> None:
     client = _FakeTwilioClient()
     executor = TwilioSessionActionExecutor(
         TwilioSessionActionConfig(client=client, dtmf_mode="auto")
@@ -528,7 +537,7 @@ async def test_auto_mode_checks_the_tone_limit_for_a_float_delay() -> None:
 
     result = await executor.execute(
         session,
-        SendDTMFAction(digits="1" * 56, inter_digit_delay_ms=1000.0),  # type: ignore[arg-type]
+        SendDTMFAction(digits="1" * 56, inter_digit_delay_ms=delay),  # type: ignore[arg-type]
     )
 
     assert session.calls == []

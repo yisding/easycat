@@ -612,6 +612,58 @@ async def test_drained_aec_reference_capture_is_masked_under_pii(
         assert any(chunk.data != bytes(len(chunk.data)) for chunk in captured)
 
 
+async def test_local_flagged_reference_stays_masked_after_the_mask_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-frame tone flag masks a capture drained after the 1 s time window."""
+    np = pytest.importorskip("numpy")
+    from easycat.transports.local import LocalTransport, LocalTransportConfig
+
+    # Journal every drained frame, not the decimated one-per-second sample.
+    monkeypatch.setattr("easycat.session._audio_router._AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES", 1)
+    aec = _RecordingAEC()
+    transport = LocalTransport(LocalTransportConfig(output_preroll_frames=0))
+    session = _session(
+        transport,
+        echo_canceller=aec,
+        enable_echo_cancellation=True,
+        artifact_store=InMemoryArtifactStore(),
+        capture_aec_reference=True,
+        journal_redaction="pii",
+    )
+    router = session._audio_router
+    captured: list[AudioChunk] = []
+
+    async def _record(chunk: AudioChunk, *_args: Any) -> None:
+        captured.append(chunk)
+
+    router._audio_stage.record_reference = _record  # type: ignore[method-assign]
+    transport._connected = True
+    transport.drain_aec_reference_frames()  # the router's first drain arms capture
+    fmt = transport.audio_format
+    tone_pcm = resample(render_dtmf_pcm16("5"), PCM16_MONO_8K.sample_rate, fmt.sample_rate)
+    frame_samples = transport._frame_samples
+    frame_bytes = frame_samples * fmt.frame_size
+    tone_pcm = tone_pcm[: len(tone_pcm) - len(tone_pcm) % frame_bytes]
+    # Tagged as the router tags tone frames, played out by the speaker callback.
+    await transport.send_audio(AudioChunk(data=tone_pcm, format=fmt, _easycat_dtmf_tone=True))
+    for _ in range(len(tone_pcm) // frame_bytes):
+        outdata = np.zeros((frame_samples, 1), dtype=np.float32)
+        transport._output_callback(np, outdata, frame_samples, None, None)
+
+    # The burst and its 1 s masking tail are over: only the flag can mask.
+    loop = asyncio.get_running_loop()
+    router._tone_capture_mask_until = loop.time() - 1.0
+    assert router._dtmf_bursts_sending == 0
+    await router._feed_transport_aec_reference(AudioChunk(data=bytes(320), format=fmt), None)
+
+    assert loop.time() >= router._tone_capture_mask_until
+    assert captured and all(chunk.data == bytes(len(chunk.data)) for chunk in captured)
+    assert b"".join(chunk.data for chunk in captured) == bytes(len(tone_pcm))
+    # The canceller always receives the real far-end tones.
+    assert b"".join(ref.data for ref in aec.references) == tone_pcm
+
+
 class _BoundedPlayoutTransport(_RecordingTransport):
     """Reporting transport with a bounded playout queue, like WebRTC's.
 
@@ -675,6 +727,126 @@ async def test_long_burst_is_paced_to_a_bounded_playout_queue() -> None:
     assert transport.rejected == 0
     assert transport.max_depth <= 30
     assert decode_dtmf(transport.tone_pcm()) == "12345678901"
+
+
+class _ManualPlayoutTransport(_RecordingTransport):
+    """Reporting transport with a bounded queue that plays only when told to.
+
+    No pending-playout hook (like WebRTC), so a burst does not wait for an
+    earlier burst's frames to play before it starts.
+    """
+
+    reports_audio_delivery = True
+
+    def __init__(self, *, capacity: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.bus: Any = None
+        self.capacity = capacity
+        self.queue: list[AudioChunk] = []
+        self.rejected = 0
+        self.max_depth = 0
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        if len(self.queue) >= self.capacity:
+            self.rejected += 1
+            return False
+        accepted = await super().send_audio(chunk)
+        self.queue.append(chunk)
+        self.max_depth = max(self.max_depth, len(self.queue))
+        return accepted
+
+    async def play_one(self) -> None:
+        if not self.queue:
+            return
+        chunk = self.queue.pop(0)
+        await self.bus.emit(
+            TransportAudioDelivered(
+                chunk=AudioChunk(
+                    data=chunk.data,
+                    format=chunk.format,
+                    _easycat_dtmf_tone=getattr(chunk, "_easycat_dtmf_tone", False) is True,
+                ),
+                session_id=getattr(chunk, "_easycat_session_id", None),
+            )
+        )
+
+    async def clear_audio(self) -> None:
+        self.queue.clear()
+        await super().clear_audio()
+
+
+def _play_while_pacing_waits(router: Any, transport: _ManualPlayoutTransport) -> list[int]:
+    """Play one queued frame whenever tone pacing waits for playout progress."""
+    depths: list[int] = []
+    original_wait = router._tone_progress.wait
+
+    async def wait_with_playout() -> bool:
+        depths.append(len(transport.queue))
+        await transport.play_one()
+        return await original_wait()
+
+    router._tone_progress.wait = wait_with_playout
+    return depths
+
+
+async def test_back_to_back_bursts_stay_within_the_pacing_window() -> None:
+    """A burst counts the earlier burst's unplayed frames instead of starting at zero."""
+    # One key is 13 frames (260 ms); three back-to-back bursts would hold 39
+    # frames while the 500 ms window allows 25.
+    transport = _ManualPlayoutTransport(capacity=30)
+    session = _session(transport)
+    transport.bus = session.event_bus
+    async with session:
+        router = session._audio_router
+        waits = _play_while_pacing_waits(router, transport)
+        for key in "123":
+            await asyncio.wait_for(session.play_dtmf_tones(key), _WAIT_S)
+        assert waits
+        assert router._tone_ms_in_flight == pytest.approx(20 * len(transport.queue))
+    assert transport.rejected == 0
+    assert transport.max_depth <= 25
+    assert decode_dtmf(transport.tone_pcm()) == "123"
+
+
+async def test_a_transport_clear_forgets_unplayed_tone_frames() -> None:
+    """Cleared frames never report played, so a clear drops their pacing share."""
+    transport = _ManualPlayoutTransport(capacity=60)
+    session = _session(transport)
+    transport.bus = session.event_bus
+    async with session:
+        router = session._audio_router
+        waits = _play_while_pacing_waits(router, transport)
+        await asyncio.wait_for(session.play_dtmf_tones("1"), _WAIT_S)
+        assert router._tone_ms_in_flight > 0
+        await session.cancel_tts_playback()
+        assert transport.queue == []
+        assert router._tone_ms_in_flight == 0.0
+        # The next burst gets the whole window again: 25 frames before a wait.
+        await asyncio.wait_for(session.play_dtmf_tones("234"), _WAIT_S)
+        assert waits and waits[0] == 25
+
+
+async def test_a_pacing_stall_drops_the_stale_bookings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audio that never reports played (an outside clear) costs one stall, not one per frame."""
+    monkeypatch.setattr("easycat.session._audio_router._TONE_PACING_STALL_S", 0)
+    transport = _ManualPlayoutTransport(capacity=60)  # never plays
+    session = _session(transport)
+    transport.bus = session.event_bus
+    waits = 0
+    async with session:
+        router = session._audio_router
+        original_wait = router._tone_progress.wait
+
+        def counting_wait() -> Any:
+            nonlocal waits
+            waits += 1
+            return original_wait()
+
+        router._tone_progress.wait = counting_wait
+        # Four keys are 43 frames: one stall at frame 26, then a fresh window.
+        await asyncio.wait_for(session.play_dtmf_tones("1234"), _WAIT_S)
+    assert waits == 1
+    assert decode_dtmf(transport.tone_pcm()) == "1234"
 
 
 class _Fixed16kTransport(_RecordingTransport):
@@ -1108,6 +1280,96 @@ async def test_stream_replacement_during_the_fence_sends_no_tone(replaced: bool)
         assert "tone" not in kinds
     else:
         assert decode_dtmf(transport.tone_pcm()) == "7"
+
+
+async def test_stream_replaced_while_rendering_calls_the_burst_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The burst binds to the stream active at the call, not after rendering."""
+    from easycat.session import _session as session_module
+
+    transport = _StreamGuardTransport()
+    transport.fence_release.set()
+    original_render = session_module.render_dtmf_pcm16_async
+
+    async def render_across_a_replacement(*args: Any, **kwargs: Any) -> bytes:
+        pcm = await original_render(*args, **kwargs)
+        transport.stream_id = "MZ-replacement"
+        return pcm
+
+    monkeypatch.setattr(session_module, "render_dtmf_pcm16_async", render_across_a_replacement)
+    async with _session(transport) as session:
+        with pytest.raises(DTMFPlaybackCancelled) as excinfo:
+            await asyncio.wait_for(session.play_dtmf_tones("7"), _WAIT_S)
+    assert "7" not in str(excinfo.value)
+    kinds = transport.kinds()
+    assert "fence" not in kinds
+    assert "begin" not in kinds
+    assert "tone" not in kinds
+
+
+class _FlakyStreamIdTransport(_StreamGuardTransport):
+    """Stream-identity hook that raises on its first read only."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.stream_reads = 0
+
+    def protected_playback_stream_id(self) -> str | None:
+        self.stream_reads += 1
+        if self.stream_reads == 1:
+            raise RuntimeError("stream identity unavailable")
+        return super().protected_playback_stream_id()
+
+
+async def test_raising_stream_id_hook_calls_the_burst_off() -> None:
+    """A present hook that raises leaves the stream unknown, so nothing is sent."""
+    transport = _FlakyStreamIdTransport()
+    transport.fence_release.set()
+    async with _session(transport) as session:
+        with pytest.raises(DTMFPlaybackCancelled) as excinfo:
+            await asyncio.wait_for(session.play_dtmf_tones("7"), _WAIT_S)
+        assert transport.stream_reads >= 2
+        # The next burst binds afresh and plays.
+        playback = await asyncio.wait_for(session.play_dtmf_tones("8"), _WAIT_S)
+        transport.ack()
+        assert await playback.wait(_WAIT_S) == "played"
+    assert "7" not in str(excinfo.value)
+    assert transport.kinds().count("fence") == 1
+    assert decode_dtmf(transport.tone_pcm()) == "8"
+
+
+class _ContentionSignallingLock(asyncio.Lock):
+    """Lock that signals when an acquirer has to wait for it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.contended = asyncio.Event()
+
+    async def acquire(self) -> bool:
+        if self.locked():
+            self.contended.set()
+        return await super().acquire()
+
+
+async def test_stream_replaced_while_waiting_for_the_send_lock_sends_no_fence() -> None:
+    transport = _StreamGuardTransport()
+    transport.fence_release.set()
+    async with _session(transport) as session:
+        router = session._audio_router
+        lock = _ContentionSignallingLock()
+        router._outbound_send_lock = lock
+        await lock.acquire()  # speech still sending after a timed-out drain
+        playing = asyncio.create_task(session.play_dtmf_tones("7"))
+        await asyncio.wait_for(lock.contended.wait(), _WAIT_S)
+        transport.stream_id = "MZ-replacement"
+        lock.release()
+        with pytest.raises(DTMFPlaybackCancelled):
+            await asyncio.wait_for(playing, _WAIT_S)
+    kinds = transport.kinds()
+    assert "fence" not in kinds
+    assert "begin" not in kinds
+    assert "tone" not in kinds
 
 
 async def test_inline_delivery_report_does_not_inflate_tone_pacing(
