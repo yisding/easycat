@@ -109,6 +109,10 @@ _DTMF_MARK_PREFIX = "easycat_dtmf_"
 # stay masked under "pii" redaction: covers device/playout buffering between
 # the delivery report and the frame reaching the reference queue.
 _TONE_CAPTURE_MASK_TAIL_S = 1.0
+# Delivery-reporting transports: keep at most this much tone audio queued
+# ahead of playout, and stop waiting for playout progress after this long.
+_TONE_PACING_AHEAD_MS = 500.0
+_TONE_PACING_STALL_S = 2.0
 
 
 def _aec_reference_env_override() -> bool | None:
@@ -358,6 +362,11 @@ class AudioRouter:
         # transport reslices playout into bare bytes, so its drained frames
         # cannot carry the per-frame tone flag.
         self._dtmf_bursts_sending: int = 0
+        # Tone audio submitted to a delivery-reporting (locally buffered)
+        # transport but not yet reported played.  Bursts are paced against it
+        # so a long sequence never overruns a bounded playback queue.
+        self._tone_ms_in_flight: float = 0.0
+        self._tone_progress = asyncio.Event()
         self._tone_capture_mask_until: float = 0.0
         # Raw inbound PCM rate (the AEC near-end rate).  Tone frames are 8 kHz;
         # their AEC reference copy is resampled to this rate so a rate mismatch
@@ -785,7 +794,9 @@ class AudioRouter:
                     mask = self._journal_sink.redaction == "pii"
                     for chunk in chunks:
                         self._tag_tone_chunk(chunk, token=token, mask=mask)
+                    self._tone_ms_in_flight = 0.0
                     for chunk in chunks:
+                        await self._pace_tone_submission()
                         await self._send_tone_chunk(chunk)
                     mark_name, done = await self._complete_protected_sequence(
                         guard,
@@ -844,10 +855,31 @@ class AudioRouter:
             delivered = await self._transport_stage.execute(chunk, self._run_ctx, self._no_turn)
             if not delivered:
                 raise RuntimeError("transport rejected DTMF audio")
-            if not self._transport_reports_audio_delivery:
+            if self._transport_reports_audio_delivery:
+                self._tone_ms_in_flight += chunk.duration_ms
+            else:
                 await self._deliver_tone_chunk(chunk)
         finally:
             await self._finish_outbound_send(replayed_chunk=False)
+
+    async def _pace_tone_submission(self) -> None:
+        """Hold the next tone frame while too much tone audio awaits playout.
+
+        Delivery-reporting transports (local, WebRTC) buffer outbound audio in
+        bounded queues and report each frame when it plays.  Submitting a long
+        burst at once would overrun those queues and reject its tail after
+        part of the key sequence was already queued.  Without delivery
+        progress for ``_TONE_PACING_STALL_S`` the frame is submitted anyway,
+        so a stalled transport surfaces as a rejection rather than a hang.
+        """
+        if not self._transport_reports_audio_delivery:
+            return
+        while self._tone_ms_in_flight >= _TONE_PACING_AHEAD_MS:
+            self._tone_progress.clear()
+            try:
+                await asyncio.wait_for(self._tone_progress.wait(), _TONE_PACING_STALL_S)
+            except TimeoutError:
+                return
 
     async def _deliver_tone_chunk(self, chunk: AudioChunk) -> None:
         """AEC reference + ``AudioOut`` for a delivered tone frame (no turn)."""
@@ -859,6 +891,9 @@ class AudioRouter:
         )
         masked = AudioChunk(data=bytes(len(chunk.data)), format=chunk.format) if mask else None
         self._extend_tone_capture_mask(chunk.duration_ms / 1000)
+        if self._transport_reports_audio_delivery:
+            self._tone_ms_in_flight = max(0.0, self._tone_ms_in_flight - chunk.duration_ms)
+            self._tone_progress.set()
         skip_feed = self._aec_reference_failed or self._transport_has_aec_drain
         if self._enable_aec() and not skip_feed:
             reference = chunk

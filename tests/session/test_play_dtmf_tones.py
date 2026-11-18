@@ -561,6 +561,71 @@ async def test_drained_aec_reference_capture_is_masked_under_pii(
         assert any(chunk.data != bytes(len(chunk.data)) for chunk in captured)
 
 
+class _BoundedPlayoutTransport(_RecordingTransport):
+    """Reporting transport with a bounded playout queue, like WebRTC's.
+
+    ``send_audio`` rejects a frame when the queue is full; a playout task
+    drains one frame per tick and reports it delivered.
+    """
+
+    reports_audio_delivery = True
+
+    def __init__(self, *, capacity: int, tick_s: float = 0.001, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.bus: Any = None
+        self.capacity = capacity
+        self.tick_s = tick_s
+        self.queue: asyncio.Queue[AudioChunk] = asyncio.Queue()
+        self.rejected = 0
+        self.max_depth = 0
+        self._playout: asyncio.Task[None] | None = None
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        if self.queue.qsize() >= self.capacity:
+            self.rejected += 1
+            return False
+        accepted = await super().send_audio(chunk)
+        self.queue.put_nowait(chunk)
+        self.max_depth = max(self.max_depth, self.queue.qsize())
+        if self._playout is None:
+            self._playout = asyncio.create_task(self._play())
+        return accepted
+
+    async def _play(self) -> None:
+        while True:
+            chunk = await self.queue.get()
+            await asyncio.sleep(self.tick_s)
+            await self.bus.emit(
+                TransportAudioDelivered(
+                    chunk=AudioChunk(
+                        data=chunk.data,
+                        format=chunk.format,
+                        _easycat_dtmf_tone=getattr(chunk, "_easycat_dtmf_tone", False) is True,
+                    ),
+                    session_id=getattr(chunk, "_easycat_session_id", None),
+                )
+            )
+
+    async def disconnect(self) -> None:
+        if self._playout is not None:
+            self._playout.cancel()
+        await super().disconnect()
+
+
+async def test_long_burst_is_paced_to_a_bounded_playout_queue() -> None:
+    # 11 keys is about 2.3 s of 20 ms frames: more than a 30-frame queue holds.
+    transport = _BoundedPlayoutTransport(capacity=30)
+    session = _session(transport)
+    transport.bus = session.event_bus
+    async with session:
+        playback = await session.play_dtmf_tones("12345678901")
+        assert await playback.wait(timeout=_WAIT_S) == "estimated"
+
+    assert transport.rejected == 0
+    assert transport.max_depth <= 30
+    assert decode_dtmf(transport.tone_pcm()) == "12345678901"
+
+
 class _Fixed16kTransport(_RecordingTransport):
     """Plays every frame at its own 16 kHz rate, ignoring ``chunk.format``."""
 
