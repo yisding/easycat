@@ -353,6 +353,23 @@ async def test_bot_task_waits_for_queued_playout(path: Path, monkeypatch) -> Non
     await asyncio.wait_for(module.wait_for_playout(object(), *extra), timeout=1)
 
 
+@pytest.mark.parametrize("path", ALL_SCRIPTS, ids=lambda path: path.parent.name + "-" + path.stem)
+@pytest.mark.asyncio
+async def test_playout_wait_is_bounded_when_preroll_never_fills(path: Path, monkeypatch) -> None:
+    module = load_script(path)
+    monkeypatch.setattr(module, "PLAYOUT_POLL_S", 0.001)
+    monkeypatch.setattr(module, "PLAYOUT_MARGIN_S", 0.05)
+
+    class UnprimedTransport:
+        """Two queued frames below the pre-roll threshold: playback never starts."""
+
+        def pending_playout_ms(self) -> float:
+            return 40.0
+
+    extra = () if path.stem == "ignore" else (FakeCancel(),)
+    await asyncio.wait_for(module.wait_for_playout(UnprimedTransport(), *extra), timeout=1)
+
+
 @pytest.mark.parametrize(
     "path", CANCEL_SCRIPTS, ids=lambda path: path.parent.name + "-" + path.stem
 )

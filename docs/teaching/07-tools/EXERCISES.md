@@ -130,8 +130,11 @@ The test is whether the current response **depends on the result**.
 ## 3. Plug a JSON-leak
 
 **Task.** Make a tool that returns a 5 KB JSON blob (mock weather
-forecast). Verify none of it reaches TTS: no `stage.tts.execute`
-record's `text` may contain `{`.
+forecast) whose keys and values include a few distinctive markers
+(for example a key `zz_station_id` and a value `ZZ-MARKER-7`).
+Verify none of it reaches TTS: across all `stage.tts.execute`
+records, no `text` may contain `{`, `}`, or any of those markers, so
+fragments without braces count as leaks too.
 
 <!-- BEGIN auto:exercise-hints -->
 **Hints**
@@ -166,9 +169,13 @@ The second path is the result itself. It never enters a stream
 <summary>Hint 3 of 3</summary>
 
 Defend each path separately. For argument deltas, keep the
-   streams separate at parse time. For the echoed result, return a
-   short summary from the tool instead of the raw blob, or tell the
-   model in the system prompt to speak results in plain sentences.
+   streams separate at parse time. For the echoed result, use a
+   deterministic defense: return a short plain-sentence summary from
+   the tool so the raw blob never enters `messages`, or add a custom
+   `LLMOutputProcessor` (via `output_processors`) that rejects or
+   rewrites JSON-looking text before TTS. A system-prompt instruction
+   to speak results in plain sentences helps, but it cannot guarantee
+   the no-leak check on its own.
    `MarkdownStripProcessor` is not a JSON defense: `strip_markdown`
    leaves braces and quotes in place.
 

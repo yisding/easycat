@@ -24,7 +24,9 @@ text)` — drop `recorder` and `cancel_token`, and delete the two-line
 `if cancel_token is not None and cancel_token.is_cancelled: break`
 check that reads the token. You've just demoted to shallow mode.
 Temporarily comment out `apply_interruption` too; that method is an
-explicit shallow-mode opt-in. Run the script and try to interrupt the
+explicit shallow-mode opt-in. Also temporarily comment out the
+`assert bridge.deep_mode, ...` line in `main()`, or the script will
+stop before the session starts. Run the script and try to interrupt the
 bot mid-sentence. What stops, and what can no
 longer be reconciled?
 

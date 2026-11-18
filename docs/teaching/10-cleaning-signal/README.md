@@ -196,10 +196,10 @@ hearing.
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.runtime.capabilities import close_if_supported
  from easycat.session import split_at_sentence_boundaries
-@@ -61,71 +79,46 @@
- PREROLL_FRAMES = 15
+@@ -62,71 +80,46 @@
  RUNS_DIR = Path(__file__).parent / "runs"
  PLAYOUT_POLL_S = 0.02
+ PLAYOUT_MARGIN_S = 0.5
 -SESSION_ID = f"ch09c-estimate-{int(time.time())}"
 -
 -# OpenAI TTS emits PCM16 mono at 24 kHz = 48,000 bytes/second.
@@ -300,7 +300,7 @@ hearing.
  
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
-@@ -133,11 +126,13 @@
+@@ -134,11 +127,13 @@
              for ev in vad_events:
                  if isinstance(ev, VADStartSpeaking):
                      self._speaking = True
@@ -314,7 +314,7 @@ hearing.
                      yield "speech_ended", None
              if self._speaking:
                  yield "frame", chunk
-@@ -145,16 +140,34 @@
+@@ -146,16 +141,34 @@
                  self._preroll.append(chunk)
  
  
@@ -353,7 +353,7 @@ hearing.
          stream=True,
      )
      buffer = ""
-@@ -177,38 +190,27 @@
+@@ -178,38 +191,27 @@
      await sentence_queue.put(None)
  
  
@@ -402,7 +402,7 @@ hearing.
          )
  
  
-@@ -226,14 +228,14 @@
+@@ -233,14 +235,14 @@
          await asyncio.sleep(PLAYOUT_POLL_S)
  
  
@@ -419,7 +419,7 @@ hearing.
              data={"stage": "coordinator", "error": repr(result)},
          )
  
-@@ -261,7 +263,7 @@
+@@ -268,7 +270,7 @@
          await close_if_supported(stt)
  
  
@@ -428,7 +428,7 @@ hearing.
      """Release both possible in-flight owners before shared providers close."""
      try:
          if stt is not None:
-@@ -272,35 +274,35 @@
+@@ -279,35 +281,35 @@
                  active_cancel.cancel()
              if not bot_task.done():
                  bot_task.cancel()
@@ -477,7 +477,7 @@ hearing.
          data={
              "stage": "interruption",
              "cancel_to_clear_audio_return_ms": (clear_returned_at - started_at) * 1000,
-@@ -308,54 +310,20 @@
+@@ -315,54 +317,20 @@
              "t_ms": bot_returned_at * 1000,
          },
      )
@@ -538,7 +538,7 @@ hearing.
              )
              if consumed:
                  continue
-@@ -373,42 +341,35 @@
+@@ -380,42 +348,35 @@
                  if not final_text.strip():
                      continue
                  print(f"  user: {final_text!r}")
@@ -593,7 +593,7 @@ hearing.
  
      def stt_factory():
          return create_stt_provider(
-@@ -423,9 +384,35 @@
+@@ -430,9 +391,35 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
  
@@ -630,7 +630,7 @@ hearing.
  
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
-@@ -434,19 +421,22 @@
+@@ -441,19 +428,22 @@
          )
          resources.push_async_callback(close_if_supported, tts)
  

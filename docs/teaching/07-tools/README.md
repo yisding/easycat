@@ -616,8 +616,9 @@ braces and quote marks. There are two separate leak paths:
    enters a stream delta: it goes back into `messages` as a
    `role="tool"` message. It reaches TTS only if the model repeats
    the raw JSON in its follow-up reply text. Defend by returning a
-   short summarised result, or by instructing the model in the
-   system prompt to speak results in plain sentences.
+   short summarised result, so the raw blob never enters
+   `messages`; instructing the model in the system prompt to speak
+   results in plain sentences helps, but is only a supplement.
    `strip_markdown` does not help here: it leaves JSON braces and
    quotes in place.
 

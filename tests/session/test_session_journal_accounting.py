@@ -211,7 +211,8 @@ def test_outbound_queue_default_policy_is_drop_newest():
     """The played-back (TTS) queue must not use DROP_OLDEST.
 
     Dropping the *oldest* unsent bot audio makes the listener hear the
-    utterance jump forward mid-sentence; DROP_NEWEST trims only the tail.
+    utterance jump forward mid-sentence; DROP_NEWEST rejects only the
+    chunk offered while full and never evicts audio already queued.
     """
     session = Session(_full_config())
     assert session._outbound_queue.policy == DropPolicy.DROP_NEWEST
@@ -230,8 +231,8 @@ async def test_audio_queue_drop_recorded_when_queue_overflows():
     chunk = _make_chunk(n_bytes=320)
     await q.put(chunk)
     await q.put(chunk)
-    # This one should be dropped (DROP_NEWEST policy — played-back speech
-    # trims the tail, never the beginning).
+    # This one should be dropped (DROP_NEWEST policy — the incoming chunk is
+    # rejected; audio already queued is never evicted).
     await q.put(chunk)
 
     drops = [r for r in journal.read() if r.name == "audio_queue_drop"]

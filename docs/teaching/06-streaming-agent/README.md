@@ -751,9 +751,11 @@ drops the frames and returns `False`. Production's outbound queue
 is an `easycat._bounded_queue.BoundedAudioQueue` with a
 `DropPolicy`:
 
-- `DROP_NEWEST` — refuse new audio until the queue drains, so
-  only the tail of an utterance is trimmed. This is the Session
-  default for played-back speech.
+- `DROP_NEWEST` — reject each chunk offered while the queue is
+  full and keep everything already queued, so accepted audio is
+  never discarded. Under sustained backpressure the listener can
+  still hear gaps wherever later chunks were rejected. This is the
+  Session default for played-back speech.
 - `BLOCK` — apply backpressure to the producer. Inject it when you
   want real backpressure on the synthesizer, but if the producer
   can't slow down (an LLM stream doesn't negotiate), it stalls.

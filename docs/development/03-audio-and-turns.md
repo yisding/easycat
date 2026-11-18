@@ -80,9 +80,13 @@ ordering is firm:
 9. Replay the deferred VAD events in their original order, even when the STT
    send raises: `VADStopSpeaking` goes to `TurnManager.on_vad_event` (opening
    the pause epoch) before it is published, while any later event is published
-   first and then passed to `TurnManager`. The stop-producing frame has
-   therefore reached STT before any segment commit or stream end
-   ([`test_vad_stop_commit_waits_for_stop_frame_stt_send`](../../tests/session/test_turn_runner.py)).
+   first and then passed to `TurnManager`. The STT send attempt for the
+   stop-producing frame therefore completes before any segment commit or
+   stream end can be scheduled, so on a successful send that frame has reached
+   STT first
+   ([`test_vad_stop_commit_waits_for_stop_frame_stt_send`](../../tests/session/test_turn_runner.py));
+   if the send raises, the stop is still replayed and the frame is not
+   delivered.
 
 [`AudioStage`](../../src/easycat/stages/audio.py) groups AEC and noise
 reduction as one replay stage but preserves the internal AEC-before-NR order.

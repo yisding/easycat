@@ -73,6 +73,7 @@ MODEL = "gpt-5.6-luna"
 PREROLL_FRAMES = 15
 RUNS_DIR = Path(__file__).parent / "runs"
 PLAYOUT_POLL_S = 0.02
+PLAYOUT_MARGIN_S = 0.5
 
 
 class MiniTurnDetector:
@@ -232,12 +233,18 @@ async def wait_for_playout(transport, cancel: CancelToken) -> None:
 
     ``send_audio`` only enqueues: finished enqueueing is not finished
     playing. There is no playout event to await, so poll the counter
-    and the cancel token, which lets barge-in still cut the tail.
+    and the cancel token, which lets barge-in still cut the tail. A reply
+    shorter than the transport pre-roll never starts playing, so the wait
+    is bounded by the queued duration plus a margin, as ``await_drain`` is.
     """
     pending_playout_ms = getattr(transport, "pending_playout_ms", None)
     if pending_playout_ms is None:
         return
-    while not cancel.is_cancelled and pending_playout_ms() > 0:  # noqa: ASYNC110
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + pending_playout_ms() / 1000 + PLAYOUT_MARGIN_S
+    while (  # noqa: ASYNC110
+        not cancel.is_cancelled and pending_playout_ms() > 0 and loop.time() < deadline
+    ):
         await asyncio.sleep(PLAYOUT_POLL_S)
 
 

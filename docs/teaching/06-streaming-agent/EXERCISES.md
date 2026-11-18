@@ -149,8 +149,12 @@ TTS synthesizes faster than real time, so the backlog lands in
    `max_pending_out_chunks` (about 10 s of 20 ms frames). Once it is
    full, `send_audio` drops the frames and returns `False`: memory
    plateaus, and the overflow shows up as rejected chunks and clipped
-   audio. Production's outbound `BoundedAudioQueue` uses `DROP_NEWEST`
-   so only the tail is trimmed, never the start of the utterance.
+   audio. Production's outbound `BoundedAudioQueue` uses `DROP_NEWEST`:
+   it never evicts audio already queued, but rejects each incoming chunk
+   while the queue is full and accepts again once the consumer frees a
+   slot, so sustained backpressure leaves gaps wherever chunks were
+   rejected (anywhere in the utterance, even its start if the queue is
+   already full).
 
 </details>
 

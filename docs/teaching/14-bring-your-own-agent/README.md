@@ -945,8 +945,11 @@ does not leak the prior list.
 1. Change `on_user_turn` to `async def on_user_turn(self, text)`
    — drop `recorder` / `cancel_token`, and delete the two-line
    `if cancel_token is not None and cancel_token.is_cancelled: break`
-   check that reads it. You just demoted to shallow mode. Temporarily comment out `apply_interruption` as well so you
-   exercise the default shallow contract, then interrupt the bot
+   check that reads it. You just demoted to shallow mode.
+   Temporarily comment out `apply_interruption` as well so you
+   exercise the default shallow contract, and comment out the
+   `assert bridge.deep_mode` guard in `main()` so the script still
+   starts, then interrupt the bot
    mid-sentence. What stops, and what can no longer be reconciled?
    (Hint: inspect `assistant_interruption_notified` and its `notified`
    field.)
