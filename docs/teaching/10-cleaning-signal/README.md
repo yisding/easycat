@@ -419,7 +419,7 @@ hearing.
              data={"stage": "coordinator", "error": repr(result)},
          )
  
-@@ -259,7 +261,7 @@
+@@ -261,7 +263,7 @@
          await close_if_supported(stt)
  
  
@@ -428,7 +428,7 @@ hearing.
      """Release both possible in-flight owners before shared providers close."""
      try:
          if stt is not None:
-@@ -270,35 +272,35 @@
+@@ -272,35 +274,35 @@
                  active_cancel.cancel()
              if not bot_task.done():
                  bot_task.cancel()
@@ -477,7 +477,7 @@ hearing.
          data={
              "stage": "interruption",
              "cancel_to_clear_audio_return_ms": (clear_returned_at - started_at) * 1000,
-@@ -306,54 +308,20 @@
+@@ -308,54 +310,20 @@
              "t_ms": bot_returned_at * 1000,
          },
      )
@@ -538,7 +538,7 @@ hearing.
              )
              if consumed:
                  continue
-@@ -371,42 +339,35 @@
+@@ -373,42 +341,35 @@
                  if not final_text.strip():
                      continue
                  print(f"  user: {final_text!r}")
@@ -593,7 +593,7 @@ hearing.
  
      def stt_factory():
          return create_stt_provider(
-@@ -421,9 +382,35 @@
+@@ -423,9 +384,35 @@
          resources.push_async_callback(transport.disconnect)
          await transport.connect()
  
@@ -630,7 +630,7 @@ hearing.
  
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
-@@ -432,19 +419,22 @@
+@@ -434,19 +421,22 @@
          )
          resources.push_async_callback(close_if_supported, tts)
  
