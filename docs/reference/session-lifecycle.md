@@ -85,6 +85,43 @@ Between start and stop, the session exposes turn-level controls:
 - `await session.send_text(text)` — inject a user turn without audio on a
   session built by `create_text_session(...)`. Voice sessions reject this
   method and continue to take user input from their transport.
+- `await session.play_dtmf_tones(digits, inter_digit_delay_ms=0,
+  tone_config=None, fence_timeout_s=10.0, should_continue=None)` — play DTMF key presses (`0-9`,
+  `*`, `#`, `A-D`, and `w`/`W` pauses) as in-band ITU-T Q.23 tones on the
+  live media stream, after any queued bot speech. The session keeps running.
+  It returns a `DTMFTonePlayback` once the tone frames are accepted; await
+  `playback.wait(timeout)` for `"played"`, `"timeout"`, `"disconnected"`, or
+  `"estimated"` (the transport cannot acknowledge playback). Cancelling the
+  caller, for example by a barge-in, does not cut the sequence short. On a
+  transport with the `ProtectedPlayback` capability (Twilio Media Streams), a
+  barge-in `clear` is deferred until the far end acknowledges the tones'
+  completion mark or the guard expires (the burst's duration plus a 5 s
+  margin), whichever comes first. Expiry does not confirm playback: the
+  released `clear` can discard tones the far end still has buffered, and
+  `playback.wait()` then reports `"timeout"`. A `should_continue`
+  predicate is checked after rendering, after queued speech drains, and
+  after the playout fence; if it returns `False` before the first tone frame
+  is sent, nothing is sent and `DTMFPlaybackCancelled` (a `RuntimeError`) is
+  raised. It raises `RuntimeError` before `start()`, after `stop()` has begun, in
+  `text_session` mode, when the transport rejects a tone frame, or when it is
+  awaited from an `AudioOut` or `Error` handler on the outbound send path
+  (the burst would wait for the send lock that handler's task holds; schedule
+  a follow-up burst with `asyncio.create_task(session.play_dtmf_tones(...))`
+  instead), and `ValueError` for invalid digits without echoing them. The
+  journal records `dtmf_tones_sent` and `dtmf_tones_completed` without the
+  digits. Tones are
+  sent as 20 ms frames in the transport's preferred TTS output format (else
+  its `audio_format`, else 8 kHz mono), so transports that play at a fixed
+  device rate, such as `LocalTransport`, still hear valid key frequencies.
+
+`stop(force=True)` aborts a protected tone burst immediately and resolves its
+playback handle as `"disconnected"`. A graceful `stop()` lets an in-progress
+burst finish first, which can take up to `fence_timeout_s` longer when the
+transport never acknowledges the fence mark; a burst that outlives its budget
+(drain wait, fence timeout, tone length and guard margin) is cancelled. A
+`stop()` called from an `AudioOut` or `Error` handler on the outbound send
+path, including a tone frame's own `AudioOut` handler, cancels pending bursts
+instead of waiting for them.
 
 ## Related Pages
 

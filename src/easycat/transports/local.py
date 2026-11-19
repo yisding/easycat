@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 # Frame duration for mic capture chunks (milliseconds).
 _DEFAULT_FRAME_MS = 20
+# In-band DTMF tones start playout once this much tone audio is queued, even
+# below a longer speech pre-roll.  The AudioRouter keeps up to 500 ms of tones
+# queued ahead of playout and then waits for delivery reports, so a tone
+# start threshold above that window would stall the burst before it starts.
+_DTMF_TONE_PREROLL_MS = 200
 
 
 @dataclass
@@ -141,7 +146,9 @@ class LocalTransport(AudioQueueMixin):
         # converge.  Uses a plain thread_queue.Queue because the output callback
         # runs on the sounddevice audio thread while the drain happens on the
         # asyncio event loop thread.
-        self._aec_ref_queue: thread_queue.Queue[bytes] = thread_queue.Queue(
+        # Each entry carries whether the frame holds in-band DTMF tone audio,
+        # so a drained reference frame can still be masked in debug captures.
+        self._aec_ref_queue: thread_queue.Queue[tuple[bytes, bool]] = thread_queue.Queue(
             maxsize=self._AEC_REF_QUEUE_MAX
         )
 
@@ -184,6 +191,21 @@ class LocalTransport(AudioQueueMixin):
         self._frame_samples = (
             self._audio_format.sample_rate * self._config.frame_duration_ms
         ) // 1000
+        # Queued frames that start a DTMF burst's playout (never above the
+        # speech pre-roll, never below one frame).
+        self._tone_preroll_frames = min(
+            self._config.output_preroll_frames,
+            max(1, _DTMF_TONE_PREROLL_MS // self._config.frame_duration_ms),
+        )
+
+    @property
+    def audio_format(self) -> AudioFormat:
+        """PCM format of captured and played audio (the device stream format).
+
+        ``send_audio`` plays every frame at this rate regardless of the
+        chunk's own format, so outbound audio must already match it.
+        """
+        return self._audio_format
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -361,7 +383,7 @@ class LocalTransport(AudioQueueMixin):
             stream_generation=stream_generation,
         )
 
-    def _push_aec_reference(self, frame: bytes) -> None:
+    def _push_aec_reference(self, frame: bytes, *, dtmf_tone: bool = False) -> None:
         """Push one far-end reference frame with a drop-oldest overflow policy.
 
         Called from the sounddevice audio thread on every output callback so the
@@ -370,15 +392,16 @@ class LocalTransport(AudioQueueMixin):
         freshest reference is always retained — stale references are useless to
         AEC3, which only cancels echo of audio that is about to arrive.
         """
+        entry = (frame, dtmf_tone)
         try:
-            self._aec_ref_queue.put_nowait(frame)
+            self._aec_ref_queue.put_nowait(entry)
         except thread_queue.Full:
             try:
                 self._aec_ref_queue.get_nowait()  # drop oldest, keep freshest
             except thread_queue.Empty:
                 pass
             try:
-                self._aec_ref_queue.put_nowait(frame)
+                self._aec_ref_queue.put_nowait(entry)
             except thread_queue.Full:
                 pass
 
@@ -415,7 +438,7 @@ class LocalTransport(AudioQueueMixin):
                 return
             self._primed = True
 
-        pcm = self._take_output_frame(frame_bytes, stream_generation=stream_generation)
+        pcm, dtmf_tone = self._take_output_frame(frame_bytes, stream_generation=stream_generation)
         if not pcm:
             outdata[:] = 0
             if self._aec_reference_enabled:
@@ -442,13 +465,16 @@ class LocalTransport(AudioQueueMixin):
                 ref = pcm + bytes(frame_bytes - len(pcm))
             else:
                 ref = pcm[:frame_bytes]
-            self._push_aec_reference(ref)
+            self._push_aec_reference(ref, dtmf_tone=dtmf_tone)
 
-    def _take_output_frame(self, frame_bytes: int, *, stream_generation: int | None) -> bytes:
+    def _take_output_frame(
+        self, frame_bytes: int, *, stream_generation: int | None
+    ) -> tuple[bytes, bool]:
         """Assemble up to one frame of PCM from the partial chunk and the queue.
 
         Runs on the audio thread.  Delivery is reported only once a queued
-        chunk has been fully played.
+        chunk has been fully played.  Returns the PCM and whether any part of
+        it is in-band DTMF tone audio (a frame may mix speech and tones).
         """
         partial = self._playout_partial
         if self._discard_playout_partial:
@@ -458,6 +484,7 @@ class LocalTransport(AudioQueueMixin):
             partial = None
         parts: list[bytes] = []
         filled = 0
+        dtmf_tone = False
         while filled < frame_bytes:
             if partial is None:
                 try:
@@ -470,6 +497,8 @@ class LocalTransport(AudioQueueMixin):
             queued, offset = partial
             data = queued.chunk.data
             piece = data[offset : offset + frame_bytes - filled]
+            if piece and queued.chunk._easycat_dtmf_tone:
+                dtmf_tone = True
             parts.append(piece)
             filled += len(piece)
             offset += len(piece)
@@ -479,7 +508,7 @@ class LocalTransport(AudioQueueMixin):
             else:
                 partial = (queued, offset)
         self._playout_partial = partial
-        return b"".join(parts)
+        return b"".join(parts), dtmf_tone
 
     def _flush_queues(self) -> None:
         """Drain all audio queues synchronously (called from disconnect and teardown)."""
@@ -586,15 +615,30 @@ class LocalTransport(AudioQueueMixin):
         session_id = getattr(chunk, "_easycat_session_id", None)
         turn_id = getattr(chunk, "_easycat_turn_id", None)
         turn_ref = getattr(chunk, "_easycat_turn_ref", None)
+        dtmf_tone = getattr(chunk, "_easycat_dtmf_tone", False) is True
         for piece in slices:
             self._out_queue.put_nowait(
                 _QueuedOutputChunk(
-                    chunk=AudioChunk(data=piece, format=chunk.format, timestamp=chunk.timestamp),
+                    chunk=AudioChunk(
+                        data=piece,
+                        format=chunk.format,
+                        timestamp=chunk.timestamp,
+                        _easycat_dtmf_tone=dtmf_tone,
+                    ),
                     session_id=session_id,
                     turn_id=turn_id,
                     turn_ref=turn_ref,
                 )
             )
+        if dtmf_tone and (
+            getattr(chunk, "_easycat_dtmf_burst_end", False) is True
+            or self._out_queue.qsize() >= self._tone_preroll_frames
+        ):
+            # A complete in-band DTMF burst may be shorter than the pre-roll,
+            # and a long one is paced by the router to a window that may be
+            # shorter too: start playout now instead of waiting for unrelated
+            # later audio (or stalling the burst's pacing).
+            self._primed = True
         # ``False`` when any frame was dropped (the queue lacked capacity for the
         # full chunk), matching the docstring so the drop metric stays honest.
         return not truncated
@@ -625,14 +669,14 @@ class LocalTransport(AudioQueueMixin):
         frames: list[AudioChunk] = []
         while True:
             try:
-                frames.append(
-                    AudioChunk(
-                        data=self._aec_ref_queue.get_nowait(),
-                        format=self._audio_format,
-                    )
-                )
+                data, dtmf_tone = self._aec_ref_queue.get_nowait()
             except thread_queue.Empty:
                 break
+            # The tone flag lets the router mask the journaled copy of the
+            # frame however late it is drained; AEC still gets the real PCM.
+            frames.append(
+                AudioChunk(data=data, format=self._audio_format, _easycat_dtmf_tone=dtmf_tone)
+            )
         return frames
 
     async def clear_audio(self) -> None:

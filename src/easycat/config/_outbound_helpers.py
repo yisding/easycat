@@ -14,7 +14,15 @@ from typing import Any
 from easycat.events import CallInitiated, CallStateChanged, EventBus
 from easycat.telephony.call_state import OutboundCallState, OutboundCallStateMachine
 from easycat.telephony.compliance import DNCStore
-from easycat.telephony.ivr import DTMFDelivery, IVRAction, IVRActionType, IVRNavigator
+from easycat.telephony.ivr import (
+    DTMFDelivery,
+    InBandDTMFDelivery,
+    IVRAction,
+    IVRActionType,
+    IVRDTMFSender,
+    IVRNavigator,
+    _await_ivr_sender_call,
+)
 from easycat.telephony.number_health import CallDispositionTracker, NumberHealthMonitor
 from easycat.telephony.outbound import OutboundCallManager
 from easycat.telephony.retry import RetryStrategy
@@ -41,6 +49,10 @@ class BuiltOutboundHelpers:
     helpers: tuple[Any, ...]
     state_machine: OutboundCallStateMachine
     screening_detector: CallScreeningDetector | None
+    # The IVR sender the navigator actually uses (after ``ivr_dtmf_mode``
+    # resolution). An ``InBandDTMFDelivery`` here is per-session and is bound
+    # to that session's output by ``wire_outbound_pipeline``.
+    ivr_delivery: IVRDTMFSender | None = None
 
 
 class _IVRCallbackCoordinator:
@@ -51,7 +63,7 @@ class _IVRCallbackCoordinator:
         event_bus: EventBus,
         state_machine: OutboundCallStateMachine,
         navigator: IVRNavigator,
-        delivery: DTMFDelivery | None,
+        delivery: IVRDTMFSender | None,
     ) -> None:
         self._event_bus = event_bus
         self._state_machine = state_machine
@@ -89,8 +101,22 @@ class _IVRCallbackCoordinator:
             return
         self._accepted_call_sid = event.call_sid
         self._navigator.reset_for_call()
-        if self._delivery is not None:
-            self._delivery.call_sid = event.call_sid
+        # Only a REST-style sender addresses the call by SID. An in-band
+        # sender plays on its bound session's stream, and in in-band mode the
+        # user's shared ``DTMFDelivery`` is never handed to this coordinator,
+        # so it is never mutated across calls.
+        delivery = self._delivery
+        if (
+            delivery is not None
+            and not isinstance(delivery, InBandDTMFDelivery)
+            and hasattr(delivery, "call_sid")
+        ):
+            try:
+                delivery.call_sid = event.call_sid
+            except AttributeError:
+                # A custom sender may expose a read-only ``call_sid`` because
+                # it tracks the call itself; SID binding is optional for it.
+                logger.debug("IVR DTMF sender's call_sid is read-only; not rebinding it")
 
     def _on_state_changed(self, event: CallStateChanged) -> None:
         if event.new == OutboundCallState.IVR:
@@ -104,7 +130,7 @@ class _IVRCallbackCoordinator:
         elif event.type == IVRActionType.HANGUP:
             await self._transition_from_ivr(OutboundCallState.ENDED)
         elif event.type == IVRActionType.SPEAK and self._delivery is not None:
-            await self._delivery.send_speech(event.text)
+            await _await_ivr_sender_call(self._delivery.send_speech(event.text), "send_speech")
 
     async def _transition_from_ivr(self, target: OutboundCallState) -> None:
         if self._state_machine.state == OutboundCallState.IVR:
@@ -126,6 +152,7 @@ class _OutboundHelperBuilder:
         self._manager_cls = manager_cls
         self._dnc_list = dnc_list
         self._helpers: list[Any] = []
+        self._ivr_delivery: IVRDTMFSender | None = None
 
     def build(self) -> BuiltOutboundHelpers:
         patterns = self._screening_patterns()
@@ -143,6 +170,7 @@ class _OutboundHelperBuilder:
             helpers=tuple(self._helpers),
             state_machine=state_machine,
             screening_detector=screening_detector,
+            ivr_delivery=self._ivr_delivery,
         )
 
     def _add_preclassification_helpers(self, state_machine: OutboundCallStateMachine) -> None:
@@ -209,10 +237,12 @@ class _OutboundHelperBuilder:
         callback = self._config.ivr_agent_callback
         if callback is None:
             return
+        delivery = resolve_ivr_dtmf_delivery(self._config)
+        self._ivr_delivery = delivery
         navigator = IVRNavigator(
             self._event_bus,
             agent_callback=callback,
-            dtmf_delivery=self._config.ivr_dtmf_delivery,
+            dtmf_delivery=delivery,
         )
         self._helpers.append(navigator)
         self._helpers.append(
@@ -220,7 +250,7 @@ class _OutboundHelperBuilder:
                 self._event_bus,
                 state_machine,
                 navigator,
-                self._config.ivr_dtmf_delivery,
+                delivery,
             )
         )
 
@@ -295,6 +325,49 @@ class _OutboundHelperBuilder:
     def _add_retry_strategy(self, manager: OutboundCallManager | None) -> None:
         if self._config.enable_retry_strategy and manager is not None:
             manager.retry_strategy = RetryStrategy(self._config.retry_strategy)
+
+
+# Process-wide one-time notices (the auto in-band swap logs once, not per call).
+_logged_notices: set[str] = set()
+
+
+def resolve_ivr_dtmf_delivery(config: OutboundCallConfig) -> IVRDTMFSender | None:
+    """Pick the IVR key sender for one session from ``ivr_dtmf_mode``.
+
+    * ``"rest"``: the configured ``DTMFDelivery`` (REST, ends the stream).
+    * ``"in_band"``: a new :class:`InBandDTMFDelivery`, one per session.
+    * ``"auto"``: ``None`` stays ``None`` (emit-only); a custom sender,
+      including a ``DTMFDelivery`` subclass, is used as-is; a stock
+      ``DTMFDelivery`` on Twilio becomes a per-session
+      :class:`InBandDTMFDelivery`; anything else is unchanged.
+
+    A configured :class:`InBandDTMFDelivery` (in ``"auto"`` or ``"in_band"``)
+    is a settings template: every session gets its own :meth:`clone
+    <InBandDTMFDelivery.clone>`, because the sender is bound to one session's
+    media output and sharing it would play one call's keys on another's
+    stream. ``config.validate()`` already rejected the ambiguous combinations.
+    """
+    delivery = config.ivr_dtmf_delivery
+    mode = config.ivr_dtmf_mode
+    if mode == "rest":
+        return delivery
+    if isinstance(delivery, InBandDTMFDelivery):
+        return delivery.clone()
+    if mode == "in_band":
+        return InBandDTMFDelivery(tone_config=config.ivr_dtmf_tones)
+    # Only the stock class is swapped: a subclass may override
+    # ``send_dtmf_with_retry`` and is kept as given (``"in_band"`` above still
+    # replaces it on request).
+    if type(delivery) is DTMFDelivery and config.provider == "twilio":
+        if "auto_in_band" not in _logged_notices:
+            _logged_notices.add("auto_in_band")
+            logger.info(
+                "IVR DTMF: ivr_dtmf_mode='auto' plays in-band tones on the live media "
+                "stream instead of the supplied DTMFDelivery; set ivr_dtmf_mode='rest' "
+                "for the REST <Play digits> update (which ends the media stream)."
+            )
+        return InBandDTMFDelivery(tone_config=config.ivr_dtmf_tones)
+    return delivery
 
 
 def build_outbound_helpers(

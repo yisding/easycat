@@ -118,6 +118,8 @@ remain top-level envelope fields, not `data` keys.
 | `audio_queue_drop` | `EVENT` | `queue: str`, `kind: str`, `queue_len: int`, `total_drops: int` | - |
 | `control_signal` | `CONTROL` | `stage: str`, `observed_stage: str`, `signal_kind: str`, `signal_id: str`, `direction: str`, `cause: str or null` | - |
 | `control_signal_cause` | `CONTROL` | `signal_id: str`, `cause: str` | - |
+| `dtmf_tones_completed` | `EVENT` | `mark_name: str or null`, `outcome: str` | `outcome` is `played`, `timeout`, `disconnected`, or `estimated`; never carries the digits. |
+| `dtmf_tones_sent` | `EVENT` | `tone_count: int`, `duration_ms: int`, `mark_name: str or null`, `transport_kind: str`, `fence: bool` | `tone_count` excludes `w`/`W` pauses; session-scoped (no turn); never carries the digits. |
 | `pipeline_heartbeat` | `EVENT` | `interval_ms: int`, `loop_lag_ms: number`, `outbound_queue_len: int`, `outbound_queue_drops: int` | - |
 | `task_cancelled` | `EVENT` | `task_name: str` | - |
 | `task_completed` | `EVENT` | `task_name: str` | - |

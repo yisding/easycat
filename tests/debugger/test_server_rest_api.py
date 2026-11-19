@@ -16,7 +16,39 @@ from easycat.debugger.server import (
     _make_app,
 )
 
-from ._server_helpers import _build_voice_bundle, _DeterministicAgent
+from ._server_helpers import _build_voice_bundle, _DeterministicAgent, run_one_turn_then_stop
+
+
+async def test_turn_helper_force_stops_the_session_when_no_reply_arrives() -> None:
+    """A missed reply must not leave the started session (or its handler) behind."""
+    import asyncio
+
+    from easycat.events import BotStoppedSpeaking
+    from easycat.noise_reduction import PassthroughNoiseReducer
+    from easycat.session._session import Session
+    from easycat.session._types import SessionConfig
+
+    from ._server_helpers import _DistinctiveTTS, _FakeAgent, _FakeSTT, _FakeTransport, _FakeVAD
+
+    session = Session(
+        SessionConfig(
+            transport=_FakeTransport(chunks_in=[]),  # no caller audio, so no reply
+            vad=_FakeVAD(),
+            stt=_FakeSTT(),
+            agent=_FakeAgent(),
+            tts=_DistinctiveTTS(),
+            noise_reducer=PassthroughNoiseReducer(),
+            enable_noise_reduction=False,
+        )
+    )
+    handlers_before = list(session.event_bus._handlers[BotStoppedSpeaking])
+
+    with pytest.raises(TimeoutError):
+        await run_one_turn_then_stop(session, timeout_s=0)
+
+    assert not session.is_running
+    assert session.event_bus._handlers[BotStoppedSpeaking] == handlers_before
+    await asyncio.wait_for(session.wait_closed(), 5.0)
 
 
 async def test_api_serves_text_session_records(tmp_path):

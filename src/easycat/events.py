@@ -228,9 +228,22 @@ class Interruption(Event):
 
 @dataclass(frozen=True)
 class PlaybackMarkAck(Event):
-    """Transport acknowledged playback reaching a previously queued mark."""
+    """A previously queued mark was acknowledged or retired.
+
+    Emitted when the far end responds to the mark, and also when a transport
+    retires a pending mark itself without any far-end response (Telnyx
+    expires its pending marks after a ``clear``, a stream stop, or a close).
+    Neither case is by itself proof the audio before the mark was heard:
+    Twilio also returns pending marks when a ``clear`` discards buffered
+    audio.
+
+    ``retired`` is ``True`` when the transport retired the mark locally
+    instead of receiving a far-end response; consumers must not treat such
+    an event as a playback confirmation.
+    """
 
     mark_name: str
+    retired: bool = False
 
 
 # Tools

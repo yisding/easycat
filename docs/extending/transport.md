@@ -151,3 +151,49 @@ lives in [`tests/contracts/test_transport_contracts.py`](../../tests/contracts/t
   source of truth for observability.
 - `clear_audio()` is invoked only when present; implement it if your
   transport buffers outbound audio, so barge-in feels instant.
+
+## Optional: protected playback for in-band DTMF
+
+`Session.play_dtmf_tones()` sends DTMF key presses as ordinary audio frames.
+A barge-in `clear_audio()` during the burst would cut the key sequence on the
+far end, so a transport that buffers audio far away (such as a telephony
+media stream) can implement the optional `ProtectedPlayback` protocol from
+`easycat.runtime.capabilities`. The router detects it with
+`protected_playback(transport)`, which checks that all four hooks are
+callable:
+
+| Member | Contract |
+| --- | --- |
+| `async wait_playout_fence(*, timeout_s) -> bool` | Send a mark and wait until audio queued before it is no longer queued: played, or discarded by a `clear` (Twilio echoes pending marks when it clears), so `True` does not prove the audio was heard. `False` on timeout, with no stream, or when the stream changed. A `clear` during the fence is not deferred. |
+| `begin_protected_playback(*, max_duration_s) -> object` | Synchronous. Arm the guard and return an opaque token. Raise `RuntimeError` with no active stream, or when the stream the preceding fence targeted is no longer active (it ended or was replaced during the fence), so tones never go out on a replacement stream. |
+| `async end_protected_playback(token) -> asyncio.Future` | Send the completion mark and return a future that resolves `"played"`, `"timeout"` (the guard deadline passed), or `"disconnected"`. |
+| `abort_protected_playback(token \| None) -> None` | Release one guard, or all guards and fence waiters for `None`. Unknown tokens are ignored. |
+
+While a guard is active, `clear_audio()` defers the wire clear and holds
+untagged `send_audio()` calls. The router tags every tone frame with the
+token, as the `PROTECTED_PLAYBACK_CHUNK_ATTR` attribute, and tagged frames are
+never held. When the completion mark is acknowledged, the transport writes the
+deferred clear before it releases held audio, so audio queued after the tones
+is cleared and the tones are not truncated. When the guard deadline passes
+first, nothing has confirmed playback: the transport still writes the deferred
+clear before it releases held audio, but that clear also discards any tones
+the far end has not played yet, so some keys can go unplayed and the outcome
+is `"timeout"`, not `"played"`. Stream teardown
+must abort the guards for that stream so a held send never reaches a
+replacement stream, and must reject later frames tagged with an aborted
+guard's token so the rest of a cut key sequence is never sent.
+`TwilioTransport` and `TwilioConnectionTransport` are the in-tree
+implementations. A transport without the capability still plays the tones; a
+barge-in during the burst can then cut them short.
+
+Tone frames are 20 ms PCM16 frames in the transport's
+`preferred_tts_output_format`, else its `audio_format`, else 8 kHz mono, so
+expose one of those when `send_audio()` ignores `chunk.format`. Tone frames
+carry `AudioChunk._easycat_dtmf_tone=True`. A transport that reports delivery
+(`reports_audio_delivery = True`) and builds new chunks for
+`TransportAudioDelivered` must copy that field, as it copies the session and
+turn stamps, so the router keeps tones out of turn accounting and masks them
+under `journal_redaction="pii"`. The last frame of each burst also carries
+`AudioChunk._easycat_dtmf_burst_end=True`; a transport that buffers audio
+until a pre-roll threshold may start playout on that frame even below its
+pre-roll, so a short burst is not left waiting for audio that never comes.

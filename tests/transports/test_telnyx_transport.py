@@ -402,6 +402,30 @@ async def test_mark_ack_and_expire_on_clear() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retire_on", ["clear", "stop"])
+async def test_locally_expired_marks_are_flagged_retired(retire_on: str) -> None:
+    """Only a far-end ack is ``retired=False``; a local expiry is not playback proof."""
+    bus, collected = make_telnyx_bus()
+    ws = _DummyTelnyxWebSocket()
+    transport = TelnyxTransport(TelnyxTransportConfig(), event_bus=bus)
+    transport._ws = ws
+    await transport._handle_message(_start_msg())
+
+    await transport.send_mark("acked")
+    await transport._handle_message(json.dumps({"event": "mark", "mark": {"name": "acked"}}))
+    await transport.send_mark("expired")
+    if retire_on == "clear":
+        await transport.clear_audio()
+    else:
+        await transport._handle_message(json.dumps({"event": "stop"}))
+    await drain(transport)
+
+    retired = {event.mark_name: event.retired for event in collected.get(PlaybackMarkAck, [])}
+    assert retired == {"acked": False, "expired": True}
+    assert transport._pending_marks == {}
+
+
+@pytest.mark.asyncio
 async def test_negotiating_pcmu_resizes_outbound_frame_bounds() -> None:
     """A start-frame codec switch must resize send coalescing to the wire codec."""
     ws = _DummyTelnyxWebSocket()

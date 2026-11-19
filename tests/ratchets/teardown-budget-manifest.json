@@ -1,15 +1,16 @@
 {
   "version": 1,
-  "update_rationale": "dx3-1: run_scripted_audio_turn's agent-reply wait joins the inventory",
+  "update_rationale": "in-band DTMF: tone playback, fence and acknowledgement waits join the inventory",
   "counts": {
     "configurable": 29,
-    "lifecycle_budget": 102,
+    "lifecycle_budget": 103,
     "not_teardown": 36,
-    "protocol_local": 47
+    "protocol_local": 53
   },
   "entries": [
     "config_default\t_bounded_queue.py\tBoundedAudioQueue.__init__\tdefault block_timeout\t0e52caa456688a04\t0\tnot_teardown\tBounds queue backpressure during ordinary audio delivery.",
     "config_default\t_concurrency.py\treap\tdefault timeout\t8f2cda988d9ca730\t0\tlifecycle_budget\tBounds reusable task cancellation and reaping.",
+    "config_default\t_dtmf_tones.py\tDTMFTonePlayback.wait\tdefault timeout\t8f2cda988d9ca730\t0\tprotocol_local\tBounds the caller's wait for in-band DTMF playback acknowledgement; expiry never cancels delivery.",
     "config_default\t_health_check.py\tPeriodicHealthChecker.__init__\tdefault probe_timeout\t0e52caa456688a04\t0\tlifecycle_budget\tBounds health check probe timeout for session lifecycle.",
     "config_default\t_tts_synthesizer.py\tTTSSynthesizer.__init__\tdefault timeout_config\t8f2cda988d9ca730\t0\tnot_teardown\tCarries synthesis latency policy rather than teardown policy.",
     "config_default\tcli/diagnose/doctor.py\tcheck_provider_reachability\tdefault timeout\t447490a807e628a6\t0\tnot_teardown\tBounds an operator reachability probe.",
@@ -27,6 +28,8 @@
     "config_default\tserver/webrtc_routes.py\tserve_webrtc_config_sessions\tdefault drain_timeout_s\tf5696227c6b0117d\t0\tconfigurable\tExposes the standalone WebRTC graceful-drain budget to callers.",
     "config_default\tserver/webrtc_routes.py\tserve_webrtc_config_sessions\tdefault force_shutdown_timeout_s\t7d60610d1d614dd3\t0\tconfigurable\tExposes the standalone WebRTC forced-shutdown budget to callers.",
     "config_default\tsession/_audio_router.py\tAudioRouter.await_drain\tdefault timeout\t6d10bd088a366879\t0\tlifecycle_budget\tBounds draining queued outbound audio.",
+    "config_default\tsession/_media_output.py\tSessionMediaOutput.play_dtmf_tones\tdefault fence_timeout_s\t28d2586e9ed257f4\t0\tprotocol_local\tForwards the in-band DTMF playout-fence wait to Session.play_dtmf_tones.",
+    "config_default\tsession/_session.py\tSession.play_dtmf_tones\tdefault fence_timeout_s\t28d2586e9ed257f4\t0\tprotocol_local\tBounds the playout-fence wait before in-band DTMF tones; force stop aborts it.",
     "config_default\tsession/_turn_runner.py\tTurnRunner.cancel_application_prompt\tdefault drain_timeout_s\t5b3918395b2f2080\t0\tlifecycle_budget\tBounds prompt drain before cancellation.",
     "config_default\tsmart_turn.py\tSmartTurnONNX.__init__\tdefault timeout_s\t447490a807e628a6\t0\tnot_teardown\tBounds model inference during ordinary turn detection.",
     "config_default\tstt/websocket_base.py\tWebSocketSTTBase.__init__\tdefault close_timeout\t447490a807e628a6\t0\tconfigurable\tExposes the provider WebSocket close budget.",
@@ -36,6 +39,7 @@
     "config_default\ttelephony/call_state.py\tOutboundCallStateMachine.__init__\tdefault classification_gate_timeout_s\t0e52caa456688a04\t0\tprotocol_local\tBounds the outbound classification gate.",
     "config_default\ttelephony/call_state.py\tOutboundCallStateMachine.__init__\tdefault classification_timeout_s\t28d2586e9ed257f4\t0\tprotocol_local\tBounds outbound answer classification.",
     "config_default\ttelephony/call_state.py\tOutboundCallStateMachine.__init__\tdefault vad_timeout_extension_s\t624c0d6fb9bc114c\t0\tprotocol_local\tExtends the telephony classification window after speech.",
+    "config_default\ttelephony/ivr.py\tInBandDTMFDelivery.__init__\tdefault ack_timeout_margin_s\t0e52caa456688a04\t0\tprotocol_local\tMargin added to tone duration when IVR in-band DTMF waits for playback acknowledgement.",
     "config_default\ttelephony/outbound.py\tOutboundCallManager.__init__\tdefault amd_timeout\t14e182932528b6c4\t0\tprotocol_local\tBounds provider answering-machine detection.",
     "config_default\ttelephony/outbound.py\tOutboundCallManager.__init__\tdefault silence_timeout\t2183ec41632f9e50\t0\tprotocol_local\tBounds outbound-call silence detection.",
     "config_default\ttelephony/screening.py\tCallScreeningDetector.__init__\tdefault agent_timeout_s\t64453a703d24902f\t0\tprotocol_local\tBounds a call-screening agent response.",
@@ -101,6 +105,7 @@
     "lifecycle_call\tsession/_audio_router.py\tAudioRouter._await_non_cancellable_send\tcall asyncio.wait\tb9e55f8a4006f0e9\t0\tlifecycle_budget\tBounds the initial non-cancellable send wait.",
     "lifecycle_call\tsession/_audio_router.py\tAudioRouter._await_non_cancellable_send\tcall asyncio.wait\tb9e55f8a4006f0e9\t1\tlifecycle_budget\tBounds the cancellation-grace send wait.",
     "lifecycle_call\tsession/_audio_router.py\tAudioRouter._await_non_cancellable_send\tcall asyncio.wait_for\t9acc6d48f0bf95b1\t0\tlifecycle_budget\tBounds final send-task reaping after cancellation.",
+    "lifecycle_call\tsession/_audio_router.py\tAudioRouter._drain_dtmf_sends\tcall asyncio.wait\ted7e7e3598f739e1\t0\tlifecycle_budget\tBounds a graceful stop's join of pending in-band DTMF bursts before cancelling them.",
     "lifecycle_call\tsession/_audio_router.py\tAudioRouter.await_drain\tcall asyncio.wait_for\tcd53f09cb67768eb\t0\tlifecycle_budget\tBounds queued audio drain.",
     "lifecycle_call\tsession/_session.py\tSession.stop\tcall asyncio.wait\t4b72b0ca7a3ec27e\t0\tlifecycle_budget\tBounds graceful session stop work.",
     "lifecycle_call\tsession/_session.py\tSession.stop\tcall asyncio.wait_for\t011f8565363cea1f\t0\tlifecycle_budget\tBounds forced session stop cleanup.",
@@ -186,6 +191,8 @@
     "named_constant\ttelephony/server.py\tTwilioVoiceServerConfig\tconstant drain_timeout_s\td6b276227e6e0f86\t0\tconfigurable\tConfigures the Twilio voice-server graceful-drain budget.",
     "named_constant\ttelephony/server.py\tTwilioVoiceServerConfig\tconstant force_shutdown_timeout_s\t25b51b96cb4e0a0f\t0\tconfigurable\tConfigures the Twilio voice-server forced-shutdown budget.",
     "named_constant\ttelephony/server.py\tTwilioVoiceServerConfig\tconstant start_timeout_s\tdc83ea9aef9d59d6\t0\tprotocol_local\tConfigures the Twilio media-start handshake.",
+    "named_constant\ttelephony/session_actions.py\tTwilioSessionActionConfig\tconstant dtmf_fence_timeout_s\t04f8a2cb0a3b7f87\t0\tprotocol_local\tBounds the playout-fence wait before Twilio in-band DTMF tones.",
+    "named_constant\ttelephony/session_actions.py\tTwilioSessionActionConfig\tconstant dtmf_playback_timeout_margin_s\t41e23050493aa51d\t0\tprotocol_local\tMargin added to tone duration when SendDTMFAction waits for in-band playback acknowledgement.",
     "named_constant\ttelephony/telnyx_app.py\tTelnyxAppSettings\tconstant drain_timeout_s\td6b276227e6e0f86\t0\tconfigurable\tConfigures the Telnyx app graceful-drain budget.",
     "named_constant\ttelephony/telnyx_app.py\tTelnyxAppSettings\tconstant force_shutdown_timeout_s\t25b51b96cb4e0a0f\t0\tconfigurable\tConfigures the Telnyx app forced-shutdown budget.",
     "named_constant\ttelephony/telnyx_app.py\tTelnyxAppSettings\tconstant start_timeout_s\tdc83ea9aef9d59d6\t0\tprotocol_local\tConfigures the Telnyx media-start handshake.",

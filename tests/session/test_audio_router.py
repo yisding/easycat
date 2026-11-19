@@ -831,6 +831,21 @@ async def test_on_playback_ack_records_byte_position():
 
 
 @pytest.mark.asyncio
+async def test_on_playback_ack_retired_mark_records_no_byte_position():
+    """A mark retired locally (Telnyx after a clear) confirms no playback."""
+    turn = TurnContext(turn_id="t", cancel_token=CancelToken())
+    turn.playback_mark_to_bytes["m0"] = 1000
+    turn.playback_mark_to_bytes["m1"] = 4000
+    router, _ = _make_router(current_turn=turn)
+
+    router.on_playback_ack(PlaybackMarkAck(mark_name="m0"))
+    router.on_playback_ack(PlaybackMarkAck(mark_name="m1", retired=True))
+
+    assert "m1" not in turn.playback_mark_to_bytes
+    assert [position for _, position in turn.playback_ack_log] == [1000]
+
+
+@pytest.mark.asyncio
 async def test_on_playback_ack_unknown_mark_is_noop():
     turn = TurnContext(turn_id="t", cancel_token=CancelToken())
     router, _ = _make_router(current_turn=turn)

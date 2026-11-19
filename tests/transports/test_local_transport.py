@@ -422,6 +422,122 @@ class TestLocalTransport:
         assert queued.chunk.data == head
 
     @pytest.mark.asyncio
+    async def test_send_audio_keeps_the_dtmf_tone_flag_on_queued_frames(self):
+        """Delivered tone frames stay out of turn accounting (in-band DTMF)."""
+        transport = LocalTransport(LocalTransportConfig(output_preroll_frames=0))
+        transport._connected = True
+        assert transport.audio_format == transport._audio_format
+        frame_bytes = transport._frame_samples * transport._audio_format.frame_size
+        chunk = AudioChunk(
+            data=bytes(frame_bytes * 2),
+            format=transport.audio_format,
+            _easycat_dtmf_tone=True,
+        )
+        plain = AudioChunk(data=bytes(frame_bytes), format=transport.audio_format)
+
+        assert await transport.send_audio(chunk) is True
+        assert await transport.send_audio(plain) is True
+
+        queued = [transport._out_queue.get_nowait() for _ in range(3)]
+        assert [item.chunk._easycat_dtmf_tone for item in queued] == [True, True, False]
+
+    @pytest.mark.asyncio
+    async def test_complete_dtmf_burst_shorter_than_preroll_starts_playout(self):
+        """A short tone burst plays at once; speech still waits for the pre-roll."""
+        np = pytest.importorskip("numpy")
+        frame_samples = LocalTransport()._frame_samples
+        loud = (1000).to_bytes(2, "little", signed=True) * frame_samples
+
+        speech_only = LocalTransport()
+        speech_only._connected = True
+        speech = AudioChunk(data=loud * 2, format=speech_only.audio_format)
+        assert await speech_only.send_audio(speech) is True
+        assert speech_only._primed is False
+
+        transport = LocalTransport()
+        transport._connected = True
+        assert transport._config.output_preroll_frames == 3
+        first = AudioChunk(data=loud, format=transport.audio_format, _easycat_dtmf_tone=True)
+        assert await transport.send_audio(first) is True
+        assert transport._primed is False  # mid-burst frames keep the pre-roll
+        last = AudioChunk(
+            data=loud,
+            format=transport.audio_format,
+            _easycat_dtmf_tone=True,
+            _easycat_dtmf_burst_end=True,
+        )
+        assert await transport.send_audio(last) is True
+        assert transport._out_queue.qsize() < transport._config.output_preroll_frames
+        assert transport._primed is True
+
+        outdata = np.zeros((frame_samples, 1), dtype=np.float32)
+        transport._output_callback(np, outdata, frame_samples, None, None)
+        assert np.any(outdata)
+
+    @pytest.mark.asyncio
+    async def test_long_preroll_lets_a_paced_dtmf_burst_start(self):
+        """Tones start inside the router's 500 ms pacing window; speech keeps its pre-roll."""
+        np = pytest.importorskip("numpy")
+        config = LocalTransportConfig(output_preroll_frames=40)
+        frame_samples = LocalTransport(config)._frame_samples
+        frame_bytes = frame_samples * 2
+        loud = (1000).to_bytes(2, "little", signed=True) * frame_samples
+
+        speech_only = LocalTransport(config)
+        speech_only._connected = True
+        for _ in range(30):
+            plain = AudioChunk(data=loud, format=speech_only.audio_format)
+            assert await speech_only.send_audio(plain) is True
+        # The playout callback decides priming: below the pre-roll it emits
+        # silence and leaves the queued speech in place.
+        outdata = np.ones((frame_samples, 1), dtype=np.float32)
+        speech_only._output_callback(np, outdata, frame_samples, None, None)
+        assert not np.any(outdata)
+        assert speech_only._out_queue.qsize() == 30
+        assert speech_only._primed is False
+
+        transport = LocalTransport(config)
+        transport._connected = True
+        for index in range(1, 11):
+            tone = AudioChunk(
+                data=bytes(frame_bytes),
+                format=transport.audio_format,
+                _easycat_dtmf_tone=True,
+            )
+            assert await transport.send_audio(tone) is True
+            # 200 ms of queued tones (10 x 20 ms) is below the 500 ms window.
+            assert transport._primed is (index == 10)
+
+    @pytest.mark.asyncio
+    async def test_aec_reference_frames_keep_the_dtmf_tone_flag(self):
+        """Drained references flag frames holding tone audio, mixed frames included."""
+        np = pytest.importorskip("numpy")
+        transport = LocalTransport(LocalTransportConfig(output_preroll_frames=0))
+        transport._connected = True
+        transport.drain_aec_reference_frames()  # a consumer attaches
+        frame_samples = transport._frame_samples
+        frame_bytes = frame_samples * transport._audio_format.frame_size
+        tone = (1000).to_bytes(2, "little", signed=True) * frame_samples
+        speech = (200).to_bytes(2, "little", signed=True) * frame_samples
+        fmt = transport.audio_format
+        await transport.send_audio(AudioChunk(data=tone, format=fmt, _easycat_dtmf_tone=True))
+        half = frame_bytes // 2
+        await transport.send_audio(
+            AudioChunk(data=tone[:half], format=fmt, _easycat_dtmf_tone=True)
+        )
+        await transport.send_audio(AudioChunk(data=speech, format=fmt))
+        for _ in range(3):
+            outdata = np.zeros((frame_samples, 1), dtype=np.float32)
+            transport._output_callback(np, outdata, frame_samples, None, None)
+
+        frames = transport.drain_aec_reference_frames()
+        # Pure tone, tone + speech, then the speech tail.
+        assert [frame._easycat_dtmf_tone for frame in frames] == [True, True, False]
+        # AEC still receives the real far-end PCM.
+        assert frames[0].data == tone
+        assert frames[1].data == tone[:half] + speech[: frame_bytes - half]
+
+    @pytest.mark.asyncio
     async def test_output_callback_pushes_reference_during_preroll_silence(self):
         """Pre-roll silence still pushes one full-frame reference per callback.
 

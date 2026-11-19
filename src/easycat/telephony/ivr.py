@@ -7,19 +7,24 @@ __all__ = [
     "DTMFDelivery",
     "IVRAction",
     "IVRActionType",
+    "IVRDTMFSender",
     "IVRNavigator",
     "IVRNavigatorConfig",
+    "InBandDTMFDelivery",
     "classify_ivr_prompt",
     "detect_human_after_ivr",
 ]
 
 import asyncio
+import copy
+import inspect
 import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
+from easycat._dtmf_tones import DTMFPlaybackCancelled, DTMFToneConfig
 from easycat._epoch import Epoch, Lease
 from easycat._numeric import is_finite_number
 from easycat.events import EventBus, IVRAction, IVRActionType, STTFinal
@@ -27,6 +32,9 @@ from easycat.runtime.scope import BackgroundTaskScope
 from easycat.telephony._ivr_decision import IVRAgentDecision, parse_ivr_agent_decision
 from easycat.telephony.dtmf import is_valid_dtmf_output
 from easycat.telephony.twiml import twiml_play_digits
+
+if TYPE_CHECKING:
+    from easycat.session._media_output import SessionMediaOutput
 
 logger = logging.getLogger(__name__)
 _IVR_PROMPT_TIMER_MEMBER = "ivr_prompt_timeout"
@@ -101,11 +109,56 @@ def _validate_non_negative_number(name: str, value: float) -> None:
         raise ValueError(f"{name} must be a non-negative number")
 
 
+async def _await_ivr_sender_call(result: object, method: str) -> Any:
+    """Await what an :class:`IVRDTMFSender` method returned.
+
+    The protocol's methods return awaitables, but a runtime-checkable protocol
+    and a signature check cannot tell a plain ``def`` from a wrapper that
+    returns a coroutine. A plain ``def`` that returns ``True`` would otherwise
+    fail with an opaque ``await`` error, so name the broken contract instead.
+    """
+    if not inspect.isawaitable(result):
+        raise TypeError(
+            f"IVR DTMF sender's {method}() must be async (return an awaitable); "
+            f"it returned {type(result).__name__}"
+        )
+    return await result
+
+
+@runtime_checkable
+class IVRDTMFSender(Protocol):
+    """What :class:`IVRNavigator` needs to press keys and speak on a call.
+
+    :class:`DTMFDelivery` (REST ``<Play digits>``) and
+    :class:`InBandDTMFDelivery` (tones on the live media stream) both conform;
+    any object whose two methods return an awaitable of ``bool`` (an
+    ``async def``, or a ``def`` returning an :class:`asyncio.Future`) can be
+    passed as ``dtmf_delivery``. ``send_dtmf_with_retry`` must accept the
+    ``should_continue`` keyword (or ``**kwargs``). The outbound helpers
+    assign the accepted call SID to a sender's ``call_sid`` attribute when it
+    has a writable one; a read-only ``call_sid`` is left alone.
+    """
+
+    def send_dtmf_with_retry(
+        self,
+        digits: str,
+        *,
+        should_continue: Callable[[], bool] | None = None,
+    ) -> Awaitable[bool]: ...
+
+    def send_speech(self, text: str) -> Awaitable[bool]: ...
+
+
 class DTMFDelivery:
     """Sends DTMF digits via Twilio REST API (not WebSocket).
 
-    Twilio doesn't support outbound DTMF through bidirectional Media Streams.
-    Instead, we update the call with TwiML containing ``<Play digits="..."/>``.
+    Each send updates the call with TwiML containing ``<Play digits="..."/>``
+    (and ``send_speech`` with ``<Say>``). That update *replaces* the call's
+    executing ``<Connect><Stream>`` TwiML, so the media stream, and the
+    EasyCat session on it, ends at the first key press; the follow-up menu is
+    never heard. It is effectively single-shot. Prefer
+    :class:`InBandDTMFDelivery` (the outbound ``ivr_dtmf_mode="auto"`` default
+    swaps it in for a stock ``DTMFDelivery`` on Twilio) for multi-level menus.
     """
 
     def __init__(
@@ -197,6 +250,152 @@ class DTMFDelivery:
         return success
 
 
+class InBandDTMFDelivery:
+    """Press IVR keys as in-band tones on the call's live media stream.
+
+    Unlike :class:`DTMFDelivery`, nothing replaces the call's TwiML: the tones
+    go out through ``Session.play_dtmf_tones`` after any queued bot speech, so
+    the stream and session keep running and the navigator hears the next
+    menu. ``send_speech`` speaks through the session's TTS on the same stream.
+
+    One instance serves one session. The outbound helper builder creates a
+    fresh instance per session (an instance supplied as
+    ``OutboundCallConfig.ivr_dtmf_delivery`` is a settings template: each
+    session gets its own :meth:`clone`) and :func:`wire_outbound_pipeline`
+    binds it to that session's output with :meth:`bind_output`; until then
+    every send returns ``False`` (so the navigator falls back to a SPEAK
+    action).
+
+    ``send_dtmf`` returns once the tone frames were accepted, without waiting
+    for Twilio to confirm playback, so a menu prompt is never blocked behind
+    the tones. Set ``wait_for_playback=True`` to wait for the playback
+    acknowledgement (bounded by the tone length plus ``ack_timeout_margin_s``);
+    a confirmation timeout still counts as sent so a retry never presses the
+    keys twice.
+    """
+
+    def __init__(
+        self,
+        *,
+        tone_config: DTMFToneConfig | None = None,
+        inter_digit_delay_ms: int = 0,
+        wait_for_playback: bool = False,
+        ack_timeout_margin_s: float = 5.0,
+    ) -> None:
+        if tone_config is not None and not isinstance(tone_config, DTMFToneConfig):
+            raise TypeError("tone_config must be a DTMFToneConfig or None")
+        if isinstance(inter_digit_delay_ms, bool) or not isinstance(inter_digit_delay_ms, int):
+            raise TypeError("inter_digit_delay_ms must be an int")
+        if inter_digit_delay_ms < 0:
+            raise ValueError("inter_digit_delay_ms must be non-negative")
+        if not isinstance(wait_for_playback, bool):
+            raise TypeError("wait_for_playback must be a bool")
+        _validate_positive_number("ack_timeout_margin_s", ack_timeout_margin_s)
+        self._tone_config = tone_config
+        self._inter_digit_delay_ms = inter_digit_delay_ms
+        self._wait_for_playback = wait_for_playback
+        self._ack_timeout_margin_s = float(ack_timeout_margin_s)
+        self._output: SessionMediaOutput | None = None
+
+    @property
+    def bound(self) -> bool:
+        """Whether a session output is bound."""
+        return self._output is not None
+
+    def clone(self) -> Self:
+        """Return a new, unbound sender with the same settings and class.
+
+        Used to give every session its own sender when one configured
+        instance is shared by many sessions, so one call's keys and speech
+        can never play on another call's stream. The clone is a shallow copy,
+        so a subclass keeps its overrides and attributes; a subclass that
+        holds per-session mutable state should override this method.
+        """
+        clone = copy.copy(self)
+        clone._output = None
+        return clone
+
+    def bind_output(self, output: SessionMediaOutput | None) -> None:
+        """Bind (or with ``None`` unbind) the session output tones play on."""
+        self._output = output
+
+    async def send_dtmf(
+        self,
+        digits: str,
+        *,
+        should_continue: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Play *digits* in-band. Returns True once the tones were accepted.
+
+        *should_continue* is forwarded to ``play_dtmf_tones``: if it returns
+        ``False`` while the tones wait behind queued speech or the playout
+        fence, no tone is sent and this returns ``False``.
+        """
+        # Same all-or-nothing whitelist as the REST path, checked before any
+        # output access. Never log the digits themselves.
+        if not isinstance(digits, str) or not is_valid_dtmf_output(digits):
+            logger.warning("Invalid DTMF digits rejected for in-band delivery")
+            return False
+        output = self._output
+        if output is None:
+            logger.warning("In-band DTMF delivery has no session output bound")
+            return False
+        try:
+            playback = await output.play_dtmf_tones(
+                digits,
+                inter_digit_delay_ms=self._inter_digit_delay_ms,
+                tone_config=self._tone_config,
+                should_continue=should_continue,
+            )
+            if not self._wait_for_playback:
+                return True
+            outcome = await playback.wait(playback.duration_ms / 1000 + self._ack_timeout_margin_s)
+        except DTMFPlaybackCancelled:
+            logger.debug("In-band DTMF delivery called off before any tone was sent")
+            return False
+        except Exception as exc:  # noqa: BLE001 intentional boundary: report failure
+            logger.warning("In-band DTMF delivery failed (%s)", type(exc).__name__)
+            return False
+        if outcome == "disconnected":
+            logger.warning("In-band DTMF tones were cut off: the media stream ended")
+            return False
+        if outcome == "timeout":
+            logger.warning("In-band DTMF playback was not confirmed in time; treating as sent")
+        return True
+
+    async def send_dtmf_with_retry(
+        self,
+        digits: str,
+        *,
+        should_continue: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Send DTMF once; unlike :class:`DTMFDelivery`, never retry.
+
+        A failed in-band send can follow tone frames that were already
+        accepted and will play (a later frame was rejected, or the stream
+        ended during playback), so resending the whole string could press the
+        first keys twice. The failures known to happen before any frame is
+        sent (invalid digits, no bound output, a stopped session) do not clear
+        up on a retry either. On ``False`` the navigator falls back to a SPEAK
+        action.
+        """
+        if should_continue is not None and not should_continue():
+            return False
+        return await self.send_dtmf(digits, should_continue=should_continue)
+
+    async def send_speech(self, text: str) -> bool:
+        """Speak *text* on the live stream through the session's TTS."""
+        output = self._output
+        if output is None:
+            return False
+        try:
+            await output.synthesize_bypass(text)
+        except Exception as exc:  # noqa: BLE001 intentional boundary: report failure
+            logger.warning("In-band IVR speech failed (%s)", type(exc).__name__)
+            return False
+        return True
+
+
 # Type alias for the agent callback.
 AgentCallback = Callable[[dict[str, object]], Awaitable[Mapping[str, object]]]
 _AGENT_CALL_FAILED = object()
@@ -227,7 +426,7 @@ class IVRNavigator:
         *,
         agent_callback: AgentCallback | None = None,
         config: IVRNavigatorConfig | None = None,
-        dtmf_delivery: DTMFDelivery | None = None,
+        dtmf_delivery: IVRDTMFSender | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._agent_callback = agent_callback
@@ -396,9 +595,12 @@ class IVRNavigator:
             or self._dtmf_delivery is None
         ):
             return
-        delivered = await self._dtmf_delivery.send_dtmf_with_retry(
-            decision.payload,
-            should_continue=lambda: self._is_current_activation(activation),
+        delivered = await _await_ivr_sender_call(
+            self._dtmf_delivery.send_dtmf_with_retry(
+                decision.payload,
+                should_continue=lambda: self._is_current_activation(activation),
+            ),
+            "send_dtmf_with_retry",
         )
         if not self._is_current_activation(activation) or delivered:
             return

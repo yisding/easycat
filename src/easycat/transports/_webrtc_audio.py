@@ -297,6 +297,7 @@ class OutboundAudioSource:
             data=delivered_data,
             format=queued.original_chunk.format,
             timestamp=queued.original_chunk.timestamp,
+            _easycat_dtmf_tone=getattr(queued.original_chunk, "_easycat_dtmf_tone", False) is True,
         )
         if delivered_data and self._aec_reference_enabled:
             # Keep the bytes and their true pre-resample format together.  A

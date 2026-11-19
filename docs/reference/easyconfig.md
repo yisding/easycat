@@ -152,7 +152,35 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   `TelephonyConfig.telnyx_actions` configures the session action executor for
   native transfer/send-DTMF/hangup commands and SMS. Outbound calls select the provider via
   `OutboundCallConfig(provider=...)` (`"twilio"` default; `"telnyx"` uses
-  `telnyx_connection_id` / `telnyx_webhook_url`).
+  `telnyx_connection_id` / `telnyx_webhook_url`). IVR key presses follow
+  `OutboundCallConfig.ivr_dtmf_mode`:
+  - `"auto"` (default): a stock Twilio `DTMFDelivery` in `ivr_dtmf_delivery`
+    is swapped for a per-session `InBandDTMFDelivery`, which plays the tones
+    and the speak fallback on the live media stream, so multi-level menus
+    work. `None` stays `None` (the navigator only emits `IVRAction` events), a
+    custom `IVRDTMFSender` (including a `DTMFDelivery` subclass) is used as
+    given, and Telnyx is unchanged.
+  - `"in_band"`: always build a per-session `InBandDTMFDelivery`. Twilio only;
+    a custom sender in `ivr_dtmf_delivery` is rejected as ambiguous.
+  - `"rest"`: use the given `DTMFDelivery` as is. Its REST `<Play digits>`
+    update replaces the call's TwiML and ends the media stream and the
+    session on it, so it is effectively single-shot. Twilio only.
+
+  `ivr_dtmf_tones` takes a `DTMFToneConfig` for the in-band tone length,
+  gaps and levels. An `InBandDTMFDelivery` passed as `ivr_dtmf_delivery`
+  (with `"auto"` or `"in_band"`) is used as a settings template: each session
+  gets its own unbound `clone()`, so one call's keys never play on another
+  call's stream. The clone is a shallow copy of the same class, so a subclass
+  keeps its overrides; override `clone()` if the subclass holds per-session
+  mutable state.
+  Set its `tone_config` rather than `ivr_dtmf_tones`; setting both is
+  rejected. A custom sender's `send_dtmf_with_retry` must accept the
+  `should_continue` keyword (or `**kwargs`), and both of its methods must
+  return an awaitable; a plain return value raises `TypeError` when called. `ivr_dtmf_mode` and
+  `ivr_dtmf_tones` are keyword-only. Invalid combinations raise
+  `EasyConfigError`. Agent-tool
+  `SendDTMFAction` on Twilio is configured separately, with
+  `TwilioSessionActionConfig.dtmf_mode` (default `"rest"`).
 - `strip_markdown` — strip markdown formatting from agent output before
   synthesis.
 - `auto_align_tts_output_to_transport` — resample/reformat TTS output to the

@@ -70,6 +70,27 @@ class FakeSession:
     transport = FakeTransport()
 
 
+class FakeTonePlayback:
+    """What ``Session.play_dtmf_tones`` returns: a handle to await playback."""
+
+    duration_ms = 600
+    mark_name = "easycat_dtmf_1"
+
+    async def wait(self, timeout: float | None = None) -> str:
+        return "played"
+
+
+class FakeToneSession(FakeSession):
+    """A session that can play in-band DTMF tones on its live media stream."""
+
+    def __init__(self) -> None:
+        self.tones: list[str] = []
+
+    async def play_dtmf_tones(self, digits: str, **_options: Any) -> FakeTonePlayback:
+        self.tones.append(digits)
+        return FakeTonePlayback()
+
+
 def check_signed_media_handoff() -> None:
     url = "https://voice.example.test/twiml"
     form = {
@@ -168,11 +189,26 @@ async def check_call_control() -> None:
     assert 'digits="1W2W#"' in updates[0]["twiml"]
     assert "Connecting you now." in updates[1]["twiml"]
     assert updates[2] == {"status": "completed"}
-    # Twilio DTMF replaces the call's <Connect><Stream> TwiML, so it ends the
-    # media stream and, like transfer and hangup, requests session stop.
+    # Default (dtmf_mode="rest") Twilio DTMF replaces the call's
+    # <Connect><Stream> TwiML, so it ends the media stream and, like transfer
+    # and hangup, requests session stop.
     assert dtmf_result.stop_session is True
     assert dtmf_result.metadata["media_stream_replaced"] is True
     assert transfer_result.stop_session is end_result.stop_session is True
+
+    # Opt in to in-band DTMF: the tones play on the live media stream through
+    # the session, so no REST update is made and the session keeps running.
+    in_band_client = FakeTwilioClient()
+    in_band = TwilioSessionActionExecutor(
+        TwilioSessionActionConfig(client=in_band_client, dtmf_mode="in_band")
+    )
+    tone_session = FakeToneSession()
+    in_band_result = await in_band.execute(tone_session, SendDTMFAction(digits="12#"))
+    assert tone_session.tones == ["12#"]
+    assert in_band_client.calls.updater.updates == []
+    assert in_band_result.stop_session is False
+    assert in_band_result.metadata["delivery"] == "in_band"
+    assert in_band_result.metadata["playback"] == "played"
     print("PASS actions: DTMF, transfer, and hangup mapped to Twilio updates")
 
 

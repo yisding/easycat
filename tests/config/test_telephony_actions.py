@@ -17,6 +17,7 @@ from easycat.telephony.session_actions import (
 )
 from tests.config._helpers import (
     _DummyAgent,
+    _stub_audio_backends,
 )
 
 
@@ -122,3 +123,40 @@ def test_both_action_executors_wire_together():
     assert len(executors) == 2
     assert isinstance(executors[0], TwilioSessionActionExecutor)
     assert isinstance(executors[1], TelnyxSessionActionExecutor)
+
+
+def test_create_session_binds_in_band_ivr_delivery_to_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.config import OutboundCallConfig
+    from easycat.session._media_output import SessionMediaOutput
+    from easycat.telephony.ivr import DTMFDelivery, InBandDTMFDelivery, IVRNavigator
+
+    async def press_one(_context: dict[str, object]) -> dict[str, str]:
+        return {"action": "dtmf", "digits": "1"}
+
+    # Factory wiring only: stub audio backends keep this off optional VAD extras.
+    _stub_audio_backends(monkeypatch)
+    shared = DTMFDelivery()
+    config = EasyConfig(
+        openai_api_key="test-key",
+        agent=_DummyAgent(),
+        telephony=TelephonyConfig(
+            enable_outbound_call_manager=True,
+            outbound=OutboundCallConfig(
+                from_number="+15550000002",
+                ivr_agent_callback=press_one,
+                ivr_dtmf_delivery=shared,
+            ),
+        ),
+    )
+    config.smart_turn.enabled = False
+
+    session = create_session(config)
+
+    navigator = next(h for h in session.telephony.helpers if isinstance(h, IVRNavigator))
+    delivery = navigator._dtmf_delivery
+    assert isinstance(delivery, InBandDTMFDelivery)
+    assert isinstance(delivery._output, SessionMediaOutput)
+    assert delivery._output.session is session
+    assert shared.call_sid == ""

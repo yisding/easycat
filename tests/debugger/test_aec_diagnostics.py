@@ -296,7 +296,6 @@ async def _aec_bundle(tmp_path):
     actually runs.  The AEC diagnostics view needs the journaled reference
     track, so this bundle opts capture in explicitly.
     """
-    import asyncio
     from collections.abc import AsyncIterator
 
     from easycat.noise_reduction import PassthroughNoiseReducer
@@ -312,6 +311,7 @@ async def _aec_bundle(tmp_path):
         _FakeSTT,
         _FakeVAD,
         _silent_chunk,
+        run_one_turn_then_stop,
     )
 
     class _DeliveringTransport:
@@ -351,9 +351,7 @@ async def _aec_bundle(tmp_path):
             session_id="aec-diag-test",
         )
     )
-    await session.start()
-    await asyncio.sleep(0.3)
-    await session.stop()
+    await run_one_turn_then_stop(session)
     bundle_path = tmp_path / "aec.zip"
     session.export_debug_bundle(str(bundle_path))
     return bundle_path

@@ -75,8 +75,9 @@ if TYPE_CHECKING:
     # Annotation-only references to telephony runtime types. Kept out of the
     # module-level import set (which would re-trigger the telephony fan-out)
     # because ``from __future__ import annotations`` makes these lazy strings.
+    from easycat._dtmf_tones import DTMFToneConfig
     from easycat.telephony.compliance import DNCStore
-    from easycat.telephony.ivr import AgentCallback, DTMFDelivery
+    from easycat.telephony.ivr import AgentCallback, IVRDTMFSender
     from easycat.telephony.retry import RetryStrategyConfig
     from easycat.telephony.session_actions import (
         TelnyxSessionActionConfig,
@@ -127,6 +128,7 @@ _VALID_JOURNAL_BACKEND = {"sqlite", "sqlite+litestream", "libsql"}
 _VALID_JOURNAL_REDACTION = {"secrets", "pii"}
 _VALID_JOURNAL_RETENTION = {"archive", "delete"}
 _VALID_VOICEMAIL_MODES = {"detect", "detect_end_of_greeting"}
+_VALID_IVR_DTMF_MODES = ("auto", "in_band", "rest")
 
 
 def _require_positive(name: str, value: object) -> None:
@@ -619,6 +621,34 @@ class VoicemailDetectionConfig:
         return {"answering_machine_detection": telnyx_mode}
 
 
+def _accepts_ivr_sender_calls(delivery: object) -> bool:
+    """Whether *delivery*'s methods accept the calls :class:`IVRNavigator` makes.
+
+    A runtime-checkable protocol checks only that the attributes exist, so a
+    ``send_dtmf_with_retry(self, digits)`` without ``should_continue`` would
+    pass and then raise ``TypeError`` on the first key press. ``**kwargs``
+    implementations are accepted; a signature that cannot be inspected is
+    given the benefit of the doubt.
+    """
+    calls: tuple[tuple[str, tuple[object, ...], dict[str, object]], ...] = (
+        ("send_dtmf_with_retry", ("1",), {"should_continue": None}),
+        ("send_speech", ("text",), {}),
+    )
+    for name, args, kwargs in calls:
+        method = getattr(delivery, name, None)
+        if not callable(method):
+            return False
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            continue
+        try:
+            signature.bind(*args, **kwargs)
+        except TypeError:
+            return False
+    return True
+
+
 @dataclass
 class OutboundCallConfig:
     """Configuration for outbound call manager."""
@@ -654,7 +684,17 @@ class OutboundCallConfig:
     twiml_url: str = ""
     status_callback_url: str = ""
     ivr_agent_callback: AgentCallback | None = None
-    ivr_dtmf_delivery: DTMFDelivery | None = None
+    # How the IVR navigator presses keys. ``"auto"`` (default) plays in-band
+    # tones on the live media stream when a stock Twilio ``DTMFDelivery`` is
+    # supplied (one ``InBandDTMFDelivery`` per session), keeps a custom sender
+    # as-is, and leaves ``None`` as emit-only. ``"in_band"`` always uses
+    # in-band tones (Twilio only). ``"rest"`` keeps the supplied
+    # ``DTMFDelivery``, whose REST ``<Play digits>`` update ends the stream.
+    # The two new fields are keyword-only so positional arguments written for
+    # the fields below (``enable_number_health`` onward) keep their meaning.
+    ivr_dtmf_delivery: IVRDTMFSender | None = None
+    ivr_dtmf_mode: Literal["auto", "in_band", "rest"] = field(default="auto", kw_only=True)
+    ivr_dtmf_tones: DTMFToneConfig | None = field(default=None, kw_only=True)
 
     # Observability / reliability extras.  All default to on — they're
     # pure event-bus listeners with no external dependencies and give
@@ -716,6 +756,79 @@ class OutboundCallConfig:
         # negatives for clarity since they are never meaningful.
         _require_non_negative("late_voicemail_window_s", self.late_voicemail_window_s)
         _require_non_negative("voicemail_pickup_window_s", self.voicemail_pickup_window_s)
+        self._validate_ivr_dtmf()
+
+    def _validate_ivr_dtmf(self) -> None:
+        mode = self.ivr_dtmf_mode
+        if mode not in _VALID_IVR_DTMF_MODES:
+            raise EasyConfigError(
+                f"Invalid ivr_dtmf_mode={mode!r}. Must be one of "
+                f"{', '.join(repr(m) for m in _VALID_IVR_DTMF_MODES)}."
+            )
+        if self.ivr_dtmf_tones is not None:
+            from easycat._dtmf_tones import DTMFToneConfig
+
+            if not isinstance(self.ivr_dtmf_tones, DTMFToneConfig):
+                raise EasyConfigError("ivr_dtmf_tones must be a DTMFToneConfig instance or None.")
+        kind = self._validate_ivr_dtmf_delivery()
+        if kind == "in_band" and self.ivr_dtmf_tones is not None:
+            raise EasyConfigError(
+                "ivr_dtmf_tones cannot be combined with an InBandDTMFDelivery in "
+                "ivr_dtmf_delivery; set tone_config on the InBandDTMFDelivery instead."
+            )
+        self._validate_ivr_dtmf_combination(
+            mode,
+            is_rest_delivery=kind == "rest",
+            is_in_band_delivery=kind == "in_band",
+        )
+
+    def _validate_ivr_dtmf_delivery(self) -> Literal["none", "rest", "in_band", "custom"]:
+        """Check the configured IVR sender and classify it."""
+        delivery = self.ivr_dtmf_delivery
+        if delivery is None:
+            return "none"
+        # Imported only when a sender is configured, so a plain outbound
+        # config never loads the IVR runtime module.
+        from easycat.telephony.ivr import DTMFDelivery, InBandDTMFDelivery, IVRDTMFSender
+
+        if not isinstance(delivery, IVRDTMFSender) or not _accepts_ivr_sender_calls(delivery):
+            raise EasyConfigError(
+                "ivr_dtmf_delivery must provide async send_dtmf_with_retry(digits, *, "
+                "should_continue=None) and send_speech(text) (an IVRDTMFSender such "
+                "as DTMFDelivery)."
+            )
+        if isinstance(delivery, DTMFDelivery):
+            return "rest"
+        if isinstance(delivery, InBandDTMFDelivery):
+            return "in_band"
+        return "custom"
+
+    def _validate_ivr_dtmf_combination(
+        self,
+        mode: str,
+        *,
+        is_rest_delivery: bool,
+        is_in_band_delivery: bool,
+    ) -> None:
+        if mode == "auto":
+            return
+        if self.provider != "twilio":
+            raise EasyConfigError(
+                f"ivr_dtmf_mode={mode!r} is supported only for provider='twilio'."
+            )
+        if mode == "rest" and not is_rest_delivery:
+            raise EasyConfigError(
+                "ivr_dtmf_mode='rest' requires ivr_dtmf_delivery to be a DTMFDelivery."
+            )
+        if (
+            mode == "in_band"
+            and self.ivr_dtmf_delivery is not None
+            and not (is_rest_delivery or is_in_band_delivery)
+        ):
+            raise EasyConfigError(
+                "ivr_dtmf_mode='in_band' cannot be combined with a custom "
+                "ivr_dtmf_delivery; use ivr_dtmf_mode='auto' to keep the custom sender."
+            )
 
 
 @dataclass

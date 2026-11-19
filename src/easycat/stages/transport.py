@@ -26,6 +26,14 @@ from easycat.stages.base import (
 
 logger = logging.getLogger(__name__)
 
+REDACT_CAPTURE_CHUNK_ATTR = "_easycat_redact_capture"
+"""Chunk attribute asking verbose capture to store silence instead of audio.
+
+Set by the session router on in-band DTMF tone frames under
+``journal_redaction="pii"``: the tones encode the digits, so the captured
+artifact keeps the frame length but not its content.
+"""
+
 
 class TransportStage:
     """Stage wrapper around a :class:`Transport`.
@@ -61,9 +69,14 @@ class TransportStage:
         output_ref = None
         extra: dict[str, Any] | None = None
         if capture_enabled:
+            capture_bytes = audio_bytes
+            if getattr(input, REDACT_CAPTURE_CHUNK_ATTR, False) and isinstance(
+                audio_bytes, (bytes, bytearray)
+            ):
+                capture_bytes = bytes(len(audio_bytes))
             output_ref = await put_artifact_async(
                 ctx,
-                audio_bytes,
+                capture_bytes,
                 capture_allowed=audio_capture_allowed(ctx, input),
             )
             extra = {

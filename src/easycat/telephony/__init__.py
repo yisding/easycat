@@ -22,6 +22,11 @@ _LAZY_ATTR: dict[str, str] = {
     "DTMFAggregator": "easycat.telephony.dtmf",
     "DTMFAggregatorConfig": "easycat.telephony.dtmf",
     "parse_twilio_dtmf_message": "easycat.telephony.dtmf",
+    # In-band DTMF tone synthesis (shared leaf so the session layer can render)
+    "DTMFToneConfig": "easycat._dtmf_tones",
+    "DTMFTonePlayback": "easycat._dtmf_tones",
+    "render_dtmf_mulaw": "easycat._dtmf_tones",
+    "render_dtmf_pcm16": "easycat._dtmf_tones",
     # TwiML helpers
     "compute_twilio_webhook_signature": "easycat.telephony.twiml",
     "parse_gather_webhook": "easycat.telephony.twiml",
@@ -77,8 +82,10 @@ _LAZY_ATTR: dict[str, str] = {
     "ScreeningResponse": "easycat.telephony.screening",
     # IVR navigator
     "DTMFDelivery": "easycat.telephony.ivr",
+    "InBandDTMFDelivery": "easycat.telephony.ivr",
     "IVRAction": "easycat.telephony.ivr",
     "IVRActionType": "easycat.telephony.ivr",
+    "IVRDTMFSender": "easycat.telephony.ivr",
     "IVRNavigator": "easycat.telephony.ivr",
     "IVRNavigatorConfig": "easycat.telephony.ivr",
     # Compliance / DNC
@@ -102,6 +109,12 @@ __all__ = sorted(_LAZY_ATTR)  # noqa: PLE0605 exports are generated from the pub
 
 
 if TYPE_CHECKING:
+    from easycat._dtmf_tones import (
+        DTMFToneConfig,
+        DTMFTonePlayback,
+        render_dtmf_mulaw,
+        render_dtmf_pcm16,
+    )
     from easycat.telephony.compliance import (
         AIDisclosureConfig,
         AsyncDNCStore,
@@ -119,8 +132,10 @@ if TYPE_CHECKING:
     )
     from easycat.telephony.ivr import (
         DTMFDelivery,
+        InBandDTMFDelivery,
         IVRAction,
         IVRActionType,
+        IVRDTMFSender,
         IVRNavigator,
         IVRNavigatorConfig,
     )
