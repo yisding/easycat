@@ -22,6 +22,8 @@ from easycat.telephony.screening import (
     ScreeningPatternSet,
     ScreeningResponse,
     ScreeningState,
+    check_coherence,
+    coherence_score,
     is_conversational,
     match_screening_platform,
     screening_patterns_for_languages,
@@ -1039,3 +1041,60 @@ class TestScreeningPatternsFactory:
         result = screening_patterns_for_languages(["ja"])
         default = ScreeningPatternSet()
         assert set(result.exclusions) == set(default.exclusions)
+
+
+# ── Coherence scoring ─────────────────────────────────────────────
+
+_COHERENCE_PUNCTUATION_XFAIL = pytest.mark.xfail(
+    strict=True,
+    reason="check_coherence/coherence_score split on whitespace only, so the punctuation "
+    "STT attaches to a word ('appointment.' vs 'appointment?', 'Yes.') defeats both the "
+    "keyword overlap and the stopword filter",
+)
+
+
+class TestCoherencePunctuation:
+    """Punctuated transcripts (what STT finals look like) score like bare words."""
+
+    BOT_TEXTS = (
+        "What kind of appointment do you need?",
+        "Would Tuesday morning work for the cleaning?",
+        "Great, see you Tuesday.",
+    )
+    CALLEE_TEXTS = (
+        "I need a dental appointment.",
+        "A cleaning, please.",
+        "Tuesday morning is perfect.",
+    )
+
+    @staticmethod
+    def _without_punctuation(texts: tuple[str, ...]) -> list[str]:
+        return [text.translate(str.maketrans("", "", ".,?!")) for text in texts]
+
+    def test_unpunctuated_on_topic_replies_are_coherent(self) -> None:
+        callee = self._without_punctuation(self.CALLEE_TEXTS)
+        bot = self._without_punctuation(self.BOT_TEXTS)
+        assert check_coherence(callee, bot)
+        assert coherence_score(callee, bot) > 0
+
+    @_COHERENCE_PUNCTUATION_XFAIL
+    def test_punctuated_on_topic_replies_are_coherent(self) -> None:
+        assert check_coherence(list(self.CALLEE_TEXTS), list(self.BOT_TEXTS))
+
+    @_COHERENCE_PUNCTUATION_XFAIL
+    def test_score_ignores_sentence_punctuation(self) -> None:
+        punctuated = coherence_score(list(self.CALLEE_TEXTS), list(self.BOT_TEXTS))
+        bare = coherence_score(
+            self._without_punctuation(self.CALLEE_TEXTS),
+            self._without_punctuation(self.BOT_TEXTS),
+        )
+        assert punctuated == pytest.approx(bare)
+
+    def test_unpunctuated_stopword_only_replies_are_not_judged(self) -> None:
+        assert check_coherence(["Yes", "Okay"], ["Is this Jordan", "Great"])
+
+    @_COHERENCE_PUNCTUATION_XFAIL
+    def test_punctuated_stopword_only_replies_are_not_judged(self) -> None:
+        # "Yes." and "Okay." are stopwords; a callee who only confirms gives the
+        # heuristic nothing to compare and must not be flagged as an answer bot.
+        assert check_coherence(["Yes.", "Okay."], ["Is this Jordan?", "Great."])
