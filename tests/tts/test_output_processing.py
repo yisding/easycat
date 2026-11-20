@@ -6,6 +6,7 @@ from easycat.llm_output_processing import (
     MAX_SSML_BREAK_MS,
     PauseProcessor,
     PhoneticReplacementProcessor,
+    apply_output_processors,
     default_pronunciation_processors,
 )
 from easycat.tts.input import TTSInput
@@ -414,3 +415,33 @@ def test_phonetic_replacement_empty_key_does_not_inject_text() -> None:
     result = processor.process(payload, is_final=True, is_streaming=False)
 
     assert result.text == "Hi, there"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="an ssml-style PauseProcessor rebuilds its output from strip_ssml_tags(payload), "
+    "so chaining it after another ssml PauseProcessor erases the earlier <break> tags",
+)
+def test_chained_ssml_pause_processors_keep_earlier_breaks() -> None:
+    processors = [
+        *default_pronunciation_processors(phone_pause_style="ssml", phone_pause_ms=130),
+        PauseProcessor(
+            pattern=r"\b[A-Z]{2}\d{4}\b",
+            pause_ms=200,
+            unit_pattern=r"\w",
+            style="ssml",
+        ),
+    ]
+
+    payload = apply_output_processors(
+        TTSInput("Call 415-555-2671 about order AB1234."),
+        processors,
+        is_final=True,
+        is_streaming=False,
+    )
+
+    assert payload.format == "ssml"
+    # Order-code pauses from the second processor are present...
+    assert '<break time="200ms"/>' in payload.text
+    # ...but the phone-number pauses from the first processor must survive too.
+    assert '<break time="130ms"/>' in payload.text
