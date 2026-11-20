@@ -102,6 +102,16 @@ class TestConstructor:
 
         assert client._base_url == TELNYX_API_BASE_URL
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="timeout_s is not validated: aiohttp treats a total timeout <= 0 (and NaN) "
+        "as 'no timeout', so a stalled Telnyx API request hangs forever",
+    )
+    @pytest.mark.parametrize("timeout_s", [0, -1.0, float("nan")])
+    def test_rejects_non_positive_or_non_finite_timeout(self, timeout_s: float) -> None:
+        with pytest.raises(ValueError, match="timeout_s"):
+            TelnyxCallControlClient("key-123", timeout_s=timeout_s)
+
 
 # ── Command paths ─────────────────────────────────────────────────
 
