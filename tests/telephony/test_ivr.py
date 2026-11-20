@@ -1112,3 +1112,104 @@ class TestInBandDTMFDelivery:
 
         assert nav.menu_depth == 2
         assert [digits for digits, _ in output.tone_calls] == ["1", "3"]
+
+
+# ── Spelled-out menu keys ─────────────────────────────────────────
+
+_SPELLED_OUT_KEY_XFAIL = pytest.mark.xfail(
+    strict=True,
+    reason="classify_ivr_prompt only recognizes 'press <digit>' / 'dial <digit>'; a menu whose "
+    "STT transcript spells the key ('press one', 'press zero', 'press star') is only caught "
+    "when it happens to contain 'for <word>, press' (which also depends on the STT emitting a "
+    "comma rather than a period between options)",
+)
+
+
+class TestIVRDetectionSpelledOutKeys:
+    """STT engines without numeral formatting transcribe menu keys as words."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Press 1 for sales.",
+            "To speak with billing, press 2.",
+            "Press 0 to speak to an operator.",
+            "Dial 9 for an outside line.",
+        ],
+    )
+    def test_numeral_menu_prompts_are_ivr(self, text: str) -> None:
+        # Control: the same prompts are recognized when the key is a numeral.
+        assert classify_ivr_prompt(text) is True
+
+    @_SPELLED_OUT_KEY_XFAIL
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Press one for sales.",
+            "Press one for sales. Press two for support.",
+            "To speak with billing, press two.",
+            "Press zero to speak to an operator.",
+            "Dial nine for an outside line.",
+            "To repeat this menu, press star.",
+        ],
+    )
+    def test_spelled_out_menu_prompts_are_ivr(self, text: str) -> None:
+        assert classify_ivr_prompt(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Hello, how can I help you?",
+            "Don't press me on that one.",
+            "The press release is on our website.",
+            "Just press one of the buttons.",
+        ],
+    )
+    def test_human_speech_mentioning_press_is_not_ivr(self, text: str) -> None:
+        # Guards the eventual fix against over-matching.
+        assert classify_ivr_prompt(text) is False
+
+    @pytest.mark.parametrize("expect_fused_voicemail", [False, True])
+    @pytest.mark.asyncio
+    async def test_numeral_menu_routes_classifying_call_to_ivr(
+        self, expect_fused_voicemail: bool
+    ) -> None:
+        state = await _state_after_first_transcript(
+            "Press 1 for sales.", expect_fused_voicemail=expect_fused_voicemail
+        )
+        assert state == "ivr"
+
+    @_SPELLED_OUT_KEY_XFAIL
+    @pytest.mark.parametrize("expect_fused_voicemail", [False, True])
+    @pytest.mark.asyncio
+    async def test_spelled_out_menu_routes_classifying_call_to_ivr(
+        self, expect_fused_voicemail: bool
+    ) -> None:
+        # Today the call never reaches IVR, so the navigator is never
+        # activated. On the bare state machine the short sentence passes the
+        # conversational check and the call is promoted to HUMAN; with AMD/STT
+        # fusion expected (the outbound helper default) it stays CLASSIFYING
+        # until AMD or the classification timeout decides.
+        state = await _state_after_first_transcript(
+            "Press one for sales.", expect_fused_voicemail=expect_fused_voicemail
+        )
+        assert state == "ivr"
+
+
+async def _state_after_first_transcript(text: str, *, expect_fused_voicemail: bool) -> str:
+    from easycat.events import CallAnswered, CallRinging
+    from easycat.telephony.call_state import OutboundCallState, OutboundCallStateMachine
+
+    bus = EventBus()
+    sm = OutboundCallStateMachine(
+        bus, classification_timeout_s=60, expect_fused_voicemail=expect_fused_voicemail
+    )
+    sm.start()
+    try:
+        await bus.emit(CallRinging(call_sid="CA1"))
+        await bus.emit(CallAnswered(call_sid="CA1"))
+        assert sm.state == OutboundCallState.CLASSIFYING
+        await bus.emit(STTFinal(text=text))
+        return sm.state.value
+    finally:
+        sm.stop()
