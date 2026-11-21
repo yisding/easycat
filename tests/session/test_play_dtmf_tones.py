@@ -1111,6 +1111,23 @@ async def test_invalid_fence_timeout_is_rejected(fence_timeout_s: Any) -> None:
             await session.play_dtmf_tones("1", fence_timeout_s=fence_timeout_s)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=OverflowError,
+    reason="gh 1355: math.isfinite leaks OverflowError for an int too large for a "
+    "C double instead of the documented ValueError",
+)
+@pytest.mark.parametrize("fence_timeout_s", [10**400, -(10**400)], ids=["huge", "huge_negative"])
+async def test_huge_integer_fence_timeout_is_rejected_with_value_error(
+    fence_timeout_s: int,
+) -> None:
+    transport = _RecordingTransport()
+    async with _session(transport) as session:
+        with pytest.raises(ValueError, match="fence_timeout_s"):
+            await session.play_dtmf_tones("1", fence_timeout_s=fence_timeout_s)
+    assert transport.wire == []
+
+
 async def test_rejected_frame_aborts_guard_and_raises() -> None:
     transport = _GuardTransport(accepted=False)
     async with _session(transport) as session:
