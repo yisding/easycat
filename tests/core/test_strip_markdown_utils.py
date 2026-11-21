@@ -721,6 +721,30 @@ def test_strip_markdown_keeps_paragraph_break_inside_multi_paragraph_blockquote(
     assert strip_markdown("> Quote one.\n>\n> Quote two.") == "Quote one.\n\nQuote two."
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="both heading passes (closer at step 2c, opener at step 8) are anchored at line "
+    "start and run before the blockquote marker is stripped, so an ATX heading inside a "
+    "blockquote keeps its '#' runs in the text sent to TTS",
+)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("> # Title", "Title"),
+        ("> ## Note\n> Body text.", "Note\nBody text."),
+        ("Intro.\n\n> ### Heads up ###\n> Details.", "Intro.\n\nHeads up\nDetails."),
+    ],
+)
+def test_strip_markdown_strips_heading_inside_blockquote(text: str, expected: str) -> None:
+    """A quoted heading (``> # Title``) must lose its ``#`` marker like a bare one.
+
+    Stripping the ``>`` marker exposes the heading at the start of the line, the
+    same way it exposes a quoted horizontal rule (``> ---``), which already gets a
+    second pass.
+    """
+    assert strip_markdown(text) == expected
+
+
 # ── ATX heading closing sequences ──────────────────────────────────
 
 
