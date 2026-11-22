@@ -214,6 +214,44 @@ class TestDNCNormalization:
         assert store.is_on_dnc("+15551234567")
         store.close()
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="gh 1357: with phonenumbers installed and no default_region, an E.164 "
+        "number keys as '+1…' but any spelling without '+' falls back to 10 digits, "
+        "so the same NANP number no longer matches across formats",
+    )
+    @pytest.mark.parametrize("store_kind", ["memory", "sqlite"])
+    @pytest.mark.parametrize(
+        ("added", "queried"),
+        [
+            ("+14155550100", "4155550100"),
+            ("+14155550100", "(415) 555-0100"),
+            ("+14155550100", "14155550100"),
+            ("4155550100", "+14155550100"),
+        ],
+        ids=["e164-vs-national", "e164-vs-formatted", "e164-vs-11-digit", "national-vs-e164"],
+    )
+    def test_default_store_matches_nanp_across_formats_with_phonenumbers(
+        self, store_kind: str, added: str, queried: str
+    ) -> None:
+        # The digit-only fallback collapses every NANP spelling to one key, so a
+        # default-constructed store matches across formats without the
+        # ``telephony`` extra. Installing the extra (which pulls in
+        # phonenumberslite) must not weaken that: a caller who said "do not
+        # call me" from caller-id "+1…" must still be blocked when the agent
+        # later dials the bare national form.
+        pytest.importorskip("phonenumbers")
+        store: DNCList | SQLiteDNCList = (
+            DNCList() if store_kind == "memory" else SQLiteDNCList(":memory:")
+        )
+        try:
+            store.add(added)
+            assert store.is_on_dnc(queried)
+        finally:
+            if isinstance(store, SQLiteDNCList):
+                store.close()
+
     def test_international_e164_normalization(self) -> None:
         pytest.importorskip("phonenumbers")
         dnc = DNCList()
