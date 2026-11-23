@@ -10,7 +10,7 @@ import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import STTEvent, STTEventType
-from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
+from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig, OpenAISTTStreamLimitError
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
 
@@ -792,6 +792,61 @@ async def test_openai_stt_total_byte_limit_aborts_oversized_stream():
 def test_openai_stt_config_rejects_nonpositive_max_stream_total_bytes():
     with pytest.raises(ValueError, match="max_stream_total_bytes"):
         OpenAISTTConfig(api_key="test-key", max_stream_total_bytes=0)
+
+
+_STREAM_RESPONSE_CAPS = [
+    "max_stream_events",
+    "max_stream_line_bytes",
+    "max_stream_total_bytes",
+    "max_transcript_chars",
+    "max_partial_events",
+]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="stream-response caps only check `<= 0`: NaN and +inf pass validation and every "
+    "later `count > cap` comparison is False, silently disabling the safety limit",
+)
+@pytest.mark.parametrize("limit_name", _STREAM_RESPONSE_CAPS)
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_openai_stt_config_rejects_nonfinite_stream_response_caps(
+    limit_name: str,
+    value: float,
+) -> None:
+    # The sibling audio caps (max_audio_*) already reject these values via
+    # STTBase._validate_positive_limit; the stream-response caps should too.
+    with pytest.raises(ValueError, match=limit_name):
+        OpenAISTTConfig(api_key="test-key", **{limit_name: value})
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="max_stream_events=NaN is accepted, so the event cap never fires and an "
+    "oversized streaming response is consumed in full",
+)
+@pytest.mark.asyncio
+async def test_openai_stt_nan_stream_event_cap_does_not_disable_limit():
+    # More events than the default cap (1_000), so any finite bound would fire.
+    mock_client = _make_mock_client(
+        ['data: {"delta": "a"}'] * 1_500 + ["data: [DONE]"],
+    )
+    # Either construction must fail, or the cap must still bound the stream.
+    with pytest.raises((ValueError, OpenAISTTStreamLimitError)):
+        config = OpenAISTTConfig(
+            api_key="test-key",
+            http_client=mock_client,
+            max_retries=1,
+            max_stream_events=float("nan"),
+            # Keep the other caps generous so only the event cap is under test.
+            max_partial_events=1_000_000,
+            max_transcript_chars=10_000_000,
+        )
+        stt = OpenAISTT(config)
+        await stt.start_stream()
+        for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=100)):
+            await stt.send_audio(chunk)
+        await stt.end_stream()
 
 
 # ── Mid-stream format change ─────────────────────────────────────
