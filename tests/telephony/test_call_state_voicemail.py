@@ -233,6 +233,48 @@ class TestVoicemailPickupDetection:
             sm.stop()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("You've reached Sarah.", id="ascii-youve"),
+            pytest.param("Sorry, I can't come to the phone.", id="ascii-cant"),
+            pytest.param(
+                "You\u2019ve reached Sarah.",
+                id="typographic-youve",
+                marks=pytest.mark.xfail(
+                    strict=True,
+                    raises=AssertionError,
+                    reason="classify_greeting misses U+2019 contractions (VOICEMAIL -> HUMAN)",
+                ),
+            ),
+            pytest.param(
+                "Sorry, I can\u2019t come to the phone.",
+                id="typographic-cant",
+                marks=pytest.mark.xfail(
+                    strict=True,
+                    raises=AssertionError,
+                    reason="classify_greeting misses U+2019 contractions (VOICEMAIL -> HUMAN)",
+                ),
+            ),
+        ],
+    )
+    async def test_voicemail_greeting_contraction_does_not_trigger_pickup(self, text: str) -> None:
+        """A greeting line is not a pickup, whichever apostrophe STT emits."""
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus, classification_timeout_s=60, voicemail_pickup_window_s=5.0
+        )
+        sm.start()
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="machine"))
+            assert sm.state == OutboundCallState.VOICEMAIL
+            await bus.emit(STTFinal(text=text, track="inbound"))
+            assert sm.state == OutboundCallState.VOICEMAIL
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
     async def test_missing_track_stt_ignored_during_voicemail(self) -> None:
         """Untracked STTFinal events do not trigger VOICEMAIL → HUMAN."""
         bus = EventBus()

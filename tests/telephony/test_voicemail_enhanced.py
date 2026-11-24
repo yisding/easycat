@@ -104,6 +104,38 @@ class TestGreetingClassifier:
         assert classify_greeting("Thank you for calling Acme Corp") == "unknown"
 
 
+# STT providers and smart-formatting modes often emit the typographic
+# apostrophe U+2019 ("you’ve") instead of ASCII "'" ("you've"). The phrase
+# lists in ``classify_greeting`` contain contractions, so the same spoken
+# greeting must classify the same way in either spelling.
+_RSQUO = "\u2019"
+_APOSTROPHE_GREETINGS = [
+    pytest.param("You've reached Sarah, leave your name and number.", "machine", id="youve"),
+    pytest.param("Sorry, I can't come to the phone right now.", "machine", id="cant"),
+    pytest.param(
+        "If you know your party's extension, dial it now.", "machine", id="partys-extension"
+    ),
+    pytest.param("Hey, this is Dave. What's up?", "human", id="whats-up"),
+]
+
+
+class TestGreetingClassifierTypographicApostrophe:
+    @pytest.mark.parametrize(("text", "expected"), _APOSTROPHE_GREETINGS)
+    def test_ascii_apostrophe_control(self, text: str, expected: str) -> None:
+        assert classify_greeting(text) == expected
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="classify_greeting matches contractions only with an ASCII apostrophe",
+    )
+    @pytest.mark.parametrize(("text", "expected"), _APOSTROPHE_GREETINGS)
+    def test_typographic_apostrophe_matches_ascii(self, text: str, expected: str) -> None:
+        curly = text.replace("'", _RSQUO)
+        assert curly != text
+        assert classify_greeting(curly) == expected
+
+
 # ── SIT Tone Detection ───────────────────────────────────────────
 
 
