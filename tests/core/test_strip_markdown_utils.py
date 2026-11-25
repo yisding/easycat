@@ -1253,3 +1253,55 @@ def test_strip_markdown_tilde_runs_that_are_not_fences(text: str) -> None:
     assert strip_markdown(text) == text.replace("~~struck~~", "struck").replace(
         "~~again~~", "again"
     )
+
+
+# ── Setext headings ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Summary\n-------\nAll good.",
+        "Summary\n---\nAll good.",
+    ],
+)
+def test_strip_markdown_removes_setext_level_two_underline(text: str) -> None:
+    """A ``---`` setext underline is removed (it doubles as a thematic break)."""
+    assert has_markdown(text)
+    stripped = strip_markdown(text)
+    assert "-" not in stripped
+    assert stripped.startswith("Summary")
+    assert stripped.endswith("All good.")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="setext level-1 headings are not handled: the `===` underline is left in the "
+    "TTS text and has_markdown() does not detect it, unlike the `---` level-2 form",
+)
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Summary\n=======\nAll good.",
+        "Summary\n===\nAll good.",
+        "Intro.\n\nSummary\n=======\n\nAll good.",
+        "Summary\n   ===   \nAll good.",
+    ],
+)
+def test_strip_markdown_removes_setext_level_one_underline(text: str) -> None:
+    """``Title`` over a ``=`` run is a CommonMark level-1 heading.
+
+    Only the heading text should reach TTS; the underline is decoration,
+    just like the ``---`` underline of a level-2 setext heading.
+    """
+    assert has_markdown(text)
+    stripped = strip_markdown(text)
+    assert "=" not in stripped
+    assert "Summary" in stripped
+    assert stripped.endswith("All good.")
+
+
+@pytest.mark.parametrize("text", ["a == b\nc", "x = 1\ny = 2", "Total = 5"])
+def test_strip_markdown_keeps_equals_signs_in_prose(text: str) -> None:
+    """``=`` inside prose lines is content, not a setext underline."""
+    assert strip_markdown(text) == text
