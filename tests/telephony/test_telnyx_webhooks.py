@@ -546,6 +546,25 @@ class TestParseTelnyxCallEvent:
         assert event.source == "detector"
         assert event.call_sid == "CC9"
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="premium AMD 'fax_detected' is reported as 'unknown' instead of 'machine'",
+    )
+    def test_premium_amd_fax_detected_maps_to_machine(self) -> None:
+        # Telnyx's call-control OpenAPI spec lists the premium detection-ended
+        # results as human_residence, human_business, machine, silence,
+        # fax_detected, and not_sure. ``_amd_result`` already treats a bare
+        # "fax" as a machine, but premium AMD never sends that token.
+        event = parse_telnyx_call_event(
+            envelope(
+                "call.machine.premium.detection.ended",
+                {"call_control_id": "CC9", "result": "fax_detected"},
+            )
+        )
+
+        assert isinstance(event, VoicemailDetected)
+        assert event.result == "machine"
+
     def test_premium_greeting_ended_maps_to_machine(self) -> None:
         event = parse_telnyx_call_event(
             envelope(
