@@ -308,6 +308,51 @@ class TestDTMFAggregator:
 
         assert aggregated == []
 
+    @pytest.mark.xfail(
+        reason=(
+            "A new digit cancels the idle-timeout task while it is still delivering "
+            "the previous DTMFAggregated event, so slow subscribers are interrupted "
+            "and later subscribers never see the completed sequence"
+        ),
+        strict=True,
+    )
+    async def test_new_digit_does_not_cancel_in_flight_timeout_aggregate(self) -> None:
+        bus = EventBus()
+        aggregate_started = asyncio.Event()
+        allow_aggregate_finish = asyncio.Event()
+        slow_received: list[str] = []
+        later_received: list[str] = []
+
+        async def slow_subscriber(event: DTMFAggregated) -> None:
+            if event.sequence == "12":
+                aggregate_started.set()
+                await allow_aggregate_finish.wait()
+            slow_received.append(event.sequence)
+
+        bus.subscribe(DTMFAggregated, slow_subscriber)
+        bus.subscribe(DTMFAggregated, lambda e: later_received.append(e.sequence))
+        agg = DTMFAggregator(bus, DTMFAggregatorConfig(timeout_ms=10))
+        agg.start()
+
+        try:
+            await bus.emit(DTMF(digit="1"))
+            await bus.emit(DTMF(digit="2"))
+            # The idle timeout fires and starts delivering "12".
+            await asyncio.wait_for(aggregate_started.wait(), timeout=1)
+
+            # The caller starts the next sequence while "12" is still being delivered.
+            await bus.emit(DTMF(digit="3"))
+            allow_aggregate_finish.set()
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+            # The completed "12" sequence must still reach every subscriber.
+            assert slow_received == ["12"]
+            assert later_received == ["12"]
+            assert agg.buffer == "3"
+        finally:
+            agg.stop()
+
     async def test_stop_clears_buffer(self) -> None:
         bus = EventBus()
         config = DTMFAggregatorConfig(timeout_ms=5000)
